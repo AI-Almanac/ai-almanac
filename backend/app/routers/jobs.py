@@ -41,6 +41,7 @@ class RompParams(BaseModel):
     model_var: str | None = None
     file_pattern: str | None = None
     region: str | None = None
+    event_type: str | None = None
     wet_threshold: float | None = None
     wet_init: float | None = None
     wet_spell: int | None = None

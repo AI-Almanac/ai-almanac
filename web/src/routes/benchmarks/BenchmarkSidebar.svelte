@@ -13,7 +13,7 @@
 
 <aside class="sidebar">
 	<button class="new-run-btn" class:active={store.showForm} onclick={onNewBenchmark}>
-		+ New Benchmark
+		New benchmark
 	</button>
 
 	{#if store.runGroups.length > 0}
@@ -91,18 +91,18 @@
 
 <style>
 	.sidebar {
-		width: 220px;
+		width: 17rem;
 		flex-shrink: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		gap: 1rem;
 	}
 
 	.new-run-btn {
 		width: 100%;
-		padding: 0.6rem 0.75rem;
+		padding: 0.75rem 0.9rem;
 		background: var(--color-accent);
-		color: var(--color-bg);
+		color: white;
 		border: none;
 		border-radius: 0.4rem;
 		font-family: var(--font-body);
@@ -112,7 +112,6 @@
 		transition:
 			background-color 0.12s,
 			transform 0.1s;
-		letter-spacing: 0.02em;
 	}
 	.new-run-btn:hover,
 	.new-run-btn.active {
@@ -121,7 +120,7 @@
 	}
 
 	.sidebar-section {
-		margin-top: 0.5rem;
+		margin-top: 0;
 	}
 	.sidebar-section > summary {
 		cursor: pointer;
@@ -129,12 +128,13 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		padding: 0.15rem 0.25rem;
-		border-radius: 3px;
+		padding: 0.15rem 0.05rem 0.5rem;
+		border-radius: 0.3rem;
 		user-select: none;
+		border-bottom: 1px solid var(--color-border-subtle);
 	}
 	.sidebar-section > summary:hover {
-		background: var(--color-surface-raised);
+		color: var(--color-text);
 	}
 	.sidebar-section > summary::before {
 		content: '▶';
@@ -148,10 +148,10 @@
 	}
 
 	.sidebar-title {
-		font-size: 0.65rem;
-		font-weight: 600;
+		font-size: 0.78rem;
+		font-weight: 750;
 		text-transform: uppercase;
-		letter-spacing: 0.1em;
+		letter-spacing: 0.04em;
 		color: var(--color-text-muted);
 		margin: 0;
 	}
@@ -170,12 +170,11 @@
 
 	.group-list {
 		list-style: none;
-		padding: 0.4rem;
+		padding: 0.25rem;
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.1rem;
-		background: var(--color-surface-raised);
+		background: var(--color-surface);
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 0.6rem;
 	}
@@ -184,47 +183,54 @@
 		position: relative;
 		display: flex;
 		align-items: stretch;
+		border-bottom: 1px solid var(--color-border-subtle);
+	}
+
+	.group-list-item:last-child {
+		border-bottom: 0;
 	}
 
 	.group-item {
 		width: 100%;
 		text-align: left;
-		padding: 0.55rem 1.5rem 0.55rem 0.65rem;
-		border-radius: 0.3rem;
+		padding: 0.7rem 1.65rem 0.7rem 0.8rem;
+		border-radius: 0.4rem;
 		border: none;
 		background: none;
 		cursor: pointer;
 		display: flex;
 		flex-direction: column;
-		gap: 0.2rem;
-		transition: background-color 0.12s;
+		gap: 0.3rem;
+		transition:
+			background-color 0.12s,
+			box-shadow 0.12s;
 		color: var(--color-text);
 	}
 	.group-item:hover {
-		background: var(--color-accent-glow);
+		background: color-mix(in srgb, var(--color-accent-light) 32%, transparent);
 	}
 	.group-item.selected {
 		background: var(--color-accent-light);
-		box-shadow: inset 2px 0 0 var(--color-accent);
+		box-shadow: inset 0.18rem 0 0 var(--color-accent);
 	}
 	.group-item.selected .group-region {
 		color: var(--color-accent);
 	}
 
 	.group-event-type {
-		font-size: 0.6rem;
+		font-size: 0.64rem;
 		font-weight: 700;
 		text-transform: uppercase;
-		letter-spacing: 0.08em;
+		letter-spacing: 0.04em;
 		color: var(--color-accent);
-		margin-bottom: 0.05rem;
 	}
 	.group-region {
-		font-size: 0.875rem;
-		font-weight: 500;
+		font-size: 0.92rem;
+		font-weight: 650;
+		line-height: 1.2;
 	}
 	.group-dates {
-		font-size: 0.65rem;
+		font-size: 0.7rem;
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 	}
@@ -233,20 +239,20 @@
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
-		margin-top: 0.1rem;
+		margin-top: 0.05rem;
 		flex-wrap: wrap;
 	}
 
 	.badge-count {
-		font-size: 0.6rem;
-		font-weight: 600;
+		font-size: 0.68rem;
+		font-weight: 650;
 		color: var(--color-text-muted);
 	}
 
 	.group-delete {
 		position: absolute;
-		top: 0.35rem;
-		right: 0.35rem;
+		top: 0.55rem;
+		right: 0.45rem;
 		padding: 0.15rem 0.3rem;
 		background: none;
 		border: none;
@@ -266,10 +272,10 @@
 
 	.status-badge {
 		font-family: var(--font-mono);
-		font-size: 0.6rem;
+		font-size: 0.66rem;
 		font-weight: 500;
-		padding: 0.1rem 0.4rem;
-		border-radius: 0.2rem;
+		padding: 0.12rem 0.45rem;
+		border-radius: 0.25rem;
 	}
 	.status-badge.running {
 		background: var(--color-status-running-bg);
@@ -286,5 +292,11 @@
 	.status-badge.mixed {
 		background: var(--color-border-subtle);
 		color: var(--color-text-muted);
+	}
+
+	@media (max-width: 1050px) {
+		.sidebar {
+			width: 100%;
+		}
 	}
 </style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import { page } from '$app/stores';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { isAuthenticated } from '$lib/auth-store';
@@ -7,21 +7,35 @@
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
-	import { getDatasets, getRegions, type Dataset, type Region } from '$lib/api';
-	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
+	import { getDatasets, getRegions, type Dataset, type Job, type Region } from '$lib/api';
 	import BenchmarkForm from './BenchmarkForm.svelte';
+	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 
 	const store = new BenchmarkStore();
-	let chatCollapsed = $state(false);
 
 	let regions = $state<Region[]>([]);
 	let datasets = $state<Dataset[]>([]);
 	let dataLoaded = $state(false);
+	let resultsSidebarOpen = $state(true);
+	let promptSetupFinished = $state(false);
+	let preferredChatSessionId = $state<string | null>(null);
+	let initialized = $state(false);
+	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
+	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
+	const inSetupMode = $derived(store.showForm || promptSetupActive);
 
-	onMount(async () => {
-		if (!$isAuthenticated) return;
+	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
-		store.load(groupKey);
+		preferredChatSessionId = $page.url.searchParams.get('chat');
+		if (initialPrompt) {
+			store.showForm = true;
+			store.selectedGroupKey = null;
+		}
+		await store.load(groupKey, !initialPrompt);
+		if (initialPrompt) {
+			store.showForm = true;
+			store.selectedGroupKey = null;
+		}
 		const [fetchedRegions, fetchedDatasets] = await Promise.allSettled([
 			getRegions(),
 			getDatasets()
@@ -29,52 +43,95 @@
 		if (fetchedRegions.status === 'fulfilled') regions = fetchedRegions.value;
 		if (fetchedDatasets.status === 'fulfilled') datasets = fetchedDatasets.value;
 		dataLoaded = true;
+	}
+
+	$effect(() => {
+		if (!$isAuthenticated || initialized) return;
+		initialized = true;
+		void initializePage();
 	});
 
 	onDestroy(() => store.stopPolling());
 
+	function startNew() {
+		promptSetupFinished = true;
+		store.showForm = true;
+		store.selectedGroupKey = null;
+		history.replaceState(null, '', '/benchmarks');
+	}
+
 	function selectGroup(key: string) {
+		promptSetupFinished = true;
+		preferredChatSessionId = null;
 		store.selectGroup(key);
 		history.replaceState(null, '', `?group=${encodeURIComponent(key)}`);
 	}
 
-	function startNew() {
-		store.showForm = true;
-		store.selectedGroupKey = null;
+	function handleSubmitted(groupKey: string, chatSessionId?: string | null) {
+		promptSetupFinished = true;
+		preferredChatSessionId = chatSessionId ?? null;
+		store.showForm = false;
+		const params = new URLSearchParams({ group: groupKey });
+		if (chatSessionId) params.set('chat', chatSessionId);
+		history.replaceState(null, '', `?${params.toString()}`);
 	}
 
-	function handleSubmitted(groupKey: string) {
-		history.replaceState(null, '', `?group=${encodeURIComponent(groupKey)}`);
+	function handleJobsCreated(jobs: Job[]) {
+		const runId = jobs[0]?.run_id ?? store.selectedGroupKey;
+		if (!runId) return;
+		store.acceptSubmittedJobs(runId, jobs);
 	}
 </script>
 
 {#if !$isAuthenticated}
 	<LoginPrompt message="Sign in to view and run benchmarks." />
 {:else}
-	<div class="page-layout">
-		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
-
+	<div class="page-layout" class:setup-mode={inSetupMode}>
+		{#if !inSetupMode}
+			<BenchmarkSidebar
+				{store}
+				onNewBenchmark={startNew}
+				onSelectGroup={selectGroup}
+			/>
+		{/if}
 		<div class="main-content">
-			{#if store.showForm}
-				<BenchmarkForm {store} {regions} {datasets} {dataLoaded} onSubmitted={handleSubmitted} />
+			{#if inSetupMode}
+				<BenchmarkForm
+					{store}
+					{regions}
+					{datasets}
+					{dataLoaded}
+					{initialPrompt}
+					onSubmitted={handleSubmitted}
+				/>
 			{:else if store.selectedGroup}
-				<!-- Benchmark Results -->
 				{@const group = store.selectedGroup}
 				{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
 				{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
 
-				<div class="results-with-chat" class:chat-hidden={chatCollapsed}>
-					<!-- Left column: header + results -->
-					<div class="results-main">
-						<header class="detail-header">
+				<div class="analysis-workspace" class:side-collapsed={!resultsSidebarOpen}>
+					<section class="analysis-main">
+						<header class="analysis-header">
 							<div>
-								<p class="detail-eyebrow">
-									Benchmark · {group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''}
-								</p>
+								<p class="detail-eyebrow">Analysis run</p>
 								<h1 class="detail-title">{group.region}</h1>
-								{#if group.startDate && group.endDate}
-									<p class="detail-dates">{group.startDate} – {group.endDate}</p>
-								{/if}
+								<p class="detail-subtitle">
+									{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''} · {group.eventType}
+									{#if group.startDate && group.endDate}
+										· {group.startDate} to {group.endDate}
+									{/if}
+								</p>
+							</div>
+							<div class="analysis-actions">
+								<button
+									type="button"
+									class="sidebar-toggle"
+									aria-expanded={resultsSidebarOpen}
+									onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
+								>
+									{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
+								</button>
+								<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>
 							</div>
 						</header>
 
@@ -98,12 +155,13 @@
 							{/each}
 						</div>
 
-						<hr class="divider" />
-
 						{#if group.jobs.some((j) => j.status === 'running') && completeJobs.length === 0}
 							<div class="running-state">
 								<div class="spinner"></div>
-								<p>Running benchmarks… checking every 3 s</p>
+								<div>
+									<strong>Running benchmark</strong>
+									<p>Results will appear here as soon as the first model completes.</p>
+								</div>
 							</div>
 						{/if}
 
@@ -124,34 +182,54 @@
 						{#if completeJobs.length > 0}
 							<ResultsViewer jobs={completeJobs} />
 						{/if}
-					</div>
+					</section>
 
-					<!-- Right column: chat panel (full height from top of content) -->
-					<div class="chat-sidebar" class:collapsed={chatCollapsed}>
-						<div class="chat-panel-wrap">
-							<button
-								class="chat-toggle-btn"
-								onclick={() => {
-									chatCollapsed = !chatCollapsed;
-								}}
-								title={chatCollapsed ? 'Show AI analysis' : 'Hide AI analysis'}
-							>
-								<span class="toggle-icon">✦</span>
-								<span class="toggle-label">{chatCollapsed ? 'AI Analysis' : 'Hide'}</span>
-							</button>
-							{#if !chatCollapsed}
-								<ChatPanel jobs={group.jobs} scopeKey={group.key} />
-							{/if}
-						</div>
-					</div>
+					{#if resultsSidebarOpen}
+						<aside class="analysis-side">
+							<section class="run-card">
+								<div class="side-card-header">
+									<p class="detail-eyebrow">Run spec</p>
+									<button
+										type="button"
+										class="icon-toggle"
+										aria-label="Collapse sidebar"
+										onclick={() => (resultsSidebarOpen = false)}
+									>
+										×
+									</button>
+								</div>
+								<div class="run-row">
+									<span>Region</span>
+									<strong>{group.region}</strong>
+								</div>
+								<div class="run-row">
+									<span>Models</span>
+									<strong>{group.jobs.map((job) => job.model_name.toUpperCase()).join(', ')}</strong>
+								</div>
+								{#if group.startDate && group.endDate}
+									<div class="run-row">
+										<span>Dates</span>
+										<strong>{group.startDate} to {group.endDate}</strong>
+									</div>
+								{/if}
+							</section>
+
+							<div class="result-chat">
+								<ChatPanel
+									jobs={group.jobs}
+									scopeKey={group.key}
+									preferredSessionId={preferredChatSessionId}
+									onJobsCreated={handleJobsCreated}
+								/>
+							</div>
+						</aside>
+					{/if}
 				</div>
 			{:else}
 				<div class="empty-state">
-					<p class="empty-title">No run set selected</p>
+					<p class="empty-title">No benchmark runs yet</p>
 					<p class="muted">
-						Click <strong>+ New Benchmark</strong> in the sidebar to benchmark one or more models against
-						ground-truth observations. Select a region, date range, and at least one model — results include
-						spatial maps and per-grid-point skill metrics (MAE, FAR, MR) across forecast lead-time windows.
+						Start a new benchmark from the sidebar, or use Ask to describe the run you want.
 					</p>
 				</div>
 			{/if}
@@ -161,139 +239,122 @@
 
 <style>
 	.page-layout {
-		display: flex;
 		min-height: calc(100vh - 3.5rem);
-		max-width: 1800px;
+		width: min(100% - 2rem, 92rem);
 		margin: 0 auto;
-		padding: 1rem 1.75rem;
-		gap: 1.5rem;
+		padding: 1.25rem 0 2rem;
+		display: flex;
+		gap: 1.25rem;
 		align-items: flex-start;
+	}
+
+	.page-layout.setup-mode {
+		width: min(100% - 2rem, 76rem);
+		min-height: calc(100vh - 4rem);
+		padding-top: clamp(1rem, 4vw, 3rem);
+		display: block;
 	}
 
 	.main-content {
 		flex: 1;
 		min-width: 0;
-		background: var(--color-surface-raised);
+	}
+
+	.analysis-workspace {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
+		gap: 1rem;
+		align-items: start;
+	}
+
+	.analysis-workspace.side-collapsed {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.analysis-main,
+	.run-card,
+	.result-chat {
 		border: 1px solid var(--color-border);
-		border-radius: 0.6rem;
-		padding: 1.5rem;
+		border-radius: 0.5rem;
+		background: var(--color-surface);
+		box-shadow: var(--shadow-soft);
 	}
 
-	.results-with-chat {
-		display: flex;
-		gap: 0;
-		align-items: flex-start;
-	}
-
-	.results-main {
-		flex: 3;
+	.analysis-main {
+		padding: clamp(1rem, 2vw, 1.5rem);
 		min-width: 0;
-		min-width: 520px;
-		padding-right: 1.25rem;
 	}
 
-	.chat-sidebar {
-		flex: 2;
-		min-width: 400px;
+	.analysis-side {
 		position: sticky;
-		/* nav (3.5rem) + page padding (2rem) + main-content padding (1.5rem) = 7rem;
-       subtract a little so it doesn't kiss the nav */
-		top: calc(3.5rem + 0.5rem);
-		height: calc(100vh - 3.5rem - 1rem);
+		top: 5rem;
 		display: flex;
 		flex-direction: column;
-		border-left: 1px solid var(--color-border-subtle);
-		padding-left: 1.25rem;
+		gap: 1rem;
+		height: calc(100vh - 6rem);
+		min-height: 36rem;
 	}
 
-	.chat-sidebar.collapsed {
-		flex: none;
-		min-width: unset;
-		height: auto;
-		border-left: none;
-		padding-left: 0;
-	}
-
-	.chat-panel-wrap {
+	.analysis-header {
 		display: flex;
-		flex-direction: column;
-		flex: 1;
-		min-height: 0;
+		justify-content: space-between;
+		gap: 1rem;
+		align-items: flex-start;
+		margin-bottom: 1rem;
 	}
 
-	.chat-toggle-btn {
+	.analysis-actions {
 		display: flex;
 		align-items: center;
-		gap: 0.35rem;
-		padding: 0.3rem 0.6rem 0.3rem 0.5rem;
-		background: var(--color-surface);
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+
+	.new-analysis,
+	.sidebar-toggle {
 		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		color: var(--color-text-muted);
-		font-size: 0.7rem;
-		font-weight: 600;
-		font-family: var(--font-body);
+		border-radius: 0.4rem;
+		background: var(--color-surface);
+		color: var(--color-text);
+		padding: 0.55rem 0.75rem;
+		font-weight: 750;
 		cursor: pointer;
-		transition:
-			color 0.15s,
-			border-color 0.15s,
-			background-color 0.15s;
-		align-self: flex-start;
-		margin-bottom: 0.6rem;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
 	}
-	.chat-toggle-btn:hover {
-		color: var(--color-accent);
+
+	.sidebar-toggle {
 		border-color: var(--color-accent-border);
-		background: var(--color-accent-glow);
-	}
-	.toggle-icon {
+		background: var(--color-accent-light);
 		color: var(--color-accent);
-		font-size: 0.6rem;
-		line-height: 1;
-	}
-	.toggle-label {
-		letter-spacing: 0.08em;
-	}
-	.chat-sidebar.collapsed .chat-toggle-btn {
-		margin-bottom: 0;
 	}
 
-	.results-with-chat .chat-panel-wrap > :global(.chat-panel) {
-		flex: 1;
-		min-width: 0;
+	.sidebar-toggle:hover,
+	.new-analysis:hover {
+		border-color: var(--color-accent-border);
+		color: var(--color-accent);
 	}
 
-	/* ---- Results header ---- */
-	.detail-header {
-		margin-bottom: 1.25rem;
-	}
 	.detail-eyebrow {
-		font-size: 0.65rem;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
+		font-size: 0.78rem;
+		font-weight: 750;
+		letter-spacing: 0.04em;
 		color: var(--color-accent);
 		margin: 0 0 0.2rem;
+		text-transform: uppercase;
 	}
 	.detail-title {
-		font-size: 1.75rem;
-		font-weight: 400;
+		font-size: clamp(1.8rem, 4vw, 3.2rem);
+		font-weight: 800;
 		font-family: var(--font-display);
 		margin: 0;
 		color: var(--color-text);
+		line-height: 1.05;
 	}
-	.detail-dates {
-		font-size: 0.8rem;
+
+	.detail-subtitle {
+		font-size: 0.9rem;
 		color: var(--color-text-muted);
 		margin: 0.2rem 0 0;
-		font-family: var(--font-mono);
-	}
-	.divider {
-		border: none;
-		border-top: 1px solid var(--color-border-subtle);
-		margin: 0 0 1.5rem;
 	}
 
 	/* ---- Model status pills ---- */
@@ -301,7 +362,7 @@
 		display: flex;
 		gap: 0.5rem;
 		flex-wrap: wrap;
-		margin-bottom: 1rem;
+		margin-bottom: 1.25rem;
 	}
 	.model-pill {
 		display: flex;
@@ -352,11 +413,22 @@
 
 	.running-state {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 0.75rem;
+		color: var(--color-text);
+		padding: 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-bg);
+		margin-bottom: 1rem;
+	}
+	.running-state strong,
+	.running-state p {
+		margin: 0;
+	}
+	.running-state p {
 		color: var(--color-text-muted);
 		font-size: 0.9rem;
-		padding: 1rem 0;
 	}
 	.spinner {
 		width: 1.1rem;
@@ -372,6 +444,72 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
+	}
+
+	.run-card {
+		padding: 1rem;
+	}
+
+	.side-card-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.icon-toggle {
+		border: 0;
+		border-radius: 0.3rem;
+		background: transparent;
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 1rem;
+		line-height: 1;
+		cursor: pointer;
+		padding: 0.2rem 0.35rem;
+	}
+
+	.icon-toggle:hover {
+		background: var(--color-surface-muted);
+		color: var(--color-text);
+	}
+
+	.run-row {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.6rem 0;
+		border-bottom: 1px solid var(--color-border-subtle);
+	}
+
+	.run-row:last-child {
+		border-bottom: 0;
+	}
+
+	.run-row span {
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
+	}
+
+	.run-row strong {
+		max-width: 60%;
+		text-align: right;
+		font-size: 0.85rem;
+		font-weight: 650;
+	}
+
+	.result-chat {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.result-chat > :global(.chat-panel) {
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
 	}
 	.job-error {
 		border: 1px solid var(--color-danger-border);
@@ -397,7 +535,10 @@
 
 	/* ---- Empty state ---- */
 	.empty-state {
-		padding: 2rem 0;
+		padding: clamp(2rem, 8vw, 5rem);
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-surface);
 	}
 	.empty-title {
 		font-size: 0.95rem;
@@ -409,5 +550,29 @@
 		color: var(--color-text-dim);
 		font-size: 0.9rem;
 		margin: 0;
+	}
+
+	@media (max-width: 1050px) {
+		.analysis-workspace {
+			grid-template-columns: 1fr;
+		}
+
+		.analysis-header {
+			flex-direction: column;
+		}
+
+		.analysis-actions {
+			justify-content: flex-start;
+		}
+
+		.analysis-side {
+			position: static;
+			height: auto;
+			min-height: 0;
+		}
+
+		.result-chat {
+			min-height: 34rem;
+		}
 	}
 </style>

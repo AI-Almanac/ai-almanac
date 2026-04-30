@@ -39,6 +39,7 @@
 	"dependencies": {
 		"@globus/sdk": "^6.2.0",
 		"@sveltejs/adapter-node": "^5.5.4",
+		"@xyflow/svelte": "^1.5.2",
 		"dompurify": "^3.4.0",
 		"marked": "^18.0.0",
 		"ol": "^10.8.0",

@@ -17,7 +17,9 @@
 		type ChatEvent,
 		type ChatScope,
 		type ChatToolCall,
-		type ChatArtifact
+		type ChatArtifact,
+		type BenchmarkRunSpec,
+		type BenchmarkValidation
 	} from '$lib/api';
 
 	import type { Job } from '$lib/api';
@@ -35,11 +37,46 @@
 	}
 
 	interface Props {
-		jobs: Job[];
+		jobs?: Job[];
 		scopeKey: string;
+		scopeKind?: ChatScope['kind'];
+		preferredSessionId?: string | null;
+		title?: string | null;
+		emptyMessage?: string;
+		placeholder?: string;
+		suggestions?: string[];
+		initialMessage?: string;
+		externalPrompt?: string | null;
+		externalPromptNonce?: number;
+		showArtifacts?: boolean;
+		onSessionReady?: (sessionId: string) => void;
+		onJobsCreated?: (jobs: Job[]) => void;
+		onBenchmarkConfig?: (config: BenchmarkRunSpec, validation?: BenchmarkValidation | null) => void;
+		onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
 	}
 
-	let { jobs, scopeKey }: Props = $props();
+	let {
+		jobs = [],
+		scopeKey,
+		scopeKind = 'benchmark_run_group',
+		preferredSessionId = null,
+		title = null,
+		emptyMessage = 'Ask a question about the benchmark results above.',
+		placeholder = 'Ask about the results… (Enter to send, Shift+Enter for newline)',
+		suggestions = [
+			'How do the models compare on false alarm rate?',
+			'Which model has the best MAE at longer lead times?',
+			'Summarise the key findings from these runs.'
+		],
+		initialMessage = '',
+		externalPrompt = null,
+		externalPromptNonce = 0,
+		showArtifacts = true,
+		onSessionReady,
+		onJobsCreated,
+		onBenchmarkConfig,
+		onBenchmarkSubmitted
+	}: Props = $props();
 
 	// Session list
 	let sessions = $state<ChatSession[]>([]);
@@ -54,6 +91,14 @@
 	let renamingValue = $state('');
 	let savingTitle = $state(false);
 	let sendLocked = false;
+	let initialMessageHandled = $state(false);
+	let handledExternalPromptNonce = $state(0);
+	let pendingSubmission = $state<{ runId: string; jobs: Job[] } | null>(null);
+	let pendingApproval = $state<{
+		toolCallId: string;
+		config: BenchmarkRunSpec;
+		validation: BenchmarkValidation | null;
+	} | null>(null);
 
 	// Streaming assistant turn
 	let streamingTurn = $state<ChatMessage | null>(null);
@@ -91,6 +136,8 @@
 	}
 
 	function defaultSessionTitle(scope: Pick<ChatScope, 'key'>): string {
+		if (title) return title;
+		if (scopeKind === 'benchmark_setup') return 'Benchmark setup';
 		const firstJob = jobs[0];
 		const eventType = titleCase(firstJob?.params?.event_type ?? 'benchmark');
 		const region = titleCase(firstJob?.params?.region ?? scope.key);
@@ -106,7 +153,7 @@
 
 	function sessionScope(): ChatScope {
 		const scope = {
-			kind: 'benchmark_run_group',
+			kind: scopeKind,
 			key: scopeKey,
 			job_ids: jobs.map((j) => j.id)
 		} satisfies Omit<ChatScope, 'title'>;
@@ -123,13 +170,24 @@
 		const all = await getChatSessions(scope);
 		sessions = all;
 
-		const preferredSessionId =
-			sessionId && all.some((session) => session.id === sessionId)
+		if (preferredSessionId && !all.some((session) => session.id === preferredSessionId)) {
+			try {
+				await loadSession(preferredSessionId);
+				return;
+			} catch {
+				// Fall back to scope sessions below; the preferred setup chat may no longer exist.
+			}
+		}
+
+		const nextSessionId =
+			preferredSessionId && all.some((session) => session.id === preferredSessionId)
+				? preferredSessionId
+				: sessionId && all.some((session) => session.id === sessionId)
 				? sessionId
 				: (all[0]?.id ?? null);
 
-		if (preferredSessionId) {
-			await loadSession(preferredSessionId);
+		if (nextSessionId) {
+			await loadSession(nextSessionId);
 			return;
 		}
 		await createNewSession();
@@ -177,6 +235,13 @@
 			window: null,
 			label: artifact.label ?? name
 		};
+	}
+
+	function jobFromToolResult(result: unknown): Job | null {
+		if (!result || typeof result !== 'object' || !('job' in result)) return null;
+		const job = (result as { job?: unknown }).job;
+		if (!job || typeof job !== 'object' || !('id' in job)) return null;
+		return job as Job;
 	}
 
 	function sessionFigures(): GalleryFigure[] {
@@ -231,6 +296,10 @@
 	});
 
 	$effect(() => {
+		if (!showArtifacts && activeTab === 'artifacts') activeTab = 'chat';
+	});
+
+	$effect(() => {
 		const scope = sessionScope();
 		const token = scopeToken(scope);
 		if (!scope.key || token === loadedScopeToken) return;
@@ -245,13 +314,36 @@
 		})();
 	});
 
+	$effect(() => {
+		if (!sessionId || sending || initialMessageHandled || !initialMessage.trim()) return;
+		initialMessageHandled = true;
+		void submit(initialMessage.trim());
+	});
+
+	$effect(() => {
+		if (
+			!sessionId ||
+			sending ||
+			!externalPrompt?.trim() ||
+			externalPromptNonce === handledExternalPromptNonce
+		) {
+			return;
+		}
+		handledExternalPromptNonce = externalPromptNonce;
+		void submit(externalPrompt.trim());
+	});
+
 	async function loadSession(id: string) {
 		loadingSession = true;
 		error = null;
 		try {
 			const detail = await getChatSession(id);
 			sessionId = id;
+			onSessionReady?.(id);
 			messages = detail.transcript;
+			if (detail.benchmark_config) {
+				onBenchmarkConfig?.(detail.benchmark_config, detail.benchmark_validation ?? null);
+			}
 			sessions = sessions.map((session) =>
 				session.id === id ? { ...session, scope: detail.scope } : session
 			);
@@ -263,21 +355,27 @@
 		}
 	}
 
-	async function createNewSession() {
+	async function createNewSession(): Promise<string | null> {
 		error = null;
 		try {
 			const scope = sessionScope();
 			const session = await createChatSession(scope, scope.title ?? undefined);
+			if (session.benchmark_config) {
+				onBenchmarkConfig?.(session.benchmark_config, session.benchmark_validation ?? null);
+			}
 			sessions = [session, ...sessions].sort(
 				(a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 			);
 			sessionId = session.id;
+			onSessionReady?.(session.id);
 			messages = [];
 			loadedScopeToken = scopeToken(scope);
+			return session.id;
 		} catch {
 			error = 'Failed to create session.';
 		}
 		showSessionList = false;
+		return null;
 	}
 
 	function beginRename(session: ChatSession, e?: MouseEvent) {
@@ -358,14 +456,20 @@
 		});
 	});
 
-	async function submit() {
-		if (!input.trim() || sending || sendLocked || !sessionId) return;
+	async function submit(overrideText?: string) {
+		const text = (overrideText ?? input).trim();
+		if (!text || sending || sendLocked || loadingSession) return;
 		sendLocked = true;
-		const activeSessionId = sessionId;
-		const text = input.trim();
-		input = '';
+		const activeSessionId = sessionId ?? (await createNewSession());
+		if (!activeSessionId) {
+			sendLocked = false;
+			return;
+		}
+		if (!overrideText) input = '';
 		sending = true;
 		error = null;
+		pendingSubmission = null;
+		pendingApproval = null;
 
 		messages = [
 			...messages,
@@ -410,6 +514,8 @@
 					};
 				} else if (event.type === 'tool_result') {
 					if (!streamingTurn || streamingTurn.id !== event.turn_id) continue;
+					const createdJob = jobFromToolResult(event.result);
+					if (createdJob) onJobsCreated?.([createdJob]);
 					streamingTurn = {
 						...streamingTurn,
 						tool_calls: (streamingTurn.tool_calls ?? []).map((tc) =>
@@ -431,9 +537,25 @@
 					};
 				} else if (event.type === 'error') {
 					throw new Error(event.message || 'Chat request failed.');
+				} else if (event.type === 'benchmark_approval_request') {
+					onBenchmarkConfig?.(event.config, event.validation ?? null);
+					pendingApproval = {
+						toolCallId: event.tool_call_id,
+						config: event.config,
+						validation: event.validation ?? null
+					};
+				} else if (event.type === 'benchmark_config') {
+					onBenchmarkConfig?.(event.config, event.validation ?? null);
+					if (event.run_id && event.jobs?.length) {
+						pendingSubmission = { runId: event.run_id, jobs: event.jobs };
+					}
 				} else if (event.type === 'done') {
 					messages = [...messages, mergeArtifacts(streamingTurn, event.turn)];
 					streamingTurn = null;
+					if (pendingSubmission) {
+						onBenchmarkSubmitted?.(pendingSubmission.runId, pendingSubmission.jobs, activeSessionId);
+						pendingSubmission = null;
+					}
 					// Update session's message_count in the list
 					sessions = sessions
 						.map((s) =>
@@ -460,6 +582,39 @@
 		}
 	}
 
+	async function approveSubmit() {
+		if (!sessionId || !pendingApproval) return;
+		const approval = pendingApproval;
+		pendingApproval = null;
+		const { submitChatBenchmark } = await import('$lib/api');
+		try {
+			const response = await submitChatBenchmark(sessionId, {
+				tool_call_id: approval.toolCallId,
+				approved_config: approval.config
+			});
+			onBenchmarkConfig?.(response.benchmark_config, response.benchmark_validation);
+			onBenchmarkSubmitted?.(response.run_id, response.jobs, sessionId);
+		} catch (e: any) {
+			error = e.message ?? 'Benchmark submit failed.';
+		}
+	}
+
+	async function declineSubmit() {
+		if (!sessionId || !pendingApproval) return;
+		const approval = pendingApproval;
+		pendingApproval = null;
+		const { denyChatBenchmarkApproval } = await import('$lib/api');
+		try {
+			await denyChatBenchmarkApproval(sessionId, {
+				tool_call_id: approval.toolCallId,
+				approved_config: approval.config,
+				message: 'The user wants to revise the benchmark before running it.'
+			});
+		} catch (e: any) {
+			error = e.message ?? 'Benchmark approval update failed.';
+		}
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
@@ -480,8 +635,18 @@
 	}
 
 	const TOOL_LABELS: Record<string, string> = {
+		list_regions: 'checking regions',
+		list_datasets: 'checking datasets',
+		list_models: 'checking models',
+		get_benchmark_config: 'reading benchmark plan',
+		update_benchmark_config: 'updating benchmark plan',
+		validate_benchmark_config: 'validating benchmark plan',
+		submit_benchmark: 'submitting benchmark',
 		list_jobs: 'listing jobs',
+		list_failed_jobs: 'checking failed jobs',
 		get_job_info: 'fetching job info',
+		get_job_logs: 'reading job logs',
+		rerun_job: 'rerunning job',
 		get_job_metrics: 'loading metrics',
 		get_spatial_summary: 'loading spatial summary',
 		run_code_sandbox: 'running sandbox computation',
@@ -602,18 +767,20 @@
 		>
 			Chat
 		</button>
-		<button
-			class="panel-tab"
-			class:active={activeTab === 'artifacts'}
-			onclick={() => {
-				activeTab = 'artifacts';
-			}}
-		>
-			Artifacts
-			{#if galleryFigures.length > 0}
-				<span class="panel-tab-count">{galleryFigures.length}</span>
-			{/if}
-		</button>
+		{#if showArtifacts}
+			<button
+				class="panel-tab"
+				class:active={activeTab === 'artifacts'}
+				onclick={() => {
+					activeTab = 'artifacts';
+				}}
+			>
+				Artifacts
+				{#if galleryFigures.length > 0}
+					<span class="panel-tab-count">{galleryFigures.length}</span>
+				{/if}
+			</button>
+		{/if}
 	</div>
 
 	{#if activeTab === 'chat'}
@@ -625,35 +792,19 @@
 				</div>
 			{:else if messages.length === 0 && !sending}
 				<div class="empty-chat">
-					<p>Ask a question about the benchmark results above.</p>
+					<p>{emptyMessage}</p>
 					<div class="suggestions">
-						<button
-							class="suggestion"
-							onclick={() => {
-								input = 'How do the models compare on false alarm rate?';
-								submit();
-							}}
-						>
-							How do the models compare on false alarm rate?
-						</button>
-						<button
-							class="suggestion"
-							onclick={() => {
-								input = 'Which model has the best MAE at longer lead times?';
-								submit();
-							}}
-						>
-							Which model has the best MAE at longer lead times?
-						</button>
-						<button
-							class="suggestion"
-							onclick={() => {
-								input = 'Summarise the key findings from these runs.';
-								submit();
-							}}
-						>
-							Summarise the key findings from these runs.
-						</button>
+						{#each suggestions as suggestion}
+							<button
+								class="suggestion"
+								onclick={() => {
+									input = suggestion;
+									submit();
+								}}
+							>
+								{suggestion}
+							</button>
+						{/each}
 					</div>
 				</div>
 			{/if}
@@ -699,6 +850,21 @@
 					{/each}
 				{/if}
 			{/each}
+
+			{#if pendingApproval && !sending}
+				<div class="approval-card">
+					<p class="approval-title">Ready to run benchmark</p>
+					<p class="approval-subtitle">
+						{pendingApproval.config.model_names?.join(', ') ?? 'Selected models'} ·
+						{pendingApproval.config.region_name ?? 'Selected region'} ·
+						Days 1–{pendingApproval.config.forecast_window_days ?? 30}
+					</p>
+					<div class="approval-actions">
+						<button class="approval-run" onclick={approveSubmit}>Run benchmark</button>
+						<button class="approval-cancel" onclick={declineSubmit}>Not yet</button>
+					</div>
+				</div>
+			{/if}
 
 			{#if sending}
 				{@const runningTool = streamingTurn?.tool_calls?.find((tc) => tc.status === 'running')}
@@ -773,14 +939,14 @@
 			<textarea
 				bind:value={input}
 				onkeydown={handleKeydown}
-				placeholder="Ask about the results… (Enter to send, Shift+Enter for newline)"
+				placeholder={placeholder}
 				rows={2}
-				disabled={sending || !sessionId || loadingSession}
+				disabled={sending}
 			></textarea>
 			<button
 				class="send-btn"
-				onclick={submit}
-				disabled={sending || !input.trim() || !sessionId || loadingSession}
+				onclick={() => submit()}
+				disabled={sending || !input.trim() || loadingSession}
 			>
 				{sending ? '…' : 'Send'}
 			</button>
@@ -1540,6 +1706,57 @@
 	}
 	.tool-icon {
 		font-size: 0.7rem;
+	}
+
+	.approval-card {
+		border: 1px solid var(--color-accent-border);
+		border-radius: 0.5rem;
+		background: var(--color-accent-light);
+		padding: 0.85rem 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.approval-title {
+		margin: 0;
+		font-size: 0.88rem;
+		font-weight: 700;
+		color: var(--color-accent);
+	}
+	.approval-subtitle {
+		margin: 0;
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
+	}
+	.approval-actions {
+		display: flex;
+		gap: 0.5rem;
+		margin-top: 0.25rem;
+	}
+	.approval-run {
+		border: 0;
+		border-radius: 0.35rem;
+		background: var(--color-accent);
+		color: white;
+		padding: 0.45rem 0.9rem;
+		font: inherit;
+		font-size: 0.82rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.approval-cancel {
+		border: 1px solid var(--color-border);
+		border-radius: 0.35rem;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		padding: 0.45rem 0.9rem;
+		font: inherit;
+		font-size: 0.82rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.approval-cancel:hover {
+		color: var(--color-text);
 	}
 
 	.thinking {

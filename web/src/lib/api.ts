@@ -163,6 +163,30 @@ export type Dataset = {
 	obs_year_end?: number | null;
 };
 
+export type BenchmarkRunSpec = {
+	intent: string;
+	region_id?: string | null;
+	region_name?: string | null;
+	romp_region?: string | null;
+	event_type: string;
+	dataset_id?: string | null;
+	dataset_name?: string | null;
+	model_ids: string[];
+	model_names: string[];
+	forecast_window_days?: number | null;
+	status: 'collecting' | 'needs_confirmation' | 'runnable' | 'running';
+	missing_fields: string[];
+	assumptions: string[];
+	advanced_params: Record<string, unknown>;
+};
+
+export type BenchmarkSubmitResponse = {
+	run_id: string;
+	jobs: Job[];
+	benchmark_config: BenchmarkRunSpec;
+	benchmark_validation: BenchmarkValidation;
+};
+
 export type JobStatus = 'running' | 'complete' | 'failed';
 
 export type Job = {
@@ -394,6 +418,82 @@ export async function getJobCell(
 	return request<JobCellResponse>(`/jobs/${id}/cell?${params}`);
 }
 
+// ---- Workflow ----------------------------------------------------------------
+
+export type IRPort = {
+	id: string;
+	label: string;
+	type: string;
+	required?: boolean;
+	multiple?: boolean;
+};
+
+export type IRNode = {
+	id: string;
+	type: string;
+	label: string;
+	config: Record<string, unknown>;
+	inputs?: IRPort[];
+	outputs?: IRPort[];
+};
+
+export type IREdge = {
+	id: string;
+	source: { nodeId: string; portId: string };
+	target: { nodeId: string; portId: string };
+};
+
+export type WorkflowIR = {
+	version: '0.1';
+	graph: { nodes: IRNode[]; edges: IREdge[] };
+	run: { mode: 'interactive' | 'scheduled' };
+};
+
+export type WorkflowSchema = {
+	version: string;
+	portTypes: Record<string, { label: string; color: string; description: string }>;
+	nodeTypes: Record<string, {
+		label: string;
+		category: string;
+		description: string;
+		inputs: IRPort[];
+		outputs: IRPort[];
+		configSchema: { type: string; properties: Record<string, unknown>; required?: string[] };
+	}>;
+	availableModels: { id: string; display_name: string; region: string }[];
+	availableDatasets: { id: string; name: string; region: string }[];
+	rompDefaults: Record<string, unknown>;
+};
+
+export type WorkflowValidationError = {
+	node_id?: string;
+	field?: string;
+	message: string;
+};
+
+export type WorkflowValidationResult = {
+	valid: boolean;
+	errors: WorkflowValidationError[];
+};
+
+export async function getWorkflowSchema(): Promise<WorkflowSchema> {
+	return request<WorkflowSchema>('/workflow/schema');
+}
+
+export async function validateWorkflow(ir: WorkflowIR): Promise<WorkflowValidationResult> {
+	return request<WorkflowValidationResult>('/workflow/validate', {
+		method: 'POST',
+		body: JSON.stringify(ir)
+	});
+}
+
+export async function runWorkflow(ir: WorkflowIR): Promise<Job[]> {
+	return request<Job[]>('/workflow/run', {
+		method: 'POST',
+		body: JSON.stringify(ir)
+	});
+}
+
 // ---- Chat --------------------------------------------------------------------
 
 export type ChatSession = {
@@ -403,6 +503,9 @@ export type ChatSession = {
 	updated_at: string;
 	message_count: number;
 	scope: ChatScope;
+	benchmark_config?: BenchmarkRunSpec | null;
+	benchmark_validation?: BenchmarkValidation | null;
+	run_id?: string | null;
 };
 
 export type ChatMessage = {
@@ -415,10 +518,18 @@ export type ChatMessage = {
 };
 
 export type ChatScope = {
-	kind: 'benchmark_run_group' | 'job_set';
+	kind: 'benchmark_setup' | 'benchmark_run_group' | 'job_set';
 	key: string;
 	title?: string | null;
 	job_ids: string[];
+};
+
+export type BenchmarkValidation = {
+	can_run: boolean;
+	status: BenchmarkRunSpec['status'];
+	missing_fields: string[];
+	errors: string[];
+	warnings: string[];
 };
 
 export type ChatArtifact = {
@@ -456,6 +567,27 @@ export type ChatEvent =
 			result: unknown;
 	  }
 	| { type: 'artifact'; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+	| {
+			type: 'tool_approval_request';
+			turn_id: string;
+			tool_call: ChatToolCall;
+			metadata?: Record<string, unknown>;
+	  }
+	| {
+			type: 'benchmark_config';
+			turn_id: string;
+			config: BenchmarkRunSpec;
+			validation?: BenchmarkValidation | null;
+			run_id?: string | null;
+			jobs?: Job[] | null;
+	  }
+	| {
+			type: 'benchmark_approval_request';
+			turn_id: string;
+			tool_call_id: string;
+			config: BenchmarkRunSpec;
+			validation?: BenchmarkValidation | null;
+	  }
 	| { type: 'error'; message: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 
@@ -489,6 +621,52 @@ export async function updateChatSession(
 
 export async function deleteChatSession(id: string): Promise<void> {
 	await request<void>(`/chat/sessions/${id}`, { method: 'DELETE' });
+}
+
+export async function submitChatBenchmark(
+	sessionId: string,
+	approval?: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null }
+): Promise<BenchmarkSubmitResponse> {
+	return request<BenchmarkSubmitResponse>(`/chat/sessions/${sessionId}/benchmark/submit`, {
+		method: 'POST',
+		body: approval
+			? JSON.stringify({
+					approval: {
+						tool_call_id: approval.tool_call_id,
+						approved_config: approval.approved_config ?? null
+					}
+				})
+			: undefined
+	});
+}
+
+export async function denyChatBenchmarkApproval(
+	sessionId: string,
+	approval: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null; message?: string }
+): Promise<void> {
+	return request<void>(`/chat/sessions/${sessionId}/benchmark/approval`, {
+		method: 'POST',
+		body: JSON.stringify({
+			approval: {
+				tool_call_id: approval.tool_call_id,
+				approved_config: approval.approved_config ?? null
+			},
+			message: approval.message ?? 'The user declined to run the benchmark.'
+		})
+	});
+}
+
+export async function updateChatBenchmarkConfig(
+	sessionId: string,
+	patch: Partial<BenchmarkRunSpec>
+): Promise<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }> {
+	return request<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }>(
+		`/chat/sessions/${sessionId}/benchmark/config`,
+		{
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}
+	);
 }
 
 /**

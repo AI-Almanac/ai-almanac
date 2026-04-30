@@ -20,6 +20,7 @@ dependencies = [
     "modal>=1.4.1",
     "netcdf4>=1.7.4",
     "openai>=2.32.0",
+    "pydantic-ai>=1.89.1",
     "pydantic-settings>=2.13.1",
     "sqlalchemy>=2.0.49",
     "uvicorn[standard]>=0.44.0",

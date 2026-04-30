@@ -6,12 +6,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .benchmark_state import BenchmarkScope
 
-class ChatScope(BaseModel):
-    kind: Literal["benchmark_run_group", "job_set"] = "benchmark_run_group"
-    key: str
-    title: str | None = None
-    job_ids: list[str] = Field(default_factory=list)
+
+class ChatScope(BenchmarkScope):
+    pass
 
 
 class ChatArtifact(BaseModel):

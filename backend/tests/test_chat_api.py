@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pydantic_ai.messages import ModelRequest, ToolReturnPart
+from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -27,6 +29,153 @@ def _sse_events(body: str) -> list[dict]:
             continue
         events.append(json.loads(chunk.removeprefix("data: ")))
     return events
+
+
+def test_chat_json_helpers_treat_empty_strings_as_defaults() -> None:
+    from app.routers.chat import _json_dict, _json_list
+
+    assert _json_list("") == []
+    assert _json_list("  \n") == []
+    assert _json_dict("") == {}
+    assert _json_dict("  \n") == {}
+
+
+def test_parse_llm_event_skips_blank_events() -> None:
+    from app.routers.chat import _parse_llm_event
+
+    assert _parse_llm_event("") is None
+    assert _parse_llm_event("  \n") is None
+    assert _parse_llm_event('{"type":"done"}') == {"type": "done"}
+
+
+@pytest.mark.asyncio
+async def test_trim_chat_history_limits_messages_and_tool_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import trim_chat_history
+
+    monkeypatch.setattr("app.services.llm.settings.llm_history_max_messages", 2)
+    monkeypatch.setattr("app.services.llm.settings.llm_tool_result_max_chars", 8)
+
+    messages = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_logs",
+                    tool_call_id="call-1",
+                    content={
+                        "logs": "0123456789abcdef",
+                        "artifacts": [{"id": "artifact-1"}],
+                    },
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_metrics",
+                    tool_call_id="call-2",
+                    content={"metric": "short"},
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_logs",
+                    tool_call_id="call-3",
+                    content="abcdefghijk",
+                )
+            ]
+        ),
+    ]
+
+    trimmed = await trim_chat_history(messages)
+
+    assert len(trimmed) == 2
+    assert isinstance(trimmed[0], ModelRequest)
+    assert isinstance(trimmed[0].parts[0], ToolReturnPart)
+    assert trimmed[0].parts[0].content == {"metric": "short"}
+    assert isinstance(trimmed[1], ModelRequest)
+    assert isinstance(trimmed[1].parts[0], ToolReturnPart)
+    assert trimmed[1].parts[0].content == (
+        "abcdefgh\n\n[tool result trimmed from conversation history]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import ChatDeps, _build_agent
+    from app.services.chat_state import ChatScope
+
+    monkeypatch.setattr("app.services.llm.settings.llm_base_url", "http://test.local")
+    model = TestModel(call_tools=[], custom_output_text="ready")
+    scope = ChatScope(
+        kind="benchmark_run_group",
+        key="group-1",
+        title="Group 1",
+        job_ids=[],
+    )
+    agent = _build_agent(scope)
+
+    with agent.override(model=model):
+        result = await agent.run(
+            "hello",
+            deps=ChatDeps(user_id="user-1", session_id="session-1", scope=scope),
+        )
+
+    assert result.output == "ready"
+    assert model.last_model_request_parameters is not None
+    tool_names = {
+        tool.name for tool in model.last_model_request_parameters.function_tools
+    }
+    assert {
+        "list_regions",
+        "update_benchmark_config",
+        "submit_benchmark",
+        "list_failed_jobs",
+        "get_job_logs",
+        "get_job_metrics",
+    }.issubset(tool_names)
+
+
+@pytest.mark.asyncio
+async def test_stream_response_runs_with_pydantic_ai_test_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import llm
+    from app.services.chat_state import ChatScope
+
+    monkeypatch.setattr(
+        "app.services.llm._build_model",
+        lambda: TestModel(call_tools=[], custom_output_text="Synthetic answer."),
+    )
+    scope = ChatScope(
+        kind="benchmark_run_group",
+        key="group-1",
+        title="Group 1",
+        job_ids=[],
+    )
+
+    events = [
+        json.loads(event)
+        async for event in llm.stream_response(
+            [],
+            "user-1",
+            "session-1",
+            scope,
+            latest_user_message="Summarize this run",
+        )
+    ]
+
+    assert "".join(
+        event["content"] for event in events if event["type"] == "text_delta"
+    ) == "Synthetic answer."
+    assert events[-1]["type"] == "done"
+    assert events[-1]["turn"]["content"] == "Synthetic answer."
+    assert events[-1]["provider_state"]
 
 
 async def _create_session(
@@ -110,12 +259,15 @@ async def test_send_message_persists_user_and_assistant_turns(
     session_id = created["id"]
 
     async def fake_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
-        assert provider_state[-1] == {"role": "user", "content": "How did this run do?"}
+        assert latest_user_message == "How did this run do?"
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "It"})
         yield json.dumps(
@@ -126,8 +278,7 @@ async def test_send_message_persists_user_and_assistant_turns(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state
-                + [{"role": "assistant", "content": "It finished successfully."}],
+                "provider_state": [],
             }
         )
 
@@ -165,10 +316,13 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     session_id = created["id"]
 
     async def failing_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "Partial"})
@@ -213,10 +367,13 @@ async def test_send_message_refreshes_scope_job_ids(
     await _insert_job(_test_engine, user_id, job_id)
 
     async def fake_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id_arg: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         assert scope.job_ids == [job_id]
@@ -228,8 +385,7 @@ async def test_send_message_refreshes_scope_job_ids(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state
-                + [{"role": "assistant", "content": "Scoped response"}],
+                "provider_state": [],
             }
         )
 
@@ -258,7 +414,10 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.services.chat_state import ChatArtifact, ChatScope
-    from app.services.llm import execute_tool
+    from app.services.chat_tools import (
+        CodeSandboxRequest,
+        run_code_sandbox,
+    )
 
     artifact_bytes = b"fake-webp-bytes"
 
@@ -307,23 +466,20 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
         )
 
     monkeypatch.setattr(
-        "app.services.llm.create_chat_figure_artifact",
+        "app.services.chat_tools.create_chat_figure_artifact",
         fake_create_chat_figure_artifact,
     )
 
-    result = await execute_tool(
-        "run_code_sandbox",
-        {"code": "def compute() -> dict:\n    return {}"},
+    result = await run_code_sandbox(
+        CodeSandboxRequest(code="def compute() -> dict:\n    return {}"),
         "user-1",
         ChatScope(key="group-1"),
         "session-1",
     )
 
-    assert result.parsed["ok"] is True
-    assert result.parsed["result"] == {"summary": "created plot"}
-    assert len(result.parsed["artifacts"]) == 1
-    assert result.parsed["artifacts"][0]["id"] == "artifact-1"
-    assert result.parsed["artifacts"][0]["label"] == "Plot"
-    assert result.parsed["artifacts"][0]["filename"] == "plot.webp"
-    assert len(result.artifacts) == 1
-    assert result.artifacts[0].id == "artifact-1"
+    assert result["ok"] is True
+    assert result["result"] == {"summary": "created plot"}
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["id"] == "artifact-1"
+    assert result["artifacts"][0]["label"] == "Plot"
+    assert result["artifacts"][0]["filename"] == "plot.webp"

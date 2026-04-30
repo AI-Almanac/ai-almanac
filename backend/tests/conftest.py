@@ -47,9 +47,7 @@ async def client(
     from app.main import app
 
     monkeypatch.setattr(db_mod, "engine", _test_engine)
-    monkeypatch.setattr(
-        "app.routers.chat.settings.llm_base_url", "http://test-llm.local"
-    )
+    monkeypatch.setattr("app.services.llm.settings.llm_base_url", "http://test-llm.local")
     monkeypatch.setattr("app.auth.settings.globus_client_id", "")
     monkeypatch.setattr("app.auth.settings.globus_client_secret", "")
 

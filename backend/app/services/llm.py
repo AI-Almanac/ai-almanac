@@ -1,224 +1,70 @@
 """
-LLM service — OpenAI-compatible client with tool definitions for job data access.
+LLM service — PydanticAI agent with typed tools for job data access.
 
-Provider is configured via LLM_BASE_URL / LLM_MODEL / LLM_API_KEY. The current
-implementation targets OpenAI chat-completions-compatible endpoints.
+Provider is configured via LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL / LLM_API_KEY.
+The default provider targets OpenAI chat-completions-compatible endpoints.
 
-Tools give the LLM structured access to job results without pre-loading
-everything into the prompt. Add new tools to TOOLS and _EXECUTORS.
+Tools give the LLM structured access to benchmark state and job results without
+pre-loading everything into the prompt. The backend owns durable state and
+validation; the LLM operates through typed tool calls.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 import re
-from dataclasses import dataclass, field
-from typing import AsyncIterator
+from dataclasses import dataclass, replace
+from typing import AsyncIterator, Sequence
 
-import sqlalchemy as sa
+from pydantic_ai import (
+    Agent,
+    AgentRunResultEvent,
+    ApprovalRequired,
+    DeferredToolRequests,
+    DeferredToolResults,
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    RunContext,
+)
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    ModelRequest,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ToolReturnPart,
+)
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.toolsets import FunctionToolset
+from ..config import settings
+from . import chat_tools
+from .benchmark_state import BenchmarkRunSpec
+from .chat_state import (
+    ChatArtifact,
+    ChatScope,
+    ChatToolCall,
+    ChatTurn,
+    new_turn_id,
+    utc_now,
+)
 
-from .chat_artifacts import create_chat_figure_artifact
-from .chat_state import ChatScope, ChatToolCall, ChatTurn, new_turn_id, utc_now
-
-logger = logging.getLogger(__name__)
 _SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
+_SUPPORTED_LLM_PROVIDERS = {"openai-compatible", "pydantic-ai"}
+_TRUNCATED_TOOL_RESULT = "[tool result trimmed from conversation history]"
 
 
 @dataclass
-class ToolExecutionResult:
-    content: str
-    parsed: object = None
-    artifacts: list = field(default_factory=list)
+class ChatDeps:
+    user_id: str
+    session_id: str
+    scope: ChatScope
 
-
-# ---------------------------------------------------------------------------
-# Tool definitions (OpenAI function-calling schema)
-# ---------------------------------------------------------------------------
-
-TOOLS: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_jobs",
-            "description": (
-                "List the user's completed benchmark jobs. Returns job ID, model name, "
-                "region, dataset ID, and completion time. Use this to discover what "
-                "runs are available before fetching metrics."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_job_info",
-            "description": (
-                "Get configuration details for a specific job: model name, region, "
-                "obs dataset, ROMP parameters (start/end date, climatology years, etc.)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "job_id": {"type": "string", "description": "The job UUID"},
-                },
-                "required": ["job_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_job_metrics",
-            "description": (
-                "Get aggregate spatial statistics for a completed job. Returns mean, "
-                "min, max, and percentiles (p25/p50/p75/p90) for each metric "
-                "(false_alarm_rate, miss_rate, mean_mae) across all forecast windows. "
-                "Use this to compare model skill across jobs."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "job_id": {"type": "string", "description": "The job UUID"},
-                },
-                "required": ["job_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_spatial_summary",
-            "description": (
-                "Get the spatial distribution of a specific metric for a job. "
-                "Returns per-gridpoint statistics showing where the model performs "
-                "well or poorly geographically. Useful for identifying regional biases."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "job_id": {"type": "string", "description": "The job UUID"},
-                    "model": {
-                        "type": "string",
-                        "description": "Model name (e.g. 'aifs')",
-                    },
-                    "window": {
-                        "type": "string",
-                        "description": "Forecast window (e.g. '16-30')",
-                    },
-                    "metric": {
-                        "type": "string",
-                        "enum": ["false_alarm_rate", "miss_rate", "mean_mae"],
-                        "description": "Metric to summarise",
-                    },
-                },
-                "required": ["job_id", "model", "window", "metric"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_code_sandbox",
-            "description": (
-                "Run arbitrary Python code in an isolated sandbox with no network access. "
-                "Use this for general computation — statistics, simulations, cross-tabulations — "
-                "when you don't need job NC files. "
-                "You must define a function `def compute() -> dict` that returns a JSON-serialisable dict. "
-                "Available libraries: xarray, numpy, scipy, pandas, matplotlib.\n\n"
-                "To produce a plot, use matplotlib with the Agg backend and the provided "
-                "`save_figure(fig, filename='figure.webp', format='webp')` helper. "
-                "Do not use BytesIO, base64, `fig.savefig` to a buffer, or return keys like "
-                "`image`, `image_data`, `figure`, or `figure_data`. "
-                "Return artifact metadata under an `artifacts` key:\n"
-                "```python\n"
-                "import matplotlib\n"
-                "matplotlib.use('Agg')\n"
-                "import matplotlib.pyplot as plt\n"
-                "\n"
-                "def compute() -> dict:\n"
-                "    fig, ax = plt.subplots()\n"
-                "    ax.plot([1, 2, 3], [4, 5, 6])\n"
-                "    artifact = save_figure(fig, filename='plot.webp', format='webp')\n"
-                "    plt.close(fig)\n"
-                "    return {'artifacts': [artifact]}\n"
-                "```"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": (
-                            "Python source defining `def compute() -> dict`. "
-                            "Must be self-contained. To return a plot, use save_figure(...) and "
-                            "return the resulting metadata under an 'artifacts' key. Do not "
-                            "encode images manually or return base64/image_data fields."
-                        ),
-                    },
-                },
-                "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_code",
-            "description": (
-                "Execute custom Python analysis code against the NC output files for a job. "
-                "Use this when the built-in metrics don't answer the question — e.g. to compute "
-                "a custom metric, build a histogram, or cross-tabulate results. "
-                "The code runs in an isolated sandbox with no network access. "
-                "You must define a function `def compute(nc_dir: str) -> dict` that opens the "
-                "NC files in `nc_dir` using xarray/numpy and returns a JSON-serialisable dict. "
-                "Available libraries: xarray, numpy, scipy, pandas, h5netcdf, matplotlib.\n\n"
-                "To produce a plot, use matplotlib with the Agg backend and the provided "
-                "`save_figure(fig, filename='figure.webp', format='webp')` helper. "
-                "Do not use BytesIO, base64, `fig.savefig` to a buffer, or return keys like "
-                "`image`, `image_data`, `figure`, or `figure_data`. "
-                "Return artifact metadata under an `artifacts` key:\n"
-                "```python\n"
-                "import matplotlib\n"
-                "matplotlib.use('Agg')\n"
-                "import matplotlib.pyplot as plt\n"
-                "\n"
-                "def compute(nc_dir: str) -> dict:\n"
-                "    # ... load data from nc_dir ...\n"
-                "    fig, ax = plt.subplots()\n"
-                "    ax.plot(windows, mae_values)\n"
-                "    artifact = save_figure(fig, filename='plot.webp', format='webp')\n"
-                "    plt.close(fig)\n"
-                "    return {'artifacts': [artifact]}\n"
-                "```\n"
-                "Returns the dict your function returns, or an error message."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "job_id": {"type": "string", "description": "The job UUID"},
-                    "code": {
-                        "type": "string",
-                        "description": (
-                            "Python source defining `def compute(nc_dir: str) -> dict`. "
-                            "Must be self-contained (no imports outside the stdlib + xarray/numpy/scipy/pandas/matplotlib). "
-                            "To return a plot, use save_figure(...) and return the resulting metadata "
-                            "under an 'artifacts' key. Do not encode images manually or return "
-                            "base64/image_data fields."
-                        ),
-                    },
-                },
-                "required": ["job_id", "code"],
-            },
-        },
-    },
-]
-
-_CODE_TOOL_NAMES = {"run_code", "run_code_sandbox"}
 
 SYSTEM_PROMPT = """You are an expert in AI weather prediction and monsoon onset forecasting, \
-helping researchers interpret benchmark results from ROMP (Rainfall Onset Metrics Package).
+helping researchers set up, run, and interpret benchmark results from ROMP (Rainfall Onset Metrics Package).
 
 ## Domain knowledge
 
@@ -238,6 +84,27 @@ climatology baseline — skill is only meaningful relative to that reference.
 
 ## Approach
 
+- Treat the user as being in one continuous benchmark session. During setup, answer normally in prose \
+and use benchmark tools to inspect system state, update the canonical benchmark config, validate it, \
+and submit it. Never claim the benchmark config changed unless a tool result confirms it.
+- If the user asks a conceptual or explanatory question such as "what does climatology mean?", \
+"what is a probabilistic model?", "how do these metrics relate?", or "why would I choose this?", \
+answer directly from your domain knowledge. Do not update, validate, submit, or summarize the \
+benchmark configuration unless the user also asks for a concrete plan change.
+- If a benchmark plan already exists and the user asks an unrelated or conceptual question, preserve \
+the existing plan silently and answer the question. Do not end every response with a run-plan summary.
+- You are not a JSON generator. Explain concepts, ask clarifying questions, and discuss tradeoffs in \
+natural language. Operate the application only through tools.
+- Use `list_regions`, `list_datasets`, and `list_models` when you need to know what the system can run.
+- Use `update_benchmark_config` when the user asks for a concrete plan change. Use \
+`validate_benchmark_config` after meaningful changes. Use `submit_benchmark` when the user clearly \
+asks to run, submit, start, or launch the benchmark. That tool is protected by human approval, so \
+call it directly instead of inventing a confirmation flow. Never claim a benchmark was submitted \
+unless the tool result confirms it.
+- When the user asks about a failed run, do not ask them to paste logs. Use `list_failed_jobs`, \
+`get_job_info`, and `get_job_logs` to inspect the failure. Explain the cause and propose the smallest \
+validated config or job-parameter change. Use `rerun_job` only after the user asks to rerun or confirms \
+the fix.
 - Use tools to fetch only the data needed for the question. Do not dump all available metrics \
 into the response unprompted.
 - Think before fetching: identify what data is required, then make targeted tool calls.
@@ -268,743 +135,518 @@ and get to the insight.
 - When uncertain about what a metric value means in context, say so explicitly."""
 
 
-def _tool_unavailable_reason(name: str) -> str | None:
-    from ..config import settings
-
-    if name == "run_code_sandbox":
-        if not settings.enable_run_code_sandbox:
-            return "run_code_sandbox is disabled by configuration"
-        if not settings.modal_token_id or not settings.modal_token_secret:
-            return "run_code_sandbox requires Modal credentials and is not available in local dev by default"
-        return None
-
-    if name == "run_code":
-        if not settings.enable_run_code:
-            return "run_code is disabled by configuration"
-        if settings.storage_backend.lower() != "gcs":
-            return (
-                "run_code requires GCS storage and is not available in local dev mode"
-            )
-        if not settings.gcs_outputs_bucket:
-            return "run_code requires a configured GCS outputs bucket"
-        if not settings.modal_token_id or not settings.modal_token_secret:
-            return "run_code requires Modal credentials"
-        return None
-
-    return None
-
-
-def get_available_tools() -> list[dict]:
-    return [
-        tool
-        for tool in TOOLS
-        if _tool_unavailable_reason(tool["function"]["name"]) is None
-    ]
-
-
-def _truncate_for_context(text: str, max_chars: int, label: str) -> str:
-    if len(text) <= max_chars:
-        return text
-    omitted = len(text) - max_chars
-    truncated = text[:max_chars].rstrip()
-    return f"{truncated}\n\n[{label} truncated for provider context; omitted {omitted} characters]"
-
-
-def _compact_tool_arguments(arguments: str, name: str) -> str:
-    from ..config import settings
-
-    if name not in _CODE_TOOL_NAMES or not arguments:
-        return arguments
-    try:
-        payload = json.loads(arguments)
-    except json.JSONDecodeError:
-        return _truncate_for_context(
-            arguments, settings.llm_code_context_max_chars, f"{name} arguments"
-        )
-
-    code = payload.get("code")
-    if isinstance(code, str):
-        compact_code = _truncate_for_context(
-            code, settings.llm_code_context_max_chars, f"{name} code"
-        )
-        if compact_code != code:
-            payload["code"] = compact_code
-            payload["code_truncated_for_context"] = True
-    return json.dumps(payload, separators=(",", ":"))
-
-
-def _compact_provider_message(message: dict) -> dict:
-    from ..config import settings
-
-    compact = dict(message)
-    role = compact.get("role")
-
-    if role == "tool" and isinstance(compact.get("content"), str):
-        compact["content"] = _truncate_for_context(
-            compact["content"],
-            settings.llm_tool_result_max_chars,
-            "tool result",
-        )
-
-    tool_calls = compact.get("tool_calls")
-    if isinstance(tool_calls, list):
-        compact["tool_calls"] = []
-        for tool_call in tool_calls:
-            tool_call_copy = dict(tool_call)
-            function = dict(tool_call_copy.get("function") or {})
-            name = str(function.get("name") or "")
-            arguments = function.get("arguments")
-            if isinstance(arguments, str):
-                function["arguments"] = _compact_tool_arguments(arguments, name)
-            tool_call_copy["function"] = function
-            compact["tool_calls"].append(tool_call_copy)
-
-    return compact
-
-
-def assemble_provider_messages(messages: list[dict]) -> list[dict]:
-    """
-    Build the prompt context sent to the model from durable session state.
-
-    This keeps transcript storage richer than provider context by compacting
-    historical tool payloads and code-heavy tool arguments before reuse.
-    """
-    return [_compact_provider_message(message) for message in messages]
-
-
-# ---------------------------------------------------------------------------
-# Tool executors
-# ---------------------------------------------------------------------------
-
-
-def _scope_conditions(scope: ChatScope, jobs_table: sa.Table) -> list:
-    """Return a list of SQLAlchemy WHERE-clause expressions for the given scope."""
-    if scope.kind == "benchmark_run_group":
-        if scope.job_ids:
-            return [
-                sa.or_(
-                    jobs_table.c.run_id == sa.bindparam("scope_key"),
-                    jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True)),
-                )
-            ]
-        return [jobs_table.c.run_id == sa.bindparam("scope_key")]
-    if scope.job_ids:
-        return [jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True))]
-    return []
-
-
-def _scope_params(scope: ChatScope) -> dict:
-    """Return bind-parameter values that correspond to _scope_conditions."""
-    params: dict = {}
-    if scope.kind == "benchmark_run_group":
-        params["scope_key"] = scope.key
-    if scope.job_ids:
-        params["job_ids"] = scope.job_ids
-    return params
-
-
-# Lightweight table reference for building typed WHERE clauses.
-_jobs = sa.table(
-    "jobs",
-    sa.column("id"),
-    sa.column("user_id"),
-    sa.column("status"),
-    sa.column("run_id"),
-    sa.column("config_json"),
-    sa.column("completed_at"),
-    sa.column("created_at"),
-)
-
-
-async def _exec_list_jobs(args: dict, user_id: str, scope: ChatScope) -> str:
-    from ..database import get_db
-
-    query = (
-        sa.select(
-            _jobs.c.id,
-            _jobs.c.config_json,
-            _jobs.c.status,
-            _jobs.c.completed_at,
-            _jobs.c.created_at,
-        )
-        .where(_jobs.c.user_id == sa.bindparam("uid"))
-        .where(_jobs.c.status == "complete")
-    )
-    for cond in _scope_conditions(scope, _jobs):
-        query = query.where(cond)
-    query = query.order_by(_jobs.c.completed_at.desc())
-
-    async with get_db() as conn:
-        rows = (
-            (await conn.execute(query, {"uid": user_id, **_scope_params(scope)}))
-            .mappings()
-            .fetchall()
-        )
-        rows = [dict(r) for r in rows]
-    jobs = []
-    for r in rows:
-        cfg = json.loads(r.get("config_json") or "{}")
-        jobs.append(
-            {
-                "job_id": r["id"],
-                "model_name": cfg.get("model_name"),
-                "region": cfg.get("romp_params", {}).get("region"),
-                "dataset_id": cfg.get("dataset_id") or r.get("dataset_id"),
-                "completed_at": r["completed_at"],
-            }
-        )
-    return json.dumps(jobs)
-
-
-async def _exec_get_job_info(args: dict, user_id: str, scope: ChatScope) -> str:
-    from ..database import get_db
-
-    job_id = args["job_id"]
-    query = (
-        sa.select(_jobs.c.config_json, _jobs.c.status)
-        .where(_jobs.c.id == sa.bindparam("id"))
-        .where(_jobs.c.user_id == sa.bindparam("uid"))
-    )
-    for cond in _scope_conditions(scope, _jobs):
-        query = query.where(cond)
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    query, {"id": job_id, "uid": user_id, **_scope_params(scope)}
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-        row = dict(row) if row else None
-    if not row:
-        return json.dumps({"error": f"Job {job_id} not found"})
-    cfg = json.loads(row.get("config_json") or "{}")
-    return json.dumps(
-        {
-            "job_id": job_id,
-            "status": row["status"],
-            "model_name": cfg.get("model_name"),
-            "model_dir": cfg.get("model_dir"),
-            "obs_dir": cfg.get("obs_dir"),
-            "romp_params": cfg.get("romp_params", {}),
-        }
+def _instructions_for_scope(scope: ChatScope) -> str:
+    if not scope.job_ids:
+        return SYSTEM_PROMPT
+    ids_str = ", ".join(scope.job_ids)
+    return (
+        f"{SYSTEM_PROMPT}\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
+        f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
     )
 
 
-def _job_status_query(scope: ChatScope):
-    """Build a SELECT status query for a single job filtered by scope."""
-    query = (
-        sa.select(_jobs.c.status)
-        .where(_jobs.c.id == sa.bindparam("id"))
-        .where(_jobs.c.user_id == sa.bindparam("uid"))
-    )
-    for cond in _scope_conditions(scope, _jobs):
-        query = query.where(cond)
-    return query
+def serialize_model_messages(messages: Sequence[ModelMessage]) -> list[dict]:
+    """Serialize pydantic-ai message history to JSON-compatible objects."""
+    return json.loads(ModelMessagesTypeAdapter.dump_json(list(messages)))
 
 
-async def _exec_get_job_metrics(args: dict, user_id: str, scope: ChatScope) -> str:
-    import numpy as np
-    from ..database import get_db
-    from ..services.storage import get_storage
-
-    job_id = args["job_id"]
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    _job_status_query(scope),
-                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-        row = dict(row) if row else None
-    if not row:
-        return json.dumps({"error": f"Job {job_id} not found"})
-    if row["status"] != "complete":
-        return json.dumps({"error": f"Job {job_id} is not complete"})
-
-    def _load():
-        import xarray as xr
-
-        storage = get_storage()
-        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
-
-        if storage.is_local:
-            output_dir = storage._outputs_dir / job_id / "output"
-            nc_files = (
-                sorted(output_dir.glob("spatial_metrics_*.nc"))
-                if output_dir.exists()
-                else []
-            )
-        else:
-            import gcsfs
-
-            fs = gcsfs.GCSFileSystem()
-            prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
-            nc_files = [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
-
-        def _open(path):
-            if storage.is_local:
-                return xr.open_dataset(path)
-            with fs.open(str(path).removeprefix("gs://"), "rb") as f:
-                return xr.load_dataset(f, engine="h5netcdf")
-
-        windows = []
-        for nc in nc_files:
-            ds = _open(nc)
-            model = str(ds.attrs.get("model", ""))
-            window = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-            metrics = {}
-            for var in ds.data_vars:
-                arr = ds[var].values.astype(float)
-                valid = arr[~np.isnan(arr)]
-                if len(valid) == 0:
-                    continue
-                var_str = str(var)
-                metrics[var_str] = {
-                    "mean": round(float(np.mean(valid)), 4),
-                    "p50": round(float(np.percentile(valid, 50)), 4),
-                    "p90": round(float(np.percentile(valid, 90)), 4),
-                    "min": round(float(np.min(valid)), 4),
-                    "max": round(float(np.max(valid)), 4),
-                    "unit": UNIT_MAP.get(var_str, "days"),
-                }
-            ds.close()
-            windows.append({"model": model, "window": window, "metrics": metrics})
-        windows.sort(key=lambda w: (w["model"] == "climatology", w["window"]))
-        return windows
-
-    windows = await asyncio.to_thread(_load)
-    return json.dumps({"job_id": job_id, "windows": windows})
+def deserialize_model_messages(value: object) -> list[ModelMessage]:
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else []
+    return ModelMessagesTypeAdapter.validate_python(value or [])
 
 
-async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) -> str:
-    import numpy as np
-    from ..database import get_db
-    from ..services.storage import get_storage
-
-    job_id = args["job_id"]
-    model = args["model"]
-    window = args["window"]
-    metric = args["metric"]
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    _job_status_query(scope),
-                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-        row = dict(row) if row else None
-    if not row:
-        return json.dumps({"error": f"Job {job_id} not found"})
-    if row["status"] != "complete":
-        return json.dumps({"error": f"Job {job_id} is not complete"})
-
-    def _load():
-        import xarray as xr
-
-        storage = get_storage()
-        w_alt = window.replace("-", ",")
-
-        if storage.is_local:
-            output_dir = storage._outputs_dir / job_id / "output"
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
-            if not matches:
-                matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
-        else:
-            import gcsfs
-
-            fs = gcsfs.GCSFileSystem()
-            base = f"{storage._outputs_bucket}/{job_id}/output"
-            matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
-            if not matches:
-                matches = fs.glob(f"{base}/spatial_metrics_{model}_{w_alt}.nc")
-            matches = [f"gs://{f}" for f in matches]
-
-        if not matches:
-            return {"error": f"No grid file found for {model}/{window}"}
-
-        if storage.is_local:
-            ds = xr.open_dataset(matches[0])
-        else:
-            with fs.open(str(matches[0]).removeprefix("gs://"), "rb") as f:
-                ds = xr.load_dataset(f, engine="h5netcdf")
-
-        if metric not in ds.data_vars:
-            ds.close()
-            return {"error": f"Metric {metric!r} not in dataset"}
-
-        arr = ds[metric].values.astype(float)
-        valid = arr[~np.isnan(arr)]
-        lats = ds.lat.values.tolist()
-        lons = ds.lon.values.tolist()
-        ds.close()
-
-        if len(valid) == 0:
-            return {"error": "No valid data points"}
-
-        return {
-            "job_id": job_id,
-            "model": model,
-            "window": window,
-            "metric": metric,
-            "grid_shape": {"lats": len(lats), "lons": len(lons)},
-            "lat_range": [round(min(lats), 2), round(max(lats), 2)],
-            "lon_range": [round(min(lons), 2), round(max(lons), 2)],
-            "valid_points": int(len(valid)),
-            "stats": {
-                "mean": round(float(np.mean(valid)), 4),
-                "p25": round(float(np.percentile(valid, 25)), 4),
-                "p50": round(float(np.percentile(valid, 50)), 4),
-                "p75": round(float(np.percentile(valid, 75)), 4),
-                "p90": round(float(np.percentile(valid, 90)), 4),
-                "min": round(float(np.min(valid)), 4),
-                "max": round(float(np.max(valid)), 4),
-            },
-        }
-
-    result = await asyncio.to_thread(_load)
-    return json.dumps(result)
+def llm_is_configured() -> bool:
+    provider = settings.llm_provider.lower()
+    if provider == "openai-compatible":
+        return bool(settings.llm_base_url)
+    if provider == "pydantic-ai":
+        return bool(settings.llm_model)
+    return False
 
 
-async def _exec_run_code_sandbox(
-    args: dict, user_id: str, scope: ChatScope
-) -> dict | str:
-    reason = _tool_unavailable_reason("run_code_sandbox")
-    if reason:
-        return json.dumps({"error": reason})
-
-    code = args["code"]
-
-    def _run():
-        import modal
-
-        fn = modal.Function.from_name("almanac-romp", "run_code_sandbox")
-        return fn.remote(code)
-
-    try:
-        result = await asyncio.to_thread(_run)
-        return result
-    except Exception as exc:
-        logger.exception("run_code_sandbox failed")
-        return json.dumps({"ok": False, "error": str(exc)})
-
-
-async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> dict | str:
-    from ..database import get_db
-    from ..services.storage import get_storage
-
-    reason = _tool_unavailable_reason("run_code")
-    if reason:
-        return json.dumps({"error": reason})
-
-    job_id = args["job_id"]
-    code = args["code"]
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    _job_status_query(scope),
-                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-        row = dict(row) if row else None
-    if not row:
-        return json.dumps({"error": f"Job {job_id} not found"})
-    if row["status"] != "complete":
-        return json.dumps({"error": f"Job {job_id} is not complete"})
-
-    storage = get_storage()
-
-    def _run():
-        import modal
-
-        fn = modal.Function.from_name("almanac-romp", "run_code")
-        return fn.remote(job_id, storage._outputs_bucket, code)
-
-    try:
-        result = await asyncio.to_thread(_run)
-        return result
-    except Exception as exc:
-        logger.exception("run_code failed")
-        return json.dumps({"ok": False, "error": str(exc)})
-
-
-# Registry — add new tools here without touching the streaming logic.
-_EXECUTORS: dict[str, callable] = {
-    "list_jobs": _exec_list_jobs,
-    "get_job_info": _exec_get_job_info,
-    "get_job_metrics": _exec_get_job_metrics,
-    "get_spatial_summary": _exec_get_spatial_summary,
-    "run_code_sandbox": _exec_run_code_sandbox,
-    "run_code": _exec_run_code,
-}
-
-
-async def _prepare_tool_result(
-    raw_result: object, session_id: str, user_id: str
-) -> ToolExecutionResult:
-    if isinstance(raw_result, str):
-        try:
-            parsed = json.loads(raw_result)
-        except json.JSONDecodeError:
-            parsed = {"raw": raw_result}
-        return ToolExecutionResult(content=raw_result, parsed=parsed)
-
-    if not isinstance(raw_result, dict):
-        content = json.dumps({"value": raw_result})
-        return ToolExecutionResult(content=content, parsed={"value": raw_result})
-
-    parsed = dict(raw_result)
-    saved_artifacts = []
-    sanitized_artifacts = []
-    for artifact_meta in raw_result.get("artifacts", []):
-        if not isinstance(artifact_meta, dict):
-            continue
-        data = artifact_meta.get("data")
-        if artifact_meta.get("kind") == "figure" and isinstance(
-            data, (bytes, bytearray)
-        ):
-            artifact = await create_chat_figure_artifact(
-                session_id,
-                user_id,
-                bytes(data),
-                label=artifact_meta.get("label"),
-                filename=artifact_meta.get("filename"),
-                media_type=artifact_meta.get("media_type"),
-            )
-            saved_artifacts.append(artifact)
-            sanitized_artifacts.append(
-                {
-                    "id": artifact.id,
-                    "kind": artifact.kind,
-                    "url": artifact.url,
-                    "label": artifact.label,
-                    "media_type": artifact.media_type,
-                    "filename": artifact.filename,
-                    "created_at": artifact.created_at.isoformat(),
-                }
-            )
-
-    payload = {key: value for key, value in parsed.items() if key != "artifacts"}
-    if sanitized_artifacts:
-        payload["artifacts"] = sanitized_artifacts
-    content = json.dumps(payload)
-    return ToolExecutionResult(
-        content=content, parsed=payload, artifacts=saved_artifacts
-    )
-
-
-async def execute_tool(
-    name: str, args: dict, user_id: str, scope: ChatScope, session_id: str
-) -> ToolExecutionResult:
-    executor = _EXECUTORS.get(name)
-    if not executor:
-        return ToolExecutionResult(
-            content=json.dumps({"error": f"Unknown tool: {name}"}),
-            parsed={"error": f"Unknown tool: {name}"},
-        )
-    try:
-        raw_result = await executor(args, user_id, scope)
-        return await _prepare_tool_result(raw_result, session_id, user_id)
-    except Exception as exc:
-        logger.exception("Tool %s failed", name)
-        return ToolExecutionResult(
-            content=json.dumps({"error": str(exc)}), parsed={"error": str(exc)}
-        )
-
-
-# ---------------------------------------------------------------------------
-# Streaming chat completion with tool use
-# ---------------------------------------------------------------------------
-
-
-def get_client():
+def _build_model() -> OpenAIChatModel | str:
     from openai import AsyncOpenAI
-    from ..config import settings
+
+    provider_name = settings.llm_provider.lower()
+    if provider_name not in _SUPPORTED_LLM_PROVIDERS:
+        supported = ", ".join(sorted(_SUPPORTED_LLM_PROVIDERS))
+        raise RuntimeError(
+            f"Unsupported LLM_PROVIDER {settings.llm_provider!r}; expected one of {supported}"
+        )
+
+    if provider_name == "pydantic-ai":
+        if ":" not in settings.llm_model:
+            raise RuntimeError(
+                "LLM_MODEL must be a provider-prefixed Pydantic AI model string "
+                "when LLM_PROVIDER=pydantic-ai"
+            )
+        return settings.llm_model
 
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    return AsyncOpenAI(
+    client = AsyncOpenAI(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_seconds,
     )
+    provider = OpenAIProvider(openai_client=client)
+    return OpenAIChatModel(settings.llm_model, provider=provider)
+
+
+def _trim_text(value: str) -> str:
+    max_chars = settings.llm_tool_result_max_chars
+    if len(value) <= max_chars:
+        return value
+    return f"{value[:max_chars]}\n\n{_TRUNCATED_TOOL_RESULT}"
+
+
+def _trim_tool_content(value: object) -> object:
+    if isinstance(value, str):
+        return _trim_text(value)
+    if isinstance(value, list):
+        return [_trim_tool_content(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _trim_tool_content(item)
+            for key, item in value.items()
+            if key != "artifacts"
+        }
+    return value
+
+
+async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
+    max_messages = settings.llm_history_max_messages
+    if max_messages > 0 and len(messages) > max_messages:
+        messages = messages[-max_messages:]
+
+    trimmed: list[ModelMessage] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            trimmed.append(message)
+            continue
+        parts = [
+            replace(part, content=_trim_tool_content(part.content))
+            if isinstance(part, ToolReturnPart)
+            else part
+            for part in message.parts
+        ]
+        trimmed.append(replace(message, parts=parts))
+    return trimmed
+
+
+def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="benchmark")
+
+    @toolset.tool
+    async def list_regions(ctx: RunContext[ChatDeps]) -> dict:
+        """List benchmark regions and whether each has configured observation data."""
+        return await chat_tools.list_regions(ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def list_datasets(
+        ctx: RunContext[ChatDeps], region: str | None = None
+    ) -> dict:
+        """List available ground-truth observation datasets, optionally filtered by region id."""
+        return await chat_tools.list_datasets(region, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def list_models(ctx: RunContext[ChatDeps], region: str | None = None) -> dict:
+        """List available forecast models, optionally filtered by region id."""
+        return await chat_tools.list_models(region, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def get_benchmark_config(ctx: RunContext[ChatDeps]) -> dict:
+        """Read the canonical benchmark configuration attached to this chat session."""
+        return await chat_tools.get_benchmark_config(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    @toolset.tool
+    async def update_benchmark_config(
+        ctx: RunContext[ChatDeps], patch: chat_tools.BenchmarkConfigPatch
+    ) -> dict:
+        """Patch and validate the canonical benchmark configuration for this chat session."""
+        return await chat_tools.update_benchmark_config(
+            patch.model_dump(exclude_none=True),
+            ctx.deps.user_id,
+            ctx.deps.scope,
+            ctx.deps.session_id,
+        )
+
+    @toolset.tool
+    async def validate_benchmark_config(ctx: RunContext[ChatDeps]) -> dict:
+        """Validate the current benchmark configuration and report run readiness."""
+        return await chat_tools.validate_benchmark_config(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    @toolset.tool
+    async def submit_benchmark(ctx: RunContext[ChatDeps]) -> dict:
+        """Submit the current benchmark plan after pydantic-ai human approval."""
+        if not ctx.tool_call_approved:
+            payload = await chat_tools.propose_benchmark_submit(
+                ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            )
+            if payload.get("error") or not payload.get("approval_required"):
+                return payload
+            raise ApprovalRequired(metadata=payload)
+
+        approved_config_payload = (ctx.tool_call_metadata or {}).get("approved_config")
+        if approved_config_payload:
+            current = await chat_tools.get_current_benchmark_config(
+                ctx.deps.session_id, ctx.deps.user_id
+            )
+            approved = BenchmarkRunSpec.model_validate(approved_config_payload)
+            if current.model_dump(mode="json") != approved.model_dump(mode="json"):
+                return {
+                    "error": "Benchmark config changed after approval; please review and approve the updated plan.",
+                    **chat_tools.benchmark_payload(
+                        current, chat_tools.validation_for_config(current)
+                    ),
+                }
+
+        return await chat_tools.submit_benchmark_for_session(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    return toolset
+
+
+def _job_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="jobs")
+
+    @toolset.tool
+    async def list_jobs(ctx: RunContext[ChatDeps]) -> dict:
+        """List the user's benchmark jobs available in this chat scope, including running and failed jobs."""
+        return await chat_tools.list_jobs(ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def list_failed_jobs(ctx: RunContext[ChatDeps]) -> dict:
+        """List failed benchmark jobs in this chat scope with stored error summaries."""
+        return await chat_tools.list_jobs(ctx.deps.user_id, ctx.deps.scope, "failed")
+
+    @toolset.tool
+    async def get_job_info(ctx: RunContext[ChatDeps], job_id: str) -> dict:
+        """Get configuration details for a specific job."""
+        return await chat_tools.get_job_info(job_id, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def get_job_logs(
+        ctx: RunContext[ChatDeps], job_id: str, max_chars: int = 12000
+    ) -> dict:
+        """Fetch logs for a running or failed job so failures can be diagnosed without user copy/paste."""
+        return await chat_tools.get_job_logs(
+            job_id, max_chars, ctx.deps.user_id, ctx.deps.scope
+        )
+
+    @toolset.tool
+    async def rerun_job(
+        ctx: RunContext[ChatDeps], request: chat_tools.RerunJobRequest
+    ) -> dict:
+        """Clone and rerun an existing job, optionally overriding ROMP params with validated values."""
+        return await chat_tools.rerun_job(request, ctx.deps.user_id, ctx.deps.scope)
+
+    return toolset
+
+
+def _metrics_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="metrics")
+
+    @toolset.tool
+    async def get_job_metrics(ctx: RunContext[ChatDeps], job_id: str) -> dict:
+        """Get aggregate spatial statistics for a completed job."""
+        return await chat_tools.get_job_metrics(
+            job_id, ctx.deps.user_id, ctx.deps.scope
+        )
+
+    @toolset.tool
+    async def get_spatial_summary(
+        ctx: RunContext[ChatDeps], request: chat_tools.SpatialMetricRequest
+    ) -> dict:
+        """Get the spatial distribution of a specific metric for a job."""
+        return await chat_tools.get_spatial_summary(
+            request, ctx.deps.user_id, ctx.deps.scope
+        )
+
+    return toolset
+
+
+def _analysis_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="analysis")
+
+    if chat_tools.is_tool_available("run_code_sandbox"):
+
+        @toolset.tool
+        async def run_code_sandbox(
+            ctx: RunContext[ChatDeps], request: chat_tools.CodeSandboxRequest
+        ) -> dict:
+            """Run arbitrary Python code in an isolated sandbox with no network access."""
+            return await chat_tools.run_code_sandbox(
+                request, ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            )
+
+    if chat_tools.is_tool_available("run_code"):
+
+        @toolset.tool
+        async def run_code(
+            ctx: RunContext[ChatDeps], request: chat_tools.JobCodeRequest
+        ) -> dict:
+            """Execute custom Python analysis code against the NC output files for a job."""
+            return await chat_tools.run_code(
+                request, ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            )
+
+    return toolset
+
+
+def _build_agent(scope: ChatScope):
+    agent = Agent(
+        _build_model(),
+        output_type=[str, DeferredToolRequests],
+        instructions=_instructions_for_scope(scope),
+        deps_type=ChatDeps,
+        toolsets=[
+            _benchmark_toolset(),
+            _job_toolset(),
+            _metrics_toolset(),
+            _analysis_toolset(),
+        ],
+        history_processors=[trim_chat_history],
+    )
+
+    return agent
+
+
+def _tool_event_args(args: object) -> dict:
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return {"raw": args}
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
+    return {}
+
+
+def _tool_result_content(content: object) -> object:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {"raw": content}
+    return content
 
 
 async def stream_response(
-    messages: list[dict],
+    message_history: list[ModelMessage],
     user_id: str,
     session_id: str,
     session_scope: ChatScope,
+    *,
+    latest_user_message: str | None = None,
+    deferred_tool_results: DeferredToolResults | None = None,
 ) -> AsyncIterator[str]:
     """
     Run one turn of the conversation, yielding SSE-formatted data lines.
 
-    Handles tool calls automatically: executes them and continues streaming
-    until the model produces a final text response.
+    PydanticAI owns provider/tool orchestration for the turn. The backend
+    still owns durable chat state, benchmark state, validation, and artifacts.
 
     Yields JSON strings (without the 'data: ' prefix — the router adds that).
     """
-    from ..config import settings
-
-    client = get_client()
-    working_messages = list(messages)
-    consumed_prefix_len = len(working_messages)
-    active_tools = get_available_tools()
+    deps = ChatDeps(
+        user_id=user_id,
+        session_id=session_id,
+        scope=session_scope,
+    )
+    agent = _build_agent(session_scope)
     turn = ChatTurn(
         id=new_turn_id(), role="assistant", content="", created_at=utc_now()
     )
+    tool_calls_by_id: dict[str, ChatToolCall] = {}
+    final_output: str | None = None
+    final_messages: list[ModelMessage] = message_history
+    just_finished_tool_call = False
 
-    while True:
-        # Accumulate the full response so we can handle tool calls.
-        response_message: dict = {"role": "assistant", "content": ""}
-        tool_calls: list[dict] = []
-        current_tool: dict | None = None
-
-        create_params = {
-            "model": settings.llm_model,
-            "messages": (
-                assemble_provider_messages(working_messages[:consumed_prefix_len])
-                + working_messages[consumed_prefix_len:]
-            ),
-            "stream": True,
-        }
-        if active_tools:
-            create_params["tools"] = active_tools
-            create_params["tool_choice"] = "auto"
-
-        stream = await client.chat.completions.create(
-            **create_params,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta is None:
-                continue
-
-            # Text content
-            if delta.content:
-                response_message["content"] += delta.content
-                turn.content += delta.content
+    async for event in agent.run_stream_events(
+        latest_user_message,
+        message_history=message_history,
+        deps=deps,
+        deferred_tool_results=deferred_tool_results,
+        conversation_id=session_id,
+    ):
+        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+            content = event.part.content
+            if content:
+                if (
+                    just_finished_tool_call
+                    and turn.content
+                    and not turn.content[-1].isspace()
+                ):
+                    sep = "\n\n"
+                    turn.content += sep
+                    yield json.dumps(
+                        {"type": "text_delta", "turn_id": turn.id, "content": sep}
+                    )
+                just_finished_tool_call = False
+                turn.content += content
                 yield json.dumps(
-                    {"type": "text_delta", "turn_id": turn.id, "content": delta.content}
+                    {"type": "text_delta", "turn_id": turn.id, "content": content}
                 )
+            continue
 
-            # Tool call deltas — accumulate across chunks
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    if tc_delta.index is not None:
-                        # New tool call starting
-                        while len(tool_calls) <= tc_delta.index:
-                            tool_calls.append(
-                                {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            )
-                        current_tool = tool_calls[tc_delta.index]
-
-                    if tc_delta.id:
-                        current_tool["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            current_tool["function"]["name"] += tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            current_tool["function"]["arguments"] += (
-                                tc_delta.function.arguments
-                            )
-
-        # If no tool calls, we're done — append the final assistant message and emit
-        if not tool_calls:
-            turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
-            final_provider_state = assemble_provider_messages(working_messages)
-            final_provider_state.append(_compact_provider_message(response_message))
+        if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+            content = event.delta.content_delta
+            if not content:
+                continue
+            if (
+                just_finished_tool_call
+                and turn.content
+                and not turn.content[-1].isspace()
+            ):
+                sep = "\n\n"
+                turn.content += sep
+                yield json.dumps(
+                    {"type": "text_delta", "turn_id": turn.id, "content": sep}
+                )
+            just_finished_tool_call = False
+            turn.content += content
             yield json.dumps(
-                {
-                    "type": "done",
-                    "provider_state": final_provider_state,
-                    "turn": turn.model_dump(mode="json"),
-                }
+                {"type": "text_delta", "turn_id": turn.id, "content": content}
             )
-            return
+            continue
 
-        consumed_prefix_len = len(working_messages)
-
-        # Append the assistant message with tool calls
-        response_message["tool_calls"] = tool_calls
-        working_messages.append(response_message)
-
-        # Execute each tool and append results
-        for tc in tool_calls:
-            name = tc["function"]["name"]
-            try:
-                args = json.loads(tc["function"]["arguments"] or "{}")
-            except json.JSONDecodeError:
-                args = {}
-
-            turn_tool = ChatToolCall(
-                id=tc["id"], name=name, status="running", input=args
+        if isinstance(event, FunctionToolCallEvent):
+            part = event.part
+            args = _tool_event_args(part.args_as_dict())
+            tool_call = ChatToolCall(
+                id=part.tool_call_id,
+                name=part.tool_name,
+                status="running",
+                input=args,
             )
-            turn.tool_calls.append(turn_tool)
+            tool_calls_by_id[tool_call.id] = tool_call
+            turn.tool_calls.append(tool_call)
             yield json.dumps(
                 {
                     "type": "tool_call",
                     "turn_id": turn.id,
-                    "tool_call": turn_tool.model_dump(mode="json"),
+                    "tool_call": tool_call.model_dump(mode="json"),
                 }
             )
-            result = await execute_tool(name, args, user_id, session_scope, session_id)
+            continue
 
-            for artifact in result.artifacts:
-                turn_tool.artifacts.append(artifact)
-                turn.artifacts.append(artifact)
-                yield json.dumps(
-                    {
-                        "type": "artifact",
-                        "turn_id": turn.id,
-                        "tool_call_id": turn_tool.id,
-                        "artifact": artifact.model_dump(mode="json"),
-                    }
-                )
-
-            parsed_result = result.parsed
-            turn_tool.status = (
+        if isinstance(event, FunctionToolResultEvent):
+            result_part = event.result
+            tool_call_id = getattr(result_part, "tool_call_id", "")
+            parsed_result = _tool_result_content(getattr(result_part, "content", None))
+            status = (
                 "failed"
                 if isinstance(parsed_result, dict) and parsed_result.get("error")
                 else "completed"
             )
-            turn_tool.result = parsed_result
+            tool_call = tool_calls_by_id.get(tool_call_id)
+            if tool_call is not None:
+                tool_call.status = status
+                tool_call.result = parsed_result
+            if isinstance(parsed_result, dict):
+                for artifact_payload in parsed_result.get("artifacts", []):
+                    if not isinstance(artifact_payload, dict):
+                        continue
+                    artifact = ChatArtifact.model_validate(artifact_payload)
+                    if tool_call is not None:
+                        tool_call.artifacts.append(artifact)
+                    turn.artifacts.append(artifact)
+                    yield json.dumps(
+                        {
+                            "type": "artifact",
+                            "turn_id": turn.id,
+                            "tool_call_id": tool_call_id,
+                            "artifact": artifact.model_dump(mode="json"),
+                        }
+                    )
             yield json.dumps(
                 {
                     "type": "tool_result",
                     "turn_id": turn.id,
-                    "tool_call_id": turn_tool.id,
-                    "status": turn_tool.status,
+                    "tool_call_id": tool_call_id,
+                    "status": status,
                     "result": parsed_result,
                 }
             )
+            if isinstance(parsed_result, dict) and parsed_result.get(
+                "benchmark_config"
+            ):
+                if parsed_result.get("approval_required"):
+                    yield json.dumps(
+                        {
+                            "type": "benchmark_approval_request",
+                            "turn_id": turn.id,
+                            "tool_call_id": tool_call_id,
+                            "config": parsed_result["benchmark_config"],
+                            "validation": parsed_result.get("benchmark_validation"),
+                        }
+                    )
+                else:
+                    yield json.dumps(
+                        {
+                            "type": "benchmark_config",
+                            "turn_id": turn.id,
+                            "config": parsed_result["benchmark_config"],
+                            "validation": parsed_result.get("benchmark_validation"),
+                            "run_id": parsed_result.get("run_id"),
+                            "jobs": parsed_result.get("jobs"),
+                        }
+                    )
+            just_finished_tool_call = True
+            continue
 
-            working_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result.content,
-                }
-            )
+        if isinstance(event, AgentRunResultEvent):
+            output = event.result.output
+            final_messages = event.result.all_messages()
+            if isinstance(output, str):
+                final_output = output
+            elif isinstance(output, DeferredToolRequests):
+                for call in output.approvals:
+                    metadata = output.metadata.get(call.tool_call_id, {})
+                    if call.tool_name == "submit_benchmark":
+                        yield json.dumps(
+                            {
+                                "type": "benchmark_approval_request",
+                                "turn_id": turn.id,
+                                "tool_call_id": call.tool_call_id,
+                                "config": metadata.get("benchmark_config"),
+                                "validation": metadata.get("benchmark_validation"),
+                            }
+                        )
+                    else:
+                        yield json.dumps(
+                            {
+                                "type": "tool_approval_request",
+                                "turn_id": turn.id,
+                                "tool_call": {
+                                    "id": call.tool_call_id,
+                                    "name": call.tool_name,
+                                    "input": _tool_event_args(call.args),
+                                    "status": "running",
+                                },
+                                "metadata": metadata,
+                            }
+                        )
+
+    if final_output is not None and not turn.content:
+        turn.content = final_output
+        yield json.dumps(
+            {"type": "text_delta", "turn_id": turn.id, "content": final_output}
+        )
+
+    turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
+    yield json.dumps(
+        {
+            "type": "done",
+            "provider_state": serialize_model_messages(final_messages),
+            "turn": turn.model_dump(mode="json"),
+        }
+    )
