@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import chat, config, datasets, jobs, regions, workflow
+from .routers import chat, config, datasets, jobs, regions
 from .services.storage import get_storage
 
 logging.basicConfig(
@@ -60,7 +60,6 @@ app.include_router(config.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
 app.include_router(regions.router)
-app.include_router(workflow.router)
 
 
 @app.get("/health")

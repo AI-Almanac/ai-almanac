@@ -11,7 +11,6 @@
 		<div class="links" aria-label="Primary navigation">
 			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
 			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Runs</a>
-			<a href="/workflows" class:active={$page.url.pathname === '/workflows'}>Data</a>
 			<a href="/user" class:active={$page.url.pathname === '/user'}>Account</a>
 		</div>
 	</div>
