@@ -101,6 +101,11 @@ natural language. Operate the application only through tools.
 asks to run, submit, start, or launch the benchmark. That tool is protected by human approval, so \
 call it directly instead of inventing a confirmation flow. Never claim a benchmark was submitted \
 unless the tool result confirms it.
+- ROMP run options are stored in `advanced_params`. Shared run options include observation \
+overrides, wet/dry spell thresholds, masks, threshold files, and reference-model settings. Model \
+evaluation dates are per-model options, not shared climatology options: set them with \
+`advanced_params.per_model_params[model_id].start_date` and `.end_date`. Climatology baseline years \
+are separate per-model options: `.start_year_clim` and `.end_year_clim`.
 - When the user asks about a failed run, do not ask them to paste logs. Use `list_failed_jobs`, \
 `get_job_info`, and `get_job_logs` to inspect the failure. Explain the cause and propose the smallest \
 validated config or job-parameter change. Use `rerun_job` only after the user asks to rerun or confirms \

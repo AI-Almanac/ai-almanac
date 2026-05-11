@@ -22,6 +22,8 @@ class BenchmarkRunSpec(BaseModel):
     status: SpecStatus = "collecting"
     missing_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+    # Shared ROMP params live at the top level. Per-model ROMP params live under
+    # advanced_params["per_model_params"][model_id].
     advanced_params: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -21,18 +21,19 @@
 	let preferredChatSessionId = $state<string | null>(null);
 	let initialized = $state(false);
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
+	const manualSetupRequested = $derived($page.url.searchParams.get('manual') === '1');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
-	const inSetupMode = $derived(store.showForm || promptSetupActive);
+	const inSetupMode = $derived(store.showForm || promptSetupActive || manualSetupRequested);
 
 	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
 		preferredChatSessionId = $page.url.searchParams.get('chat');
-		if (initialPrompt) {
+		if (initialPrompt || manualSetupRequested) {
 			store.showForm = true;
 			store.selectedGroupKey = null;
 		}
-		await store.load(groupKey, !initialPrompt);
-		if (initialPrompt) {
+		await store.load(groupKey, !initialPrompt && !manualSetupRequested);
+		if (initialPrompt || manualSetupRequested) {
 			store.showForm = true;
 			store.selectedGroupKey = null;
 		}
@@ -102,6 +103,7 @@
 					{datasets}
 					{dataLoaded}
 					{initialPrompt}
+					initialManualOpen={manualSetupRequested}
 					onSubmitted={handleSubmitted}
 				/>
 			{:else if store.selectedGroup}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import BaseModel, Field as PydanticField
 
@@ -13,6 +13,36 @@ from .chat_artifacts import create_chat_figure_artifact
 from .chat_state import ChatScope
 
 
+class PerModelRompParams(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    start_year_clim: int | None = None
+    end_year_clim: int | None = None
+    init_days: str | None = None
+    date_filter_year: int | None = None
+    parallel: bool | None = None
+    probabilistic: bool | None = None
+    members: str | None = None
+    model_var: str | None = None
+    file_pattern: str | None = None
+
+
+class BenchmarkAdvancedParams(BaseModel):
+    obs: str | None = None
+    obs_file_pattern: str | None = None
+    obs_var: str | None = None
+    wet_threshold: float | None = None
+    wet_init: float | None = None
+    wet_spell: int | None = None
+    dry_spell: int | None = None
+    dry_extent: int | None = None
+    nc_mask: str | None = None
+    thresh_file: str | None = None
+    ref_model: str | None = None
+    ref_model_dir: str | None = None
+    per_model_params: dict[str, PerModelRompParams] | None = None
+
+
 class BenchmarkConfigPatch(BaseModel):
     intent: str | None = None
     region_id: str | None = None
@@ -20,7 +50,7 @@ class BenchmarkConfigPatch(BaseModel):
     model_ids: list[str] | None = None
     event_type: str | None = None
     forecast_window_days: Annotated[int, PydanticField(ge=30)] | None = None
-    advanced_params: dict[str, Any] | None = PydanticField(default=None)
+    advanced_params: BenchmarkAdvancedParams | None = PydanticField(default=None)
 
 
 SpatialMetricRequest = benchmark_domain.SpatialMetricRequest

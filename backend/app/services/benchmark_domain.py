@@ -118,6 +118,60 @@ def _env_key(*parts: str) -> str:
     return "_".join(p for p in parts if p).upper().replace("-", "_")
 
 
+SHARED_ROMP_PARAM_KEYS = {
+    "obs",
+    "obs_file_pattern",
+    "obs_var",
+    "wet_threshold",
+    "wet_init",
+    "wet_spell",
+    "dry_spell",
+    "dry_extent",
+    "nc_mask",
+    "thresh_file",
+    "ref_model",
+    "ref_model_dir",
+}
+
+PER_MODEL_ROMP_PARAM_KEYS = {
+    "start_date",
+    "end_date",
+    "start_year_clim",
+    "end_year_clim",
+    "init_days",
+    "date_filter_year",
+    "parallel",
+    "probabilistic",
+    "members",
+    "model_var",
+    "file_pattern",
+}
+
+
+def _non_empty_params(params: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in params.items()
+        if key in allowed and value is not None and value != ""
+    }
+
+
+def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict[str, Any]:
+    cleaned = _non_empty_params(params, SHARED_ROMP_PARAM_KEYS)
+    raw_per_model = params.get("per_model_params")
+    if isinstance(raw_per_model, dict):
+        selected = set(model_ids)
+        per_model = {
+            model_id: _non_empty_params(model_params, PER_MODEL_ROMP_PARAM_KEYS)
+            for model_id, model_params in raw_per_model.items()
+            if model_id in selected and isinstance(model_params, dict)
+        }
+        per_model = {model_id: values for model_id, values in per_model.items() if values}
+        if per_model:
+            cleaned["per_model_params"] = per_model
+    return cleaned
+
+
 def _obs_year_range(obs_dir: str) -> tuple[int | None, int | None]:
     from pathlib import Path
 
@@ -236,6 +290,7 @@ def _validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
     if spec.region_id and not region:
         errors.append(f"Unknown region_id: {spec.region_id}")
     models = _region_models(spec.region_id)
+    model_map = {model["id"]: model for model in models}
     valid_model_ids = {model["id"] for model in models}
     bad_models = [
         model_id for model_id in spec.model_ids if model_id not in valid_model_ids
@@ -250,14 +305,39 @@ def _validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
         errors.append(
             "forecast_window_days must be at least 30 because ROMP's default verification window extends to day 30"
         )
-    start_date = spec.advanced_params.get("start_date")
-    end_date = spec.advanced_params.get("end_date")
-    if (
-        isinstance(start_date, str)
-        and isinstance(end_date, str)
-        and start_date > end_date
-    ):
-        errors.append("start_date must be before end_date")
+    per_model_params = spec.advanced_params.get("per_model_params")
+    if isinstance(per_model_params, dict):
+        for model_id, params in per_model_params.items():
+            if not isinstance(params, dict):
+                errors.append(f"per_model_params.{model_id} must be an object")
+                continue
+            start_date = params.get("start_date")
+            end_date = params.get("end_date")
+            if (
+                isinstance(start_date, str)
+                and isinstance(end_date, str)
+                and start_date > end_date
+            ):
+                errors.append(f"{model_id}: start_date must be before end_date")
+            model = model_map.get(model_id)
+            if model and isinstance(start_date, str) and start_date < model["start_date"]:
+                errors.append(
+                    f"{model_id}: start_date is before available coverage ({model['start_date']})"
+                )
+            if model and isinstance(end_date, str) and end_date > model["end_date"]:
+                errors.append(
+                    f"{model_id}: end_date is after available coverage ({model['end_date']})"
+                )
+            start_year_clim = params.get("start_year_clim")
+            end_year_clim = params.get("end_year_clim")
+            if (
+                isinstance(start_year_clim, int)
+                and isinstance(end_year_clim, int)
+                and start_year_clim > end_year_clim
+            ):
+                errors.append(
+                    f"{model_id}: start_year_clim must be before end_year_clim"
+                )
     can_run = not missing and not errors
     return BenchmarkValidation(
         can_run=can_run,
@@ -372,8 +452,12 @@ async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> 
                     "display_name",
                     "region",
                     "model_type",
+                    "model_var",
+                    "file_pattern",
                     "probabilistic",
+                    "members",
                     "init_days",
+                    "date_filter_year",
                     "start_date",
                     "end_date",
                     "start_year_clim",
@@ -428,6 +512,9 @@ async def _exec_update_benchmark_config(
     advanced_params = dict(spec.advanced_params)
     if isinstance(patch.get("advanced_params"), dict):
         advanced_params.update(patch["advanced_params"])
+    advanced_params = _clean_advanced_params(
+        advanced_params, [model["id"] for model in models]
+    )
 
     next_spec = spec.model_copy(
         update={
@@ -481,7 +568,12 @@ def _clamp_model_params(model: dict, spec: BenchmarkRunSpec) -> dict:
         params["model_var"] = model["model_var"]
     if model.get("file_pattern") and model["file_pattern"] != "{}.nc":
         params["file_pattern"] = model["file_pattern"]
-    params.update(spec.advanced_params)
+    params.update(_non_empty_params(spec.advanced_params, SHARED_ROMP_PARAM_KEYS))
+    per_model_params = spec.advanced_params.get("per_model_params")
+    if isinstance(per_model_params, dict):
+        model_params = per_model_params.get(model["id"])
+        if isinstance(model_params, dict):
+            params.update(_non_empty_params(model_params, PER_MODEL_ROMP_PARAM_KEYS))
     return params
 
 

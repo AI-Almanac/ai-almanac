@@ -216,6 +216,7 @@ export type JobParams = {
 	end_year_clim?: number;
 	max_forecast_day?: number;
 	init_days?: string;
+	date_filter_year?: number | null;
 	parallel?: boolean;
 	// Advanced — obs overrides
 	obs?: string;
@@ -259,6 +260,7 @@ export type ModelConfig = {
 	probabilistic: boolean;
 	members: string | null;
 	init_days: string;
+	date_filter_year?: number | null;
 	start_date: string;
 	end_date: string;
 	start_year_clim: number;

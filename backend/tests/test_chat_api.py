@@ -48,6 +48,48 @@ def test_parse_llm_event_skips_blank_events() -> None:
     assert _parse_llm_event('{"type":"done"}') == {"type": "done"}
 
 
+def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
+    from app.services.benchmark_domain import _clamp_model_params
+    from app.services.benchmark_state import BenchmarkRunSpec
+
+    model = {
+        "id": "fuxi",
+        "start_date": "1964-05-01",
+        "end_date": "2024-07-31",
+        "start_year_clim": 1964,
+        "end_year_clim": 2024,
+        "init_days": "0,3",
+        "probabilistic": False,
+        "model_var": "tp",
+        "file_pattern": "{}.nc",
+    }
+    spec = BenchmarkRunSpec(
+        region_id="india",
+        model_ids=["fuxi"],
+        advanced_params={
+            "wet_threshold": 10,
+            "per_model_params": {
+                "fuxi": {
+                    "start_date": "2019-05-01",
+                    "end_date": "2021-07-31",
+                    "start_year_clim": 1991,
+                    "end_year_clim": 2021,
+                },
+                "aifs": {"start_date": "2018-05-01"},
+            },
+        },
+    )
+
+    params = _clamp_model_params(model, spec)
+
+    assert params["wet_threshold"] == 10
+    assert params["start_date"] == "2019-05-01"
+    assert params["end_date"] == "2021-07-31"
+    assert params["start_year_clim"] == 1991
+    assert params["end_year_clim"] == 2021
+    assert "per_model_params" not in params
+
+
 @pytest.mark.asyncio
 async def test_trim_chat_history_limits_messages_and_tool_payloads(
     monkeypatch: pytest.MonkeyPatch,
