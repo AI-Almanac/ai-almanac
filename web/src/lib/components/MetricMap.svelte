@@ -127,6 +127,17 @@
 		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
 	}
 
+	function modelDisplayName(modelName: string) {
+		const labels: Record<string, string> = {
+			fuxi: 'FuXi',
+			aifs: 'AIFS',
+			aifs_daily: 'AIFS Daily',
+			fuxi_s2s: 'FuXi S2S',
+			climatology: 'Climatology'
+		};
+		return labels[modelName.toLowerCase()] ?? modelName;
+	}
+
 	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
 		const requestId = ++cellLoadRequestId;
 		cellResults = [];
@@ -336,7 +347,7 @@
 				const feature = new Feature({ geometry: new Polygon([coords]) });
 				feature.set(
 					'displayVal',
-					`${data.metric}: ${modelVal.toFixed(3)} (Δ vs clim: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`
+					`${data.metric}: ${modelVal.toFixed(3)} (Δ vs climatology: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`
 				);
 				feature.set('lat', lat);
 				feature.set('lon', lon);
@@ -621,9 +632,7 @@
 			{#each activeRuns as run}
 				<div class="run-group" class:clim-group={run.modelName === 'climatology'}>
 					<div class="run-header">
-						<span class="run-label"
-							>{run.modelName === 'climatology' ? 'Climatology' : run.modelName.toUpperCase()}</span
-						>
+						<span class="run-label">{modelDisplayName(run.modelName)}</span>
 						{#if run.modelName === 'climatology'}
 							<span class="clim-badge">baseline</span>
 						{/if}
@@ -689,11 +698,11 @@
 			{#each visibleLayers as vl, i}
 				{@const { modelName: vModel, metric: vMetric } = parseKey(vl.key)}
 				{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
-				{@const displayName = vModel === 'climatology' ? 'Climatology' : vModel.toUpperCase()}
+				{@const displayName = modelDisplayName(vModel)}
 				{#if i > 0}<div class="legend-divider"></div>{/if}
 				<div class="legend-title">
 					{displayName} — {metricLabel(vMetric)}
-					{#if vl.isDelta}<span class="legend-delta-badge">Δ vs clim</span>{/if}
+					{#if vl.isDelta}<span class="legend-delta-badge">Δ vs climatology</span>{/if}
 				</div>
 				<div class="scale-bar" style="background: {gradient}"></div>
 				{#if vl.isDelta && vl.deltaMaxAbs != null}

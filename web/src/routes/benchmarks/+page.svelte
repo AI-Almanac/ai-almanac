@@ -7,7 +7,16 @@
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
-	import { getDatasets, getRegions, type Dataset, type Job, type Region } from '$lib/api';
+	import {
+		getDatasets,
+		getRegions,
+		getRompDefaults,
+		type Dataset,
+		type Job,
+		type Region,
+		type RompDefaults
+	} from '$lib/api';
+	import { EVENT_TYPES } from '$lib/data/event-types';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 
@@ -15,6 +24,7 @@
 
 	let regions = $state<Region[]>([]);
 	let datasets = $state<Dataset[]>([]);
+	let parameterDefaults = $state<RompDefaults | null>(null);
 	let dataLoaded = $state(false);
 	let resultsSidebarOpen = $state(true);
 	let promptSetupFinished = $state(false);
@@ -37,12 +47,16 @@
 			store.showForm = true;
 			store.selectedGroupKey = null;
 		}
-		const [fetchedRegions, fetchedDatasets] = await Promise.allSettled([
+		const [fetchedRegions, fetchedDatasets, fetchedParameterDefaults] = await Promise.allSettled([
 			getRegions(),
-			getDatasets()
+			getDatasets(),
+			getRompDefaults()
 		]);
 		if (fetchedRegions.status === 'fulfilled') regions = fetchedRegions.value;
 		if (fetchedDatasets.status === 'fulfilled') datasets = fetchedDatasets.value;
+		if (fetchedParameterDefaults.status === 'fulfilled') {
+			parameterDefaults = fetchedParameterDefaults.value;
+		}
 		dataLoaded = true;
 	}
 
@@ -82,6 +96,69 @@
 		if (!runId) return;
 		store.acceptSubmittedJobs(runId, jobs);
 	}
+
+	function modelDisplayName(modelName: string): string {
+		const labels: Record<string, string> = {
+			fuxi: 'FuXi',
+			aifs: 'AIFS',
+			aifs_daily: 'AIFS Daily',
+			fuxi_s2s: 'FuXi S2S',
+			climatology: 'Climatology'
+		};
+		return labels[modelName.toLowerCase()] ?? modelName;
+	}
+
+	function eventTypeName(eventType: string): string {
+		return EVENT_TYPES.find((event) => event.id === eventType)?.name ?? eventType;
+	}
+
+	function formatRunDate(value: string): string {
+		if (!value) return 'Unknown';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return value;
+		return new Intl.DateTimeFormat(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		}).format(date);
+	}
+
+	function formatRunStatus(jobs: Job[]): string {
+		if (jobs.some((job) => job.status === 'running')) return 'Running';
+		if (jobs.every((job) => job.status === 'complete')) return 'Complete';
+		if (jobs.every((job) => job.status === 'failed')) return 'Failed';
+		return 'Mixed';
+	}
+
+	function compactDateRange(startDate?: string, endDate?: string): string {
+		if (!startDate || !endDate) return 'Unknown';
+		return `${startDate} to ${endDate}`;
+	}
+
+	function forecastWindow(params: Job['params']): string {
+		return params?.max_forecast_day ? `Days 1-${params.max_forecast_day}` : 'All available days';
+	}
+
+	function climatePeriod(params: Job['params']): string {
+		if (!params?.start_year_clim || !params?.end_year_clim) return 'Default climatology period';
+		return `${params.start_year_clim} to ${params.end_year_clim}`;
+	}
+
+	function initDays(params: Job['params']): string {
+		return params?.init_days?.trim() || 'Default initialization days';
+	}
+
+	function parameterValue(
+		value: number | string | undefined,
+		fallback: number | string | undefined,
+		unit?: string
+	): string {
+		const resolved = value ?? fallback;
+		if (resolved === undefined || resolved === '') return 'Not recorded';
+		return unit ? `${resolved} ${unit}` : String(resolved);
+	}
 </script>
 
 {#if !$isAuthenticated}
@@ -89,11 +166,7 @@
 {:else}
 	<div class="page-layout" class:setup-mode={inSetupMode}>
 		{#if !inSetupMode}
-			<BenchmarkSidebar
-				{store}
-				onNewBenchmark={startNew}
-				onSelectGroup={selectGroup}
-			/>
+			<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
 		{/if}
 		<div class="main-content">
 			{#if inSetupMode}
@@ -110,6 +183,7 @@
 				{@const group = store.selectedGroup}
 				{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
 				{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
+				{@const primaryJob = group.jobs[0]}
 
 				<div class="analysis-workspace" class:side-collapsed={!resultsSidebarOpen}>
 					<section class="analysis-main">
@@ -118,7 +192,9 @@
 								<p class="detail-eyebrow">Analysis run</p>
 								<h1 class="detail-title">{group.region}</h1>
 								<p class="detail-subtitle">
-									{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''} · {group.eventType}
+									{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''} · {eventTypeName(
+										group.eventType
+									)}
 									{#if group.startDate && group.endDate}
 										· {group.startDate} to {group.endDate}
 									{/if}
@@ -137,25 +213,142 @@
 							</div>
 						</header>
 
-						<div class="model-status-row">
-							{#each group.jobs as job}
-								<div
-									class="model-pill"
-									class:running={job.status === 'running'}
-									class:failed={job.status === 'failed'}
-									class:complete={job.status === 'complete'}
-								>
-									<span class="pill-name">{job.model_name.toUpperCase()}</span>
-									{#if job.status === 'running'}
-										<span class="pill-spinner"></span>
-									{:else if job.status === 'failed'}
-										<span class="pill-icon fail" title={job.error ?? 'Failed'}>✕</span>
-									{:else}
-										<span class="pill-icon ok">✓</span>
-									{/if}
+						<details class="benchmark-summary">
+							<summary class="summary-trigger">
+								<span class="summary-trigger-title">Benchmark summary</span>
+								<span class="summary-trigger-meta">
+									{formatRunStatus(group.jobs)} · {group.jobs.length} model{group.jobs.length === 1
+										? ''
+										: 's'} · {forecastWindow(primaryJob?.params)} · Run {formatRunDate(
+										group.mostRecentAt
+									)}
+								</span>
+							</summary>
+
+							<div class="run-summary-grid">
+								<div class="run-fact">
+									<span>Run date</span>
+									<strong>{formatRunDate(group.mostRecentAt)}</strong>
 								</div>
-							{/each}
-						</div>
+								<div class="run-fact">
+									<span>Status</span>
+									<strong>{formatRunStatus(group.jobs)}</strong>
+								</div>
+								<div class="run-fact">
+									<span>Region</span>
+									<strong>{group.region}</strong>
+								</div>
+								<div class="run-fact">
+									<span>Event type</span>
+									<strong>{eventTypeName(group.eventType)}</strong>
+								</div>
+							</div>
+
+							<div class="summary-detail-grid">
+								<div class="run-section">
+									<h3>Models Run</h3>
+									<div class="model-run-list">
+										{#each group.jobs as job}
+											<div class="model-run-item">
+												<strong>{modelDisplayName(job.model_name)}</strong>
+												<span
+													class:complete={job.status === 'complete'}
+													class:failed={job.status === 'failed'}
+													class:running={job.status === 'running'}
+												>
+													{job.status}
+												</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+
+								<div class="run-section">
+									<h3>Benchmark Configuration</h3>
+									<div class="run-row">
+										<span>Forecast period</span>
+										<strong>{compactDateRange(group.startDate, group.endDate)}</strong>
+									</div>
+									<div class="run-row">
+										<span>Forecast window</span>
+										<strong>{forecastWindow(primaryJob?.params)}</strong>
+									</div>
+									<div class="run-row">
+										<span>Climatology period</span>
+										<strong>{climatePeriod(primaryJob?.params)}</strong>
+									</div>
+									<div class="run-row">
+										<span>Initialization days</span>
+										<strong>{initDays(primaryJob?.params)}</strong>
+									</div>
+								</div>
+							</div>
+
+							<div class="run-section">
+								<h3>Parameters</h3>
+								<div class="parameter-grid">
+									<div>
+										<span>Wet threshold</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.wet_threshold,
+												parameterDefaults?.wet_threshold,
+												'millimeters'
+											)}</strong
+										>
+									</div>
+									<div>
+										<span>Wet initialization</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.wet_init,
+												parameterDefaults?.wet_init,
+												'millimeters'
+											)}</strong
+										>
+									</div>
+									<div>
+										<span>Wet spell</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.wet_spell,
+												parameterDefaults?.wet_spell,
+												'days'
+											)}</strong
+										>
+									</div>
+									<div>
+										<span>Dry spell</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.dry_spell,
+												parameterDefaults?.dry_spell,
+												'days'
+											)}</strong
+										>
+									</div>
+									<div>
+										<span>Dry extent</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.dry_extent,
+												parameterDefaults?.dry_extent,
+												'days'
+											)}</strong
+										>
+									</div>
+									<div>
+										<span>Observation variable</span>
+										<strong
+											>{parameterValue(
+												primaryJob?.params?.obs_var,
+												parameterDefaults?.obs_var
+											)}</strong
+										>
+									</div>
+								</div>
+							</div>
+						</details>
 
 						{#if group.jobs.some((j) => j.status === 'running') && completeJobs.length === 0}
 							<div class="running-state">
@@ -171,7 +364,7 @@
 							<div class="failed-runs">
 								{#each failedJobs as job}
 									<div class="job-error">
-										<p class="job-error-title">{job.model_name.toUpperCase()} failed</p>
+										<p class="job-error-title">{modelDisplayName(job.model_name)} failed</p>
 										{#if job.error}
 											<pre class="job-error-msg">{job.error}</pre>
 										{/if}
@@ -188,34 +381,6 @@
 
 					{#if resultsSidebarOpen}
 						<aside class="analysis-side">
-							<section class="run-card">
-								<div class="side-card-header">
-									<p class="detail-eyebrow">Run spec</p>
-									<button
-										type="button"
-										class="icon-toggle"
-										aria-label="Collapse sidebar"
-										onclick={() => (resultsSidebarOpen = false)}
-									>
-										×
-									</button>
-								</div>
-								<div class="run-row">
-									<span>Region</span>
-									<strong>{group.region}</strong>
-								</div>
-								<div class="run-row">
-									<span>Models</span>
-									<strong>{group.jobs.map((job) => job.model_name.toUpperCase()).join(', ')}</strong>
-								</div>
-								{#if group.startDate && group.endDate}
-									<div class="run-row">
-										<span>Dates</span>
-										<strong>{group.startDate} to {group.endDate}</strong>
-									</div>
-								{/if}
-							</section>
-
 							<div class="result-chat">
 								<ChatPanel
 									jobs={group.jobs}
@@ -274,7 +439,7 @@
 	}
 
 	.analysis-main,
-	.run-card,
+	.benchmark-summary,
 	.result-chat {
 		border: 1px solid var(--color-border);
 		border-radius: 0.5rem;
@@ -359,54 +524,6 @@
 		margin: 0.2rem 0 0;
 	}
 
-	/* ---- Model status pills ---- */
-	.model-status-row {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-		margin-bottom: 1.25rem;
-	}
-	.model-pill {
-		display: flex;
-		align-items: center;
-		gap: 0.35rem;
-		padding: 0.3rem 0.65rem;
-		border-radius: 0.3rem;
-		font-size: 0.75rem;
-		font-weight: 600;
-		font-family: var(--font-mono);
-		border: 1px solid var(--color-border-subtle);
-		background: var(--color-surface);
-	}
-	.model-pill.running {
-		background: var(--color-status-running-bg);
-		border-color: var(--color-status-running);
-		color: var(--color-status-running);
-	}
-	.model-pill.failed {
-		background: var(--color-status-failed-bg);
-		border-color: var(--color-status-failed);
-		color: var(--color-status-failed);
-	}
-	.model-pill.complete {
-		background: var(--color-status-complete-bg);
-		border-color: var(--color-status-complete);
-		color: var(--color-status-complete);
-	}
-	.pill-name {
-		letter-spacing: 0.05em;
-	}
-	.pill-icon {
-		font-size: 0.7rem;
-	}
-	.pill-spinner {
-		width: 0.6rem;
-		height: 0.6rem;
-		border: 1.5px solid rgba(251, 191, 36, 0.3);
-		border-top-color: var(--color-status-running);
-		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
-	}
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
@@ -448,32 +565,166 @@
 		gap: 1.25rem;
 	}
 
-	.run-card {
-		padding: 1rem;
+	.benchmark-summary {
+		margin-bottom: 1rem;
+		padding: 0;
+		overflow: hidden;
 	}
 
-	.side-card-header {
+	.summary-trigger {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.7rem 0.85rem;
+		cursor: pointer;
+		list-style: none;
+		user-select: none;
+	}
+
+	.summary-trigger::-webkit-details-marker {
+		display: none;
+	}
+
+	.summary-trigger::before {
+		content: '▸';
+		color: var(--color-text);
+		font-size: 0.7rem;
+		transition: transform 0.15s;
+	}
+
+	.benchmark-summary[open] .summary-trigger::before {
+		transform: rotate(90deg);
+	}
+
+	.summary-trigger-title {
+		color: var(--color-text);
+		font-size: 0.82rem;
+		font-weight: 850;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.summary-trigger-meta {
+		min-width: 0;
+		flex: 1;
+		color: var(--color-text-muted);
+		font-size: 0.82rem;
+		overflow: hidden;
+		text-align: right;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.benchmark-summary[open] {
+		padding-bottom: 0.9rem;
+	}
+
+	.run-summary-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+		gap: 0.6rem;
+		padding: 0 0.85rem;
+	}
+
+	.run-fact {
+		padding: 0.65rem 0.7rem;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 0.45rem;
+		background: var(--color-bg);
+	}
+
+	.run-fact span,
+	.parameter-grid span {
+		display: block;
+		margin-bottom: 0.25rem;
+		color: var(--color-text-muted);
+		font-size: 0.72rem;
+		font-weight: 750;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.run-fact strong {
+		display: block;
+		color: var(--color-text);
+		font-size: 0.88rem;
+		line-height: 1.25;
+	}
+
+	.summary-detail-grid {
+		display: grid;
+		grid-template-columns: minmax(12rem, 0.8fr) minmax(16rem, 1.2fr);
+		gap: 1rem;
+		border-top: 1px solid var(--color-border-subtle);
+		margin: 0.85rem 0.85rem 0;
+		padding-top: 0.85rem;
+	}
+
+	.run-section {
+		min-width: 0;
+	}
+
+	.benchmark-summary > .run-section {
+		border-top: 1px solid var(--color-border-subtle);
+		margin: 0.85rem 0.85rem 0;
+		padding-top: 0.85rem;
+	}
+
+	.run-section h3 {
+		margin: 0 0 0.65rem;
+		color: var(--color-text);
+		font-size: 0.82rem;
+		font-weight: 850;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+	}
+
+	.model-run-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+
+	.model-run-item {
+		display: flex;
+		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem;
+		padding: 0.5rem 0.6rem;
+		border-radius: 0.45rem;
+		background: var(--color-bg);
 	}
 
-	.icon-toggle {
-		border: 0;
-		border-radius: 0.3rem;
-		background: transparent;
-		color: var(--color-text-muted);
-		font: inherit;
-		font-size: 1rem;
-		line-height: 1;
-		cursor: pointer;
-		padding: 0.2rem 0.35rem;
-	}
-
-	.icon-toggle:hover {
-		background: var(--color-surface-muted);
+	.model-run-item strong {
 		color: var(--color-text);
+	}
+
+	.model-run-item span {
+		border-radius: 999rem;
+		padding: 0.18rem 0.45rem;
+		font-size: 0.68rem;
+		font-weight: 800;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-text-muted);
+		background: var(--color-surface-muted);
+	}
+
+	.model-run-item span.complete {
+		background: var(--color-status-complete-bg);
+		color: var(--color-status-complete);
+	}
+
+	.model-run-item span.failed {
+		background: var(--color-status-failed-bg);
+		color: var(--color-status-failed);
+	}
+
+	.model-run-item span.running {
+		background: var(--color-status-running-bg);
+		color: var(--color-status-running);
 	}
 
 	.run-row {
@@ -498,6 +749,27 @@
 		text-align: right;
 		font-size: 0.85rem;
 		font-weight: 650;
+	}
+
+	.parameter-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+		gap: 0.5rem;
+	}
+
+	.parameter-grid div {
+		min-width: 0;
+		padding: 0.55rem 0.6rem;
+		border-radius: 0.45rem;
+		background: var(--color-bg);
+	}
+
+	.parameter-grid strong {
+		display: block;
+		color: var(--color-text);
+		font-size: 0.85rem;
+		line-height: 1.25;
+		overflow-wrap: anywhere;
 	}
 
 	.result-chat {
@@ -571,6 +843,21 @@
 			position: static;
 			height: auto;
 			min-height: 0;
+		}
+
+		.summary-detail-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.summary-trigger {
+			align-items: flex-start;
+			flex-wrap: wrap;
+		}
+
+		.summary-trigger-meta {
+			flex-basis: 100%;
+			padding-left: 1.3rem;
+			text-align: left;
 		}
 
 		.result-chat {

@@ -43,8 +43,10 @@
 				{/if}
 			</div>
 			<p class="card-desc">{et.description}</p>
-			{#if et.onsetDefinition}
-				<p class="card-onset"><span class="onset-label">Onset</span>{et.onsetDefinition}</p>
+			{#if et.definition}
+				<p class="card-definition">
+					<span class="definition-label">Definition</span>{et.definition}
+				</p>
 			{/if}
 			<div class="card-regions">
 				{#each et.regions as r}
@@ -167,7 +169,7 @@
 		line-height: 1.5;
 		flex: 1;
 	}
-	.card-onset {
+	.card-definition {
 		margin: 0;
 		font-size: 0.72rem;
 		color: var(--color-text-muted);
@@ -177,7 +179,7 @@
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 0.3rem;
 	}
-	.onset-label {
+	.definition-label {
 		font-weight: 700;
 		color: var(--color-accent);
 		margin-right: 0.4rem;

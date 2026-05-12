@@ -7,7 +7,7 @@ export interface EventType {
 	description: string;
 	regions: string[];
 	status: EventTypeStatus;
-	onsetDefinition: string;
+	definition: string;
 }
 
 export const EVENT_TYPES: EventType[] = [
@@ -19,7 +19,7 @@ export const EVENT_TYPES: EventType[] = [
 			'Evaluate model skill in predicting the calendar date of seasonal monsoon onset using region-specific meteorological definitions.',
 		regions: ['India', 'Ethiopia'],
 		status: 'active',
-		onsetDefinition:
+		definition:
 			'India: Modified Moron–Robertson (MOK-anchored). Ethiopia: ICPAC 3-day accumulation threshold.'
 	},
 	{
@@ -30,7 +30,7 @@ export const EVENT_TYPES: EventType[] = [
 			'Evaluate model skill in predicting the end of the monsoon season using region-specific withdrawal definitions.',
 		regions: ['Coming soon'],
 		status: 'coming_soon',
-		onsetDefinition: ''
+		definition: ''
 	},
 	{
 		id: 'heatwave_onset',
@@ -40,7 +40,7 @@ export const EVENT_TYPES: EventType[] = [
 			'Benchmark forecasts of heat wave onset defined by sustained anomalous temperature thresholds.',
 		regions: ['Coming soon'],
 		status: 'coming_soon',
-		onsetDefinition: ''
+		definition: ''
 	},
 	{
 		id: 'custom',
@@ -50,6 +50,6 @@ export const EVENT_TYPES: EventType[] = [
 			"Define your own human-centric event metric with AI assistance. Describe what matters to your community — crop planting windows, flood risk days, school closure thresholds — and we'll help you build a rigorous benchmark around it.",
 		regions: ['Coming soon'],
 		status: 'coming_soon',
-		onsetDefinition: ''
+		definition: ''
 	}
 ];

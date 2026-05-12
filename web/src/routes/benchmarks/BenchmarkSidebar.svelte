@@ -9,6 +9,28 @@
 	}
 
 	const { store, onNewBenchmark, onSelectGroup }: Props = $props();
+
+	function eventLabel(eventType: string): string {
+		return EVENT_TYPES.find((event) => event.id === eventType)?.name ?? eventType;
+	}
+
+	function formatRunDate(value: string): string {
+		if (!value) return 'Unknown date';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return value;
+		return new Intl.DateTimeFormat(undefined, {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric'
+		}).format(date);
+	}
+
+	function groupStatus(group: (typeof store.runGroups)[number]): string {
+		if (group.jobs.some((job) => job.status === 'running')) return 'running';
+		if (group.jobs.every((job) => job.status === 'complete')) return 'complete';
+		if (group.jobs.every((job) => job.status === 'failed')) return 'failed';
+		return 'mixed';
+	}
 </script>
 
 <aside class="sidebar">
@@ -29,27 +51,15 @@
 							class:selected={store.selectedGroupKey === group.key && !store.showForm}
 							onclick={() => onSelectGroup(group.key)}
 						>
-							<span class="group-event-type"
-								>{EVENT_TYPES.find((e) => e.id === group.eventType)?.shortName ??
-									group.eventType}</span
-							>
-							<span class="group-region">{group.region}</span>
-							{#if group.startDate && group.endDate}
-								<span class="group-dates">{group.startDate} – {group.endDate}</span>
-							{/if}
-							<div class="group-badges">
-								<span class="badge-count"
-									>{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''}</span
-								>
-								{#if group.jobs.some((j) => j.status === 'running')}
-									<span class="status-badge running">running</span>
-								{:else if group.jobs.every((j) => j.status === 'complete')}
-									<span class="status-badge complete">complete</span>
-								{:else if group.jobs.every((j) => j.status === 'failed')}
-									<span class="status-badge failed">failed</span>
-								{:else}
-									<span class="status-badge mixed">mixed</span>
-								{/if}
+							<div class="group-main">
+								<span class="group-region">{group.region}</span>
+								<span class="group-meta">
+									{formatRunDate(group.mostRecentAt)} · {eventLabel(group.eventType)}
+								</span>
+							</div>
+							<div class="group-side">
+								<span class="model-count">{group.jobs.length}</span>
+								<span class="status-dot {groupStatus(group)}" title={groupStatus(group)}></span>
 							</div>
 						</button>
 						{#if group.isOwner}
@@ -91,22 +101,22 @@
 
 <style>
 	.sidebar {
-		width: 17rem;
+		width: 14.5rem;
 		flex-shrink: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: 0.85rem;
 	}
 
 	.new-run-btn {
 		width: 100%;
-		padding: 0.75rem 0.9rem;
+		padding: 0.65rem 0.75rem;
 		background: var(--color-accent);
 		color: white;
 		border: none;
 		border-radius: 0.4rem;
 		font-family: var(--font-body);
-		font-size: 0.875rem;
+		font-size: 0.82rem;
 		font-weight: 600;
 		cursor: pointer;
 		transition:
@@ -170,13 +180,14 @@
 
 	.group-list {
 		list-style: none;
-		padding: 0.25rem;
+		padding: 0.2rem 0;
 		margin: 0;
 		display: flex;
 		flex-direction: column;
-		background: var(--color-surface);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.6rem;
+		background: transparent;
+		border-top: 1px solid var(--color-border-subtle);
+		border-bottom: 1px solid var(--color-border-subtle);
+		border-radius: 0;
 	}
 
 	.group-list-item {
@@ -193,71 +204,87 @@
 	.group-item {
 		width: 100%;
 		text-align: left;
-		padding: 0.7rem 1.65rem 0.7rem 0.8rem;
-		border-radius: 0.4rem;
+		min-height: 2.85rem;
+		padding: 0.42rem 1.5rem 0.42rem 0.55rem;
+		border-radius: 0.25rem;
 		border: none;
 		background: none;
 		cursor: pointer;
 		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.55rem;
 		transition:
 			background-color 0.12s,
 			box-shadow 0.12s;
 		color: var(--color-text);
 	}
 	.group-item:hover {
-		background: color-mix(in srgb, var(--color-accent-light) 32%, transparent);
+		background: color-mix(in srgb, var(--color-accent-light) 24%, transparent);
 	}
 	.group-item.selected {
 		background: var(--color-accent-light);
-		box-shadow: inset 0.18rem 0 0 var(--color-accent);
+		box-shadow: inset 0.14rem 0 0 var(--color-accent);
 	}
 	.group-item.selected .group-region {
 		color: var(--color-accent);
 	}
 
-	.group-event-type {
-		font-size: 0.64rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--color-accent);
-	}
-	.group-region {
-		font-size: 0.92rem;
-		font-weight: 650;
-		line-height: 1.2;
-	}
-	.group-dates {
-		font-size: 0.7rem;
-		color: var(--color-text-muted);
-		font-family: var(--font-mono);
+	.group-main {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.12rem;
 	}
 
-	.group-badges {
-		display: flex;
+	.group-region {
+		overflow: hidden;
+		font-size: 0.82rem;
+		font-weight: 750;
+		line-height: 1.15;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.group-meta {
+		overflow: hidden;
+		font-size: 0.66rem;
+		color: var(--color-text-muted);
+		line-height: 1.2;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.group-side {
+		flex-shrink: 0;
+		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-		margin-top: 0.05rem;
-		flex-wrap: wrap;
+		color: var(--color-text-muted);
 	}
 
-	.badge-count {
-		font-size: 0.68rem;
-		font-weight: 650;
-		color: var(--color-text-muted);
+	.model-count {
+		min-width: 1.1rem;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 999rem;
+		padding: 0.08rem 0.3rem;
+		background: var(--color-surface);
+		font-size: 0.62rem;
+		font-weight: 800;
+		line-height: 1.2;
+		text-align: center;
 	}
 
 	.group-delete {
 		position: absolute;
-		top: 0.55rem;
-		right: 0.45rem;
-		padding: 0.15rem 0.3rem;
+		top: 50%;
+		right: 0.28rem;
+		transform: translateY(-50%);
+		padding: 0.1rem 0.22rem;
 		background: none;
 		border: none;
 		color: var(--color-text-dim);
-		font-size: 0.75rem;
+		font-size: 0.72rem;
 		line-height: 1;
 		cursor: pointer;
 		border-radius: 0.2rem;
@@ -270,28 +297,28 @@
 		background-color: var(--color-danger-bg);
 	}
 
-	.status-badge {
-		font-family: var(--font-mono);
-		font-size: 0.66rem;
-		font-weight: 500;
-		padding: 0.12rem 0.45rem;
-		border-radius: 0.25rem;
+	.status-dot {
+		width: 0.45rem;
+		height: 0.45rem;
+		border-radius: 999rem;
+		background: var(--color-text-muted);
 	}
-	.status-badge.running {
+
+	.status-dot.running {
 		background: var(--color-status-running-bg);
-		color: var(--color-status-running);
+		box-shadow: inset 0 0 0 0.12rem var(--color-status-running);
 	}
-	.status-badge.complete {
-		background: var(--color-status-complete-bg);
-		color: var(--color-status-complete);
+
+	.status-dot.complete {
+		background: var(--color-status-complete);
 	}
-	.status-badge.failed {
-		background: var(--color-status-failed-bg);
-		color: var(--color-status-failed);
+
+	.status-dot.failed {
+		background: var(--color-status-failed);
 	}
-	.status-badge.mixed {
-		background: var(--color-border-subtle);
-		color: var(--color-text-muted);
+
+	.status-dot.mixed {
+		background: var(--color-text-muted);
 	}
 
 	@media (max-width: 1050px) {

@@ -29,7 +29,7 @@
 	<header class="cell-header">
 		<div>
 			<p class="cell-kicker">Grid Cell Inspector</p>
-			<h3>{cell.lat.toFixed(2)}°N, {cell.lon.toFixed(2)}°E</h3>
+			<h3>Latitude {cell.lat.toFixed(2)}°N, longitude {cell.lon.toFixed(2)}°E</h3>
 			<p class="cell-subtitle">Window {forecastWindow} days, compared with climatology</p>
 		</div>
 		<button class="cell-close" onclick={onclose} aria-label="Close cell inspector">×</button>

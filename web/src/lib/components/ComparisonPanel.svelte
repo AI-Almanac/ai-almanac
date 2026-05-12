@@ -58,9 +58,9 @@
 
 	const PRIMARY_VARS = ['false_alarm_rate', 'miss_rate', 'mean_mae'];
 	const VAR_LABEL: Record<string, string> = {
-		false_alarm_rate: 'FAR',
-		miss_rate: 'MR',
-		mean_mae: 'MAE (mean)'
+		false_alarm_rate: 'False alarm rate',
+		miss_rate: 'Miss rate',
+		mean_mae: 'Mean absolute error'
 	};
 
 	function fmt(v: number, unit: string) {

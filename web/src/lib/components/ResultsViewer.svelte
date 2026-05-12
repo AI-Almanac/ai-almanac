@@ -7,10 +7,21 @@
 	let { jobs }: Props = $props();
 
 	const MAP_METRICS = [
-		{ value: 'false_alarm_rate', label: 'FAR' },
-		{ value: 'miss_rate', label: 'MR' },
-		{ value: 'mean_mae', label: 'MAE' }
+		{ value: 'false_alarm_rate', label: 'False alarm rate' },
+		{ value: 'miss_rate', label: 'Miss rate' },
+		{ value: 'mean_mae', label: 'Mean absolute error' }
 	];
+
+	function modelDisplayName(modelName: string): string {
+		const labels: Record<string, string> = {
+			fuxi: 'FuXi',
+			aifs: 'AIFS',
+			aifs_daily: 'AIFS Daily',
+			fuxi_s2s: 'FuXi S2S',
+			climatology: 'Climatology'
+		};
+		return labels[modelName.toLowerCase()] ?? modelName;
+	}
 
 	const WINDOW_OPTS: { value: '1-15' | '16-30'; label: string }[] = [
 		{ value: '1-15', label: 'Days 1–15' },
@@ -42,7 +53,7 @@
 	<div class="tables">
 		{#each jobs as job (job.id)}
 			<div class="table-section">
-				<p class="table-model">{job.model_name.toUpperCase()}</p>
+				<p class="table-model">{modelDisplayName(job.model_name)}</p>
 				<MetricsTable jobId={job.id} />
 			</div>
 		{/each}
