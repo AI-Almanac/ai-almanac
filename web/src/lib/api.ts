@@ -156,6 +156,7 @@ export type Dataset = {
 	id: string;
 	name: string;
 	status: string;
+	region?: string | null;
 	is_demo: boolean;
 	created_at: string;
 	obs_file_pattern?: string | null;
@@ -514,7 +515,7 @@ export type ChatEvent =
 			config: BenchmarkRunSpec;
 			validation?: BenchmarkValidation | null;
 	  }
-	| { type: 'error'; message: string; retryable?: boolean }
+	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 
 export async function createChatSession(scope: ChatScope, title?: string): Promise<ChatSession> {

@@ -175,6 +175,7 @@
 					{regions}
 					{datasets}
 					{dataLoaded}
+					{parameterDefaults}
 					{initialPrompt}
 					initialManualOpen={manualSetupRequested}
 					onSubmitted={handleSubmitted}

@@ -183,8 +183,8 @@
 			preferredSessionId && all.some((session) => session.id === preferredSessionId)
 				? preferredSessionId
 				: sessionId && all.some((session) => session.id === sessionId)
-				? sessionId
-				: (all[0]?.id ?? null);
+					? sessionId
+					: (all[0]?.id ?? null);
 
 		if (nextSessionId) {
 			await loadSession(nextSessionId);
@@ -242,6 +242,16 @@
 		const job = (result as { job?: unknown }).job;
 		if (!job || typeof job !== 'object' || !('id' in job)) return null;
 		return job as Job;
+	}
+
+	function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string {
+		if (event.error_type === 'provider_error') return 'The chat provider failed. Please try again.';
+		if (event.error_type === 'tool_error')
+			return 'A benchmark data lookup failed. Please try again.';
+		if (event.error_type === 'scope_mismatch') {
+			return 'This chat belongs to a different benchmark view. Start a new chat for this benchmark.';
+		}
+		return event.message || 'Chat request failed.';
 	}
 
 	function sessionFigures(): GalleryFigure[] {
@@ -536,7 +546,7 @@
 						)
 					};
 				} else if (event.type === 'error') {
-					throw new Error(event.message || 'Chat request failed.');
+					throw new Error(chatErrorMessage(event));
 				} else if (event.type === 'benchmark_approval_request') {
 					onBenchmarkConfig?.(event.config, event.validation ?? null);
 					pendingApproval = {
@@ -553,7 +563,11 @@
 					messages = [...messages, mergeArtifacts(streamingTurn, event.turn)];
 					streamingTurn = null;
 					if (pendingSubmission) {
-						onBenchmarkSubmitted?.(pendingSubmission.runId, pendingSubmission.jobs, activeSessionId);
+						onBenchmarkSubmitted?.(
+							pendingSubmission.runId,
+							pendingSubmission.jobs,
+							activeSessionId
+						);
 						pendingSubmission = null;
 					}
 					// Update session's message_count in the list
@@ -856,8 +870,8 @@
 					<p class="approval-title">Ready to run benchmark</p>
 					<p class="approval-subtitle">
 						{pendingApproval.config.model_names?.join(', ') ?? 'Selected models'} ·
-						{pendingApproval.config.region_name ?? 'Selected region'} ·
-						Days 1–{pendingApproval.config.forecast_window_days ?? 30}
+						{pendingApproval.config.region_name ?? 'Selected region'} · Days 1–{pendingApproval
+							.config.forecast_window_days ?? 30}
 					</p>
 					<div class="approval-actions">
 						<button class="approval-run" onclick={approveSubmit}>Run benchmark</button>
@@ -939,7 +953,7 @@
 			<textarea
 				bind:value={input}
 				onkeydown={handleKeydown}
-				placeholder={placeholder}
+				{placeholder}
 				rows={2}
 				disabled={sending}
 			></textarea>

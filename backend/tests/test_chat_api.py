@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from pydantic_ai.messages import ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -239,7 +239,7 @@ async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
             text(
                 """
                 INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at)
-                VALUES (:id, :user_id, :dataset_id, 'completed', '{}'::text, :created_at)
+                VALUES (:id, :user_id, :dataset_id, 'complete', '{}'::text, :created_at)
                 """
             ),
             {
@@ -396,6 +396,74 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
 
 
 @pytest.mark.asyncio
+async def test_send_message_denies_pending_tool_calls_before_new_prompt(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    _test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import serialize_model_messages
+
+    created = await _create_session(client, auth_headers)
+    session_id = created["id"]
+    provider_state = serialize_model_messages(
+        [
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="submit_benchmark",
+                        args={},
+                        tool_call_id="approval-1",
+                    )
+                ]
+            )
+        ]
+    )
+    async with _test_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET provider_state = :state WHERE id = :id"),
+            {"state": json.dumps(provider_state), "id": session_id},
+        )
+
+    async def fake_stream_response(
+        provider_state: list,
+        user_id: str,
+        session_id_arg: str,
+        scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
+    ) -> AsyncIterator[str]:
+        assert latest_user_message == "Let's revise this first."
+        assert isinstance(provider_state[-1], ModelRequest)
+        denied_return = provider_state[-1].parts[0]
+        assert isinstance(denied_return, ToolReturnPart)
+        assert denied_return.tool_call_id == "approval-1"
+        assert denied_return.outcome == "denied"
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {
+                    "content": "We can revise it.",
+                    "tool_calls": [],
+                    "artifacts": [],
+                },
+                "provider_state": serialize_model_messages(provider_state),
+            }
+        )
+
+    monkeypatch.setattr("app.routers.chat.stream_response", fake_stream_response)
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message",
+        headers=auth_headers,
+        json={"content": "Let's revise this first."},
+    )
+    assert response.status_code == 200
+    assert _sse_events(response.text)[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_send_message_refreshes_scope_job_ids(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
@@ -449,6 +517,50 @@ async def test_send_message_refreshes_scope_job_ids(
     )
     assert detail_response.status_code == 200
     assert detail_response.json()["scope"]["job_ids"] == [job_id]
+
+
+@pytest.mark.asyncio
+async def test_get_job_metrics_returns_tool_error_for_unreadable_nc(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    user_id: str,
+    _test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.benchmark_domain import get_job_metrics
+    from app.services.chat_state import ChatScope
+
+    response = await client.get("/chat/sessions", headers=auth_headers)
+    assert response.status_code == 200
+
+    job_id = f"job-{uuid4()}"
+    await _insert_job(_test_engine, user_id, job_id)
+
+    class UnreadableStorage:
+        def list_nc_output_files(self, job_id_arg: str) -> list[str]:
+            assert job_id_arg == job_id
+            return ["/outputs/spatial_metrics_model_1-15.nc"]
+
+        def open_nc_dataset(self, path: str):
+            assert path == "/outputs/spatial_metrics_model_1-15.nc"
+            raise RuntimeError("NetCDF: HDF error")
+
+    monkeypatch.setattr("app.services.storage.get_storage", lambda: UnreadableStorage())
+
+    payload = await get_job_metrics(
+        job_id,
+        user_id,
+        ChatScope(
+            kind="benchmark_run_group",
+            key="group-1",
+            title="Group 1",
+            job_ids=[job_id],
+        ),
+    )
+
+    assert payload["job_id"] == job_id
+    assert "Could not read metric output" in payload["error"]
+    assert "NetCDF: HDF error" in payload["error"]
 
 
 @pytest.mark.asyncio

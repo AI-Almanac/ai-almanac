@@ -896,58 +896,48 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope)
         return json.dumps({"error": f"Job {job_id} is not complete"})
 
     def _load():
-        import xarray as xr
-
         storage = get_storage()
         UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
-
-        if storage.is_local:
-            output_dir = storage._outputs_dir / job_id / "output"
-            nc_files = (
-                sorted(output_dir.glob("spatial_metrics_*.nc"))
-                if output_dir.exists()
-                else []
-            )
-        else:
-            import gcsfs
-
-            fs = gcsfs.GCSFileSystem()
-            prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
-            nc_files = [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
-
-        def _open(path):
-            if storage.is_local:
-                return xr.open_dataset(path)
-            with fs.open(str(path).removeprefix("gs://"), "rb") as f:
-                return xr.load_dataset(f, engine="h5netcdf")
+        nc_files = storage.list_nc_output_files(job_id)
+        if not nc_files:
+            return {"error": f"No metric output files found for job {job_id}"}
 
         windows = []
         for nc in nc_files:
-            ds = _open(nc)
-            model = str(ds.attrs.get("model", ""))
-            window = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-            metrics = {}
-            for var in ds.data_vars:
-                arr = ds[var].values.astype(float)
-                valid = arr[~np.isnan(arr)]
-                if len(valid) == 0:
-                    continue
-                var_str = str(var)
-                metrics[var_str] = {
-                    "mean": round(float(np.mean(valid)), 4),
-                    "p50": round(float(np.percentile(valid, 50)), 4),
-                    "p90": round(float(np.percentile(valid, 90)), 4),
-                    "min": round(float(np.min(valid)), 4),
-                    "max": round(float(np.max(valid)), 4),
-                    "unit": UNIT_MAP.get(var_str, "days"),
+            try:
+                ds = storage.open_nc_dataset(nc)
+                model = str(ds.attrs.get("model", ""))
+                window = str(ds.attrs.get("verification_window", "")).replace(",", "-")
+                metrics = {}
+                for var in ds.data_vars:
+                    arr = ds[var].values.astype(float)
+                    valid = arr[~np.isnan(arr)]
+                    if len(valid) == 0:
+                        continue
+                    var_str = str(var)
+                    metrics[var_str] = {
+                        "mean": round(float(np.mean(valid)), 4),
+                        "p50": round(float(np.percentile(valid, 50)), 4),
+                        "p90": round(float(np.percentile(valid, 90)), 4),
+                        "min": round(float(np.min(valid)), 4),
+                        "max": round(float(np.max(valid)), 4),
+                        "unit": UNIT_MAP.get(var_str, "days"),
+                    }
+            except Exception as exc:
+                logger.exception("Could not load metrics file %s for job %s", nc, job_id)
+                return {
+                    "error": f"Could not read metric output {nc}: {exc}",
+                    "job_id": job_id,
                 }
-            ds.close()
+            finally:
+                if "ds" in locals():
+                    ds.close()
+                    del ds
             windows.append({"model": model, "window": window, "metrics": metrics})
         windows.sort(key=lambda w: (w["model"] == "climatology", w["window"]))
-        return windows
+        return {"job_id": job_id, "windows": windows}
 
-    windows = await asyncio.to_thread(_load)
-    return json.dumps({"job_id": job_id, "windows": windows})
+    return json.dumps(await asyncio.to_thread(_load))
 
 
 async def _exec_get_spatial_summary(
@@ -980,44 +970,28 @@ async def _exec_get_spatial_summary(
         return json.dumps({"error": f"Job {job_id} is not complete"})
 
     def _load():
-        import xarray as xr
-
         storage = get_storage()
-        w_alt = window.replace("-", ",")
+        match = storage.find_nc_output_file(job_id, model, window)
 
-        if storage.is_local:
-            output_dir = storage._outputs_dir / job_id / "output"
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
-            if not matches:
-                matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
-        else:
-            import gcsfs
-
-            fs = gcsfs.GCSFileSystem()
-            base = f"{storage._outputs_bucket}/{job_id}/output"
-            matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
-            if not matches:
-                matches = fs.glob(f"{base}/spatial_metrics_{model}_{w_alt}.nc")
-            matches = [f"gs://{f}" for f in matches]
-
-        if not matches:
+        if not match:
             return {"error": f"No grid file found for {model}/{window}"}
 
-        if storage.is_local:
-            ds = xr.open_dataset(matches[0])
-        else:
-            with fs.open(str(matches[0]).removeprefix("gs://"), "rb") as f:
-                ds = xr.load_dataset(f, engine="h5netcdf")
+        try:
+            ds = storage.open_nc_dataset(match)
+            if metric not in ds.data_vars:
+                return {"error": f"Metric {metric!r} not in dataset"}
 
-        if metric not in ds.data_vars:
-            ds.close()
-            return {"error": f"Metric {metric!r} not in dataset"}
-
-        arr = ds[metric].values.astype(float)
-        valid = arr[~np.isnan(arr)]
-        lats = ds.lat.values.tolist()
-        lons = ds.lon.values.tolist()
-        ds.close()
+            arr = ds[metric].values.astype(float)
+            valid = arr[~np.isnan(arr)]
+            lats = ds.lat.values.tolist()
+            lons = ds.lon.values.tolist()
+        except Exception as exc:
+            logger.exception("Could not load grid file %s for job %s", match, job_id)
+            return {"error": f"Could not read grid output {match}: {exc}"}
+        finally:
+            if "ds" in locals():
+                ds.close()
+                del ds
 
         if len(valid) == 0:
             return {"error": "No valid data points"}

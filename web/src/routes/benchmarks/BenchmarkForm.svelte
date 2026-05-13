@@ -11,7 +11,8 @@
 		type JobParams,
 		type Job,
 		type ModelConfig,
-		type Region
+		type Region,
+		type RompDefaults
 	} from '$lib/api';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 
@@ -20,6 +21,7 @@
 		regions,
 		datasets,
 		dataLoaded,
+		parameterDefaults,
 		initialPrompt = '',
 		initialManualOpen = false,
 		onSubmitted
@@ -28,6 +30,7 @@
 		regions: Region[];
 		datasets: Dataset[];
 		dataLoaded: boolean;
+		parameterDefaults: RompDefaults | null;
 		initialPrompt?: string;
 		initialManualOpen?: boolean;
 		onSubmitted: (groupKey: string, chatSessionId?: string | null) => void;
@@ -61,12 +64,14 @@
 	const canRun = $derived(
 		Boolean(
 			selectedRegionId &&
-				selectedDatasetId &&
-				selectedModelIds.length > 0 &&
-				!(validation?.errors.length ?? 0)
+			selectedDatasetId &&
+			selectedModelIds.length > 0 &&
+			!(validation?.errors.length ?? 0)
 		)
 	);
-	const runState = $derived(submitting ? 'running' : canRun ? 'runnable' : (spec?.status ?? 'collecting'));
+	const runState = $derived(
+		submitting ? 'running' : canRun ? 'runnable' : (spec?.status ?? 'collecting')
+	);
 	const specSlots = $derived([
 		{ label: 'Mode', value: spec?.intent ? 'Chat-assisted setup' : 'Manual setup' },
 		{ label: 'Region', value: selectedRegion?.display_name ?? spec?.region_name ?? 'Not set' },
@@ -124,10 +129,10 @@
 			Object.entries(advanced).filter(([key]) => key !== 'per_model_params')
 		) as Record<string, string | number | null>;
 		perModelOverrides =
-			((advanced.per_model_params as Record<
+			(advanced.per_model_params as Record<
 				string,
 				Record<string, string | boolean | number>
-			> | null) ?? {});
+			> | null) ?? {};
 		if (nextSpec.status === 'runnable') detailsOpen = true;
 	}
 
@@ -163,8 +168,7 @@
 			if (obsEnd !== null) nextYear = Math.min(nextYear, obsEnd);
 			return nextYear;
 		};
-		const clampDate = (date: string) =>
-			`${clampYear(Number(date.slice(0, 4)))}${date.slice(4)}`;
+		const clampDate = (date: string) => `${clampYear(Number(date.slice(0, 4)))}${date.slice(4)}`;
 		return {
 			start_date: clampDate(cfg.start_date),
 			end_date: clampDate(cfg.end_date),
@@ -433,11 +437,7 @@
 				{/each}
 			</div>
 
-			<button
-				class="advanced-button"
-				type="button"
-				onclick={() => (advancedPanelOpen = true)}
-			>
+			<button class="advanced-button" type="button" onclick={() => (advancedPanelOpen = true)}>
 				<span>Manual configuration</span>
 				<small>
 					{#if syncingConfig}
@@ -458,7 +458,12 @@
 				<p class="form-error">{error}</p>
 			{/if}
 
-			<button class="run-button" type="button" disabled={!canRun || submitting} onclick={runBenchmark}>
+			<button
+				class="run-button"
+				type="button"
+				disabled={!canRun || submitting}
+				onclick={runBenchmark}
+			>
 				{submitting ? 'Starting run...' : 'Run benchmark'}
 			</button>
 		</aside>
@@ -478,6 +483,7 @@
 	{selectedRegion}
 	{selectedDataset}
 	{sharedAdvancedParams}
+	{parameterDefaults}
 	{setRegionId}
 	{setDatasetId}
 	{setForecastWindowDays}

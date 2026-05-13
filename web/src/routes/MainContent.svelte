@@ -34,9 +34,7 @@
 <main class="landing">
 	<section class="search-hero">
 		<h1>AI Almanac</h1>
-		<p class="lede">
-			Human-centric Climate Insights using the latest AI Weather Prediction Models
-		</p>
+		<p class="lede">Human-centric Climate Insights using the latest AI Weather Prediction Models</p>
 
 		<form class="search-box" action="/benchmarks" method="GET">
 			<input
@@ -69,7 +67,12 @@
 
 {#if workflowLauncherOpen}
 	<div class="workflow-layer" role="presentation">
-		<button class="workflow-scrim" type="button" aria-label="Close workflow chooser" onclick={() => (workflowLauncherOpen = false)}></button>
+		<button
+			class="workflow-scrim"
+			type="button"
+			aria-label="Close workflow chooser"
+			onclick={() => (workflowLauncherOpen = false)}
+		></button>
 		<div class="workflow-panel" role="dialog" aria-modal="true" aria-labelledby="workflow-title">
 			<header class="workflow-header">
 				<h2 id="workflow-title">Get started</h2>
@@ -77,8 +80,7 @@
 					class="workflow-close"
 					type="button"
 					aria-label="Close workflow chooser"
-					onclick={() => (workflowLauncherOpen = false)}
-					>×</button
+					onclick={() => (workflowLauncherOpen = false)}>×</button
 				>
 			</header>
 

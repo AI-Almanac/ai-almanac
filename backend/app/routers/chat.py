@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import TypeVar
@@ -21,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from pydantic_ai import DeferredToolResults, ToolDenied
+from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import bindparam, text
 
 from ..auth import CurrentUser
@@ -57,6 +59,7 @@ from ..services.llm import (
 from ..services.storage import get_storage, guess_chat_figure_media_type
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +367,30 @@ def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     ):
         return "provider_error"
     return "internal_error"
+
+
+def _deny_unprocessed_tool_calls(provider_state: list) -> list:
+    if not provider_state:
+        return provider_state
+
+    tool_calls = getattr(provider_state[-1], "tool_calls", None)
+    if not tool_calls:
+        return provider_state
+
+    denied_returns = [
+        ToolReturnPart(
+            tool_name=call.tool_name,
+            content="The user continued the conversation without approving this action.",
+            tool_call_id=call.tool_call_id,
+            outcome="denied",
+        )
+        for call in tool_calls
+        if getattr(call, "tool_call_id", None)
+    ]
+    if not denied_returns:
+        return provider_state
+
+    return [*provider_state, ModelRequest(parts=denied_returns)]
 
 
 async def _persist_failed_turn(
@@ -745,7 +772,9 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 )
                 return
 
-            provider_state = deserialize_model_messages(row["provider_state"])
+            provider_state = _deny_unprocessed_tool_calls(
+                deserialize_model_messages(row["provider_state"])
+            )
             transcript = _json_list(row["transcript"])
             stored_scope = ChatScope.model_validate(_json_dict(row["scope"]))
             if requested_scope is not None:
@@ -872,6 +901,11 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 pass
             return
         except Exception as exc:
+            logger.exception(
+                "Chat response stream failed for session %s and user %s",
+                session_id,
+                user["id"],
+            )
             try:
                 async with get_db() as conn:
                     await _persist_failed_turn(

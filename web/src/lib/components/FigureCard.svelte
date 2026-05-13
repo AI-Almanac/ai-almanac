@@ -33,25 +33,31 @@
 		</div>
 	</div>
 
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="img-wrap" {onclick} title="Click to expand">
+	<div class="img-wrap">
 		{#await fetchResultBlob(figure.raw.url)}
 			<div class="loading">Loading…</div>
 		{:then src}
-			<img {src} alt={figure.label} />
+			<button
+				class="expand-btn"
+				{onclick}
+				title="Click to expand"
+				aria-label="Expand {figure.label}"
+			>
+				<img {src} alt={figure.label} />
+			</button>
 			<div class="hover-actions">
 				<div class="expand-hint">&#x26F6; Expand</div>
-				<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-				<div
+				<button
 					class="download-btn"
 					onclick={(e) => {
 						e.stopPropagation();
 						download();
 					}}
-					title="Download"
+					aria-label="Download {figure.label}"
+					title="Download figure"
 				>
 					&#x2B07;
-				</div>
+				</button>
 			</div>
 		{:catch}
 			<div class="loading">Failed to load image.</div>
@@ -110,10 +116,21 @@
 
 	.img-wrap {
 		position: relative;
-		cursor: zoom-in;
 	}
 
-	.img-wrap img {
+	.expand-btn {
+		cursor: zoom-in;
+		display: block;
+		width: 100%;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		text-align: inherit;
+	}
+
+	.expand-btn img {
 		width: 100%;
 		display: block;
 	}
@@ -144,6 +161,8 @@
 	.download-btn {
 		cursor: pointer;
 		pointer-events: all;
+		border: 0;
+		font: inherit;
 	}
 
 	.download-btn:hover {

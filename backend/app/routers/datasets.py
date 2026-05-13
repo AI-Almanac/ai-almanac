@@ -39,6 +39,7 @@ class DatasetOut(BaseModel):
     id: str
     name: str
     status: str
+    region: str | None = None
     storage_key: str | None = None
     created_at: str
     ready_at: str | None = None
@@ -166,6 +167,7 @@ async def list_datasets(user: CurrentUser):
                 id=d["id"],
                 name=d["name"],
                 status="ready",
+                region=d.get("region"),
                 created_at="",
                 is_demo=True,
                 obs_file_pattern=d.get("obs_file_pattern"),

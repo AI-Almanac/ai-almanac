@@ -23,8 +23,7 @@
 	<div class="field-row">
 		<label
 			><span class="label-text"
-				>Evaluation Start <span class="tip" data-tip="First date included for this model."
-					>ⓘ</span
+				>Evaluation Start <span class="tip" data-tip="First date included for this model.">ⓘ</span
 				></span
 			>
 			<input
@@ -50,8 +49,7 @@
 			><span class="label-text"
 				>Baseline Start Year <span
 					class="tip"
-					data-tip="First year used to build the baseline seasonal behavior."
-					>ⓘ</span
+					data-tip="First year used to build the baseline seasonal behavior.">ⓘ</span
 				></span
 			>
 			<input
@@ -65,8 +63,7 @@
 			><span class="label-text"
 				>Baseline End Year <span
 					class="tip"
-					data-tip="Last year used to build the baseline seasonal behavior."
-					>ⓘ</span
+					data-tip="Last year used to build the baseline seasonal behavior.">ⓘ</span
 				></span
 			>
 			<input
@@ -88,45 +85,6 @@
 				oninput={(e) => setOverride(modelId, 'init_days', (e.target as HTMLInputElement).value)}
 			/>
 		</label>
-		<label
-			><span class="label-text"
-				>Calendar Alignment Year <span
-					class="tip"
-					data-tip="Reference year used for aligning weekly initialization calendars. Leave blank to use the model default."
-					>ⓘ</span
-				></span
-			>
-			<input
-				type="number"
-				value={getOverride(modelId, 'date_filter_year', cfg?.date_filter_year ?? '')}
-				oninput={(e) => setOverride(modelId, 'date_filter_year', (e.target as HTMLInputElement).value)}
-			/>
-		</label>
-		<label
-			><span class="label-text"
-				>Forecast Variable <span class="tip" data-tip="Variable name to read from forecast files.">ⓘ</span
-				></span
-			>
-			<input
-				value={getOverride(modelId, 'model_var', cfg?.model_var !== 'tp' ? (cfg?.model_var ?? '') : '')}
-				placeholder={cfg?.model_var ?? 'tp'}
-				oninput={(e) => setOverride(modelId, 'model_var', (e.target as HTMLInputElement).value)}
-			/>
-		</label>
-		<label
-			><span class="label-text"
-				>Filename Pattern <span
-					class="tip"
-					data-tip="Filename pattern used to locate forecast files."
-					>ⓘ</span
-				></span
-			>
-			<input
-				value={getOverride(modelId, 'file_pattern', cfg?.file_pattern !== '{}.nc' ? (cfg?.file_pattern ?? '') : '')}
-				placeholder={cfg?.file_pattern ?? '{}.nc'}
-				oninput={(e) => setOverride(modelId, 'file_pattern', (e.target as HTMLInputElement).value)}
-			/>
-		</label>
 		{#if !getOverride(modelId, 'probabilistic', cfg?.probabilistic ?? false)}
 			<label class="checkbox-label">
 				<input
@@ -135,7 +93,9 @@
 					onchange={(e) => setOverride(modelId, 'parallel', (e.target as HTMLInputElement).checked)}
 				/>
 				<span class="label-text"
-					>Run Years Concurrently <span class="tip" data-tip="Run years concurrently for faster results.">ⓘ</span
+					>Run Years Concurrently <span
+						class="tip"
+						data-tip="Run years concurrently for faster results.">ⓘ</span
 					></span
 				>
 			</label>
@@ -150,8 +110,7 @@
 			<span class="label-text"
 				>Ensemble Forecast <span
 					class="tip"
-					data-tip="Compute ensemble metrics in addition to deterministic metrics."
-					>ⓘ</span
+					data-tip="Compute ensemble metrics in addition to deterministic metrics.">ⓘ</span
 				></span
 			>
 		</label>
