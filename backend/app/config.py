@@ -2,11 +2,13 @@ import os
 from pathlib import Path
 
 import yaml
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
 _DATASETS_YAML = Path(__file__).parent / "config" / "datasets.yaml"
 _ROMP_YAML = Path(__file__).parent / "config" / "romp.yaml"
+_ENV_FILE_NAMES = (Path.cwd() / ".env", Path(__file__).resolve().parents[1] / ".env")
 
 
 def _env_key(*parts: str) -> str:
@@ -14,8 +16,34 @@ def _env_key(*parts: str) -> str:
     return "_".join(p for p in parts if p).upper().replace("-", "_")
 
 
+_env_file_cache: dict[str, str] | None = None
+
+
+def _env_file_values() -> dict[str, str]:
+    global _env_file_cache
+    if _env_file_cache is not None:
+        return _env_file_cache
+
+    values: dict[str, str] = {}
+    for env_file in dict.fromkeys(_ENV_FILE_NAMES):
+        if not env_file.exists():
+            continue
+        for key, value in dotenv_values(env_file).items():
+            if value is not None:
+                values.setdefault(key, value)
+
+    _env_file_cache = values
+    return values
+
+
+def _env_value(key: str) -> str:
+    return os.environ.get(key, _env_file_values().get(key, ""))
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # ---------------------------------------------------------------------------
     # Database
@@ -78,15 +106,20 @@ class Settings(BaseSettings):
     modal_token_secret: str = ""
 
     # ---------------------------------------------------------------------------
-    # LLM — OpenAI chat-completions-compatible client.
+    # LLM.
+    # llm_provider="openai-compatible" uses llm_base_url with an OpenAI chat-completions-compatible client.
+    # llm_provider="pydantic-ai" treats llm_model as a provider-prefixed Pydantic AI model string.
     # Examples:
-    #   Modal vLLM: llm_base_url="https://xxx--almanac-llm.modal.run/v1", llm_model="Qwen/Qwen2.5-Coder-7B-Instruct"
-    #   Ollama:     llm_base_url="http://localhost:11434/v1", llm_model="qwen2.5-coder"
+    #   Modal vLLM: llm_provider="openai-compatible", llm_base_url="https://xxx--almanac-llm.modal.run/v1", llm_model="Qwen/Qwen2.5-Coder-7B-Instruct"
+    #   Ollama:     llm_provider="openai-compatible", llm_base_url="http://localhost:11434/v1", llm_model="qwen2.5-coder"
+    #   Anthropic:  llm_provider="pydantic-ai", llm_model="anthropic:claude-sonnet-4-6"
     # ---------------------------------------------------------------------------
+    llm_provider: str = "openai-compatible"
     llm_base_url: str = ""
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = "placeholder"
     llm_timeout_seconds: float = 60.0
+    llm_history_max_messages: int = 80
     llm_tool_result_max_chars: int = 12000
     llm_code_context_max_chars: int = 6000
     enable_run_code: bool = True
@@ -127,7 +160,7 @@ def get_model_registry() -> list[dict]:
     result = []
     for entry in raw:
         env_key = _env_key(entry["region"], entry["id"], "model_dir")
-        model_dir = os.environ.get(env_key, "")
+        model_dir = _env_value(env_key)
         if not model_dir:
             continue
         m = dict(entry)
@@ -168,13 +201,14 @@ def get_demo_datasets() -> list[dict]:
     result = []
     for entry in raw:
         env_key = _env_key(entry["id"], "obs_dir")
-        obs_dir = os.environ.get(env_key, "")
+        obs_dir = _env_value(env_key)
         if not obs_dir:
             continue
         result.append(
             {
                 "id": "demo:" + entry["id"],
                 "name": entry["name"],
+                "region": entry.get("region", ""),
                 "obs_dir": obs_dir,
                 "obs_file_pattern": entry.get("obs_file_pattern"),
             }

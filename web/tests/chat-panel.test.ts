@@ -171,4 +171,43 @@ describe('ChatPanel', () => {
 		await screen.findByText('Completed');
 		expect(screen.queryByText('Run once.')).not.toBeNull();
 	});
+
+	it('shows a specific message for provider stream errors', async () => {
+		api.getChatSessions.mockResolvedValue([baseSession()]);
+		api.getChatSession.mockResolvedValueOnce(sessionDetail([])).mockResolvedValueOnce(
+			sessionDetail([
+				{
+					id: 'turn-user-1',
+					role: 'user',
+					content: 'Summarize this benchmark.',
+					created_at: '2026-04-23T00:00:00Z'
+				},
+				{
+					id: 'turn-assistant-1',
+					role: 'assistant',
+					content: '',
+					created_at: '2026-04-23T00:00:01Z'
+				}
+			])
+		);
+		api.sendChatMessage.mockImplementation(async function* () {
+			yield {
+				type: 'error',
+				error_type: 'provider_error',
+				message: 'Chat response failed'
+			};
+		});
+
+		render(ChatPanel, { jobs: jobs(), scopeKey: 'scope-a' });
+
+		await screen.findByText('Ask a question about the benchmark results above.');
+
+		const input = screen.getByPlaceholderText(
+			'Ask about the results… (Enter to send, Shift+Enter for newline)'
+		);
+		await fireEvent.input(input, { target: { value: 'Summarize this benchmark.' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+		await screen.findByText('The chat provider failed. Please try again.');
+	});
 });

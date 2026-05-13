@@ -78,9 +78,9 @@
 			return `No grid points in that longitude range. Available longitudes: ${grid.lons.join('°, ')}°${step ? ` (${step}° spacing)` : ''}.`;
 		}
 		if (f.lat_min != null && f.lat_max != null && f.lat_min > f.lat_max)
-			return 'Lat min must be less than lat max.';
+			return 'Latitude minimum must be less than latitude maximum.';
 		if (f.lon_min != null && f.lon_max != null && f.lon_min > f.lon_max)
-			return 'Lon min must be less than lon max.';
+			return 'Longitude minimum must be less than longitude maximum.';
 		return null;
 	}
 
@@ -123,9 +123,9 @@
 	// --- Table rendering helpers ---
 
 	const VAR_META: Record<string, { label: string }> = {
-		false_alarm_rate: { label: 'FAR' },
-		miss_rate: { label: 'MR' },
-		mean_mae: { label: 'MAE (mean)' }
+		false_alarm_rate: { label: 'False alarm rate' },
+		miss_rate: { label: 'Miss rate' },
+		mean_mae: { label: 'Mean absolute error' }
 	};
 
 	const PRIMARY_VARS = ['false_alarm_rate', 'miss_rate', 'mean_mae'];
@@ -134,7 +134,7 @@
 	function varLabel(key: string): string {
 		if (VAR_META[key]) return VAR_META[key].label;
 		const m = key.match(/^mae_(\d{4})$/);
-		if (m) return `MAE ${m[1]}`;
+		if (m) return `Mean absolute error ${m[1]}`;
 		return key;
 	}
 
@@ -170,14 +170,14 @@
 			{/if}
 			{#if extent}
 				<span class="bbox-hint">
-					Grid: {extent.lat_min}°–{extent.lat_max}°N, {extent.lon_min}°–{extent.lon_max}°E ({grid
-						?.lats.length}×{grid?.lons.length} points)
+					Grid: latitude {extent.lat_min}°–{extent.lat_max}°N, longitude {extent.lon_min}°–{extent.lon_max}°E
+					({grid?.lats.length}×{grid?.lons.length} points)
 				</span>
 			{/if}
 		</div>
 		<div class="bbox-fields">
 			<label
-				>Lat min
+				>Latitude min
 				<input
 					type="number"
 					step={extent?.lat_step ?? 'any'}
@@ -187,7 +187,7 @@
 				/>
 			</label>
 			<label
-				>Lat max
+				>Latitude max
 				<input
 					type="number"
 					step={extent?.lat_step ?? 'any'}
@@ -197,7 +197,7 @@
 				/>
 			</label>
 			<label
-				>Lon min
+				>Longitude min
 				<input
 					type="number"
 					step={extent?.lon_step ?? 'any'}
@@ -207,7 +207,7 @@
 				/>
 			</label>
 			<label
-				>Lon max
+				>Longitude max
 				<input
 					type="number"
 					step={extent?.lon_step ?? 'any'}
@@ -232,7 +232,7 @@
 	<div class="controls">
 		<label class="toggle">
 			<input type="checkbox" bind:checked={showPerYear} />
-			Show per-year MAE
+			Show per-year mean absolute error
 		</label>
 	</div>
 
@@ -241,7 +241,7 @@
 		<summary>About these metrics</summary>
 		<div class="glossary-grid">
 			<div class="glossary-item">
-				<span class="g-term">MAE</span>
+				<span class="g-term">Mean absolute error</span>
 				<span class="g-def"
 					><strong>Mean Absolute Error</strong> — average absolute difference in days between the
 					model's predicted monsoon onset and the ground-truth observed onset, averaged across all
@@ -249,7 +249,7 @@
 				>
 			</div>
 			<div class="glossary-item">
-				<span class="g-term">FAR</span>
+				<span class="g-term">False alarm rate</span>
 				<span class="g-def"
 					><strong>False Alarm Rate</strong> — fraction of forecast windows where the model predicts
 					onset but no onset actually occurs (FP ÷ (FP + TN)). A model that over-predicts onset will
@@ -257,7 +257,7 @@
 				>
 			</div>
 			<div class="glossary-item">
-				<span class="g-term">MR</span>
+				<span class="g-term">Miss rate</span>
 				<span class="g-def"
 					><strong>Miss Rate</strong> — fraction of forecast windows where onset occurs but the
 					model fails to predict it (FN ÷ actual onsets). A model that under-predicts onset will

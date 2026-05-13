@@ -1,62 +1,37 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 :root {
-	--color-bg: #0e1f34;
-	--color-surface: #162b45;
-	--color-surface-raised: #1d3554;
-	--color-border: #2b4f74;
-	--color-border-subtle: #1f3f60;
-	--color-text: #e8f1fa;
-	--color-text-muted: #82a8c8;
-	--color-text-dim: #527898;
-	--color-accent: #d4933f;
-	--color-accent-hover: #eaab52;
-	--color-accent-light: rgba(212, 147, 63, 0.14);
-	--color-accent-glow: rgba(212, 147, 63, 0.07);
-	--color-accent-border: rgba(212, 147, 63, 0.3);
-	--color-bg-glass: rgba(14, 31, 52, 0.88);
-	--color-danger: #f87171;
-	--color-danger-border: rgba(248, 113, 113, 0.35);
-	--color-danger-bg: rgba(248, 113, 113, 0.08);
-	--color-status-running: #fbbf24;
-	--color-status-running-bg: rgba(251, 191, 36, 0.15);
-	--color-status-complete: #34d399;
-	--color-status-complete-bg: rgba(52, 211, 153, 0.15);
-	--color-status-failed: #f87171;
-	--color-status-failed-bg: rgba(248, 113, 113, 0.15);
-	--color-logs-bg: #0a1525;
-	--color-grid-line: rgba(43, 79, 116, 0.2);
-	--font-display: 'Instrument Serif', Georgia, serif;
-	--font-body: 'Manrope', system-ui, sans-serif;
-	--font-mono: 'JetBrains Mono', monospace;
-}
-
-/* Atmospheric grid background */
-body::before {
-	content: '';
-	position: fixed;
-	inset: 0;
-	background-image:
-		linear-gradient(var(--color-grid-line) 1px, transparent 1px),
-		linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
-	background-size: 64px 64px;
-	pointer-events: none;
-	z-index: -1;
-	mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 80%);
-	-webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 30%, transparent 80%);
-}
-
-/* Film grain overlay */
-body::after {
-	content: '';
-	position: fixed;
-	inset: 0;
-	pointer-events: none;
-	z-index: 100;
-	opacity: 0.035;
-	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-	background-size: 256px 256px;
+	--color-bg: #f7f4ef;
+	--color-surface: #fffdf9;
+	--color-surface-muted: #eee8de;
+	--color-surface-raised: #ffffff;
+	--color-border: #d9d0c3;
+	--color-border-subtle: #e8dfd3;
+	--color-text: #24211d;
+	--color-text-muted: #70685e;
+	--color-text-dim: #9a9084;
+	--color-accent: #2f6f63;
+	--color-accent-hover: #245a50;
+	--color-accent-soft: #dcebe6;
+	--color-accent-light: #e9f3ef;
+	--color-accent-glow: rgba(47, 111, 99, 0.08);
+	--color-accent-border: rgba(47, 111, 99, 0.28);
+	--color-bg-glass: rgba(247, 244, 239, 0.86);
+	--color-danger: #b54848;
+	--color-danger-border: rgba(181, 72, 72, 0.28);
+	--color-danger-bg: #f7e8e5;
+	--color-status-running: #9b6b2b;
+	--color-status-running-bg: #f4ead8;
+	--color-status-complete: #2f6f63;
+	--color-status-complete-bg: #dcebe6;
+	--color-status-failed: #b54848;
+	--color-status-failed-bg: #f7e8e5;
+	--color-logs-bg: #211f1b;
+	--font-display: 'Geist', ui-sans-serif, system-ui, sans-serif;
+	--font-body: 'Geist', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'Geist Mono', ui-monospace, monospace;
+	--shadow-soft: 0 1rem 3rem rgba(36, 33, 29, 0.08);
 }
 
 *,
@@ -65,17 +40,29 @@ body::after {
 	box-sizing: border-box;
 }
 
+html {
+	background: var(--color-bg);
+}
+
 body {
-	background-color: var(--color-bg);
+	margin: 0;
+	background: var(--color-bg);
 	color: var(--color-text);
 	font-family: var(--font-body);
 	font-size: 1rem;
-	line-height: 1.6;
+	line-height: 1.55;
 	-webkit-font-smoothing: antialiased;
 }
 
+button,
+input,
+select,
+textarea {
+	font: inherit;
+}
+
 ::selection {
-	background: rgba(212, 147, 63, 0.25);
+	background: var(--color-accent-soft);
 	color: var(--color-text);
 }
 

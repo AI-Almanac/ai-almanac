@@ -10,14 +10,17 @@
 
 - id: test-ethiopia
   name: "Test Ethiopia"
+  region: ethiopia
   obs_file_pattern: "{}.nc"
 
 # --- Real benchmark datasets (set the corresponding env vars to enable) ---
 
 - id: ethiopia
   name: "CHIRPS Ethiopia"
+  region: ethiopia
   obs_file_pattern: "{}.nc"
 
 - id: imd-2p0
   name: "IMD India (2 deg)"
+  region: india
   obs_file_pattern: "data_{}.nc"

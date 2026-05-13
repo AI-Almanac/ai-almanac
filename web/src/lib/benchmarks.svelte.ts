@@ -121,25 +121,29 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
 export class BenchmarkStore {
 	jobs = $state<Job[]>([]);
 	selectedGroupKey = $state<string | null>(null);
-	showForm = $state(true);
+	showForm = $state(false);
 
 	runGroups = $derived(buildRunGroups(this.jobs));
 	selectedGroup = $derived(this.runGroups.find((g) => g.key === this.selectedGroupKey) ?? null);
 
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
 
-	async load(groupKey?: string | null) {
+	async load(groupKey?: string | null, selectDefault = true) {
 		try {
 			this.jobs = await getJobs();
 		} catch (e) {
 			console.error('Failed to fetch jobs', e);
 		}
+		const groups = buildRunGroups(this.jobs);
 		if (groupKey) {
-			const exists = buildRunGroups(this.jobs).some((g) => g.key === groupKey);
-			if (exists) {
-				this.selectedGroupKey = groupKey;
+			const selected = groups.find((g) => g.key === groupKey);
+			if (selected) {
+				this.selectedGroupKey = selected.key;
 				this.showForm = false;
 			}
+		} else if (selectDefault && !this.selectedGroupKey && groups.length > 0) {
+			this.selectedGroupKey = groups[0].key;
+			this.showForm = false;
 		}
 		this.startPolling();
 	}
@@ -156,8 +160,9 @@ export class BenchmarkStore {
 		const removedIds = new Set(group.jobs.map((j) => j.id));
 		this.jobs = untrack(() => this.jobs.filter((j) => !removedIds.has(j.id)));
 		if (untrack(() => this.selectedGroupKey) === key) {
-			this.selectedGroupKey = null;
-			this.showForm = true;
+			const nextGroup = buildRunGroups(untrack(() => this.jobs))[0];
+			this.selectedGroupKey = nextGroup?.key ?? null;
+			this.showForm = false;
 		}
 	}
 
@@ -202,6 +207,12 @@ export class BenchmarkStore {
 			first.run_id ??
 			`${first.params?.event_type ?? 'monsoon_onset'}||${first.params?.region ?? 'unknown'}||${first.params?.start_date ?? 'unknown'}||${first.params?.end_date ?? 'unknown'}`;
 		this.selectedGroupKey = key;
+		this.showForm = false;
+	}
+
+	acceptSubmittedJobs(runId: string, jobs: Job[]): void {
+		this.jobs = [...jobs, ...untrack(() => this.jobs)];
+		this.selectedGroupKey = runId;
 		this.showForm = false;
 	}
 

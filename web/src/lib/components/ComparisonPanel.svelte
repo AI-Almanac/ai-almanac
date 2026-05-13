@@ -58,9 +58,9 @@
 
 	const PRIMARY_VARS = ['false_alarm_rate', 'miss_rate', 'mean_mae'];
 	const VAR_LABEL: Record<string, string> = {
-		false_alarm_rate: 'FAR',
-		miss_rate: 'MR',
-		mean_mae: 'MAE (mean)'
+		false_alarm_rate: 'False alarm rate',
+		miss_rate: 'Miss rate',
+		mean_mae: 'Mean absolute error'
 	};
 
 	function fmt(v: number, unit: string) {
@@ -227,11 +227,12 @@
 					{#each jobs as job, ji}
 						{@const fig = figureFor(job.id, pair.window)}
 						{@const figs = rowFigs((id) => figureFor(id, pair.window))}
-						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-						<div
+						<button
 							class="fig-cell"
+							disabled={!fig}
 							onclick={() => fig && openLightbox(figs, figs.indexOf(fig))}
 							title={fig ? 'Click to expand' : ''}
+							aria-label={fig ? `Expand ${fig.label}` : `${pair.label} not available`}
 						>
 							{#if jobData[job.id]?.loading}
 								<div class="cell-placeholder loading-dot">Loading…</div>
@@ -246,7 +247,7 @@
 							{:else}
 								<div class="cell-placeholder na">Not available</div>
 							{/if}
-						</div>
+						</button>
 					{/each}
 				{/each}
 			</div>
@@ -269,8 +270,12 @@
 					{#each jobs as job}
 						{@const fig = portraitFor(job.id, pair.label)}
 						{@const figs = rowFigs((id) => portraitFor(id, pair.label))}
-						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-						<div class="fig-cell" onclick={() => fig && openLightbox(figs, figs.indexOf(fig))}>
+						<button
+							class="fig-cell"
+							disabled={!fig}
+							onclick={() => fig && openLightbox(figs, figs.indexOf(fig))}
+							aria-label={fig ? `Expand ${fig.label}` : `${pair.label} not available`}
+						>
 							{#if jobData[job.id]?.loading}
 								<div class="cell-placeholder">Loading…</div>
 							{:else if fig}
@@ -284,7 +289,7 @@
 							{:else}
 								<div class="cell-placeholder na">Not available</div>
 							{/if}
-						</div>
+						</button>
 					{/each}
 				{/each}
 			</div>
@@ -481,6 +486,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		padding: 0;
+		color: inherit;
+		font: inherit;
+	}
+
+	.fig-cell:disabled {
+		cursor: default;
 	}
 
 	.fig-cell img {

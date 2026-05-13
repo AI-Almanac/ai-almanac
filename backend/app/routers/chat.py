@@ -13,27 +13,53 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
+from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from pydantic_ai import DeferredToolResults, ToolDenied
+from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import bindparam, text
 
 from ..auth import CurrentUser
-from ..config import settings
 from ..database import get_db
 from ..services.chat_artifacts import (
     delete_chat_figure_artifact,
     hydrate_turn_artifact_urls,
     verify_chat_figure_signature,
 )
-from ..services.chat_state import ChatArtifact, ChatScope, ChatToolCall, ChatTurn
-from ..services.llm import SYSTEM_PROMPT, stream_response
+from ..services.benchmark_domain import (
+    submit_benchmark_for_session,
+    update_benchmark_config,
+)
+from ..services.benchmark_state import (
+    BenchmarkRunSpec,
+    BenchmarkValidation,
+)
+from ..services.chat_state import (
+    ChatArtifact,
+    ChatScope,
+    ChatToolCall,
+    ChatTurn,
+)
+from ..services.chat_tools import (
+    SubmitBenchmarkApproval,
+)
+
+from ..services.llm import (
+    deserialize_model_messages,
+    llm_is_configured,
+    serialize_model_messages,
+    stream_response,
+)
 from ..services.storage import get_storage, guess_chat_figure_media_type
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +81,9 @@ class SessionOut(BaseModel):
     updated_at: datetime
     message_count: int
     scope: ChatScope
+    benchmark_config: BenchmarkRunSpec | None = None
+    benchmark_validation: BenchmarkValidation | None = None
+    run_id: str | None = None
 
 
 class SessionDetail(SessionOut):
@@ -70,36 +99,127 @@ class SessionUpdate(BaseModel):
     title: str | None = None
 
 
+class BenchmarkSubmitOut(BaseModel):
+    run_id: str
+    jobs: list[dict]
+    benchmark_config: BenchmarkRunSpec
+    benchmark_validation: BenchmarkValidation
+
+
+class BenchmarkConfigPatchIn(BaseModel):
+    intent: str | None = None
+    region_id: str | None = None
+    dataset_id: str | None = None
+    model_ids: list[str] | None = None
+    event_type: str | None = None
+    forecast_window_days: int | None = None
+    advanced_params: dict | None = None
+
+
+class BenchmarkSubmitIn(BaseModel):
+    approval: SubmitBenchmarkApproval | None = None
+
+
+class BenchmarkApprovalIn(BaseModel):
+    approval: SubmitBenchmarkApproval
+    message: str = "The user declined to run the benchmark."
+
+
+class BenchmarkConfigOut(BaseModel):
+    benchmark_config: BenchmarkRunSpec
+    benchmark_validation: BenchmarkValidation
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+T = TypeVar("T")
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _build_system_message(scope: ChatScope) -> dict:
-    content = SYSTEM_PROMPT
-    if scope.job_ids:
-        ids_str = ", ".join(scope.job_ids)
-        content += (
-            f"\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
-            f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
-        )
-    return {"role": "system", "content": content}
+def _json_value(value: object, default: T) -> T:
+    if isinstance(value, type(default)):
+        return value
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    return json.loads(stripped)
 
 
 def _json_list(value: object) -> list[dict]:
-    if isinstance(value, list):
-        return value
-    return json.loads(value or "[]")
+    return _json_value(value, [])
 
 
 def _json_dict(value: object) -> dict:
-    if isinstance(value, dict):
-        return value
-    return json.loads(value or "{}")
+    return _json_value(value, {})
+
+
+def _benchmark_config(value: object) -> BenchmarkRunSpec | None:
+    parsed = _json_dict(value)
+    return BenchmarkRunSpec.model_validate(parsed) if parsed else None
+
+
+def _benchmark_validation(value: object) -> BenchmarkValidation | None:
+    parsed = _json_dict(value)
+    return BenchmarkValidation.model_validate(parsed) if parsed else None
+
+
+def _benchmark_submit_out(payload: dict) -> BenchmarkSubmitOut:
+    return BenchmarkSubmitOut(
+        run_id=payload["run_id"],
+        jobs=payload["jobs"],
+        benchmark_config=BenchmarkRunSpec.model_validate(payload["benchmark_config"]),
+        benchmark_validation=BenchmarkValidation.model_validate(
+            payload["benchmark_validation"]
+        ),
+    )
+
+
+def _session_out(row) -> SessionOut:
+    transcript = _json_list(row["transcript"])
+    return SessionOut(
+        id=row["id"],
+        title=row["title"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        message_count=len(transcript),
+        scope=ChatScope.model_validate(_json_dict(row["scope"])),
+        benchmark_config=_benchmark_config(row.get("benchmark_config")),
+        benchmark_validation=_benchmark_validation(row.get("benchmark_validation")),
+        run_id=row.get("run_id"),
+    )
+
+
+def _session_detail(row, user_id: str) -> SessionDetail:
+    transcript = _json_list(row["transcript"])
+    return SessionDetail(
+        **_session_out(row).model_dump(),
+        transcript=[
+            hydrate_turn_artifact_urls(ChatTurn.model_validate(turn), user_id)
+            for turn in transcript
+        ],
+    )
+
+
+def _parse_llm_event(event: str) -> dict | None:
+    stripped = event.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("LLM stream emitted a malformed event") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("LLM stream emitted a non-object event")
+    return parsed
 
 
 def _replace_turn(transcript: list[dict], turn: ChatTurn) -> list[dict]:
@@ -201,15 +321,6 @@ async def _update_session_state(
     )
 
 
-def _apply_scope_to_provider_state(
-    provider_state: list[dict], scope: ChatScope
-) -> list[dict]:
-    system_message = _build_system_message(scope)
-    if provider_state and provider_state[0].get("role") == "system":
-        return [system_message, *provider_state[1:]]
-    return [system_message, *provider_state]
-
-
 async def _validate_scope(scope: ChatScope, user_id: str) -> ChatScope:
     job_ids = list(dict.fromkeys(scope.job_ids))
     validated_scope = scope.model_copy(update={"job_ids": job_ids})
@@ -258,6 +369,30 @@ def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     return "internal_error"
 
 
+def _deny_unprocessed_tool_calls(provider_state: list) -> list:
+    if not provider_state:
+        return provider_state
+
+    tool_calls = getattr(provider_state[-1], "tool_calls", None)
+    if not tool_calls:
+        return provider_state
+
+    denied_returns = [
+        ToolReturnPart(
+            tool_name=call.tool_name,
+            content="The user continued the conversation without approving this action.",
+            tool_call_id=call.tool_call_id,
+            outcome="denied",
+        )
+        for call in tool_calls
+        if getattr(call, "tool_call_id", None)
+    ]
+    if not denied_returns:
+        return provider_state
+
+    return [*provider_state, ModelRequest(parts=denied_returns)]
+
+
 async def _persist_failed_turn(
     conn,
     session_id: str,
@@ -283,6 +418,91 @@ async def _persist_failed_turn(
     )
 
 
+async def _get_session_provider_scope(session_id: str, user_id: str):
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("""
+                        SELECT provider_state, scope
+                        FROM chat_sessions
+                        WHERE id = :id AND user_id = :uid
+                    """),
+                    {"id": session_id, "uid": user_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return row
+
+
+def _approval_metadata(approval: SubmitBenchmarkApproval) -> dict:
+    return {
+        "approved_config": approval.approved_config.model_dump(mode="json")
+        if approval.approved_config
+        else None
+    }
+
+
+async def _save_provider_state(
+    session_id: str, user_id: str, provider_state: list[dict]
+) -> None:
+    async with get_db() as conn:
+        await conn.execute(
+            text("""
+                UPDATE chat_sessions
+                SET provider_state = :provider_state, updated_at = :now
+                WHERE id = :id AND user_id = :uid
+            """),
+            {
+                "provider_state": json.dumps(provider_state),
+                "now": _now(),
+                "id": session_id,
+                "uid": user_id,
+            },
+        )
+
+
+async def _resume_deferred_benchmark_tool(
+    session_id: str,
+    user_id: str,
+    approval: SubmitBenchmarkApproval,
+    approval_result: bool | ToolDenied,
+) -> tuple[list[dict], dict | None]:
+    row = await _get_session_provider_scope(session_id, user_id)
+    scope = ChatScope.model_validate(_json_dict(row["scope"]))
+    provider_state = deserialize_model_messages(row["provider_state"])
+    deferred_results = DeferredToolResults(
+        approvals={approval.tool_call_id: approval_result},
+        metadata={approval.tool_call_id: _approval_metadata(approval)},
+    )
+    final_provider_state = serialize_model_messages(provider_state)
+    payload: dict | None = None
+
+    async for event in stream_response(
+        provider_state,
+        user_id,
+        session_id,
+        scope,
+        deferred_tool_results=deferred_results,
+    ):
+        data = _parse_llm_event(event)
+        if data and data.get("type") == "benchmark_config" and data.get("run_id"):
+            payload = {
+                "run_id": data["run_id"],
+                "jobs": data.get("jobs"),
+                "benchmark_config": data.get("config"),
+                "benchmark_validation": data.get("validation"),
+            }
+        if data and data.get("type") == "done":
+            final_provider_state = data.get("provider_state", final_provider_state)
+
+    return final_provider_state, payload
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -292,12 +512,12 @@ async def _persist_failed_turn(
     "/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED
 )
 async def create_session(body: SessionCreate, user: CurrentUser):
-    if not settings.llm_base_url:
+    if not llm_is_configured():
         raise HTTPException(status_code=503, detail="LLM is not configured")
 
     session_id = str(uuid.uuid4())
     now = _now()
-    initial_messages = [_build_system_message(body.scope)]
+    initial_messages: list[dict] = []
 
     async with get_db() as conn:
         await conn.execute(
@@ -322,6 +542,9 @@ async def create_session(body: SessionCreate, user: CurrentUser):
         updated_at=now,
         message_count=0,
         scope=body.scope,
+        benchmark_config=None,
+        benchmark_validation=None,
+        run_id=None,
     )
 
 
@@ -352,29 +575,7 @@ async def list_sessions(
             .fetchall()
         )
 
-    result = []
-    for r in rows:
-        transcript = (
-            r["transcript"]
-            if isinstance(r["transcript"], list)
-            else json.loads(r["transcript"] or "[]")
-        )
-        scope = (
-            r["scope"]
-            if isinstance(r["scope"], dict)
-            else json.loads(r["scope"] or "{}")
-        )
-        result.append(
-            SessionOut(
-                id=r["id"],
-                title=r["title"],
-                created_at=r["created_at"],
-                updated_at=r["updated_at"],
-                message_count=len(transcript),
-                scope=ChatScope.model_validate(scope),
-            )
-        )
-    return result
+    return [_session_out(row) for row in rows]
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
@@ -396,28 +597,7 @@ async def get_session(session_id: str, user: CurrentUser):
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    transcript = (
-        row["transcript"]
-        if isinstance(row["transcript"], list)
-        else json.loads(row["transcript"] or "[]")
-    )
-    scope = (
-        row["scope"]
-        if isinstance(row["scope"], dict)
-        else json.loads(row["scope"] or "{}")
-    )
-    return SessionDetail(
-        id=row["id"],
-        title=row["title"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        message_count=len(transcript),
-        scope=ChatScope.model_validate(scope),
-        transcript=[
-            hydrate_turn_artifact_urls(ChatTurn.model_validate(turn), user["id"])
-            for turn in transcript
-        ],
-    )
+    return _session_detail(row, user["id"])
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionOut)
@@ -451,29 +631,106 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    transcript = (
-        row["transcript"]
-        if isinstance(row["transcript"], list)
-        else json.loads(row["transcript"] or "[]")
+    return _session_out(row)
+
+
+@router.post(
+    "/sessions/{session_id}/benchmark/submit", response_model=BenchmarkSubmitOut
+)
+async def submit_session_benchmark(
+    session_id: str, user: CurrentUser, body: BenchmarkSubmitIn | None = None
+):
+    if body and body.approval:
+        final_provider_state, payload = await _resume_deferred_benchmark_tool(
+            session_id,
+            user["id"],
+            body.approval,
+            True,
+        )
+        if payload is None:
+            raise HTTPException(
+                status_code=400, detail="Benchmark approval did not submit a run"
+            )
+
+        await _save_provider_state(session_id, user["id"], final_provider_state)
+        return _benchmark_submit_out(payload)
+
+    row = await _get_session_provider_scope(session_id, user["id"])
+    scope = ChatScope.model_validate(_json_dict(row["scope"]))
+    payload = await submit_benchmark_for_session(user["id"], scope, session_id)
+    if payload.get("error"):
+        raise HTTPException(status_code=400, detail=payload["error"])
+    if not isinstance(payload.get("run_id"), str) or not isinstance(
+        payload.get("jobs"), list
+    ):
+        raise HTTPException(status_code=400, detail="Benchmark config is not runnable")
+
+    return _benchmark_submit_out(payload)
+
+
+@router.post(
+    "/sessions/{session_id}/benchmark/approval", status_code=status.HTTP_204_NO_CONTENT
+)
+async def deny_session_benchmark_approval(
+    session_id: str, body: BenchmarkApprovalIn, user: CurrentUser
+):
+    final_provider_state, _ = await _resume_deferred_benchmark_tool(
+        session_id,
+        user["id"],
+        body.approval,
+        ToolDenied(body.message),
     )
-    scope = (
-        row["scope"]
-        if isinstance(row["scope"], dict)
-        else json.loads(row["scope"] or "{}")
+    await _save_provider_state(session_id, user["id"], final_provider_state)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(
+    "/sessions/{session_id}/benchmark/config", response_model=BenchmarkConfigOut
+)
+async def update_session_benchmark_config(
+    session_id: str, body: BenchmarkConfigPatchIn, user: CurrentUser
+):
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    scope = ChatScope.model_validate(_json_dict(row["scope"]))
+    payload = await update_benchmark_config(
+        body.model_dump(exclude_none=True),
+        user["id"],
+        scope,
+        session_id,
     )
-    return SessionOut(
-        id=row["id"],
-        title=row["title"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        message_count=len(transcript),
-        scope=ChatScope.model_validate(scope),
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("benchmark_config"), dict
+    ):
+        raise HTTPException(
+            status_code=500, detail="Benchmark config update returned invalid payload"
+        )
+    return BenchmarkConfigOut(
+        benchmark_config=BenchmarkRunSpec.model_validate(payload["benchmark_config"]),
+        benchmark_validation=BenchmarkValidation.model_validate(
+            payload["benchmark_validation"]
+        ),
     )
 
 
 @router.post("/sessions/{session_id}/message")
 async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
-    if not settings.llm_base_url:
+    if not llm_is_configured():
         raise HTTPException(status_code=503, detail="LLM is not configured")
 
     requested_scope = None
@@ -515,7 +772,9 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 )
                 return
 
-            provider_state = _json_list(row["provider_state"])
+            provider_state = _deny_unprocessed_tool_calls(
+                deserialize_model_messages(row["provider_state"])
+            )
             transcript = _json_list(row["transcript"])
             stored_scope = ChatScope.model_validate(_json_dict(row["scope"]))
             if requested_scope is not None:
@@ -533,8 +792,6 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
             else:
                 scope = stored_scope
 
-            provider_state = _apply_scope_to_provider_state(provider_state, scope)
-
             created_at = _now()
             user_turn = ChatTurn(
                 id=str(uuid.uuid4()),
@@ -549,9 +806,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 status="streaming",
             )
 
-            pending_provider_state = provider_state + [
-                {"role": "user", "content": body.content}
-            ]
+            pending_provider_state = serialize_model_messages(provider_state)
             pending_transcript = transcript + [
                 user_turn.model_dump(mode="json"),
                 assistant_turn.model_dump(mode="json"),
@@ -570,9 +825,30 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
         terminal_event: str | None = None
         try:
             async for event in stream_response(
-                pending_provider_state, user["id"], session_id, scope
+                provider_state,
+                user["id"],
+                session_id,
+                scope,
+                latest_user_message=body.content,
             ):
-                data = json.loads(event)
+                data = _parse_llm_event(event)
+                if data is None:
+                    continue
+                if (
+                    data.get("type") == "benchmark_config"
+                    and isinstance(data.get("run_id"), str)
+                    and isinstance(data.get("jobs"), list)
+                ):
+                    scope = ChatScope(
+                        kind="benchmark_run_group",
+                        key=data["run_id"],
+                        title=scope.title,
+                        job_ids=[
+                            job["id"]
+                            for job in data["jobs"]
+                            if isinstance(job, dict) and isinstance(job.get("id"), str)
+                        ],
+                    )
                 if data.get("type") == "done":
                     completed_turn = ChatTurn.model_validate(
                         {
@@ -625,6 +901,11 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 pass
             return
         except Exception as exc:
+            logger.exception(
+                "Chat response stream failed for session %s and user %s",
+                session_id,
+                user["id"],
+            )
             try:
                 async with get_db() as conn:
                     await _persist_failed_turn(

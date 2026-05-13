@@ -51,9 +51,9 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="overlay" onclick={onclose}>
-	<div class="box" onclick={(e) => e.stopPropagation()}>
+<div class="overlay">
+	<button class="backdrop" onclick={onclose} aria-label="Close figure lightbox"></button>
+	<div class="box" role="dialog" aria-modal="true" aria-label="Figure preview">
 		<button class="close" onclick={onclose} aria-label="Close">&times;</button>
 		<button class="download" onclick={download} aria-label="Download" title="Download figure"
 			>&#x2B07;</button
@@ -86,15 +86,23 @@
 		position: fixed;
 		inset: 0;
 		z-index: 2000;
-		background: rgba(0, 0, 0, 0.85);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		padding: 1.5rem;
 	}
 
+	.backdrop {
+		position: absolute;
+		inset: 0;
+		border: 0;
+		background: rgba(0, 0, 0, 0.85);
+		cursor: zoom-out;
+	}
+
 	.box {
 		position: relative;
+		z-index: 1;
 		max-width: min(90vw, 1200px);
 		max-height: 90vh;
 		display: flex;

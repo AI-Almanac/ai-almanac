@@ -178,11 +178,36 @@ export type Dataset = {
 	id: string;
 	name: string;
 	status: string;
+	region?: string | null;
 	is_demo: boolean;
 	created_at: string;
 	obs_file_pattern?: string | null;
 	obs_year_start?: number | null;
 	obs_year_end?: number | null;
+};
+
+export type BenchmarkRunSpec = {
+	intent: string;
+	region_id?: string | null;
+	region_name?: string | null;
+	romp_region?: string | null;
+	event_type: string;
+	dataset_id?: string | null;
+	dataset_name?: string | null;
+	model_ids: string[];
+	model_names: string[];
+	forecast_window_days?: number | null;
+	status: 'collecting' | 'needs_confirmation' | 'runnable' | 'running';
+	missing_fields: string[];
+	assumptions: string[];
+	advanced_params: Record<string, unknown>;
+};
+
+export type BenchmarkSubmitResponse = {
+	run_id: string;
+	jobs: Job[];
+	benchmark_config: BenchmarkRunSpec;
+	benchmark_validation: BenchmarkValidation;
 };
 
 export type JobStatus = 'running' | 'complete' | 'failed';
@@ -214,6 +239,7 @@ export type JobParams = {
 	end_year_clim?: number;
 	max_forecast_day?: number;
 	init_days?: string;
+	date_filter_year?: number | null;
 	parallel?: boolean;
 	// Advanced — obs overrides
 	obs?: string;
@@ -257,6 +283,7 @@ export type ModelConfig = {
 	probabilistic: boolean;
 	members: string | null;
 	init_days: string;
+	date_filter_year?: number | null;
 	start_date: string;
 	end_date: string;
 	start_year_clim: number;
@@ -425,6 +452,9 @@ export type ChatSession = {
 	updated_at: string;
 	message_count: number;
 	scope: ChatScope;
+	benchmark_config?: BenchmarkRunSpec | null;
+	benchmark_validation?: BenchmarkValidation | null;
+	run_id?: string | null;
 };
 
 export type ChatMessage = {
@@ -437,10 +467,18 @@ export type ChatMessage = {
 };
 
 export type ChatScope = {
-	kind: 'benchmark_run_group' | 'job_set';
+	kind: 'benchmark_setup' | 'benchmark_run_group' | 'job_set';
 	key: string;
 	title?: string | null;
 	job_ids: string[];
+};
+
+export type BenchmarkValidation = {
+	can_run: boolean;
+	status: BenchmarkRunSpec['status'];
+	missing_fields: string[];
+	errors: string[];
+	warnings: string[];
 };
 
 export type ChatArtifact = {
@@ -478,7 +516,28 @@ export type ChatEvent =
 			result: unknown;
 	  }
 	| { type: 'artifact'; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
-	| { type: 'error'; message: string; retryable?: boolean }
+	| {
+			type: 'tool_approval_request';
+			turn_id: string;
+			tool_call: ChatToolCall;
+			metadata?: Record<string, unknown>;
+	  }
+	| {
+			type: 'benchmark_config';
+			turn_id: string;
+			config: BenchmarkRunSpec;
+			validation?: BenchmarkValidation | null;
+			run_id?: string | null;
+			jobs?: Job[] | null;
+	  }
+	| {
+			type: 'benchmark_approval_request';
+			turn_id: string;
+			tool_call_id: string;
+			config: BenchmarkRunSpec;
+			validation?: BenchmarkValidation | null;
+	  }
+	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 
 export async function createChatSession(scope: ChatScope, title?: string): Promise<ChatSession> {
@@ -511,6 +570,52 @@ export async function updateChatSession(
 
 export async function deleteChatSession(id: string): Promise<void> {
 	await request<void>(`/chat/sessions/${id}`, { method: 'DELETE' });
+}
+
+export async function submitChatBenchmark(
+	sessionId: string,
+	approval?: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null }
+): Promise<BenchmarkSubmitResponse> {
+	return request<BenchmarkSubmitResponse>(`/chat/sessions/${sessionId}/benchmark/submit`, {
+		method: 'POST',
+		body: approval
+			? JSON.stringify({
+					approval: {
+						tool_call_id: approval.tool_call_id,
+						approved_config: approval.approved_config ?? null
+					}
+				})
+			: undefined
+	});
+}
+
+export async function denyChatBenchmarkApproval(
+	sessionId: string,
+	approval: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null; message?: string }
+): Promise<void> {
+	return request<void>(`/chat/sessions/${sessionId}/benchmark/approval`, {
+		method: 'POST',
+		body: JSON.stringify({
+			approval: {
+				tool_call_id: approval.tool_call_id,
+				approved_config: approval.approved_config ?? null
+			},
+			message: approval.message ?? 'The user declined to run the benchmark.'
+		})
+	});
+}
+
+export async function updateChatBenchmarkConfig(
+	sessionId: string,
+	patch: Partial<BenchmarkRunSpec>
+): Promise<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }> {
+	return request<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }>(
+		`/chat/sessions/${sessionId}/benchmark/config`,
+		{
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}
+	);
 }
 
 /**

@@ -23,8 +23,7 @@
 	<div class="field-row">
 		<label
 			><span class="label-text"
-				>Start Date <span class="tip" data-tip="Start of the evaluation window for this model."
-					>ⓘ</span
+				>Evaluation Start <span class="tip" data-tip="First date included for this model.">ⓘ</span
 				></span
 			>
 			<input
@@ -36,7 +35,7 @@
 		</label>
 		<label
 			><span class="label-text"
-				>End Date <span class="tip" data-tip="End of the evaluation window for this model.">ⓘ</span
+				>Evaluation End <span class="tip" data-tip="Last date included for this model.">ⓘ</span
 				></span
 			>
 			<input
@@ -48,10 +47,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Clim Start Year <span
+				>Baseline Start Year <span
 					class="tip"
-					data-tip="First year of the climatological reference period for onset threshold computation."
-					>ⓘ</span
+					data-tip="First year used to build the baseline seasonal behavior.">ⓘ</span
 				></span
 			>
 			<input
@@ -63,10 +61,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Clim End Year <span
+				>Baseline End Year <span
 					class="tip"
-					data-tip="Last year of the climatological reference period. Must cover the evaluation years."
-					>ⓘ</span
+					data-tip="Last year used to build the baseline seasonal behavior.">ⓘ</span
 				></span
 			>
 			<input
@@ -77,9 +74,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Init Days <span
+				>Initialization Days <span
 					class="tip"
-					data-tip="Comma-separated initialization day offsets within each week. '0,3' = Mon/Thu."
+					data-tip="Comma-separated forecast initialization days within each week. '0,3' = Mon/Thu."
 					>ⓘ</span
 				></span
 			>
@@ -96,7 +93,9 @@
 					onchange={(e) => setOverride(modelId, 'parallel', (e.target as HTMLInputElement).checked)}
 				/>
 				<span class="label-text"
-					>Parallel <span class="tip" data-tip="Run years concurrently for faster results.">ⓘ</span
+					>Run Years Concurrently <span
+						class="tip"
+						data-tip="Run years concurrently for faster results.">ⓘ</span
 					></span
 				>
 			</label>
@@ -109,17 +108,16 @@
 					setOverride(modelId, 'probabilistic', (e.target as HTMLInputElement).checked)}
 			/>
 			<span class="label-text"
-				>Probabilistic <span
+				>Ensemble Forecast <span
 					class="tip"
-					data-tip="Compute probabilistic metrics (Brier Score, RPS, AUC) in addition to deterministic ones."
-					>ⓘ</span
+					data-tip="Compute ensemble metrics in addition to deterministic metrics.">ⓘ</span
 				></span
 			>
 		</label>
 		{#if getOverride(modelId, 'probabilistic', cfg?.probabilistic ?? false)}
 			<label
 				><span class="label-text"
-					>Members <span
+					>Ensemble Members <span
 						class="tip"
 						data-tip="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All'."
 						>ⓘ</span

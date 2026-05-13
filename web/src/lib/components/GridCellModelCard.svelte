@@ -17,6 +17,17 @@
 		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
 	}
 
+	function modelDisplayName(modelName: string) {
+		const labels: Record<string, string> = {
+			fuxi: 'FuXi',
+			aifs: 'AIFS',
+			aifs_daily: 'AIFS Daily',
+			fuxi_s2s: 'FuXi S2S',
+			climatology: 'Climatology'
+		};
+		return labels[modelName.toLowerCase()] ?? modelName;
+	}
+
 	function formatValue(value: number | null | undefined, digits = 2): string {
 		return value == null ? '—' : value.toFixed(digits);
 	}
@@ -39,9 +50,9 @@
 <article class="cell-model-card">
 	<div class="cell-model-heading">
 		<div>
-			<p class="cell-model-label">{result.model.toUpperCase()}</p>
+			<p class="cell-model-label">{modelDisplayName(result.model)}</p>
 			<p class="cell-grid-note">
-				Nearest grid: {result.lat.toFixed(2)}°N, {result.lon.toFixed(2)}°E
+				Nearest grid: latitude {result.lat.toFixed(2)}°N, longitude {result.lon.toFixed(2)}°E
 			</p>
 		</div>
 		<span class="cell-window">Days {result.window}</span>

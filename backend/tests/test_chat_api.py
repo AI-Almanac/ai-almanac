@@ -7,6 +7,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+)
+from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -29,6 +36,196 @@ def _sse_events(body: str) -> list[dict]:
     return events
 
 
+def test_chat_json_helpers_treat_empty_strings_as_defaults() -> None:
+    from app.routers.chat import _json_dict, _json_list
+
+    assert _json_list("") == []
+    assert _json_list("  \n") == []
+    assert _json_dict("") == {}
+    assert _json_dict("  \n") == {}
+
+
+def test_parse_llm_event_skips_blank_events() -> None:
+    from app.routers.chat import _parse_llm_event
+
+    assert _parse_llm_event("") is None
+    assert _parse_llm_event("  \n") is None
+    assert _parse_llm_event('{"type":"done"}') == {"type": "done"}
+
+
+def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
+    from app.services.benchmark_domain import _clamp_model_params
+    from app.services.benchmark_state import BenchmarkRunSpec
+
+    model = {
+        "id": "fuxi",
+        "start_date": "1964-05-01",
+        "end_date": "2024-07-31",
+        "start_year_clim": 1964,
+        "end_year_clim": 2024,
+        "init_days": "0,3",
+        "probabilistic": False,
+        "model_var": "tp",
+        "file_pattern": "{}.nc",
+    }
+    spec = BenchmarkRunSpec(
+        region_id="india",
+        model_ids=["fuxi"],
+        advanced_params={
+            "wet_threshold": 10,
+            "per_model_params": {
+                "fuxi": {
+                    "start_date": "2019-05-01",
+                    "end_date": "2021-07-31",
+                    "start_year_clim": 1991,
+                    "end_year_clim": 2021,
+                },
+                "aifs": {"start_date": "2018-05-01"},
+            },
+        },
+    )
+
+    params = _clamp_model_params(model, spec)
+
+    assert params["wet_threshold"] == 10
+    assert params["start_date"] == "2019-05-01"
+    assert params["end_date"] == "2021-07-31"
+    assert params["start_year_clim"] == 1991
+    assert params["end_year_clim"] == 2021
+    assert "per_model_params" not in params
+
+
+@pytest.mark.asyncio
+async def test_trim_chat_history_limits_messages_and_tool_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import trim_chat_history
+
+    monkeypatch.setattr("app.services.llm.settings.llm_history_max_messages", 2)
+    monkeypatch.setattr("app.services.llm.settings.llm_tool_result_max_chars", 8)
+
+    messages = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_logs",
+                    tool_call_id="call-1",
+                    content={
+                        "logs": "0123456789abcdef",
+                        "artifacts": [{"id": "artifact-1"}],
+                    },
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_metrics",
+                    tool_call_id="call-2",
+                    content={"metric": "short"},
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="get_job_logs",
+                    tool_call_id="call-3",
+                    content="abcdefghijk",
+                )
+            ]
+        ),
+    ]
+
+    trimmed = await trim_chat_history(messages)
+
+    assert len(trimmed) == 2
+    assert isinstance(trimmed[0], ModelRequest)
+    assert isinstance(trimmed[0].parts[0], ToolReturnPart)
+    assert trimmed[0].parts[0].content == {"metric": "short"}
+    assert isinstance(trimmed[1], ModelRequest)
+    assert isinstance(trimmed[1].parts[0], ToolReturnPart)
+    assert trimmed[1].parts[0].content == (
+        "abcdefgh\n\n[tool result trimmed from conversation history]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import ChatDeps, _build_agent
+    from app.services.chat_state import ChatScope
+
+    monkeypatch.setattr("app.services.llm.settings.llm_base_url", "http://test.local")
+    model = TestModel(call_tools=[], custom_output_text="ready")
+    scope = ChatScope(
+        kind="benchmark_run_group",
+        key="group-1",
+        title="Group 1",
+        job_ids=[],
+    )
+    agent = _build_agent(scope)
+
+    with agent.override(model=model):
+        result = await agent.run(
+            "hello",
+            deps=ChatDeps(user_id="user-1", session_id="session-1", scope=scope),
+        )
+
+    assert result.output == "ready"
+    assert model.last_model_request_parameters is not None
+    tool_names = {
+        tool.name for tool in model.last_model_request_parameters.function_tools
+    }
+    assert {
+        "list_regions",
+        "update_benchmark_config",
+        "submit_benchmark",
+        "list_failed_jobs",
+        "get_job_logs",
+        "get_job_metrics",
+    }.issubset(tool_names)
+
+
+@pytest.mark.asyncio
+async def test_stream_response_runs_with_pydantic_ai_test_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import llm
+    from app.services.chat_state import ChatScope
+
+    monkeypatch.setattr(
+        "app.services.llm._build_model",
+        lambda: TestModel(call_tools=[], custom_output_text="Synthetic answer."),
+    )
+    scope = ChatScope(
+        kind="benchmark_run_group",
+        key="group-1",
+        title="Group 1",
+        job_ids=[],
+    )
+
+    events = [
+        json.loads(event)
+        async for event in llm.stream_response(
+            [],
+            "user-1",
+            "session-1",
+            scope,
+            latest_user_message="Summarize this run",
+        )
+    ]
+
+    assert (
+        "".join(event["content"] for event in events if event["type"] == "text_delta")
+        == "Synthetic answer."
+    )
+    assert events[-1]["type"] == "done"
+    assert events[-1]["turn"]["content"] == "Synthetic answer."
+    assert events[-1]["provider_state"]
+
+
 async def _create_session(
     client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
 ) -> dict:
@@ -48,7 +245,7 @@ async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
             text(
                 """
                 INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at)
-                VALUES (:id, :user_id, :dataset_id, 'completed', '{}'::text, :created_at)
+                VALUES (:id, :user_id, :dataset_id, 'complete', '{}'::text, :created_at)
                 """
             ),
             {
@@ -110,12 +307,15 @@ async def test_send_message_persists_user_and_assistant_turns(
     session_id = created["id"]
 
     async def fake_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
-        assert provider_state[-1] == {"role": "user", "content": "How did this run do?"}
+        assert latest_user_message == "How did this run do?"
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "It"})
         yield json.dumps(
@@ -126,8 +326,7 @@ async def test_send_message_persists_user_and_assistant_turns(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state
-                + [{"role": "assistant", "content": "It finished successfully."}],
+                "provider_state": [],
             }
         )
 
@@ -165,10 +364,13 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     session_id = created["id"]
 
     async def failing_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "Partial"})
@@ -200,6 +402,74 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
 
 
 @pytest.mark.asyncio
+async def test_send_message_denies_pending_tool_calls_before_new_prompt(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    _test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.llm import serialize_model_messages
+
+    created = await _create_session(client, auth_headers)
+    session_id = created["id"]
+    provider_state = serialize_model_messages(
+        [
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="submit_benchmark",
+                        args={},
+                        tool_call_id="approval-1",
+                    )
+                ]
+            )
+        ]
+    )
+    async with _test_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET provider_state = :state WHERE id = :id"),
+            {"state": json.dumps(provider_state), "id": session_id},
+        )
+
+    async def fake_stream_response(
+        provider_state: list,
+        user_id: str,
+        session_id_arg: str,
+        scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
+    ) -> AsyncIterator[str]:
+        assert latest_user_message == "Let's revise this first."
+        assert isinstance(provider_state[-1], ModelRequest)
+        denied_return = provider_state[-1].parts[0]
+        assert isinstance(denied_return, ToolReturnPart)
+        assert denied_return.tool_call_id == "approval-1"
+        assert denied_return.outcome == "denied"
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {
+                    "content": "We can revise it.",
+                    "tool_calls": [],
+                    "artifacts": [],
+                },
+                "provider_state": serialize_model_messages(provider_state),
+            }
+        )
+
+    monkeypatch.setattr("app.routers.chat.stream_response", fake_stream_response)
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message",
+        headers=auth_headers,
+        json={"content": "Let's revise this first."},
+    )
+    assert response.status_code == 200
+    assert _sse_events(response.text)[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_send_message_refreshes_scope_job_ids(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
@@ -213,10 +483,13 @@ async def test_send_message_refreshes_scope_job_ids(
     await _insert_job(_test_engine, user_id, job_id)
 
     async def fake_stream_response(
-        provider_state: list[dict],
+        provider_state: list,
         user_id_arg: str,
         session_id_arg: str,
         scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         assert scope.job_ids == [job_id]
@@ -228,8 +501,7 @@ async def test_send_message_refreshes_scope_job_ids(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state
-                + [{"role": "assistant", "content": "Scoped response"}],
+                "provider_state": [],
             }
         )
 
@@ -254,11 +526,58 @@ async def test_send_message_refreshes_scope_job_ids(
 
 
 @pytest.mark.asyncio
+async def test_get_job_metrics_returns_tool_error_for_unreadable_nc(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    user_id: str,
+    _test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.benchmark_domain import get_job_metrics
+    from app.services.chat_state import ChatScope
+
+    response = await client.get("/chat/sessions", headers=auth_headers)
+    assert response.status_code == 200
+
+    job_id = f"job-{uuid4()}"
+    await _insert_job(_test_engine, user_id, job_id)
+
+    class UnreadableStorage:
+        def list_nc_output_files(self, job_id_arg: str) -> list[str]:
+            assert job_id_arg == job_id
+            return ["/outputs/spatial_metrics_model_1-15.nc"]
+
+        def open_nc_dataset(self, path: str):
+            assert path == "/outputs/spatial_metrics_model_1-15.nc"
+            raise RuntimeError("NetCDF: HDF error")
+
+    monkeypatch.setattr("app.services.storage.get_storage", lambda: UnreadableStorage())
+
+    payload = await get_job_metrics(
+        job_id,
+        user_id,
+        ChatScope(
+            kind="benchmark_run_group",
+            key="group-1",
+            title="Group 1",
+            job_ids=[job_id],
+        ),
+    )
+
+    assert payload["job_id"] == job_id
+    assert "Could not read metric output" in payload["error"]
+    assert "NetCDF: HDF error" in payload["error"]
+
+
+@pytest.mark.asyncio
 async def test_run_code_sandbox_preserves_figure_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.services.chat_state import ChatArtifact, ChatScope
-    from app.services.llm import execute_tool
+    from app.services.chat_tools import (
+        CodeSandboxRequest,
+        run_code_sandbox,
+    )
 
     artifact_bytes = b"fake-webp-bytes"
 
@@ -307,23 +626,20 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
         )
 
     monkeypatch.setattr(
-        "app.services.llm.create_chat_figure_artifact",
+        "app.services.chat_tools.create_chat_figure_artifact",
         fake_create_chat_figure_artifact,
     )
 
-    result = await execute_tool(
-        "run_code_sandbox",
-        {"code": "def compute() -> dict:\n    return {}"},
+    result = await run_code_sandbox(
+        CodeSandboxRequest(code="def compute() -> dict:\n    return {}"),
         "user-1",
         ChatScope(key="group-1"),
         "session-1",
     )
 
-    assert result.parsed["ok"] is True
-    assert result.parsed["result"] == {"summary": "created plot"}
-    assert len(result.parsed["artifacts"]) == 1
-    assert result.parsed["artifacts"][0]["id"] == "artifact-1"
-    assert result.parsed["artifacts"][0]["label"] == "Plot"
-    assert result.parsed["artifacts"][0]["filename"] == "plot.webp"
-    assert len(result.artifacts) == 1
-    assert result.artifacts[0].id == "artifact-1"
+    assert result["ok"] is True
+    assert result["result"] == {"summary": "created plot"}
+    assert len(result["artifacts"]) == 1
+    assert result["artifacts"][0]["id"] == "artifact-1"
+    assert result["artifacts"][0]["label"] == "Plot"
+    assert result["artifacts"][0]["filename"] == "plot.webp"
