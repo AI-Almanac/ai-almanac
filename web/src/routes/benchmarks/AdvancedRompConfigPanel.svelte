@@ -162,7 +162,6 @@
 												setForecastWindowDays(value ? Number(value) : null);
 											}}
 										>
-											<option value={15}>Days 1-15</option>
 											<option value={30}>Days 1-30</option>
 											<option value={45}>Days 1-45</option>
 										</select>
