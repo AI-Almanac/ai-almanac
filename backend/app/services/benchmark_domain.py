@@ -156,7 +156,9 @@ def _non_empty_params(params: dict[str, Any], allowed: set[str]) -> dict[str, An
     }
 
 
-def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict[str, Any]:
+def _clean_advanced_params(
+    params: dict[str, Any], model_ids: list[str]
+) -> dict[str, Any]:
     cleaned = _non_empty_params(params, SHARED_ROMP_PARAM_KEYS)
     raw_per_model = params.get("per_model_params")
     if isinstance(raw_per_model, dict):
@@ -166,7 +168,9 @@ def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict
             for model_id, model_params in raw_per_model.items()
             if model_id in selected and isinstance(model_params, dict)
         }
-        per_model = {model_id: values for model_id, values in per_model.items() if values}
+        per_model = {
+            model_id: values for model_id, values in per_model.items() if values
+        }
         if per_model:
             cleaned["per_model_params"] = per_model
     return cleaned
@@ -320,7 +324,11 @@ def _validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
             ):
                 errors.append(f"{model_id}: start_date must be before end_date")
             model = model_map.get(model_id)
-            if model and isinstance(start_date, str) and start_date < model["start_date"]:
+            if (
+                model
+                and isinstance(start_date, str)
+                and start_date < model["start_date"]
+            ):
                 errors.append(
                     f"{model_id}: start_date is before available coverage ({model['start_date']})"
                 )
@@ -924,7 +932,9 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope)
                         "unit": UNIT_MAP.get(var_str, "days"),
                     }
             except Exception as exc:
-                logger.exception("Could not load metrics file %s for job %s", nc, job_id)
+                logger.exception(
+                    "Could not load metrics file %s for job %s", nc, job_id
+                )
                 return {
                     "error": f"Could not read metric output {nc}: {exc}",
                     "job_id": job_id,

@@ -7,7 +7,12 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -212,9 +217,10 @@ async def test_stream_response_runs_with_pydantic_ai_test_model(
         )
     ]
 
-    assert "".join(
-        event["content"] for event in events if event["type"] == "text_delta"
-    ) == "Synthetic answer."
+    assert (
+        "".join(event["content"] for event in events if event["type"] == "text_delta")
+        == "Synthetic answer."
+    )
     assert events[-1]["type"] == "done"
     assert events[-1]["turn"]["content"] == "Synthetic answer."
     assert events[-1]["provider_state"]
