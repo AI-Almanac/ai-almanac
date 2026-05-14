@@ -30,6 +30,13 @@ resource "google_artifact_registry_repository_iam_member" "backend_pull" {
   member     = "serviceAccount:${google_service_account.backend.email}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "backend_staging_pull" {
+  location   = var.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.backend_staging.email}"
+}
+
 # Cloud Run Jobs pulls images using the job's service account (batch_worker)
 resource "google_artifact_registry_repository_iam_member" "batch_worker_pull" {
   location   = var.region

@@ -10,10 +10,18 @@ ghcr_owner  = "your-github-username-or-org"
 # Cloud SQL
 db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
 db_password = "changeme"      # also stored in Secret Manager after first apply
+# staging_db_password defaults to db_password when omitted; set it to isolate
+# staging credentials from production.
+# staging_db_password = "changeme-staging"
 
 # Custom domain for the frontend — requires domain ownership verification (see below)
 # custom_domain = "app.example.com"
 # api_domain    = "api.example.com"
+
+# Staging custom domains. Leave empty to skip staging domain mappings.
+staging_custom_domain = "staging.ai-almanac.org"
+staging_api_domain    = "api-staging.ai-almanac.org"
+staging_frontend_url  = "https://staging.ai-almanac.org"
 
 # Frontend Cloud Run URL — leave empty on first deploy (cycle), set after
 # frontend service is created to lock down CORS on the backend.
