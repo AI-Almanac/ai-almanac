@@ -2,7 +2,7 @@ name: Backend CI / Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
@@ -42,9 +42,10 @@ jobs:
         run: uv run pytest
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     needs: ci
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     permissions:
       contents: read
       packages: write
@@ -70,6 +71,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Select deployment target
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "CLOUD_RUN_SERVICE=almanac-backend" >> "$GITHUB_ENV"
+          else
+            echo "CLOUD_RUN_SERVICE=almanac-backend-staging" >> "$GITHUB_ENV"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -85,6 +94,6 @@ jobs:
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
         with:
-          service: almanac-backend
+          service: ${{ env.CLOUD_RUN_SERVICE }}
           region: us-central1
           image: ${{ env.AR_IMAGE }}:${{ github.sha }}
