@@ -1,19 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy, untrack } from 'svelte';
-	import Map from 'ol/Map';
-	import View from 'ol/View';
-	import TileLayer from 'ol/layer/Tile';
-	import VectorLayer from 'ol/layer/Vector';
-	import VectorSource from 'ol/source/Vector';
-	import OSM from 'ol/source/OSM';
-	import Feature from 'ol/Feature';
-	import Polygon from 'ol/geom/Polygon';
-	import { fromLonLat } from 'ol/proj';
-	import GeoJSON from 'ol/format/GeoJSON';
-	import Style from 'ol/style/Style';
-	import Fill from 'ol/style/Fill';
-	import Stroke from 'ol/style/Stroke';
-	import 'ol/ol.css';
+	import maplibregl from 'maplibre-gl';
+	import 'maplibre-gl/dist/maplibre-gl.css';
 	import {
 		getRegionBoundary,
 		type JobGridResponse,
@@ -39,8 +27,27 @@
 	};
 	let { jobs, forecastWindow, metrics }: Props = $props();
 
+	type GridFeature = {
+		type: 'Feature';
+		properties: {
+			color: string;
+			lat: number;
+			lon: number;
+			displayVal: string;
+		};
+		geometry: {
+			type: 'Polygon';
+			coordinates: number[][][];
+		};
+	};
+	type GridFeatureCollection = {
+		type: 'FeatureCollection';
+		features: GridFeature[];
+	};
+
 	let mapContainer = $state<HTMLElement | null>(null);
-	let map = $state<Map | null>(null);
+	let map = $state<maplibregl.Map | null>(null);
+	let mapReady = $state(false);
 
 	// ColorBrewer sequential scales for climatology raw values: [metric][colorIndex] low→high
 	const COLOR_SCALES: Record<string, string[][]> = {
@@ -61,6 +68,24 @@
 			['#fcfbfd', '#dadaeb', '#9e9ac8', '#756bb1', '#54278f'], // Purples
 			['#fff5f0', '#fdd0a2', '#fc8d59', '#d7301f', '#7f0000'], // Reds
 			['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b'] // Blues-dark
+		],
+		rmse: [
+			['#ffffcc', '#c2e699', '#78c679', '#31a354', '#006837'],
+			['#f7fcf5', '#c7e9c0', '#74c476', '#238b45', '#00441b'],
+			['#fff5f0', '#fdd0a2', '#fc8d59', '#d7301f', '#7f0000'],
+			['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b']
+		],
+		mae: [
+			['#ffffcc', '#c2e699', '#78c679', '#31a354', '#006837'],
+			['#fff5f0', '#fdd0a2', '#fc8d59', '#d7301f', '#7f0000'],
+			['#fff7fb', '#ece2f0', '#a6bddb', '#1c9099', '#016450'],
+			['#fcfbfd', '#dadaeb', '#9e9ac8', '#756bb1', '#54278f']
+		],
+		acc: [
+			['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b'],
+			['#f7fcf5', '#c7e9c0', '#74c476', '#238b45', '#00441b'],
+			['#f7f7f7', '#cccccc', '#969696', '#525252', '#252525'],
+			['#f7fcfd', '#ccece6', '#66c2a4', '#238b45', '#005824']
 		]
 	};
 	const FALLBACK_SCALE = ['#f7f7f7', '#cccccc', '#969696', '#525252', '#252525'];
@@ -70,14 +95,26 @@
 	const DIVERGING_STOPS = ['#2166ac', '#92c5de', '#f7f7f7', '#f4a582', '#b2182b'];
 
 	function getStops(metricValue: string, colorIndex: number): string[] {
+		if (metricValue === 'bias') return DIVERGING_STOPS;
 		const scales = COLOR_SCALES[metricValue];
 		if (!scales) return FALLBACK_SCALE;
 		return scales[colorIndex % scales.length];
 	}
 
+	function isHigherBetterMetric(metricValue: string): boolean {
+		return metricValue === 'acc';
+	}
+
+	function isNeutralDeltaMetric(metricValue: string): boolean {
+		return metricValue === 'bias';
+	}
+
 	type LayerState = {
-		layer: VectorLayer;
+		layerId: string;
+		sourceId: string;
 		data: JobGridResponse;
+		geojson: GridFeatureCollection;
+		bounds: maplibregl.LngLatBoundsLike | null;
 		stops: string[];
 		isDelta: boolean;
 		deltaMaxAbs?: number;
@@ -86,9 +123,16 @@
 
 	type BoundaryLevel = 'adm1' | 'adm2';
 	type BoundaryLayerState = {
-		layer: VectorLayer;
+		layerId: string;
+		sourceId: string;
 		label: string;
 		source: string;
+		geojson: unknown;
+	};
+	type BoundaryCacheEntry = {
+		label: string;
+		source: string;
+		geojson: unknown;
 	};
 	type BoundaryMetadata = Awaited<ReturnType<typeof getRegionBoundary>>['metadata'];
 	type BoundaryStyleDef = {
@@ -121,7 +165,7 @@
 			zIndex: 36
 		}
 	};
-	const boundaryCache = new globalThis.Map<string, BoundaryLayerState>();
+	const boundaryCache = new globalThis.Map<string, BoundaryCacheEntry>();
 
 	let layers = $state<Record<string, LayerState>>({});
 	let boundaryLayers = $state<Record<BoundaryLevel, BoundaryLayerState | null>>({
@@ -137,7 +181,7 @@
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
 	let loadRequestId = 0;
-	const boundaryRegion = $derived(jobs[0]?.params?.region);
+	const boundaryRegion = $derived(jobs[0]?.region_id ?? jobs[0]?.params?.region);
 
 	let panelCollapsed = $state(false);
 	let fullscreen = $state(false);
@@ -317,15 +361,50 @@
 		return lerpHex(stops[lo], stops[hi], seg - lo);
 	}
 
+	function mapLayerId(key: string) {
+		return `metric-layer-${key}`;
+	}
+
+	function mapSourceId(key: string) {
+		return `metric-source-${key}`;
+	}
+
+	function boundaryLayerId(level: BoundaryLevel) {
+		return `boundary-layer-${level}`;
+	}
+
+	function boundarySourceId(level: BoundaryLevel) {
+		return `boundary-source-${level}`;
+	}
+
+	function gridCellBounds(data: JobGridResponse) {
+		const dlat = data.lats.length > 1 ? Math.abs(data.lats[1] - data.lats[0]) / 2 : 0.5;
+		const dlon = data.lons.length > 1 ? Math.abs(data.lons[1] - data.lons[0]) / 2 : 0.5;
+		return { dlat, dlon };
+	}
+
+	function boundsFromGrid(data: JobGridResponse): maplibregl.LngLatBoundsLike | null {
+		if (data.lats.length === 0 || data.lons.length === 0) return null;
+		const { dlat, dlon } = gridCellBounds(data);
+		const west = Math.min(...data.lons) - dlon;
+		const east = Math.max(...data.lons) + dlon;
+		const south = Math.min(...data.lats) - dlat;
+		const north = Math.max(...data.lats) + dlat;
+		return [
+			[west, south],
+			[east, north]
+		];
+	}
+
 	// ---- Layer building ----------------------------------------------------------
 
 	// Build a layer colored by raw values (used for climatology).
-	function buildRawLayer(data: JobGridResponse, stops: string[]): VectorLayer {
+	function buildRawGeojson(data: JobGridResponse, stops: string[]): GridFeatureCollection {
 		const { lats, lons, values, min, max } = data;
 		const range = max - min || 1;
-		const features: Feature[] = [];
-		const dlat = lats.length > 1 ? Math.abs(lats[1] - lats[0]) / 2 : 0.5;
-		const dlon = lons.length > 1 ? Math.abs(lons[1] - lons[0]) / 2 : 0.5;
+		const biasMaxAbs = data.metric === 'bias' ? Math.max(Math.abs(min), Math.abs(max)) || 1 : null;
+		const features: GridFeature[] = [];
+		const { dlat, dlon } = gridCellBounds(data);
 
 		for (let i = 0; i < lats.length; i++) {
 			for (let j = 0; j < lons.length; j++) {
@@ -333,41 +412,39 @@
 				if (val == null) continue;
 				const lat = lats[i],
 					lon = lons[j];
-				const t = (val - min) / range;
+				const t = biasMaxAbs == null ? (val - min) / range : (val + biasMaxAbs) / (2 * biasMaxAbs);
 				const color = interpolateStops(stops, t);
 				const coords = [
-					fromLonLat([lon - dlon, lat - dlat]),
-					fromLonLat([lon + dlon, lat - dlat]),
-					fromLonLat([lon + dlon, lat + dlat]),
-					fromLonLat([lon - dlon, lat + dlat]),
-					fromLonLat([lon - dlon, lat - dlat])
+					[lon - dlon, lat - dlat],
+					[lon + dlon, lat - dlat],
+					[lon + dlon, lat + dlat],
+					[lon - dlon, lat + dlat],
+					[lon - dlon, lat - dlat]
 				];
-				const feature = new Feature({ geometry: new Polygon([coords]) });
-				feature.set('displayVal', `${data.metric}: ${val.toFixed(3)}`);
-				feature.set('lat', lat);
-				feature.set('lon', lon);
-				feature.setStyle(
-					new Style({
-						fill: new Fill({ color }),
-						stroke: new Stroke({ color: 'rgba(255,255,255,0.3)', width: 0.5 })
-					})
-				);
-				features.push(feature);
+				features.push({
+					type: 'Feature',
+					properties: {
+						color,
+						displayVal: `${data.metric}: ${val.toFixed(3)}`,
+						lat,
+						lon
+					},
+					geometry: { type: 'Polygon', coordinates: [coords] }
+				});
 			}
 		}
-		return new VectorLayer({ source: new VectorSource({ features }), visible: false, zIndex: 10 });
+		return { type: 'FeatureCollection', features };
 	}
 
 	// Build a layer colored by (model − climatology) delta using a diverging scale.
 	// Returns the layer and the symmetric maxAbs used for the scale.
-	function buildDeltaLayer(
+	function buildDeltaGeojson(
 		data: JobGridResponse,
 		climData: JobGridResponse
-	): { layer: VectorLayer; maxAbs: number } {
+	): { geojson: GridFeatureCollection; maxAbs: number } {
 		const { lats, lons, values } = data;
-		const features: Feature[] = [];
-		const dlat = lats.length > 1 ? Math.abs(lats[1] - lats[0]) / 2 : 0.5;
-		const dlon = lons.length > 1 ? Math.abs(lons[1] - lons[0]) / 2 : 0.5;
+		const features: GridFeature[] = [];
+		const { dlat, dlon } = gridCellBounds(data);
 
 		// First pass: collect deltas to find symmetric range
 		const deltas: (number | null)[][] = lats.map((_, i) =>
@@ -393,93 +470,133 @@
 				const modelVal = values[i]?.[j] as number;
 				const lat = lats[i],
 					lon = lons[j];
-				// Map [-maxAbs, maxAbs] → [0, 1]
-				const t = (delta + maxAbs) / (2 * maxAbs);
+				// Map [-maxAbs, maxAbs] to the scale. For skill metrics like ACC,
+				// positive deltas are better, so invert the color direction.
+				const t = isHigherBetterMetric(data.metric)
+					? (maxAbs - delta) / (2 * maxAbs)
+					: (delta + maxAbs) / (2 * maxAbs);
 				const color = interpolateStops(DIVERGING_STOPS, t);
 				const coords = [
-					fromLonLat([lon - dlon, lat - dlat]),
-					fromLonLat([lon + dlon, lat - dlat]),
-					fromLonLat([lon + dlon, lat + dlat]),
-					fromLonLat([lon - dlon, lat + dlat]),
-					fromLonLat([lon - dlon, lat - dlat])
+					[lon - dlon, lat - dlat],
+					[lon + dlon, lat - dlat],
+					[lon + dlon, lat + dlat],
+					[lon - dlon, lat + dlat],
+					[lon - dlon, lat - dlat]
 				];
-				const feature = new Feature({ geometry: new Polygon([coords]) });
-				feature.set(
-					'displayVal',
-					`${data.metric}: ${modelVal.toFixed(3)} (Δ vs climatology: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`
-				);
-				feature.set('lat', lat);
-				feature.set('lon', lon);
-				feature.setStyle(
-					new Style({
-						fill: new Fill({ color }),
-						stroke: new Stroke({ color: 'rgba(255,255,255,0.3)', width: 0.5 })
-					})
-				);
-				features.push(feature);
+				features.push({
+					type: 'Feature',
+					properties: {
+						color,
+						displayVal: `${data.metric}: ${modelVal.toFixed(3)} (Delta vs climatology: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`,
+						lat,
+						lon
+					},
+					geometry: { type: 'Polygon', coordinates: [coords] }
+				});
 			}
 		}
 		return {
-			layer: new VectorLayer({
-				source: new VectorSource({ features }),
-				visible: false,
-				zIndex: 10
-			}),
+			geojson: { type: 'FeatureCollection', features },
 			maxAbs
 		};
 	}
 
 	// ---- Layer management --------------------------------------------------------
 
-	function fitToLayer(layer: VectorLayer) {
-		const extent = (layer.getSource() as VectorSource).getExtent();
-		if (map && extent) map.getView().fit(extent, { padding: [20, 20, 20, 20], duration: 300 });
+	function fitToLayer(state: LayerState) {
+		if (map && state.bounds) map.fitBounds(state.bounds, { padding: 28, duration: 300 });
 	}
 
 	function addLayerState(key: string, state: LayerState) {
 		if (!map) return;
-		if (layers[key]) map.removeLayer(layers[key].layer);
-		map.addLayer(state.layer);
+		removeMapLayer(state.layerId, state.sourceId);
+		map.addSource(state.sourceId, {
+			type: 'geojson',
+			data: state.geojson as GeoJSON.GeoJSON
+		});
+		map.addLayer({
+			id: state.layerId,
+			type: 'fill',
+			source: state.sourceId,
+			layout: {
+				visibility: visibleKeys.has(key) ? 'visible' : 'none'
+			},
+			paint: {
+				'fill-color': ['get', 'color'],
+				'fill-opacity': opacities[key] ?? 1,
+				'fill-outline-color': 'rgba(255,255,255,0.3)'
+			}
+		});
 		layers = { ...layers, [key]: state };
 		if (visibleKeys.has(key)) {
-			state.layer.setVisible(true);
-			state.layer.setOpacity(opacities[key] ?? 1);
-			if (visibleKeys.size === 1) fitToLayer(state.layer);
+			if (visibleKeys.size === 1) fitToLayer(state);
 		}
+	}
+
+	function removeMapLayer(layerId: string, sourceId: string) {
+		if (!map) return;
+		if (map.getLayer(layerId)) map.removeLayer(layerId);
+		if (map.getSource(sourceId)) map.removeSource(sourceId);
 	}
 
 	function boundaryCacheKey(level: BoundaryLevel, region: string) {
 		return `${region.trim().toLowerCase()}||${level}`;
 	}
 
-	function buildBoundaryLayer(
-		level: BoundaryLevel,
+	function boundaryCacheEntry(
 		metadata: BoundaryMetadata,
-		geojson: unknown
-	): BoundaryLayerState {
-		const features = new GeoJSON().readFeatures(geojson, {
-			dataProjection: 'EPSG:4326',
-			featureProjection: 'EPSG:3857'
-		});
+		geojson: unknown,
+		level: BoundaryLevel
+	): BoundaryCacheEntry {
+		return {
+			label: `${metadata.boundaryName ?? 'Region'} ${metadata.boundaryType ?? BOUNDARY_LEVELS[level].type}`,
+			source: metadata.boundarySource ?? 'geoBoundaries',
+			geojson
+		};
+	}
+
+	function addBoundaryLayerState(
+		level: BoundaryLevel,
+		entry: BoundaryCacheEntry
+	): BoundaryLayerState | null {
+		if (!map) return null;
 		const style = BOUNDARY_LEVELS[level];
-		const layer = new VectorLayer({
-			source: new VectorSource({ features }),
-			visible: false,
-			zIndex: style.zIndex,
-			style: [
-				new Style({ stroke: new Stroke({ color: style.haloColor, width: style.haloWidth }) }),
-				new Style({
-					stroke: new Stroke({
-						color: style.strokeColor,
-						width: style.strokeWidth
-					})
-				})
-			]
+		const sourceId = boundarySourceId(level);
+		const haloLayerId = `${boundaryLayerId(level)}-halo`;
+		const layerId = boundaryLayerId(level);
+		if (map.getLayer(haloLayerId)) map.removeLayer(haloLayerId);
+		removeMapLayer(layerId, sourceId);
+		map.addSource(sourceId, {
+			type: 'geojson',
+			data: entry.geojson as GeoJSON.GeoJSON
+		});
+		const visibility = visibleBoundaryLevels.has(level) ? 'visible' : 'none';
+		map.addLayer({
+			id: haloLayerId,
+			type: 'line',
+			source: sourceId,
+			layout: { visibility },
+			paint: {
+				'line-color': style.haloColor,
+				'line-width': style.haloWidth
+			}
+		});
+		map.addLayer({
+			id: layerId,
+			type: 'line',
+			source: sourceId,
+			layout: { visibility },
+			paint: {
+				'line-color': style.strokeColor,
+				'line-width': style.strokeWidth
+			}
 		});
 		return {
-			layer,
-			label: `${metadata.boundaryName ?? 'Region'} ${metadata.boundaryType ?? BOUNDARY_LEVELS[level].type}`,
-			source: metadata.boundarySource ?? 'geoBoundaries'
+			layerId,
+			sourceId,
+			label: entry.label,
+			source: entry.source,
+			geojson: entry.geojson
 		};
 	}
 
@@ -493,9 +610,8 @@
 		const cacheKey = boundaryCacheKey(level, region);
 		const cached = boundaryCache.get(cacheKey);
 		if (cached) {
-			map.addLayer(cached.layer);
-			cached.layer.setVisible(visibleBoundaryLevels.has(level));
-			boundaryLayers = { ...boundaryLayers, [level]: cached };
+			const state = addBoundaryLayerState(level, cached);
+			if (state) boundaryLayers = { ...boundaryLayers, [level]: state };
 			return;
 		}
 
@@ -503,11 +619,10 @@
 		boundaryErrors = { ...boundaryErrors, [level]: '' };
 		try {
 			const { metadata, geojson } = await getRegionBoundary(region, level);
-			const state = buildBoundaryLayer(level, metadata, geojson);
-			boundaryCache.set(cacheKey, state);
-			map.addLayer(state.layer);
-			state.layer.setVisible(visibleBoundaryLevels.has(level));
-			boundaryLayers = { ...boundaryLayers, [level]: state };
+			const cachedState = boundaryCacheEntry(metadata, geojson, level);
+			boundaryCache.set(cacheKey, cachedState);
+			const state = addBoundaryLayerState(level, cachedState);
+			if (state) boundaryLayers = { ...boundaryLayers, [level]: state };
 		} catch (e) {
 			boundaryErrors = {
 				...boundaryErrors,
@@ -527,26 +642,39 @@
 		const next = new Set(visibleBoundaryLevels);
 		if (next.has(level)) {
 			next.delete(level);
-			boundaryLayers[level]?.layer.setVisible(false);
+			setBoundaryVisibility(level, false);
 		} else {
 			next.add(level);
-			boundaryLayers[level]?.layer.setVisible(true);
+			setBoundaryVisibility(level, true);
 			untrack(() => loadBoundaryLayer(level));
 		}
 		visibleBoundaryLevels = next;
+	}
+
+	function setBoundaryVisibility(level: BoundaryLevel, visible: boolean) {
+		if (!map) return;
+		for (const id of [`${boundaryLayerId(level)}-halo`, boundaryLayerId(level)]) {
+			if (map.getLayer(id)) {
+				map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+			}
+		}
 	}
 
 	function toggleLayer(key: string) {
 		const next = new Set(visibleKeys);
 		if (next.has(key)) {
 			next.delete(key);
-			layers[key]?.layer.setVisible(false);
+			if (layers[key] && map?.getLayer(layers[key].layerId)) {
+				map.setLayoutProperty(layers[key].layerId, 'visibility', 'none');
+			}
 		} else {
 			next.add(key);
 			if (layers[key]) {
-				layers[key].layer.setVisible(true);
-				layers[key].layer.setOpacity(opacities[key] ?? 1);
-				if (visibleKeys.size === 0) fitToLayer(layers[key].layer);
+				if (map?.getLayer(layers[key].layerId)) {
+					map.setLayoutProperty(layers[key].layerId, 'visibility', 'visible');
+					map.setPaintProperty(layers[key].layerId, 'fill-opacity', opacities[key] ?? 1);
+				}
+				if (visibleKeys.size === 0) fitToLayer(layers[key]);
 			}
 		}
 		visibleKeys = next;
@@ -554,20 +682,24 @@
 
 	function setOpacity(key: string, value: number) {
 		opacities = { ...opacities, [key]: value };
-		layers[key]?.layer.setOpacity(value);
+		if (layers[key] && map?.getLayer(layers[key].layerId)) {
+			map.setPaintProperty(layers[key].layerId, 'fill-opacity', value);
+		}
 	}
 
 	// ---- Full load (called when jobs or window changes) --------------------------
 
 	async function loadAll() {
-		if (!map) return;
+		if (!map || !mapReady) return;
 		const requestId = ++loadRequestId;
 		const previousVisibleKeys = new Set(visibleKeys);
 		const previousOpacities = { ...opacities };
 
-		for (const { layer } of Object.values(layers)) map.removeLayer(layer);
+		for (const { layerId, sourceId } of Object.values(layers)) removeMapLayer(layerId, sourceId);
 		for (const state of Object.values(boundaryLayers)) {
-			if (state) map.removeLayer(state.layer);
+			if (!state) continue;
+			if (map.getLayer(`${state.layerId}-halo`)) map.removeLayer(`${state.layerId}-halo`);
+			removeMapLayer(state.layerId, state.sourceId);
 		}
 		layers = {};
 		boundaryLayers = { adm1: null, adm2: null };
@@ -597,12 +729,11 @@
 			colorIndex: jobs.length // distinct color index after all model colors
 		};
 
-		activeRuns = [...modelRuns, climRun];
-
 		const firstKey = layerKey(modelRuns[0].jobId, modelRuns[0].modelName, metrics[0].value);
 
 		// Mark all keys as loading
-		const allKeys = activeRuns.flatMap((run) =>
+		const fetchRuns = [...modelRuns, climRun];
+		const allKeys = fetchRuns.flatMap((run) =>
 			metrics.map((m) => layerKey(run.jobId, run.modelName, m.value))
 		);
 		const allKeySet = new Set(allKeys);
@@ -616,7 +747,7 @@
 			| { run: RunDef; metricValue: string; data: JobGridResponse }
 			| { run: RunDef; metricValue: string; error: string };
 		const results: FetchResult[] = await Promise.all(
-			activeRuns.flatMap((run) =>
+			fetchRuns.flatMap((run) =>
 				metrics.map(async (m) => {
 					try {
 						const data = await getCachedJobGrid(run.jobId, run.modelName, forecastWindow, m.value);
@@ -640,26 +771,34 @@
 				climByMetric[r.metricValue] = r.data;
 			}
 		}
+		const hasClimatology = Object.keys(climByMetric).length > 0;
+		activeRuns = hasClimatology ? [...modelRuns, climRun] : modelRuns;
 
 		// Build and register layers
 		const newErrors: Record<string, string> = {};
 		for (const r of results) {
 			const key = layerKey(r.run.jobId, r.run.modelName, r.metricValue);
 			if ('error' in r) {
-				newErrors[key] = r.error;
+				if (r.run.modelName !== 'climatology') newErrors[key] = r.error;
 			} else {
 				const { run, metricValue, data } = r;
+				const layerId = mapLayerId(key);
+				const sourceId = mapSourceId(key);
+				const bounds = boundsFromGrid(data);
 				if (run.modelName === 'climatology') {
 					const stops = getStops(metricValue, run.colorIndex);
-					const layer = buildRawLayer(data, stops);
-					addLayerState(key, { layer, data, stops, isDelta: false });
+					const geojson = buildRawGeojson(data, stops);
+					addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
 				} else {
 					const climData = climByMetric[metricValue];
 					if (climData) {
-						const { layer, maxAbs } = buildDeltaLayer(data, climData);
+						const { geojson, maxAbs } = buildDeltaGeojson(data, climData);
 						addLayerState(key, {
-							layer,
+							layerId,
+							sourceId,
 							data,
+							geojson,
+							bounds,
 							stops: DIVERGING_STOPS,
 							isDelta: true,
 							deltaMaxAbs: maxAbs,
@@ -668,8 +807,8 @@
 					} else {
 						// Fallback to raw if clim unavailable
 						const stops = getStops(metricValue, run.colorIndex);
-						const layer = buildRawLayer(data, stops);
-						addLayerState(key, { layer, data, stops, isDelta: false });
+						const geojson = buildRawGeojson(data, stops);
+						addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
 					}
 				}
 			}
@@ -682,15 +821,19 @@
 			const firstLoadedKey = allKeys.find((key) => layers[key]);
 			visibleKeys = firstLoadedKey ? new Set([firstLoadedKey]) : new Set();
 			if (firstLoadedKey) {
-				layers[firstLoadedKey].layer.setVisible(true);
-				layers[firstLoadedKey].layer.setOpacity(opacities[firstLoadedKey] ?? 1);
+				map.setLayoutProperty(layers[firstLoadedKey].layerId, 'visibility', 'visible');
+				map.setPaintProperty(
+					layers[firstLoadedKey].layerId,
+					'fill-opacity',
+					opacities[firstLoadedKey] ?? 1
+				);
 			}
 		} else if (loadedVisibleKeys.length !== visibleKeys.size) {
 			visibleKeys = new Set(loadedVisibleKeys);
 		}
 
 		const firstVisibleKey = [...visibleKeys].find((key) => layers[key]);
-		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey].layer);
+		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey]);
 
 		if (Object.values(layers).length > 0) {
 			for (const level of visibleBoundaryLevels) untrack(() => loadBoundaryLayer(level));
@@ -701,24 +844,40 @@
 
 	onMount(() => {
 		if (!mapContainer) return;
-		map = new Map({
-			target: mapContainer,
-			layers: [new TileLayer({ source: new OSM() })],
-			view: new View({ center: fromLonLat([80, 20]), zoom: 4 })
+		map = new maplibregl.Map({
+			container: mapContainer,
+			style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+			center: [80, 20],
+			zoom: 4,
+			attributionControl: false
+		});
+		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+		map.on('load', () => {
+			mapReady = true;
+			const attrib = mapContainer?.querySelector<HTMLDetailsElement>('.maplibregl-ctrl-attrib');
+			if (attrib) {
+				attrib.classList.remove('maplibregl-compact-show');
+				attrib.removeAttribute('open');
+			}
 		});
 
-		map.on('pointermove', (e) => {
-			if (!map || e.dragging) {
+		map.on('mousemove', (e) => {
+			if (!map) {
 				tooltipVisible = false;
 				return;
 			}
-			const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
-			if (feature && feature.get('lat') != null) {
-				const lat = Number(feature.get('lat'));
-				const lon = Number(feature.get('lon'));
+			const layerIds = [...visibleKeys]
+				.map((key) => layers[key]?.layerId)
+				.filter((id): id is string => Boolean(id && map?.getLayer(id)));
+			const feature =
+				layerIds.length > 0 ? map.queryRenderedFeatures(e.point, { layers: layerIds })[0] : null;
+			const lat = feature?.properties?.lat;
+			const lon = feature?.properties?.lon;
+			if (typeof lat === 'number' && typeof lon === 'number') {
 				tooltipContent = buildTooltipContent(lat, lon);
-				tooltipX = e.pixel[0] + 14;
-				tooltipY = e.pixel[1] - 10;
+				tooltipX = e.point.x + 14;
+				tooltipY = e.point.y - 10;
 				tooltipVisible = true;
 				mapContainer!.style.cursor = 'crosshair';
 			} else {
@@ -729,23 +888,30 @@
 
 		map.on('click', (e) => {
 			if (!map) return;
-			const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
-			if (!feature || feature.get('lat') == null) return;
-			openCellInspector(Number(feature.get('lat')), Number(feature.get('lon')));
+			const layerIds = [...visibleKeys]
+				.map((key) => layers[key]?.layerId)
+				.filter((id): id is string => Boolean(id && map?.getLayer(id)));
+			const feature =
+				layerIds.length > 0 ? map.queryRenderedFeatures(e.point, { layers: layerIds })[0] : null;
+			const lat = feature?.properties?.lat;
+			const lon = feature?.properties?.lon;
+			if (typeof lat !== 'number' || typeof lon !== 'number') return;
+			openCellInspector(lat, lon);
 		});
 	});
 
 	onDestroy(() => {
 		if (map) {
-			map.setTarget(undefined);
+			map.remove();
 			map = null;
 		}
+		mapReady = false;
 	});
 
 	$effect(() => {
 		// Only trigger on job set or window changes — do NOT read jobs/metrics directly
 		// as that would re-run loadAll on every poll even when complete jobs are unchanged.
-		if (jobIds && forecastWindow && map) untrack(loadAll);
+		if (jobIds && forecastWindow && map && mapReady) untrack(loadAll);
 	});
 
 	$effect(() => {
@@ -759,7 +925,7 @@
 
 	$effect(() => {
 		fullscreen;
-		setTimeout(() => map?.updateSize(), 300);
+		setTimeout(() => map?.resize(), 300);
 	});
 </script>
 
@@ -896,9 +1062,21 @@
 				{#if vl.isDelta && vl.deltaMaxAbs != null}
 					<div class="scale-labels">
 						<span>−{vl.deltaMaxAbs.toFixed(3)}</span>
-						<span class="scale-unit">(better)</span>
+						<span class="scale-unit"
+							>{isNeutralDeltaMetric(vMetric)
+								? '(negative)'
+								: isHigherBetterMetric(vMetric)
+									? '(worse)'
+									: '(better)'}</span
+						>
 						<span>0</span>
-						<span class="scale-unit">(worse)</span>
+						<span class="scale-unit"
+							>{isNeutralDeltaMetric(vMetric)
+								? '(positive)'
+								: isHigherBetterMetric(vMetric)
+									? '(better)'
+									: '(worse)'}</span
+						>
 						<span>+{vl.deltaMaxAbs.toFixed(3)}</span>
 					</div>
 				{:else}
@@ -968,13 +1146,22 @@
 		width: 100%;
 		height: 100%;
 	}
-	.map-instance :global(.ol-viewport) {
+	.map-instance :global(.maplibregl-canvas-container),
+	.map-instance :global(.maplibregl-canvas) {
+		width: 100% !important;
+		height: 100% !important;
+	}
+	.map-instance :global(.maplibregl-canvas) {
 		border-radius: 0.5rem;
 	}
-	.map-instance :global(.ol-control button) {
+	.map-instance :global(.maplibregl-ctrl button) {
 		background-color: rgba(255, 255, 255, 0.85);
 		color: #333;
 		border-radius: 0.25rem;
+	}
+	.map-instance :global(.maplibregl-ctrl-bottom-right) {
+		bottom: 0.5rem;
+		right: 0.5rem;
 	}
 
 	/* ---- Status overlay ---- */

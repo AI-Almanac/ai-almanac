@@ -5,9 +5,22 @@
 		type Job,
 		type JobResult,
 		type JobMetrics,
-		type WindowMetrics
+		type WindowMetrics,
+		type MetricDefinition
 	} from '$lib/api';
 	import { fetchResultBlob } from '$lib/benchmarks.svelte';
+	import {
+		formatMetricDelta,
+		formatMetricValue,
+		isAnnualMaeMetric,
+		loadMetricDefinitions,
+		lowerIsBetter,
+		metricLabel,
+		metricMap,
+		metricUnit,
+		orderMetricKeys,
+		windowLabel
+	} from '$lib/metric-metadata';
 	import { parseResult, type ParsedFigure } from '$lib/result-parser';
 	import FigureLightbox from './FigureLightbox.svelte';
 
@@ -25,6 +38,8 @@
 	};
 
 	let jobData = $state<Record<string, JobData>>({});
+	let metricDefinitions = $state<MetricDefinition[]>([]);
+	const definitionsById = $derived(metricMap(metricDefinitions));
 
 	$effect(() => {
 		for (const job of jobs) {
@@ -56,16 +71,11 @@
 
 	// --- Metrics comparison ---
 
-	const PRIMARY_VARS = ['false_alarm_rate', 'miss_rate', 'mean_mae'];
-	const VAR_LABEL: Record<string, string> = {
-		false_alarm_rate: 'False alarm rate',
-		miss_rate: 'Miss rate',
-		mean_mae: 'Mean absolute error'
-	};
-
-	function fmt(v: number, unit: string) {
-		return unit === 'fraction' ? (v * 100).toFixed(1) + '%' : v.toFixed(1) + ' d';
-	}
+	$effect(() => {
+		loadMetricDefinitions().then((definitions) => {
+			metricDefinitions = definitions;
+		});
+	});
 
 	// Collect all unique window labels across all jobs
 	const allWindows = $derived(
@@ -80,9 +90,24 @@
 		);
 	}
 
-	function deltaClass(delta: number): string {
+	function metricKeysForWindow(window: string): string[] {
+		const sets = jobs
+			.map((job) => getWindow(job.id, window))
+			.filter((win): win is WindowMetrics => Boolean(win))
+			.map((win) => new Set(Object.keys(win.metrics).filter((key) => !isAnnualMaeMetric(key))));
+		if (sets.length === 0) return [];
+		const [first, ...rest] = sets;
+		return orderMetricKeys(
+			[...first].filter((key) => rest.every((set) => set.has(key))),
+			definitionsById
+		);
+	}
+
+	function deltaClass(metric: string, delta: number): string {
 		if (Math.abs(delta) < 0.005) return 'delta-neutral';
-		return delta < 0 ? 'delta-better' : 'delta-worse';
+		const preference = lowerIsBetter(metric, definitionsById);
+		if (preference == null) return 'delta-neutral';
+		return preference ? (delta < 0 ? 'delta-better' : 'delta-worse') : delta > 0 ? 'delta-better' : 'delta-worse';
 	}
 
 	// --- Figure comparison ---
@@ -145,8 +170,9 @@
 		<section class="section">
 			<h2 class="section-heading">Metrics Comparison</h2>
 			{#each allWindows as win}
+				{@const windowMetrics = metricKeysForWindow(win)}
 				<div class="win-block">
-					<p class="win-label">Days {win}</p>
+					<p class="win-label">{windowLabel(win)}</p>
 					<div class="table-wrap">
 						<table>
 							<thead>
@@ -164,19 +190,20 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each PRIMARY_VARS as varKey}
+								{#each windowMetrics as varKey}
 									{@const baseWin = getWindow(jobs[0].id, win)}
 									{@const baseStat = baseWin?.metrics[varKey]}
 									<tr>
-										<td class="metric-name">{VAR_LABEL[varKey] ?? varKey}</td>
+										<td class="metric-name">{metricLabel(varKey, definitionsById)}</td>
 										{#each jobs as job, i}
 											{@const w = getWindow(job.id, win)}
 											{@const s = w?.metrics[varKey]}
+											{@const unit = metricUnit(varKey, s?.unit ?? baseStat?.unit, definitionsById)}
 											<td class="val">
 												{#if jobData[job.id]?.loading}
 													<span class="loading-dot">…</span>
 												{:else if s}
-													{fmt(s.mean, s.unit)}
+													{formatMetricValue(s.mean, unit)}
 												{:else}
 													<span class="na">—</span>
 												{/if}
@@ -185,10 +212,8 @@
 												<td class="delta">
 													{#if s && baseStat}
 														{@const d = s.mean - baseStat.mean}
-														<span class={deltaClass(d)}>
-															{d >= 0 ? '+' : ''}{s.unit === 'fraction'
-																? (d * 100).toFixed(1) + '%'
-																: d.toFixed(1) + ' d'}
+														<span class={deltaClass(varKey, d)}>
+															{formatMetricDelta(d, unit)}
 														</span>
 													{:else}
 														<span class="na">—</span>

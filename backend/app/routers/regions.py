@@ -5,33 +5,10 @@ from typing import Any
 import aiohttp
 from fastapi import APIRouter, HTTPException
 
-from ..config import get_demo_datasets
+from ..config import get_demo_datasets, get_regions
 
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
-
-# Canonical list of regions ROMP supports. The romp_region value must match
-# region_def.py exactly. This will be replaced by a DB table once the region
-# schema is implemented.
-KNOWN_REGIONS = [
-    {
-        "id": "ethiopia",
-        "display_name": "Ethiopia",
-        "romp_region": "Ethiopia",
-        "description": "Kiremt (June–September) rainy season onset over the Ethiopian highlands.",
-    },
-    {
-        "id": "india",
-        "display_name": "India",
-        "romp_region": "India",
-        "description": "South-Asian summer monsoon onset using the Modified Moron–Robertson (MOK) definition.",
-    },
-]
-
-REGION_BOUNDARY_ISO = {
-    "ethiopia": "ETH",
-    "india": "IND",
-}
 
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
@@ -44,41 +21,24 @@ _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 @router.get("")
 def list_regions() -> list[dict]:
     """
-    Return all known regions with a has_data flag indicating whether at least
-    one configured obs dataset is associated with the region.
+    Return all regions from regions.yaml with a has_data flag indicating whether
+    at least one configured obs dataset is associated with the region.
     """
-    demo_names = [d["name"].lower() for d in get_demo_datasets()]
+    # Index demo datasets by their region field for O(1) lookup
+    configured_regions = {d["region"] for d in get_demo_datasets() if d.get("region")}
+
     result = []
-    for region in KNOWN_REGIONS:
-        name = region["display_name"].lower()
-        has_data = any(name in dn for dn in demo_names)
-        result.append({**region, "has_data": has_data})
+    for region in get_regions():
+        result.append(
+            {
+                "id": region["id"],
+                "display_name": region["display_name"],
+                "romp_region": region.get("romp_name", "custom"),
+                "description": region.get("description", ""),
+                "has_data": region["id"] in configured_regions,
+            }
+        )
     return result
-
-
-def _region_iso(region: str) -> str | None:
-    return REGION_BOUNDARY_ISO.get(region.strip().lower())
-
-
-def _metadata_url(iso: str, boundary_type: str) -> str:
-    return f"https://www.geoboundaries.org/api/current/gbOpen/{iso}/{boundary_type}/"
-
-
-async def _fetch_json(session: aiohttp.ClientSession, url: str) -> dict[str, Any]:
-    async with session.get(url) as response:
-        body = await response.text()
-        if response.status >= 400:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Boundary upstream request failed ({response.status}): {body[:300]}",
-            )
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Boundary upstream response was not JSON: {body[:300]}",
-            ) from exc
 
 
 @router.get("/{region}/boundaries/{level}")
@@ -89,11 +49,13 @@ async def get_boundary(region: str, level: str) -> dict[str, Any]:
     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
     of browser CORS restrictions, so the API fetches and caches it server-side.
     """
-    iso = _region_iso(region)
-    if not iso:
+    region_lower = region.strip().lower()
+    region_def = next((r for r in get_regions() if r["id"] == region_lower), None)
+    if not region_def or not region_def.get("boundary_iso"):
         raise HTTPException(
             status_code=404, detail=f"No boundary mapping for region {region!r}"
         )
+    iso = region_def["boundary_iso"]
 
     boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
     if not boundary_type:
@@ -132,3 +94,24 @@ async def get_boundary(region: str, level: str) -> dict[str, Any]:
     }
     _BOUNDARY_CACHE[cache_key] = result
     return result
+
+
+def _metadata_url(iso: str, boundary_type: str) -> str:
+    return f"https://www.geoboundaries.org/api/current/gbOpen/{iso}/{boundary_type}/"
+
+
+async def _fetch_json(session: aiohttp.ClientSession, url: str) -> dict[str, Any]:
+    async with session.get(url) as response:
+        body = await response.text()
+        if response.status >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Boundary upstream request failed ({response.status}): {body[:300]}",
+            )
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Boundary upstream response was not JSON: {body[:300]}",
+            ) from exc

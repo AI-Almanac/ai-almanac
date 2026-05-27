@@ -11,7 +11,13 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ..auth import CurrentUser
-from ..config import get_model_registry, get_demo_datasets
+from ..config import (
+    REMOTE_OBS_PROVIDERS,
+    get_demo_datasets,
+    get_model_registry,
+    get_region,
+    get_regions,
+)
 from ..database import get_db
 from ..services.runner import get_runner
 from ..services.storage import get_storage
@@ -57,6 +63,12 @@ class RompParams(BaseModel):
     parallel: bool | None = None
     ref_model: str | None = None
     init_days: str | None = None
+    lat_min: float | None = None
+    lat_max: float | None = None
+    lon_min: float | None = None
+    lon_max: float | None = None
+    land_only: bool | None = None
+    shp_only: bool | None = None
     nc_mask: str | None = None
     ref_model_dir: str | None = None
     thresh_file: str | None = None
@@ -78,6 +90,9 @@ class JobOut(BaseModel):
     model_dir: str | None = None
     obs_dir: str | None = None
     params: dict | None = None
+    region_id: str | None = None
+    region_name: str | None = None
+    romp_region: str | None = None
     created_at: str
     started_at: str | None
     completed_at: str | None
@@ -97,9 +112,43 @@ class ResultFile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _region_from_romp_name(romp_region: str | None) -> dict | None:
+    if not romp_region:
+        return None
+    normalized = romp_region.lower()
+    for region in get_regions():
+        if region.get("romp_name", "custom").lower() == normalized:
+            return region
+    return None
+
+
+def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
+    region = get_region(cfg.get("region_id") or "")
+    if region is None:
+        dataset_config = cfg.get("dataset_config") or {}
+        region = get_region(dataset_config.get("region") or "")
+    if region is None:
+        region = _region_from_romp_name((cfg.get("romp_params") or {}).get("region"))
+
+    if region:
+        return {
+            "region_id": region["id"],
+            "region_name": region["display_name"],
+            "romp_region": region.get("romp_name", "custom"),
+        }
+
+    romp_region = (cfg.get("romp_params") or {}).get("region")
+    return {
+        "region_id": None,
+        "region_name": romp_region,
+        "romp_region": romp_region,
+    }
+
+
 def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
+    region_metadata = _job_region_metadata(cfg)
     return JobOut(
         id=row["id"],
         dataset_id=row["dataset_id"],
@@ -108,6 +157,7 @@ def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
         model_dir=cfg.get("model_dir"),
         obs_dir=cfg.get("obs_dir"),
         params=cfg.get("romp_params") or None,
+        **region_metadata,
         created_at=row["created_at"],
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
@@ -117,12 +167,43 @@ def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     )
 
 
-async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
+def _apply_region_params(romp_params: dict) -> dict:
+    params = dict(romp_params)
+    region_id = params.pop("region", None)
+    if not region_id:
+        return params
+
+    region_def = get_region(region_id)
+    if not region_def:
+        params["region"] = region_id
+        return params
+
+    if region_def.get("romp_name"):
+        params["region"] = region_def["romp_name"]
+        return params
+
+    params["region"] = "custom"
+    for key in ("lat_min", "lat_max", "lon_min", "lon_max"):
+        params.setdefault(key, region_def[key])
+    params.setdefault("land_only", region_def.get("land_only", False))
+    params.setdefault("shp_only", region_def.get("shp_only", False))
+    return params
+
+
+async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str | None:
+    """Return the obs directory for a dataset, or None for remote observation datasets."""
     if obs_dir_override:
         return obs_dir_override
     if dataset_id.startswith("demo:"):
-        demo_map = {d["id"]: d["obs_dir"] for d in get_demo_datasets()}
-        obs_dir = demo_map.get(dataset_id)
+        demo_map = {d["id"]: d for d in get_demo_datasets()}
+        demo = demo_map.get(dataset_id)
+        if not demo:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}"
+            )
+        if demo.get("provider") in REMOTE_OBS_PROVIDERS:
+            return None
+        obs_dir = demo.get("obs_dir")
         if not obs_dir:
             raise HTTPException(
                 status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}"
@@ -226,16 +307,28 @@ async def create_job(body: JobCreate, user: CurrentUser):
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
 
-    if "obs_file_pattern" not in romp_params and body.dataset_id.startswith("demo:"):
+    # Pull the app region id from params, or fall back to the model's configured region.
+    region_id = romp_params.get("region") or model_cfg.get("region", "")
+    region_def = get_region(region_id) if region_id else None
+    romp_params = _apply_region_params({"region": region_id, **romp_params})
+
+    if body.dataset_id.startswith("demo:"):
         demo_map = {d["id"]: d for d in get_demo_datasets()}
-        demo = demo_map.get(body.dataset_id)
-        if demo and demo.get("obs_file_pattern"):
+        demo = demo_map.get(body.dataset_id, {})
+        if "obs_file_pattern" not in romp_params and demo.get("obs_file_pattern"):
             romp_params["obs_file_pattern"] = demo["obs_file_pattern"]
+        dataset_config = {k: v for k, v in demo.items() if k not in ("obs_dir",)}
+    else:
+        dataset_config = {"provider": "local"}
 
     config = {
         "model_name": body.model_name,
         "obs_dir": obs_dir,
         "model_dir": model_cfg["model_dir"],
+        "region_id": region_def["id"] if region_def else None,
+        "region_name": region_def["display_name"] if region_def else None,
+        "romp_region": region_def.get("romp_name", "custom") if region_def else region_id,
+        "dataset_config": dataset_config,
         "romp_params": romp_params,
     }
 
@@ -309,7 +402,9 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
 
     storage = get_storage()
-    if storage.is_local:
+    from ..config import settings
+
+    if storage.is_local or settings.job_runner.lower() == "modal":
         logs = await asyncio.to_thread(storage.read_log, job_id)
     else:
         job_prefix = job_id.replace("_", "-")[:36]

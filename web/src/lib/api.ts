@@ -184,6 +184,7 @@ export type Dataset = {
 	obs_file_pattern?: string | null;
 	obs_year_start?: number | null;
 	obs_year_end?: number | null;
+	provider?: string | null;
 };
 
 export type BenchmarkRunSpec = {
@@ -220,6 +221,9 @@ export type Job = {
 	model_dir?: string;
 	obs_dir?: string;
 	params?: JobParams;
+	region_id?: string | null;
+	region_name?: string | null;
+	romp_region?: string | null;
 	created_at?: string;
 	started_at?: string;
 	completed_at?: string;

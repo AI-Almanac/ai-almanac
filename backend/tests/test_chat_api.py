@@ -95,6 +95,142 @@ def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
     assert "per_model_params" not in params
 
 
+def test_apply_region_params_adds_custom_region_bounds() -> None:
+    from app.routers.jobs import _apply_region_params
+
+    params = _apply_region_params({"region": "bangladesh", "start_date": "2020-05-01"})
+
+    assert params == {
+        "region": "custom",
+        "start_date": "2020-05-01",
+        "lat_min": 20.0,
+        "lat_max": 27.0,
+        "lon_min": 88.0,
+        "lon_max": 93.0,
+        "land_only": False,
+        "shp_only": False,
+    }
+
+
+def test_apply_region_params_maps_builtin_region_name() -> None:
+    from app.routers.jobs import _apply_region_params
+
+    params = _apply_region_params({"region": "india"})
+
+    assert params == {"region": "India"}
+
+
+def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> None:
+    from app.routers.jobs import _job_region_metadata
+
+    metadata = _job_region_metadata(
+        {
+            "dataset_config": {"region": "bangladesh"},
+            "romp_params": {"region": "custom"},
+        }
+    )
+
+    assert metadata == {
+        "region_id": "bangladesh",
+        "region_name": "Bangladesh",
+        "romp_region": "custom",
+    }
+
+
+def test_job_region_metadata_maps_builtin_romp_region() -> None:
+    from app.routers.jobs import _job_region_metadata
+
+    metadata = _job_region_metadata({"romp_params": {"region": "India"}})
+
+    assert metadata == {
+        "region_id": "india",
+        "region_name": "India",
+        "romp_region": "India",
+    }
+
+
+@pytest.mark.asyncio
+async def test_submit_benchmark_passes_region_id_to_job_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import benchmark_domain
+    from app.services.benchmark_state import (
+        BenchmarkRunSpec,
+        BenchmarkScope,
+        BenchmarkValidation,
+    )
+
+    captured_params = []
+
+    class CreatedJob:
+        def model_dump(self, mode: str) -> dict:
+            return {"id": "job-1"}
+
+    class DbConnection:
+        async def execute(self, *args, **kwargs) -> None:
+            return None
+
+    class DbContext:
+        async def __aenter__(self) -> DbConnection:
+            return DbConnection()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    async def load_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
+        return BenchmarkRunSpec(
+            region_id="bangladesh",
+            region_name="Bangladesh",
+            romp_region="custom",
+            dataset_id="demo:bangladesh",
+            dataset_name="Bangladesh",
+            model_ids=["e2s-test"],
+            model_names=["E2S (Test)"],
+            forecast_window_days=30,
+        )
+
+    async def save_state(*args) -> None:
+        return None
+
+    async def create_job(body, user):
+        captured_params.append(body.params.model_dump(exclude_none=True))
+        return CreatedJob()
+
+    monkeypatch.setattr(benchmark_domain, "_load_benchmark_config", load_config)
+    monkeypatch.setattr(benchmark_domain, "_save_benchmark_state", save_state)
+    monkeypatch.setattr("app.database.get_db", lambda: DbContext())
+    monkeypatch.setattr(
+        benchmark_domain,
+        "_validation_for_config",
+        lambda spec: BenchmarkValidation(can_run=True, status="runnable"),
+    )
+    monkeypatch.setattr(
+        benchmark_domain,
+        "_region_models",
+        lambda region_id: [
+            {
+                "id": "e2s-test",
+                "start_date": "2020-05-01",
+                "end_date": "2022-09-30",
+                "start_year_clim": 2020,
+                "end_year_clim": 2022,
+                "init_days": "0,3",
+                "probabilistic": False,
+            }
+        ],
+    )
+    monkeypatch.setattr("app.routers.jobs.create_job", create_job)
+
+    await benchmark_domain._exec_submit_benchmark(
+        {},
+        "user-1",
+        BenchmarkScope(kind="benchmark_setup", key="setup-1", title="Setup"),
+        "session-1",
+    )
+
+    assert captured_params[0]["region"] == "bangladesh"
+
+
 @pytest.mark.asyncio
 async def test_trim_chat_history_limits_messages_and_tool_payloads(
     monkeypatch: pytest.MonkeyPatch,

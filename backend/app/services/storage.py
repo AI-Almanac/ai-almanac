@@ -111,13 +111,13 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def list_nc_output_files(self, job_id: str) -> list:
-        """Return list of spatial_metrics_*.nc paths/URIs for a job."""
+        """Return list of ROMP and Earth2Studio metric NetCDF paths/URIs for a job."""
 
     @abstractmethod
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         """
-        Return the path/URI for spatial_metrics_{model}_{window}.nc, or None if
-        not found. Tries both the original window string and a hyphen→comma variant.
+        Return the path/URI for the model/window metric NetCDF, or None if not found.
+        Tries both the original window string and a hyphen→comma variant.
         """
 
     @abstractmethod
@@ -197,18 +197,23 @@ class LocalStorage(StorageBackend):
 
     def list_nc_output_files(self, job_id: str) -> list:
         output_dir = self._outputs_dir / job_id / "output"
-        return (
-            sorted(output_dir.glob("spatial_metrics_*.nc"))
-            if output_dir.exists()
-            else []
+        if not output_dir.exists():
+            return []
+        return sorted(
+            output_dir.glob("spatial_metrics_*.nc"),
+            key=lambda p: p.name,
+        ) + sorted(
+            output_dir.glob("e2s_spatial_metrics_*.nc"),
+            key=lambda p: p.name,
         )
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         output_dir = self._outputs_dir / job_id / "output"
-        for w in (window, window.replace("-", ",")):
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{w}.nc"))
-            if matches:
-                return str(matches[0])
+        for prefix in ("spatial_metrics", "e2s_spatial_metrics"):
+            for w in (window, window.replace("-", ",")):
+                matches = list(output_dir.glob(f"{prefix}_{model}_{w}.nc"))
+                if matches:
+                    return str(matches[0])
         return None
 
     def open_nc_dataset(self, path):
@@ -329,18 +334,21 @@ class GCSStorage(StorageBackend):
         import gcsfs
 
         fs = gcsfs.GCSFileSystem()
-        prefix = f"{self._outputs_bucket}/{job_id}/output/spatial_metrics_"
-        return [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
+        base = f"{self._outputs_bucket}/{job_id}/output"
+        romp = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/spatial_metrics_*.nc"))]
+        e2s = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/e2s_spatial_metrics_*.nc"))]
+        return romp + e2s
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         import gcsfs
 
         fs = gcsfs.GCSFileSystem()
         base = f"{self._outputs_bucket}/{job_id}/output"
-        for w in (window, window.replace("-", ",")):
-            matches = fs.glob(f"{base}/spatial_metrics_{model}_{w}.nc")
-            if matches:
-                return f"gs://{matches[0]}"
+        for prefix in ("spatial_metrics", "e2s_spatial_metrics"):
+            for w in (window, window.replace("-", ",")):
+                matches = fs.glob(f"{base}/{prefix}_{model}_{w}.nc")
+                if matches:
+                    return f"gs://{matches[0]}"
         return None
 
     def open_nc_dataset(self, path):

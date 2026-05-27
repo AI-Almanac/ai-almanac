@@ -1,4 +1,4 @@
-"""Spatial metrics aggregation from ROMP output NetCDF files.
+"""Spatial metrics aggregation from ROMP and Earth2Studio output NetCDF files.
 
 All functions here are synchronous and intended to be called via
 asyncio.to_thread() from the async route handlers in routers/jobs.py.
@@ -17,6 +17,10 @@ from .storage import StorageBackend
 UNIT_MAP: dict[str, str] = {
     "false_alarm_rate": "fraction",
     "miss_rate": "fraction",
+    "rmse": "mm",
+    "mae": "mm",
+    "acc": "dimensionless",
+    "bias": "mm",
 }
 
 
@@ -115,7 +119,7 @@ def compute_job_metrics(
     lon_min: float | None = None,
     lon_max: float | None = None,
 ) -> JobMetrics:
-    """Aggregate spatial_metrics_*.nc files into domain-wide distribution stats."""
+    """Aggregate spatial_metrics_*.nc and e2s_spatial_metrics_*.nc files into stats."""
     try:
         import numpy as np
     except ImportError:
@@ -205,7 +209,7 @@ def compute_job_grid(
     window: str,
     metric: str,
 ) -> JobGridResponse:
-    """Load a single spatial_metrics_*.nc file and return the raw 2D grid."""
+    """Load a single metrics NetCDF file and return the raw 2D grid."""
     try:
         import numpy as np
     except ImportError:
@@ -274,11 +278,9 @@ def compute_job_cell(
         raise FileNotFoundError(f"Grid file for {model}/{window} not found")
 
     baseline_match = storage.find_nc_output_file(job_id, baseline_model, window)
-    if not baseline_match:
-        raise FileNotFoundError(f"Grid file for {baseline_model}/{window} not found")
 
     ds_model = _open_nc(storage, model_match)
-    ds_baseline = _open_nc(storage, baseline_match)
+    ds_baseline = _open_nc(storage, baseline_match) if baseline_match else None
 
     try:
         lats = ds_model.lat.values.astype(float)
@@ -294,8 +296,23 @@ def compute_job_cell(
             da = ds[var]
             if "lat" in da.dims and "lon" in da.dims:
                 da = da.transpose("lat", "lon")
-            value = float(da.values[lat_idx, lon_idx])
+            ds_lats = da.lat.values.astype(float)
+            ds_lons = da.lon.values.astype(float)
+            ds_lat_idx = int(np.abs(ds_lats - cell_lat).argmin())
+            ds_lon_idx = int(np.abs(ds_lons - cell_lon).argmin())
+            value = float(da.values[ds_lat_idx, ds_lon_idx])
             return None if np.isnan(value) else value
+
+        def is_numeric_grid_var(ds, var: str) -> bool:
+            da = ds[var]
+            return (
+                "lat" in da.dims
+                and "lon" in da.dims
+                and np.issubdtype(da.dtype, np.number)
+            )
+
+        def is_annual_mae(var: str) -> bool:
+            return var.startswith("mae_") and var.removeprefix("mae_").isdigit()
 
         def delta(
             model_value: float | None, baseline_value: float | None
@@ -305,9 +322,25 @@ def compute_job_cell(
             return model_value - baseline_value
 
         metrics: dict[str, CellMetricComparison] = {}
-        for metric in ("mean_mae", "false_alarm_rate", "miss_rate"):
+        model_vars = {
+            str(var)
+            for var in ds_model.data_vars
+            if is_numeric_grid_var(ds_model, str(var)) and not is_annual_mae(str(var))
+        }
+        if ds_baseline is not None:
+            baseline_vars = {
+                str(var)
+                for var in ds_baseline.data_vars
+                if is_numeric_grid_var(ds_baseline, str(var))
+                and not is_annual_mae(str(var))
+            }
+            metric_vars = sorted(model_vars.intersection(baseline_vars))
+        else:
+            metric_vars = sorted(model_vars)
+
+        for metric in metric_vars:
             model_value = read_cell(ds_model, metric)
-            baseline_value = read_cell(ds_baseline, metric)
+            baseline_value = read_cell(ds_baseline, metric) if ds_baseline is not None else None
             metrics[metric] = CellMetricComparison(
                 model=model_value,
                 baseline=baseline_value,
@@ -315,16 +348,20 @@ def compute_job_cell(
                 unit=UNIT_MAP.get(metric, "days"),
             )
 
+        if ds_baseline is not None:
+            annual_vars = set(ds_model.data_vars).intersection(ds_baseline.data_vars)
+        else:
+            annual_vars = set(ds_model.data_vars)
         years = sorted(
             int(str(var).removeprefix("mae_"))
-            for var in set(ds_model.data_vars).intersection(ds_baseline.data_vars)
-            if str(var).startswith("mae_") and str(var).removeprefix("mae_").isdigit()
+            for var in annual_vars
+            if is_annual_mae(str(var))
         )
         mae_series = []
         for year in years:
             var = f"mae_{year}"
             model_value = read_cell(ds_model, var)
-            baseline_value = read_cell(ds_baseline, var)
+            baseline_value = read_cell(ds_baseline, var) if ds_baseline is not None else None
             mae_series.append(
                 CellMaePoint(
                     year=year,
@@ -335,7 +372,8 @@ def compute_job_cell(
             )
     finally:
         ds_model.close()
-        ds_baseline.close()
+        if ds_baseline is not None:
+            ds_baseline.close()
 
     return JobCellResponse(
         job_id=job_id,

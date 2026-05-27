@@ -1,16 +1,27 @@
 <script lang="ts">
-	import type { Job } from '$lib/api';
+	import type { Job, JobMetrics, MetricDefinition } from '$lib/api';
+	import { getCachedJobMetrics } from '$lib/benchmarks.svelte';
+	import {
+		loadMetricDefinitions,
+		metricMap,
+		metricOptions,
+		windowLabel
+	} from '$lib/metric-metadata';
 	import MetricsTable from './MetricsTable.svelte';
 	import MetricMap from './MetricMap.svelte';
 
 	type Props = { jobs: Job[] };
 	let { jobs }: Props = $props();
 
-	const MAP_METRICS = [
-		{ value: 'false_alarm_rate', label: 'False alarm rate' },
-		{ value: 'miss_rate', label: 'Miss rate' },
-		{ value: 'mean_mae', label: 'Mean absolute error' }
-	];
+	let metricsByJob = $state<Record<string, JobMetrics>>({});
+	let metricDefinitions = $state<MetricDefinition[]>([]);
+	const definitionsById = $derived(metricMap(metricDefinitions));
+	const currentMetrics = $derived(
+		jobs.flatMap((job) => {
+			const metrics = metricsByJob[job.id];
+			return metrics ? [metrics] : [];
+		})
+	);
 
 	function modelDisplayName(modelName: string): string {
 		const labels: Record<string, string> = {
@@ -23,17 +34,68 @@
 		return labels[modelName.toLowerCase()] ?? modelName;
 	}
 
-	const WINDOW_OPTS: { value: '1-15' | '16-30'; label: string }[] = [
-		{ value: '1-15', label: 'Days 1–15' },
-		{ value: '16-30', label: 'Days 16–30' }
-	];
+	function windowSortValue(window: string): number {
+		if (window === '1-15') return 0;
+		if (window === '16-30') return 1;
+		if (window === 'all') return 2;
+		return 10;
+	}
 
-	let mapWindow = $state<'1-15' | '16-30'>('1-15');
+	const windowOptions = $derived(
+		[
+			...new Set(
+				currentMetrics.flatMap((metrics) =>
+					metrics.windows
+						.filter((window) => window.model !== 'climatology')
+						.map((window) => window.window)
+				)
+			)
+		]
+			.sort((a, b) => windowSortValue(a) - windowSortValue(b) || a.localeCompare(b))
+			.map((window) => ({ value: window, label: windowLabel(window) }))
+	);
+
+	const mapMetrics = $derived(
+		metricOptions(
+			new Set(
+				currentMetrics.flatMap((metrics) =>
+					metrics.windows
+						.filter((window) => window.model !== 'climatology' && window.window === mapWindow)
+						.flatMap((window) => Object.keys(window.metrics))
+				)
+			),
+			definitionsById
+		)
+	);
+
+	let mapWindow = $state('1-15');
+
+	$effect(() => {
+		loadMetricDefinitions().then((definitions) => {
+			metricDefinitions = definitions;
+		});
+	});
+
+	$effect(() => {
+		for (const job of jobs) {
+			if (job.status !== 'complete' || metricsByJob[job.id]) continue;
+			getCachedJobMetrics(job.id).then((metrics) => {
+				metricsByJob = { ...metricsByJob, [job.id]: metrics };
+			});
+		}
+	});
+
+	$effect(() => {
+		if (windowOptions.length === 0) return;
+		if (!windowOptions.some((option) => option.value === mapWindow)) {
+			mapWindow = windowOptions[0].value;
+		}
+	});
 </script>
 
 <div class="viewer">
 	<div class="filter-row">
-		{#each WINDOW_OPTS as opt}
+		{#each windowOptions as opt}
 			<button
 				class="chip"
 				class:active={mapWindow === opt.value}
@@ -44,8 +106,8 @@
 		{/each}
 	</div>
 
-	{#if jobs.length > 0}
-		<MetricMap {jobs} forecastWindow={mapWindow} metrics={MAP_METRICS} />
+	{#if jobs.length > 0 && mapMetrics.length > 0}
+		<MetricMap {jobs} forecastWindow={mapWindow} metrics={mapMetrics} />
 	{:else}
 		<p class="empty">No spatial data available for this run set.</p>
 	{/if}

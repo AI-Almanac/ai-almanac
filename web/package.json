@@ -40,8 +40,8 @@
 		"@globus/sdk": "^6.2.0",
 		"@sveltejs/adapter-node": "^5.5.4",
 		"dompurify": "^3.4.0",
+		"maplibre-gl": "^5.24.0",
 		"marked": "^18.0.0",
-		"ol": "^10.8.0",
 		"svelte-floating-ui": "^1.6.2",
 		"uplot": "^1.6.32"
 	}

@@ -140,7 +140,9 @@
 		if (scopeKind === 'benchmark_setup') return 'Benchmark setup';
 		const firstJob = jobs[0];
 		const eventType = titleCase(firstJob?.params?.event_type ?? 'benchmark');
-		const region = titleCase(firstJob?.params?.region ?? scope.key);
+		const region =
+			firstJob?.region_name ??
+			titleCase(firstJob?.region_id ?? firstJob?.params?.region ?? scope.key);
 		const start = formatDateForTitle(firstJob?.params?.start_date);
 		const end = formatDateForTitle(firstJob?.params?.end_date);
 		const dateRange = start && end ? `${start} to ${end}` : (start ?? end);

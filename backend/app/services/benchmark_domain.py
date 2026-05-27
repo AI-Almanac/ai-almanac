@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 import sqlalchemy as sa
@@ -21,7 +21,7 @@ class SpatialMetricRequest(BaseModel):
     job_id: str
     model: str
     window: str
-    metric: Literal["false_alarm_rate", "miss_rate", "mean_mae"]
+    metric: str
 
 
 class CodeSandboxRequest(BaseModel):
@@ -195,9 +195,9 @@ def _obs_year_range(obs_dir: str) -> tuple[int | None, int | None]:
 def _region_by_id(region_id: object) -> dict | None:
     if not isinstance(region_id, str):
         return None
-    from ..routers.regions import KNOWN_REGIONS
+    from ..config import get_region
 
-    return next((region for region in KNOWN_REGIONS if region["id"] == region_id), None)
+    return get_region(region_id)
 
 
 async def _dataset_candidates(user_id: str) -> list[dict]:
@@ -206,7 +206,8 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
 
     demo = []
     for dataset in get_demo_datasets():
-        start, end = _obs_year_range(dataset["obs_dir"])
+        obs_dir = dataset.get("obs_dir")
+        start, end = _obs_year_range(obs_dir) if obs_dir else (None, None)
         demo.append(
             {
                 "id": dataset["id"],
@@ -425,14 +426,20 @@ def benchmark_payload(
 
 
 async def _exec_list_regions(args: dict, user_id: str, scope: BenchmarkScope) -> str:
-    from ..config import get_demo_datasets
-    from ..routers.regions import KNOWN_REGIONS
+    from ..config import get_demo_datasets, get_regions
 
-    demo_names = [d["name"].lower() for d in get_demo_datasets()]
+    configured_regions = {d["region"] for d in get_demo_datasets() if d.get("region")}
     result = []
-    for region in KNOWN_REGIONS:
-        name = region["display_name"].lower()
-        result.append({**region, "has_data": any(name in dn for dn in demo_names)})
+    for region in get_regions():
+        result.append(
+            {
+                "id": region["id"],
+                "display_name": region["display_name"],
+                "romp_region": region.get("romp_name", "custom"),
+                "description": region.get("description", ""),
+                "has_data": region["id"] in configured_regions,
+            }
+        )
     return json.dumps(result)
 
 
@@ -531,7 +538,7 @@ async def _exec_update_benchmark_config(
             else spec.intent,
             "region_id": region["id"] if region else None,
             "region_name": region["display_name"] if region else None,
-            "romp_region": region["romp_region"] if region else None,
+            "romp_region": region.get("romp_name", "custom") if region else None,
             "event_type": patch.get("event_type")
             if isinstance(patch.get("event_type"), str)
             else spec.event_type,
@@ -622,7 +629,7 @@ async def _exec_submit_benchmark(
     jobs = []
     shared_params = {
         "event_type": spec.event_type,
-        "region": spec.romp_region,
+        "region": spec.region_id,
         "max_forecast_day": spec.forecast_window_days,
     }
     for model in models:
@@ -880,8 +887,8 @@ def _job_status_query(scope: BenchmarkScope):
 
 
 async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope) -> str:
-    import numpy as np
     from ..database import get_db
+    from ..services.metrics import compute_job_metrics
     from ..services.storage import get_storage
 
     job_id = args["job_id"]
@@ -905,47 +912,17 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope)
 
     def _load():
         storage = get_storage()
-        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
-        nc_files = storage.list_nc_output_files(job_id)
-        if not nc_files:
+        try:
+            metrics = compute_job_metrics(job_id, storage)
+        except Exception as exc:
+            logger.exception("Could not load metrics for job %s", job_id)
+            return {
+                "error": f"Could not read metric outputs for job {job_id}: {exc}",
+                "job_id": job_id,
+            }
+        if not metrics.windows:
             return {"error": f"No metric output files found for job {job_id}"}
-
-        windows = []
-        for nc in nc_files:
-            try:
-                ds = storage.open_nc_dataset(nc)
-                model = str(ds.attrs.get("model", ""))
-                window = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-                metrics = {}
-                for var in ds.data_vars:
-                    arr = ds[var].values.astype(float)
-                    valid = arr[~np.isnan(arr)]
-                    if len(valid) == 0:
-                        continue
-                    var_str = str(var)
-                    metrics[var_str] = {
-                        "mean": round(float(np.mean(valid)), 4),
-                        "p50": round(float(np.percentile(valid, 50)), 4),
-                        "p90": round(float(np.percentile(valid, 90)), 4),
-                        "min": round(float(np.min(valid)), 4),
-                        "max": round(float(np.max(valid)), 4),
-                        "unit": UNIT_MAP.get(var_str, "days"),
-                    }
-            except Exception as exc:
-                logger.exception(
-                    "Could not load metrics file %s for job %s", nc, job_id
-                )
-                return {
-                    "error": f"Could not read metric output {nc}: {exc}",
-                    "job_id": job_id,
-                }
-            finally:
-                if "ds" in locals():
-                    ds.close()
-                    del ds
-            windows.append({"model": model, "window": window, "metrics": metrics})
-        windows.sort(key=lambda w: (w["model"] == "climatology", w["window"]))
-        return {"job_id": job_id, "windows": windows}
+        return metrics.model_dump()
 
     return json.dumps(await asyncio.to_thread(_load))
 
@@ -955,6 +932,7 @@ async def _exec_get_spatial_summary(
 ) -> str:
     import numpy as np
     from ..database import get_db
+    from ..services.metrics import UNIT_MAP
     from ..services.storage import get_storage
 
     job_id = args["job_id"]
@@ -1023,6 +1001,7 @@ async def _exec_get_spatial_summary(
                 "p90": round(float(np.percentile(valid, 90)), 4),
                 "min": round(float(np.min(valid)), 4),
                 "max": round(float(np.max(valid)), 4),
+                "unit": UNIT_MAP.get(metric, "days"),
             },
         }
 
