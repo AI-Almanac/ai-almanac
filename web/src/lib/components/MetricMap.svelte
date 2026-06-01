@@ -181,11 +181,13 @@
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
-	type MapViewMode = 'single' | 'baseline' | 'difference';
+	type MapViewMode = 'single' | 'baseline' | 'difference' | 'swipe';
 	let viewMode = $state<MapViewMode>('baseline');
 	let selectedMetric = $state('');
 	let selectedModelJobId = $state('');
 	let selectedReferenceJobId = $state('climatology');
+	let swipePosition = $state(50);
+	let draggingSwipe = $state(false);
 	let loadRequestId = 0;
 	const boundaryRegion = $derived(jobs[0]?.region_id ?? jobs[0]?.params?.region);
 
@@ -261,6 +263,13 @@
 		return modelDisplayName(run.modelName);
 	}
 
+	function viewModeDescription(mode: MapViewMode) {
+		if (mode === 'single') return 'Show raw metric values for one model.';
+		if (mode === 'baseline') return 'Show where the selected model improves or worsens relative to climatology.';
+		if (mode === 'difference') return 'Show the selected model minus another model or climatology.';
+		return 'Compare two raw metric maps with a draggable split view.';
+	}
+
 	function availableModelRuns() {
 		return activeRuns.filter((run) => run.modelName !== 'climatology');
 	}
@@ -274,6 +283,10 @@
 			return activeRuns.find((run) => run.modelName === 'climatology');
 		}
 		return availableModelRuns().find((run) => run.jobId === selectedReferenceJobId);
+	}
+
+	function sameRun(a: RunDef, b: RunDef) {
+		return a.jobId === b.jobId && a.modelName === b.modelName;
 	}
 
 	function normalizeLensSelection() {
@@ -304,7 +317,7 @@
 			viewMode === 'baseline'
 				? activeRuns.find((run) => run.modelName === 'climatology')
 				: selectedReferenceRun();
-		if (!referenceRun || referenceRun.jobId === modelRun.jobId) {
+		if (!referenceRun || sameRun(referenceRun, modelRun)) {
 			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric);
 		}
 		return deltaLayerKey(
@@ -316,9 +329,75 @@
 		);
 	}
 
+	function currentLensKeys() {
+		normalizeLensSelection();
+		if (viewMode !== 'swipe') {
+			const key = currentLensKey();
+			return key ? [key] : [];
+		}
+		const modelRun = selectedModelRun();
+		const referenceRun = selectedReferenceRun();
+		if (!modelRun || !referenceRun || !selectedMetric || sameRun(referenceRun, modelRun)) {
+			const key = currentLensKey();
+			return key ? [key] : [];
+		}
+		return [
+			rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric),
+			rawLayerKey(referenceRun.jobId, referenceRun.modelName, selectedMetric)
+		];
+	}
+
+	function swipeLongitude() {
+		if (!map || !mapContainer) return null;
+		const x = (mapContainer.clientWidth * swipePosition) / 100;
+		return map.unproject([x, mapContainer.clientHeight / 2]).lng;
+	}
+
+	function setSwipePositionFromClientX(clientX: number) {
+		if (!mapContainer) return;
+		const rect = mapContainer.getBoundingClientRect();
+		const pct = ((clientX - rect.left) / rect.width) * 100;
+		swipePosition = Math.min(95, Math.max(5, pct));
+	}
+
+	function startSwipeDrag(event: PointerEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		draggingSwipe = true;
+		setSwipePositionFromClientX(event.clientX);
+	}
+
+	function moveSwipeWithKeyboard(event: KeyboardEvent) {
+		const step = event.shiftKey ? 10 : 2;
+		if (event.key === 'ArrowLeft') {
+			event.preventDefault();
+			swipePosition = Math.max(5, swipePosition - step);
+		} else if (event.key === 'ArrowRight') {
+			event.preventDefault();
+			swipePosition = Math.min(95, swipePosition + step);
+		}
+	}
+
+	function updateSwipeFilters() {
+		if (!map) return;
+		const keys = currentLensKeys();
+		for (const key of keys) {
+			const state = layers[key];
+			if (state && map.getLayer(state.layerId)) map.setFilter(state.layerId, ['all']);
+		}
+		if (viewMode !== 'swipe' || keys.length !== 2) return;
+		const splitLon = swipeLongitude();
+		if (splitLon == null) return;
+		const [leftKey, rightKey] = keys;
+		const leftLayer = layers[leftKey]?.layerId;
+		const rightLayer = layers[rightKey]?.layerId;
+		if (leftLayer && map.getLayer(leftLayer)) map.setFilter(leftLayer, ['<=', ['get', 'lon'], splitLon]);
+		if (rightLayer && map.getLayer(rightLayer)) map.setFilter(rightLayer, ['>', ['get', 'lon'], splitLon]);
+	}
+
 	function applyLensSelection(fit = false) {
-		const key = currentLensKey();
-		const nextVisibleKeys = key && layers[key] ? new Set([key]) : new Set<string>();
+		const keys = currentLensKeys();
+		const nextVisibleKeys = new Set(keys.filter((key) => layers[key]));
 		for (const [layerKey, state] of Object.entries(layers)) {
 			if (!map?.getLayer(state.layerId)) continue;
 			map.setLayoutProperty(state.layerId, 'visibility', nextVisibleKeys.has(layerKey) ? 'visible' : 'none');
@@ -327,7 +406,9 @@
 			}
 		}
 		visibleKeys = nextVisibleKeys;
-		if (fit && key && layers[key]) fitToLayer(layers[key]);
+		updateSwipeFilters();
+		const firstKey = keys.find((key) => layers[key]);
+		if (fit && firstKey) fitToLayer(layers[firstKey]);
 	}
 
 	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
@@ -875,7 +956,7 @@
 			for (const metric of metrics) {
 				const modelData = dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value)];
 				if (!modelData) continue;
-				const references = activeRuns.filter((reference) => reference.jobId !== run.jobId);
+				const references = activeRuns.filter((reference) => !sameRun(reference, run));
 				for (const reference of references) {
 					const referenceData =
 						dataByRunMetric[rawLayerKey(reference.jobId, reference.modelName, metric.value)];
@@ -937,6 +1018,19 @@
 				attrib.removeAttribute('open');
 			}
 		});
+		map.on('move', () => {
+			if (viewMode === 'swipe') updateSwipeFilters();
+		});
+
+		const onPointerMove = (event: PointerEvent) => {
+			if (!draggingSwipe) return;
+			setSwipePositionFromClientX(event.clientX);
+		};
+		const onPointerUp = () => {
+			draggingSwipe = false;
+		};
+		window.addEventListener('pointermove', onPointerMove);
+		window.addEventListener('pointerup', onPointerUp);
 
 		map.on('mousemove', (e) => {
 			if (!map) {
@@ -974,6 +1068,11 @@
 			if (typeof lat !== 'number' || typeof lon !== 'number') return;
 			openCellInspector(lat, lon);
 		});
+
+		return () => {
+			window.removeEventListener('pointermove', onPointerMove);
+			window.removeEventListener('pointerup', onPointerUp);
+		};
 	});
 
 	onDestroy(() => {
@@ -995,6 +1094,7 @@
 		selectedModelJobId;
 		selectedReferenceJobId;
 		viewMode;
+		swipePosition;
 		if (map && mapReady && Object.keys(layers).length > 0) {
 			untrack(() => applyLensSelection(false));
 		}
@@ -1064,7 +1164,11 @@
 					<button class:active={viewMode === 'difference'} onclick={() => (viewMode = 'difference')}>
 						Difference
 					</button>
+					<button class:active={viewMode === 'swipe'} onclick={() => (viewMode = 'swipe')}>
+						Swipe
+					</button>
 				</div>
+				<p class="lens-note">{viewModeDescription(viewMode)}</p>
 
 				<label class="control-field">
 					<span>Model</span>
@@ -1075,7 +1179,7 @@
 					</select>
 				</label>
 
-				{#if viewMode === 'difference'}
+				{#if viewMode === 'difference' || viewMode === 'swipe'}
 					<label class="control-field">
 						<span>Compare with</span>
 						<select bind:value={selectedReferenceJobId}>
@@ -1088,7 +1192,7 @@
 						</select>
 					</label>
 				{:else if viewMode === 'baseline'}
-					<p class="lens-note">Showing change relative to climatology. Blue is better for error metrics.</p>
+					<p class="lens-note">Blue is better for error metrics; red is worse.</p>
 				{/if}
 			</div>
 
@@ -1128,6 +1232,27 @@
 	{#if tooltipVisible}
 		<div class="tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
 			{@html tooltipContent}
+		</div>
+	{/if}
+
+	{#if viewMode === 'swipe' && visibleLayers.length === 2}
+		<div class="swipe-split" style="left: {swipePosition}%">
+			<div class="swipe-line"></div>
+			<div
+				class="swipe-handle"
+				class:dragging={draggingSwipe}
+				onpointerdown={startSwipeDrag}
+				onkeydown={moveSwipeWithKeyboard}
+				role="slider"
+				tabindex="0"
+				aria-label="Swipe comparison position"
+				aria-valuemin="5"
+				aria-valuemax="95"
+				aria-valuenow={Math.round(swipePosition)}
+			>
+				<span>‹</span>
+				<span>›</span>
+			</div>
 		</div>
 	{/if}
 
@@ -1364,6 +1489,10 @@
 		cursor: pointer;
 	}
 
+	.view-toggle button + button {
+		margin-left: 0.05rem;
+	}
+
 	.view-toggle button.active {
 		background: white;
 		color: var(--color-accent);
@@ -1574,6 +1703,56 @@
 	.tooltip :global(.tt-delta) {
 		font-size: 0.68rem;
 		color: #777;
+	}
+
+	.swipe-split {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		z-index: 24;
+		pointer-events: none;
+	}
+
+	.swipe-line {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		background: rgba(255, 255, 255, 0.92);
+		box-shadow: 0 0 0 1px rgba(30, 37, 44, 0.35);
+		transform: translateX(-1px);
+	}
+
+	.swipe-handle {
+		position: absolute;
+		top: 50%;
+		left: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.1rem;
+		width: 2.35rem;
+		height: 2.35rem;
+		border-radius: 999px;
+		border: 1px solid rgba(35, 41, 46, 0.28);
+		background: rgba(255, 255, 255, 0.94);
+		color: #2f4f47;
+		font-size: 1rem;
+		font-weight: 800;
+		box-shadow: 0 0.35rem 1.2rem rgba(0, 0, 0, 0.22);
+		transform: translate(-50%, -50%);
+		cursor: ew-resize;
+		pointer-events: auto;
+		user-select: none;
+	}
+
+	.swipe-handle.dragging,
+	.swipe-handle:focus-visible {
+		outline: none;
+		border-color: var(--color-accent);
+		box-shadow:
+			0 0 0 3px rgba(67, 122, 111, 0.25),
+			0 0.35rem 1.2rem rgba(0, 0, 0, 0.22);
 	}
 
 	/* ---- Legend ---- */
