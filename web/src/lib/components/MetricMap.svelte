@@ -52,6 +52,46 @@
 	let map = $state<maplibregl.Map | null>(null);
 	let mapReady = $state(false);
 
+	const BASEMAP_STYLES = [
+		{
+			id: 'carto-dark',
+			label: 'CARTO Dark',
+			url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+		},
+		{
+			id: 'carto-dark-no-labels',
+			label: 'CARTO Dark, no labels',
+			url: 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json'
+		},
+		{
+			id: 'carto-light',
+			label: 'CARTO Light',
+			url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+		},
+		{
+			id: 'carto-light-no-labels',
+			label: 'CARTO Light, no labels',
+			url: 'https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json'
+		},
+		{
+			id: 'carto-voyager',
+			label: 'CARTO Voyager',
+			url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'
+		},
+		{
+			id: 'carto-voyager-no-labels',
+			label: 'CARTO Voyager, no labels',
+			url: 'https://basemaps.cartocdn.com/gl/voyager-nolabels-gl-style/style.json'
+		},
+		{ id: 'openfreemap-liberty', label: 'OpenFreeMap Liberty', url: 'https://tiles.openfreemap.org/styles/liberty' },
+		{ id: 'openfreemap-bright', label: 'OpenFreeMap Bright', url: 'https://tiles.openfreemap.org/styles/bright' },
+		{ id: 'openfreemap-positron', label: 'OpenFreeMap Positron', url: 'https://tiles.openfreemap.org/styles/positron' },
+		{ id: 'openfreemap-dark', label: 'OpenFreeMap Dark', url: 'https://tiles.openfreemap.org/styles/dark' },
+		{ id: 'openfreemap-fiord', label: 'OpenFreeMap Fiord', url: 'https://tiles.openfreemap.org/styles/fiord' }
+	] as const;
+	type BasemapStyleId = (typeof BASEMAP_STYLES)[number]['id'];
+	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
+
 	// ColorBrewer sequential scales for climatology raw values: [metric][colorIndex] low→high
 	const COLOR_SCALES: Record<string, string[][]> = {
 		false_alarm_rate: [
@@ -286,6 +326,10 @@
 
 	function modelRunLabel(run: RunDef) {
 		return modelDisplayName(run.modelName);
+	}
+
+	function selectedBasemapStyle() {
+		return BASEMAP_STYLES.find((style) => style.id === selectedBasemap) ?? BASEMAP_STYLES[0];
 	}
 
 	function viewModeDescription(mode: MapViewMode) {
@@ -1117,7 +1161,7 @@
 		if (!mapContainer) return;
 		map = new maplibregl.Map({
 			container: mapContainer,
-			style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+			style: selectedBasemapStyle().url,
 			center: [80, 20],
 			zoom: 4,
 			attributionControl: false
@@ -1206,6 +1250,15 @@
 		// Only trigger on job set or window changes — do NOT read jobs/metrics directly
 		// as that would re-run loadAll on every poll even when complete jobs are unchanged.
 		if (jobIds && forecastWindow && activeWindowKey && map && mapReady) untrack(loadAll);
+	});
+
+	$effect(() => {
+		const style = selectedBasemapStyle();
+		if (!map || !mapReady) return;
+		map.once('style.load', () => {
+			untrack(loadAll);
+		});
+		map.setStyle(style.url);
 	});
 
 	$effect(() => {
@@ -1465,6 +1518,16 @@
 				</div>
 			</div>
 
+			<div class="map-context-row">
+				<label class="control-field basemap-field">
+					<span>Basemap</span>
+					<select bind:value={selectedBasemap}>
+						{#each BASEMAP_STYLES as style}
+							<option value={style.id}>{style.label}</option>
+						{/each}
+					</select>
+				</label>
+
 			<details class="boundary-group">
 				<summary class="run-header">
 					<span class="run-label">Boundaries</span>
@@ -1497,6 +1560,7 @@
 				{/each}
 				</div>
 			</details>
+			</div>
 		{/if}
 	</div>
 </div>
@@ -1722,6 +1786,17 @@
 		align-items: center;
 	}
 
+	.map-context-row {
+		display: flex;
+		align-items: end;
+		gap: 0.65rem;
+		padding: 0 0.7rem 0.55rem;
+	}
+
+	.basemap-field {
+		width: min(18rem, 100%);
+	}
+
 	.control-field {
 		display: flex;
 		flex-direction: column;
@@ -1822,8 +1897,8 @@
 	}
 
 	.boundary-group {
-		margin: 0 0.7rem 0.55rem;
-		width: min(13.5rem, calc(100% - 1.4rem));
+		margin: 0;
+		width: min(13.5rem, 100%);
 		background: rgba(246, 248, 250, 0.72);
 		border: 1px solid #d8dde5;
 		border-radius: 0.4rem;
