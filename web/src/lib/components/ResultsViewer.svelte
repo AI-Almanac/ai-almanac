@@ -60,15 +60,13 @@
 			new Set(
 				currentMetrics.flatMap((metrics) =>
 					metrics.windows
-						.filter((window) => window.model !== 'climatology' && window.window === mapWindow)
-						.flatMap((window) => Object.keys(window.metrics))
+						.filter((windowMetrics) => windowMetrics.model !== 'climatology')
+						.flatMap((windowMetrics) => Object.keys(windowMetrics.metrics))
 				)
 			),
 			definitionsById
 		)
 	);
-
-	let mapWindow = $state('1-15');
 
 	$effect(() => {
 		loadMetricDefinitions().then((definitions) => {
@@ -85,29 +83,16 @@
 		}
 	});
 
-	$effect(() => {
-		if (windowOptions.length === 0) return;
-		if (!windowOptions.some((option) => option.value === mapWindow)) {
-			mapWindow = windowOptions[0].value;
-		}
-	});
 </script>
 
 <div class="viewer">
-	<div class="filter-row">
-		{#each windowOptions as opt}
-			<button
-				class="chip"
-				class:active={mapWindow === opt.value}
-				onclick={() => {
-					mapWindow = opt.value;
-				}}>{opt.label}</button
-			>
-		{/each}
-	</div>
-
-	{#if jobs.length > 0 && mapMetrics.length > 0}
-		<MetricMap {jobs} forecastWindow={mapWindow} metrics={mapMetrics} />
+	{#if jobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
+		<MetricMap
+			{jobs}
+			forecastWindow={windowOptions[0].value}
+			forecastWindows={windowOptions}
+			metrics={mapMetrics}
+		/>
 	{:else}
 		<p class="empty">No spatial data available for this run set.</p>
 	{/if}
@@ -127,36 +112,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
-	}
-
-	.filter-row {
-		display: flex;
-		gap: 0.4rem;
-		flex-wrap: wrap;
-	}
-
-	.chip {
-		padding: 0.3rem 0.75rem;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 1rem;
-		background: var(--color-surface);
-		color: var(--color-text-dim);
-		font-size: 0.75rem;
-		font-weight: 500;
-		cursor: pointer;
-		transition:
-			background-color 0.12s,
-			color 0.12s,
-			border-color 0.12s;
-	}
-	.chip:hover {
-		border-color: var(--color-accent);
-		color: var(--color-accent);
-	}
-	.chip.active {
-		background: var(--color-accent-light);
-		border-color: var(--color-accent);
-		color: var(--color-accent);
 	}
 
 	.empty {

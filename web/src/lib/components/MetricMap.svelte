@@ -12,6 +12,7 @@
 	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
 
 	type MetricDef = { value: string; label: string };
+	type WindowDef = { value: string; label: string };
 
 	// One RunDef per complete job (one model per job)
 	type RunDef = {
@@ -24,8 +25,10 @@
 		jobs: Job[]; // complete jobs in the selected run group
 		forecastWindow: string;
 		metrics: MetricDef[];
+		forecastWindows?: WindowDef[];
+		compact?: boolean;
 	};
-	let { jobs, forecastWindow, metrics }: Props = $props();
+	let { jobs, forecastWindow, metrics, forecastWindows, compact = false }: Props = $props();
 
 	type GridFeature = {
 		type: 'Feature';
@@ -190,6 +193,8 @@
 	let selectedMetric = $state('');
 	let selectedModelJobId = $state('');
 	let selectedReferenceJobId = $state('climatology');
+	let selectedWindow = $state('');
+	let selectedReferenceWindow = $state('');
 	let swipePosition = $state(50);
 	let draggingSwipe = $state(false);
 	let loadRequestId = 0;
@@ -226,26 +231,41 @@
 			.filter((layer) => layer != null)
 	);
 	const anyLoading = $derived(loading.size > 0);
+	const activeWindows = $derived(
+		forecastWindows?.length ? forecastWindows : [{ value: forecastWindow, label: forecastWindow }]
+	);
+	const activeWindowKey = $derived(activeWindows.map((window) => window.value).join(','));
 
 	// ---- Key helpers -------------------------------------------------------------
 
-	function rawLayerKey(jobId: string, modelName: string, metric: string) {
-		return `raw||${jobId}||${modelName}||${metric}`;
+	function rawLayerKey(jobId: string, modelName: string, metric: string, window: string) {
+		return `raw||${window}||${jobId}||${modelName}||${metric}`;
 	}
 
 	function deltaLayerKey(
 		jobId: string,
 		modelName: string,
 		metric: string,
+		window: string,
 		referenceJobId: string,
-		referenceModelName: string
+		referenceModelName: string,
+		referenceWindow: string
 	) {
-		return `delta||${jobId}||${modelName}||${metric}||${referenceJobId}||${referenceModelName}`;
+		return `delta||${window}||${jobId}||${modelName}||${metric}||${referenceWindow}||${referenceJobId}||${referenceModelName}`;
 	}
 
 	function parseKey(key: string) {
-		const [kind, jobId, modelName, metric, referenceJobId, referenceModelName] = key.split('||');
-		return { kind, jobId, modelName, metric, referenceJobId, referenceModelName };
+		const [
+			kind,
+			window,
+			jobId,
+			modelName,
+			metric,
+			referenceWindow,
+			referenceJobId,
+			referenceModelName
+		] = key.split('||');
+		return { kind, window, jobId, modelName, metric, referenceWindow, referenceJobId, referenceModelName };
 	}
 
 	function metricLabel(metricValue: string) {
@@ -270,8 +290,12 @@
 	function viewModeDescription(mode: MapViewMode) {
 		if (mode === 'single') return 'Show raw metric values for one model.';
 		if (mode === 'baseline') return 'Show where the selected model improves or worsens relative to climatology.';
-		if (mode === 'difference') return 'Show the selected model minus another model or climatology.';
-		return 'Compare two raw metric maps with a draggable split view.';
+		if (mode === 'difference') return 'Show the selected model and lead time minus the comparison choice.';
+		return 'Compare two raw metric maps across models or lead times with a draggable split view.';
+	}
+
+	function windowLabelFor(value: string) {
+		return activeWindows.find((window) => window.value === value)?.label ?? value;
 	}
 
 	function availableModelRuns() {
@@ -293,7 +317,9 @@
 		if (viewMode !== 'swipe') return null;
 		const modelRun = selectedModelRun();
 		const referenceRun = selectedReferenceRun();
-		if (!modelRun || !referenceRun || sameRun(modelRun, referenceRun)) return null;
+		if (!modelRun || !referenceRun || (sameRun(modelRun, referenceRun) && selectedWindow === selectedReferenceWindow)) {
+			return null;
+		}
 		return { left: modelRun, right: referenceRun };
 	}
 
@@ -303,6 +329,12 @@
 
 	function normalizeLensSelection() {
 		const modelRuns = availableModelRuns();
+		if (!selectedWindow || !activeWindows.some((window) => window.value === selectedWindow)) {
+			selectedWindow = forecastWindow;
+		}
+		if (!selectedReferenceWindow || !activeWindows.some((window) => window.value === selectedReferenceWindow)) {
+			selectedReferenceWindow = selectedWindow;
+		}
 		if (selectedMetric && !metrics.some((metric) => metric.value === selectedMetric)) {
 			selectedMetric = metrics[0]?.value ?? '';
 		}
@@ -311,10 +343,12 @@
 		}
 		if (selectedReferenceJobId === selectedModelJobId) {
 			const climatologyRun = activeRuns.find((run) => run.modelName === 'climatology');
-			selectedReferenceJobId =
-				climatologyRun?.jobId === selectedModelJobId
-					? (modelRuns.find((run) => run.jobId !== selectedModelJobId)?.jobId ?? '')
-					: 'climatology';
+			if (selectedReferenceWindow === selectedWindow) {
+				selectedReferenceJobId =
+					climatologyRun?.jobId === selectedModelJobId
+						? (modelRuns.find((run) => run.jobId !== selectedModelJobId)?.jobId ?? '')
+						: 'climatology';
+			}
 		}
 	}
 
@@ -323,21 +357,24 @@
 		const modelRun = selectedModelRun();
 		if (!modelRun || !selectedMetric) return null;
 		if (viewMode === 'single') {
-			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric);
+			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric, selectedWindow);
 		}
 		const referenceRun =
 			viewMode === 'baseline'
 				? activeRuns.find((run) => run.modelName === 'climatology')
 				: selectedReferenceRun();
-		if (!referenceRun || sameRun(referenceRun, modelRun)) {
-			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric);
+		const referenceWindow = viewMode === 'baseline' ? selectedWindow : selectedReferenceWindow;
+		if (!referenceRun || (sameRun(referenceRun, modelRun) && referenceWindow === selectedWindow)) {
+			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric, selectedWindow);
 		}
 		return deltaLayerKey(
 			modelRun.jobId,
 			modelRun.modelName,
 			selectedMetric,
+			selectedWindow,
 			referenceRun.jobId,
-			referenceRun.modelName
+			referenceRun.modelName,
+			referenceWindow
 		);
 	}
 
@@ -349,13 +386,18 @@
 		}
 		const modelRun = selectedModelRun();
 		const referenceRun = selectedReferenceRun();
-		if (!modelRun || !referenceRun || !selectedMetric || sameRun(referenceRun, modelRun)) {
+		if (
+			!modelRun ||
+			!referenceRun ||
+			!selectedMetric ||
+			(sameRun(referenceRun, modelRun) && selectedReferenceWindow === selectedWindow)
+		) {
 			const key = currentLensKey();
 			return key ? [key] : [];
 		}
 		return [
-			rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric),
-			rawLayerKey(referenceRun.jobId, referenceRun.modelName, selectedMetric)
+			rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric, selectedWindow),
+			rawLayerKey(referenceRun.jobId, referenceRun.modelName, selectedMetric, selectedReferenceWindow)
 		];
 	}
 
@@ -496,9 +538,10 @@
 			const displayName = modelName === 'climatology' ? 'Climatology' : modelName.toUpperCase();
 			const rows = keys.map((key) => {
 				const ls = layers[key];
-				const { metric } = parseKey(key);
+				const { metric, window } = parseKey(key);
 				const val = getValueAtLatLon(ls.data, lat, lon);
-				if (val == null) return `<span class="tt-metric">${metricLabel(metric)}: —</span>`;
+				const label = `${metricLabel(metric)} · ${windowLabelFor(window)}`;
+				if (val == null) return `<span class="tt-metric">${label}: —</span>`;
 				if (ls.isDelta && ls.referenceData) {
 					const referenceVal = getValueAtLatLon(ls.referenceData, lat, lon);
 					const delta = referenceVal != null ? val - referenceVal : null;
@@ -506,9 +549,9 @@
 						delta != null
 							? ` <span class="tt-delta">(Δ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})</span>`
 							: '';
-					return `<span class="tt-metric">${metricLabel(metric)}: ${val.toFixed(3)}${deltaStr}</span>`;
+					return `<span class="tt-metric">${label}: ${val.toFixed(3)}${deltaStr}</span>`;
 				}
-				return `<span class="tt-metric">${metricLabel(metric)}: ${val.toFixed(3)}</span>`;
+				return `<span class="tt-metric">${label}: ${val.toFixed(3)}</span>`;
 			});
 			sections.push(
 				`<div class="tt-group"><span class="tt-model">${displayName}</span>${rows.join('')}</div>`
@@ -894,6 +937,12 @@
 		};
 
 		const firstMetric = metrics[0].value;
+		if (!selectedWindow || !activeWindows.some((window) => window.value === selectedWindow)) {
+			selectedWindow = forecastWindow;
+		}
+		if (!selectedReferenceWindow || !activeWindows.some((window) => window.value === selectedReferenceWindow)) {
+			selectedReferenceWindow = selectedWindow;
+		}
 		if (!selectedMetric || !metrics.some((metric) => metric.value === selectedMetric)) {
 			selectedMetric = firstMetric;
 		}
@@ -913,7 +962,9 @@
 		// Mark all keys as loading
 		const fetchRuns = [...modelRuns, climRun];
 		const allKeys = fetchRuns.flatMap((run) =>
-			metrics.map((m) => rawLayerKey(run.jobId, run.modelName, m.value))
+			activeWindows.flatMap((window) =>
+				metrics.map((m) => rawLayerKey(run.jobId, run.modelName, m.value, window.value))
+			)
 		);
 		visibleKeys = new Set([...previousVisibleKeys].filter((key) => allKeys.includes(key)));
 		opacities = Object.fromEntries(allKeys.map((key) => [key, previousOpacities[key] ?? 1]));
@@ -921,22 +972,25 @@
 
 		// Fetch all grid data concurrently
 		type FetchResult =
-			| { run: RunDef; metricValue: string; data: JobGridResponse }
-			| { run: RunDef; metricValue: string; error: string };
+			| { run: RunDef; windowValue: string; metricValue: string; data: JobGridResponse }
+			| { run: RunDef; windowValue: string; metricValue: string; error: string };
 		const results: FetchResult[] = await Promise.all(
 			fetchRuns.flatMap((run) =>
-				metrics.map(async (m) => {
-					try {
-						const data = await getCachedJobGrid(run.jobId, run.modelName, forecastWindow, m.value);
-						return { run, metricValue: m.value, data };
-					} catch (e) {
-						return {
-							run,
-							metricValue: m.value,
-							error: e instanceof Error ? e.message : 'Failed to load'
-						};
-					}
-				})
+				activeWindows.flatMap((window) =>
+					metrics.map(async (m) => {
+						try {
+							const data = await getCachedJobGrid(run.jobId, run.modelName, window.value, m.value);
+							return { run, windowValue: window.value, metricValue: m.value, data };
+						} catch (e) {
+							return {
+								run,
+								windowValue: window.value,
+								metricValue: m.value,
+								error: e instanceof Error ? e.message : 'Failed to load'
+							};
+						}
+					})
+				)
 			)
 		);
 		if (requestId !== loadRequestId) return;
@@ -946,9 +1000,10 @@
 		const dataByRunMetric: Record<string, JobGridResponse> = {};
 		for (const r of results) {
 			if ('data' in r) {
-				dataByRunMetric[rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue)] = r.data;
+				dataByRunMetric[rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue, r.windowValue)] =
+					r.data;
 				if (r.run.modelName === 'climatology') {
-					climByMetric[r.metricValue] = r.data;
+					climByMetric[`${r.windowValue}||${r.metricValue}`] = r.data;
 				}
 			}
 		}
@@ -958,7 +1013,11 @@
 		const sharedRangeByMetric: Record<string, { min: number; max: number }> = {};
 		for (const metric of metrics) {
 			const values = modelRuns
-				.map((run) => dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value)])
+				.flatMap((run) =>
+					activeWindows.map(
+						(window) => dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
+					)
+				)
 				.filter((data): data is JobGridResponse => Boolean(data));
 			if (values.length > 0) {
 				sharedRangeByMetric[metric.value] = {
@@ -971,7 +1030,7 @@
 		// Build raw value layers.
 		const newErrors: Record<string, string> = {};
 		for (const r of results) {
-			const key = rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue);
+			const key = rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue, r.windowValue);
 			if ('error' in r) {
 				if (r.run.modelName !== 'climatology') newErrors[key] = r.error;
 			} else {
@@ -1000,34 +1059,42 @@
 		// Build model-vs-baseline and model-vs-model difference layers.
 		for (const run of modelRuns) {
 			for (const metric of metrics) {
-				const modelData = dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value)];
-				if (!modelData) continue;
-				const references = activeRuns.filter((reference) => !sameRun(reference, run));
-				for (const reference of references) {
-					const referenceData =
-						dataByRunMetric[rawLayerKey(reference.jobId, reference.modelName, metric.value)];
-					if (!referenceData) continue;
-					const key = deltaLayerKey(
-						run.jobId,
-						run.modelName,
-						metric.value,
-						reference.jobId,
-						reference.modelName
-					);
-					const { geojson, maxAbs } = buildDeltaGeojson(modelData, referenceData);
-					addLayerState(key, {
-						layerId: mapLayerId(key),
-						sourceId: mapSourceId(key),
-						data: modelData,
-						geojson,
-						bounds: boundsFromGrid(modelData),
-						stops: DIVERGING_STOPS,
-						isDelta: true,
-						deltaMaxAbs: maxAbs,
-						referenceData,
-						referenceModelName: reference.modelName
-					});
-					opacities = { ...opacities, [key]: previousOpacities[key] ?? 1 };
+				for (const window of activeWindows) {
+					const modelData = dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)];
+					if (!modelData) continue;
+					for (const reference of activeRuns) {
+						for (const referenceWindow of activeWindows) {
+							if (sameRun(reference, run) && referenceWindow.value === window.value) continue;
+							const referenceData =
+								dataByRunMetric[
+									rawLayerKey(reference.jobId, reference.modelName, metric.value, referenceWindow.value)
+								];
+							if (!referenceData) continue;
+							const key = deltaLayerKey(
+								run.jobId,
+								run.modelName,
+								metric.value,
+								window.value,
+								reference.jobId,
+								reference.modelName,
+								referenceWindow.value
+							);
+							const { geojson, maxAbs } = buildDeltaGeojson(modelData, referenceData);
+							addLayerState(key, {
+								layerId: mapLayerId(key),
+								sourceId: mapSourceId(key),
+								data: modelData,
+								geojson,
+								bounds: boundsFromGrid(modelData),
+								stops: DIVERGING_STOPS,
+								isDelta: true,
+								deltaMaxAbs: maxAbs,
+								referenceData,
+								referenceModelName: reference.modelName
+							});
+							opacities = { ...opacities, [key]: previousOpacities[key] ?? 1 };
+						}
+					}
 				}
 			}
 		}
@@ -1132,13 +1199,15 @@
 	$effect(() => {
 		// Only trigger on job set or window changes — do NOT read jobs/metrics directly
 		// as that would re-run loadAll on every poll even when complete jobs are unchanged.
-		if (jobIds && forecastWindow && map && mapReady) untrack(loadAll);
+		if (jobIds && forecastWindow && activeWindowKey && map && mapReady) untrack(loadAll);
 	});
 
 	$effect(() => {
 		selectedMetric;
 		selectedModelJobId;
 		selectedReferenceJobId;
+		selectedWindow;
+		selectedReferenceWindow;
 		viewMode;
 		swipePosition;
 		if (map && mapReady && Object.keys(layers).length > 0) {
@@ -1148,9 +1217,9 @@
 
 	$effect(() => {
 		const cell = selectedCell;
-		if (cell && jobIds && forecastWindow) {
+		if (cell && jobIds && selectedWindow) {
 			const jobsSnapshot = jobs;
-			const window = forecastWindow;
+			const window = selectedWindow;
 			untrack(() => loadCellResults(cell.lat, cell.lon, window, jobsSnapshot));
 		}
 	});
@@ -1161,7 +1230,7 @@
 	});
 </script>
 
-<div class="map-root" class:fullscreen>
+<div class="map-root" class:fullscreen class:compact>
 	{#if anyLoading}
 		<div class="status-overlay">Loading…</div>
 	{/if}
@@ -1190,6 +1259,15 @@
 					<select bind:value={selectedMetric}>
 						{#each metrics as metric}
 							<option value={metric.value}>{metric.label}</option>
+						{/each}
+					</select>
+				</label>
+
+				<label class="control-field">
+					<span>Lead time</span>
+					<select bind:value={selectedWindow}>
+						{#each activeWindows as window}
+							<option value={window.value}>{window.label}</option>
 						{/each}
 					</select>
 				</label>
@@ -1232,8 +1310,16 @@
 							{#if activeRuns.some((run) => run.modelName === 'climatology')}
 								<option value="climatology">Climatology</option>
 							{/if}
-							{#each availableModelRuns().filter((run) => run.jobId !== selectedModelJobId) as run}
+							{#each availableModelRuns() as run}
 								<option value={run.jobId}>{modelRunLabel(run)}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="control-field">
+						<span>Compare lead time</span>
+						<select bind:value={selectedReferenceWindow}>
+							{#each activeWindows as window}
+								<option value={window.value}>{window.label}</option>
 							{/each}
 						</select>
 					</label>
@@ -1286,11 +1372,11 @@
 		{#if currentSwipeRuns}
 			<div class="swipe-label swipe-label-left">
 				<span>Left</span>
-				<strong>{modelRunLabel(currentSwipeRuns.left)}</strong>
+				<strong>{modelRunLabel(currentSwipeRuns.left)} · {windowLabelFor(selectedWindow)}</strong>
 			</div>
 			<div class="swipe-label swipe-label-right">
 				<span>Right</span>
-				<strong>{modelRunLabel(currentSwipeRuns.right)}</strong>
+				<strong>{modelRunLabel(currentSwipeRuns.right)} · {windowLabelFor(selectedReferenceWindow)}</strong>
 			</div>
 		{/if}
 		<div class="swipe-split" style="left: {swipePosition}%">
@@ -1317,14 +1403,16 @@
 	{#if visibleLayers.length > 0}
 		<div class="legend">
 			{#each visibleLayers as vl, i}
-				{@const { modelName: vModel, metric: vMetric } = parseKey(vl.key)}
+				{@const { modelName: vModel, metric: vMetric, window: vWindow, referenceWindow } = parseKey(vl.key)}
 				{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
 				{@const displayName = modelDisplayName(vModel)}
 				{@const referenceName = vl.referenceModelName ? modelDisplayName(vl.referenceModelName) : null}
 				{#if i > 0}<div class="legend-divider"></div>{/if}
 				<div class="legend-title">
-					{displayName} — {metricLabel(vMetric)}
-					{#if vl.isDelta && referenceName}<span class="legend-delta-badge">Δ vs {referenceName}</span>{/if}
+					{displayName} · {windowLabelFor(vWindow)} — {metricLabel(vMetric)}
+					{#if vl.isDelta && referenceName}
+						<span class="legend-delta-badge">Δ vs {referenceName} · {windowLabelFor(referenceWindow)}</span>
+					{/if}
 				</div>
 				<div class="scale-bar" style="background: {gradient}"></div>
 				{#if vl.isDelta && vl.deltaMaxAbs != null}
@@ -1371,7 +1459,7 @@
 	{#if selectedCell}
 		<GridCellInspector
 			cell={selectedCell}
-			{forecastWindow}
+			forecastWindow={selectedWindow}
 			{metrics}
 			results={cellResults}
 			loading={cellLoading}
@@ -1404,6 +1492,10 @@
 		border-radius: 0;
 		z-index: 900;
 		border: none;
+	}
+
+	.map-root.compact {
+		height: 430px;
 	}
 
 	:global(.map-root.fullscreen.obscured-by-lightbox) {
