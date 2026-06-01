@@ -118,7 +118,8 @@
 		stops: string[];
 		isDelta: boolean;
 		deltaMaxAbs?: number;
-		climData?: JobGridResponse; // present on delta layers for tooltip computation
+		referenceData?: JobGridResponse; // present on delta layers for tooltip computation
+		referenceModelName?: string;
 	};
 
 	type BoundaryLevel = 'adm1' | 'adm2';
@@ -180,6 +181,11 @@
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
+	type MapViewMode = 'single' | 'baseline' | 'difference';
+	let viewMode = $state<MapViewMode>('baseline');
+	let selectedMetric = $state('');
+	let selectedModelJobId = $state('');
+	let selectedReferenceJobId = $state('climatology');
 	let loadRequestId = 0;
 	const boundaryRegion = $derived(jobs[0]?.region_id ?? jobs[0]?.params?.region);
 
@@ -217,13 +223,23 @@
 
 	// ---- Key helpers -------------------------------------------------------------
 
-	function layerKey(jobId: string, modelName: string, metric: string) {
-		return `${jobId}||${modelName}||${metric}`;
+	function rawLayerKey(jobId: string, modelName: string, metric: string) {
+		return `raw||${jobId}||${modelName}||${metric}`;
+	}
+
+	function deltaLayerKey(
+		jobId: string,
+		modelName: string,
+		metric: string,
+		referenceJobId: string,
+		referenceModelName: string
+	) {
+		return `delta||${jobId}||${modelName}||${metric}||${referenceJobId}||${referenceModelName}`;
 	}
 
 	function parseKey(key: string) {
-		const [jobId, modelName, metric] = key.split('||');
-		return { jobId, modelName, metric };
+		const [kind, jobId, modelName, metric, referenceJobId, referenceModelName] = key.split('||');
+		return { kind, jobId, modelName, metric, referenceJobId, referenceModelName };
 	}
 
 	function metricLabel(metricValue: string) {
@@ -239,6 +255,79 @@
 			climatology: 'Climatology'
 		};
 		return labels[modelName.toLowerCase()] ?? modelName;
+	}
+
+	function modelRunLabel(run: RunDef) {
+		return modelDisplayName(run.modelName);
+	}
+
+	function availableModelRuns() {
+		return activeRuns.filter((run) => run.modelName !== 'climatology');
+	}
+
+	function selectedModelRun() {
+		return availableModelRuns().find((run) => run.jobId === selectedModelJobId) ?? availableModelRuns()[0];
+	}
+
+	function selectedReferenceRun() {
+		if (selectedReferenceJobId === 'climatology') {
+			return activeRuns.find((run) => run.modelName === 'climatology');
+		}
+		return availableModelRuns().find((run) => run.jobId === selectedReferenceJobId);
+	}
+
+	function normalizeLensSelection() {
+		const modelRuns = availableModelRuns();
+		if (selectedMetric && !metrics.some((metric) => metric.value === selectedMetric)) {
+			selectedMetric = metrics[0]?.value ?? '';
+		}
+		if (selectedModelJobId && !modelRuns.some((run) => run.jobId === selectedModelJobId)) {
+			selectedModelJobId = modelRuns[0]?.jobId ?? '';
+		}
+		if (selectedReferenceJobId === selectedModelJobId) {
+			const climatologyRun = activeRuns.find((run) => run.modelName === 'climatology');
+			selectedReferenceJobId =
+				climatologyRun?.jobId === selectedModelJobId
+					? (modelRuns.find((run) => run.jobId !== selectedModelJobId)?.jobId ?? '')
+					: 'climatology';
+		}
+	}
+
+	function currentLensKey() {
+		normalizeLensSelection();
+		const modelRun = selectedModelRun();
+		if (!modelRun || !selectedMetric) return null;
+		if (viewMode === 'single') {
+			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric);
+		}
+		const referenceRun =
+			viewMode === 'baseline'
+				? activeRuns.find((run) => run.modelName === 'climatology')
+				: selectedReferenceRun();
+		if (!referenceRun || referenceRun.jobId === modelRun.jobId) {
+			return rawLayerKey(modelRun.jobId, modelRun.modelName, selectedMetric);
+		}
+		return deltaLayerKey(
+			modelRun.jobId,
+			modelRun.modelName,
+			selectedMetric,
+			referenceRun.jobId,
+			referenceRun.modelName
+		);
+	}
+
+	function applyLensSelection(fit = false) {
+		const key = currentLensKey();
+		const nextVisibleKeys = key && layers[key] ? new Set([key]) : new Set<string>();
+		for (const [layerKey, state] of Object.entries(layers)) {
+			if (!map?.getLayer(state.layerId)) continue;
+			map.setLayoutProperty(state.layerId, 'visibility', nextVisibleKeys.has(layerKey) ? 'visible' : 'none');
+			if (nextVisibleKeys.has(layerKey)) {
+				map.setPaintProperty(state.layerId, 'fill-opacity', opacities[layerKey] ?? 1);
+			}
+		}
+		visibleKeys = nextVisibleKeys;
+		if (fit && key && layers[key]) fitToLayer(layers[key]);
 	}
 
 	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
@@ -317,9 +406,9 @@
 				const { metric } = parseKey(key);
 				const val = getValueAtLatLon(ls.data, lat, lon);
 				if (val == null) return `<span class="tt-metric">${metricLabel(metric)}: —</span>`;
-				if (ls.isDelta && ls.climData) {
-					const climVal = getValueAtLatLon(ls.climData, lat, lon);
-					const delta = climVal != null ? val - climVal : null;
+				if (ls.isDelta && ls.referenceData) {
+					const referenceVal = getValueAtLatLon(ls.referenceData, lat, lon);
+					const delta = referenceVal != null ? val - referenceVal : null;
 					const deltaStr =
 						delta != null
 							? ` <span class="tt-delta">(Δ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})</span>`
@@ -436,11 +525,11 @@
 		return { type: 'FeatureCollection', features };
 	}
 
-	// Build a layer colored by (model − climatology) delta using a diverging scale.
+	// Build a layer colored by (model − reference) delta using a diverging scale.
 	// Returns the layer and the symmetric maxAbs used for the scale.
 	function buildDeltaGeojson(
 		data: JobGridResponse,
-		climData: JobGridResponse
+		referenceData: JobGridResponse
 	): { geojson: GridFeatureCollection; maxAbs: number } {
 		const { lats, lons, values } = data;
 		const features: GridFeature[] = [];
@@ -450,9 +539,9 @@
 		const deltas: (number | null)[][] = lats.map((_, i) =>
 			lons.map((__, j) => {
 				const modelVal = values[i]?.[j];
-				const climVal = climData.values[i]?.[j];
-				if (modelVal == null || climVal == null) return null;
-				return modelVal - climVal;
+				const referenceVal = referenceData.values[i]?.[j];
+				if (modelVal == null || referenceVal == null) return null;
+				return modelVal - referenceVal;
 			})
 		);
 		let maxAbs = 0;
@@ -487,7 +576,7 @@
 					type: 'Feature',
 					properties: {
 						color,
-						displayVal: `${data.metric}: ${modelVal.toFixed(3)} (Delta vs climatology: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`,
+						displayVal: `${data.metric}: ${modelVal.toFixed(3)} (Delta: ${delta >= 0 ? '+' : ''}${delta.toFixed(3)})`,
 						lat,
 						lon
 					},
@@ -660,33 +749,6 @@
 		}
 	}
 
-	function toggleLayer(key: string) {
-		const next = new Set(visibleKeys);
-		if (next.has(key)) {
-			next.delete(key);
-			if (layers[key] && map?.getLayer(layers[key].layerId)) {
-				map.setLayoutProperty(layers[key].layerId, 'visibility', 'none');
-			}
-		} else {
-			next.add(key);
-			if (layers[key]) {
-				if (map?.getLayer(layers[key].layerId)) {
-					map.setLayoutProperty(layers[key].layerId, 'visibility', 'visible');
-					map.setPaintProperty(layers[key].layerId, 'fill-opacity', opacities[key] ?? 1);
-				}
-				if (visibleKeys.size === 0) fitToLayer(layers[key]);
-			}
-		}
-		visibleKeys = next;
-	}
-
-	function setOpacity(key: string, value: number) {
-		opacities = { ...opacities, [key]: value };
-		if (layers[key] && map?.getLayer(layers[key].layerId)) {
-			map.setPaintProperty(layers[key].layerId, 'fill-opacity', value);
-		}
-	}
-
 	// ---- Full load (called when jobs or window changes) --------------------------
 
 	async function loadAll() {
@@ -729,16 +791,29 @@
 			colorIndex: jobs.length // distinct color index after all model colors
 		};
 
-		const firstKey = layerKey(modelRuns[0].jobId, modelRuns[0].modelName, metrics[0].value);
+		const firstMetric = metrics[0].value;
+		if (!selectedMetric || !metrics.some((metric) => metric.value === selectedMetric)) {
+			selectedMetric = firstMetric;
+		}
+		if (!selectedModelJobId || !modelRuns.some((run) => run.jobId === selectedModelJobId)) {
+			selectedModelJobId = modelRuns[0].jobId;
+		}
+		if (
+			selectedReferenceJobId !== 'climatology' &&
+			!modelRuns.some((run) => run.jobId === selectedReferenceJobId)
+		) {
+			selectedReferenceJobId = 'climatology';
+		}
+		if (selectedReferenceJobId === selectedModelJobId) {
+			selectedReferenceJobId = 'climatology';
+		}
 
 		// Mark all keys as loading
 		const fetchRuns = [...modelRuns, climRun];
 		const allKeys = fetchRuns.flatMap((run) =>
-			metrics.map((m) => layerKey(run.jobId, run.modelName, m.value))
+			metrics.map((m) => rawLayerKey(run.jobId, run.modelName, m.value))
 		);
-		const allKeySet = new Set(allKeys);
-		const preservedVisibleKeys = [...previousVisibleKeys].filter((key) => allKeySet.has(key));
-		visibleKeys = new Set(preservedVisibleKeys.length > 0 ? preservedVisibleKeys : [firstKey]);
+		visibleKeys = new Set([...previousVisibleKeys].filter((key) => allKeys.includes(key)));
 		opacities = Object.fromEntries(allKeys.map((key) => [key, previousOpacities[key] ?? 1]));
 		loading = new Set(allKeys);
 
@@ -766,18 +841,22 @@
 
 		// Index climatology data by metric for delta computation
 		const climByMetric: Record<string, JobGridResponse> = {};
+		const dataByRunMetric: Record<string, JobGridResponse> = {};
 		for (const r of results) {
-			if ('data' in r && r.run.modelName === 'climatology') {
-				climByMetric[r.metricValue] = r.data;
+			if ('data' in r) {
+				dataByRunMetric[rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue)] = r.data;
+				if (r.run.modelName === 'climatology') {
+					climByMetric[r.metricValue] = r.data;
+				}
 			}
 		}
 		const hasClimatology = Object.keys(climByMetric).length > 0;
 		activeRuns = hasClimatology ? [...modelRuns, climRun] : modelRuns;
 
-		// Build and register layers
+		// Build raw value layers.
 		const newErrors: Record<string, string> = {};
 		for (const r of results) {
-			const key = layerKey(r.run.jobId, r.run.modelName, r.metricValue);
+			const key = rawLayerKey(r.run.jobId, r.run.modelName, r.metricValue);
 			if ('error' in r) {
 				if (r.run.modelName !== 'climatology') newErrors[key] = r.error;
 			} else {
@@ -785,54 +864,51 @@
 				const layerId = mapLayerId(key);
 				const sourceId = mapSourceId(key);
 				const bounds = boundsFromGrid(data);
-				if (run.modelName === 'climatology') {
-					const stops = getStops(metricValue, run.colorIndex);
-					const geojson = buildRawGeojson(data, stops);
-					addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
-				} else {
-					const climData = climByMetric[metricValue];
-					if (climData) {
-						const { geojson, maxAbs } = buildDeltaGeojson(data, climData);
-						addLayerState(key, {
-							layerId,
-							sourceId,
-							data,
-							geojson,
-							bounds,
-							stops: DIVERGING_STOPS,
-							isDelta: true,
-							deltaMaxAbs: maxAbs,
-							climData
-						});
-					} else {
-						// Fallback to raw if clim unavailable
-						const stops = getStops(metricValue, run.colorIndex);
-						const geojson = buildRawGeojson(data, stops);
-						addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
-					}
+				const stops = getStops(metricValue, run.colorIndex);
+				const geojson = buildRawGeojson(data, stops);
+				addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
+			}
+		}
+
+		// Build model-vs-baseline and model-vs-model difference layers.
+		for (const run of modelRuns) {
+			for (const metric of metrics) {
+				const modelData = dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value)];
+				if (!modelData) continue;
+				const references = activeRuns.filter((reference) => reference.jobId !== run.jobId);
+				for (const reference of references) {
+					const referenceData =
+						dataByRunMetric[rawLayerKey(reference.jobId, reference.modelName, metric.value)];
+					if (!referenceData) continue;
+					const key = deltaLayerKey(
+						run.jobId,
+						run.modelName,
+						metric.value,
+						reference.jobId,
+						reference.modelName
+					);
+					const { geojson, maxAbs } = buildDeltaGeojson(modelData, referenceData);
+					addLayerState(key, {
+						layerId: mapLayerId(key),
+						sourceId: mapSourceId(key),
+						data: modelData,
+						geojson,
+						bounds: boundsFromGrid(modelData),
+						stops: DIVERGING_STOPS,
+						isDelta: true,
+						deltaMaxAbs: maxAbs,
+						referenceData,
+						referenceModelName: reference.modelName
+					});
+					opacities = { ...opacities, [key]: previousOpacities[key] ?? 1 };
 				}
 			}
 		}
 		errors = newErrors;
 		loading = new Set();
 
-		const loadedVisibleKeys = [...visibleKeys].filter((key) => layers[key]);
-		if (loadedVisibleKeys.length === 0) {
-			const firstLoadedKey = allKeys.find((key) => layers[key]);
-			visibleKeys = firstLoadedKey ? new Set([firstLoadedKey]) : new Set();
-			if (firstLoadedKey) {
-				map.setLayoutProperty(layers[firstLoadedKey].layerId, 'visibility', 'visible');
-				map.setPaintProperty(
-					layers[firstLoadedKey].layerId,
-					'fill-opacity',
-					opacities[firstLoadedKey] ?? 1
-				);
-			}
-		} else if (loadedVisibleKeys.length !== visibleKeys.size) {
-			visibleKeys = new Set(loadedVisibleKeys);
-		}
-
-		const firstVisibleKey = [...visibleKeys].find((key) => layers[key]);
+		applyLensSelection(true);
+		const firstVisibleKey = [...visibleKeys][0];
 		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey]);
 
 		if (Object.values(layers).length > 0) {
@@ -915,6 +991,16 @@
 	});
 
 	$effect(() => {
+		selectedMetric;
+		selectedModelJobId;
+		selectedReferenceJobId;
+		viewMode;
+		if (map && mapReady && Object.keys(layers).length > 0) {
+			untrack(() => applyLensSelection(false));
+		}
+	});
+
+	$effect(() => {
 		const cell = selectedCell;
 		if (cell && jobIds && forecastWindow) {
 			const jobsSnapshot = jobs;
@@ -944,14 +1030,68 @@
 
 	<div bind:this={mapContainer} class="map-instance"></div>
 
-	<!-- Layer panel -->
-	<div class="layer-panel" class:collapsed={panelCollapsed}>
+	<!-- Result lens -->
+	<div class="layer-panel result-lens" class:collapsed={panelCollapsed}>
 		<button class="layer-panel-header" onclick={() => (panelCollapsed = !panelCollapsed)}>
-			<span class="layer-panel-title">Layers</span>
+			<span class="layer-panel-title">Result lens</span>
 			<span class="panel-toggle">{panelCollapsed ? '▸' : '▾'}</span>
 		</button>
 
 		{#if !panelCollapsed}
+			<div class="lens-controls">
+				<label class="control-field">
+					<span>Metric</span>
+					<select bind:value={selectedMetric}>
+						{#each metrics as metric}
+							<option value={metric.value}>{metric.label}</option>
+						{/each}
+					</select>
+				</label>
+
+				<div class="view-toggle" aria-label="Map view">
+					<button class:active={viewMode === 'single'} onclick={() => (viewMode = 'single')}>
+						Values
+					</button>
+					<button
+						class:active={viewMode === 'baseline'}
+						onclick={() => {
+							viewMode = 'baseline';
+							selectedReferenceJobId = 'climatology';
+						}}
+					>
+						Skill
+					</button>
+					<button class:active={viewMode === 'difference'} onclick={() => (viewMode = 'difference')}>
+						Difference
+					</button>
+				</div>
+
+				<label class="control-field">
+					<span>Model</span>
+					<select bind:value={selectedModelJobId}>
+						{#each availableModelRuns() as run}
+							<option value={run.jobId}>{modelRunLabel(run)}</option>
+						{/each}
+					</select>
+				</label>
+
+				{#if viewMode === 'difference'}
+					<label class="control-field">
+						<span>Compare with</span>
+						<select bind:value={selectedReferenceJobId}>
+							{#if activeRuns.some((run) => run.modelName === 'climatology')}
+								<option value="climatology">Climatology</option>
+							{/if}
+							{#each availableModelRuns().filter((run) => run.jobId !== selectedModelJobId) as run}
+								<option value={run.jobId}>{modelRunLabel(run)}</option>
+							{/each}
+						</select>
+					</label>
+				{:else if viewMode === 'baseline'}
+					<p class="lens-note">Showing change relative to climatology. Blue is better for error metrics.</p>
+				{/if}
+			</div>
+
 			<div class="boundary-group">
 				<div class="run-header">
 					<span class="run-label">Boundaries</span>
@@ -982,61 +1122,6 @@
 					</div>
 				{/each}
 			</div>
-
-			{#each activeRuns as run}
-				<div class="run-group" class:clim-group={run.modelName === 'climatology'}>
-					<div class="run-header">
-						<span class="run-label">{modelDisplayName(run.modelName)}</span>
-						{#if run.modelName === 'climatology'}
-							<span class="clim-badge">baseline</span>
-						{/if}
-					</div>
-
-					{#each metrics as m}
-						{@const key = layerKey(run.jobId, run.modelName, m.value)}
-						{@const isVisible = visibleKeys.has(key)}
-						{@const isLoading = loading.has(key)}
-						{@const err = errors[key]}
-						{@const opacity = opacities[key] ?? 1}
-
-						<div class="layer-item" class:visible={isVisible}>
-							<button
-								class="layer-row"
-								onclick={() => toggleLayer(key)}
-								disabled={isLoading || !!err}
-							>
-								<span class="layer-checkbox" class:checked={isVisible}>
-									{#if isVisible}<span class="checkmark">✓</span>{/if}
-								</span>
-								<span class="layer-label">{m.label}</span>
-								{#if isLoading}
-									<span class="layer-spinner"></span>
-								{:else if err}
-									<span class="layer-error" title={err}>✕</span>
-								{/if}
-							</button>
-
-							{#if isVisible}
-								<div class="opacity-row">
-									<span class="opacity-icon">◑</span>
-									<input
-										type="range"
-										min="0"
-										max="1"
-										step="0.05"
-										value={opacity}
-										oninput={(e) =>
-											setOpacity(key, parseFloat((e.target as HTMLInputElement).value))}
-										class="opacity-slider"
-										style="--pct: {Math.round(opacity * 100)}%"
-									/>
-									<span class="opacity-value">{Math.round(opacity * 100)}</span>
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{/each}
 		{/if}
 	</div>
 
@@ -1053,10 +1138,11 @@
 				{@const { modelName: vModel, metric: vMetric } = parseKey(vl.key)}
 				{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
 				{@const displayName = modelDisplayName(vModel)}
+				{@const referenceName = vl.referenceModelName ? modelDisplayName(vl.referenceModelName) : null}
 				{#if i > 0}<div class="legend-divider"></div>{/if}
 				<div class="legend-title">
 					{displayName} — {metricLabel(vMetric)}
-					{#if vl.isDelta}<span class="legend-delta-badge">Δ vs climatology</span>{/if}
+					{#if vl.isDelta && referenceName}<span class="legend-delta-badge">Δ vs {referenceName}</span>{/if}
 				</div>
 				<div class="scale-bar" style="background: {gradient}"></div>
 				{#if vl.isDelta && vl.deltaMaxAbs != null}
@@ -1216,10 +1302,79 @@
 		border: 1px solid #ccc;
 		border-radius: 0.4rem;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-		width: 190px;
+		width: clamp(14rem, 24vw, 20rem);
 		overflow: hidden;
 		max-height: calc(100% - 1.5rem);
 		overflow-y: auto;
+	}
+
+	.lens-controls {
+		display: flex;
+		flex-direction: column;
+		gap: 0.65rem;
+		padding: 0.65rem;
+		border-top: 1px solid #e1e5ea;
+		background: rgba(250, 248, 242, 0.96);
+	}
+
+	.control-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.control-field span {
+		font-size: 0.58rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.09em;
+		color: #6f6b62;
+	}
+
+	.control-field select {
+		width: 100%;
+		min-width: 0;
+		border: 1px solid #d7d0c2;
+		border-radius: 0.35rem;
+		background: rgba(255, 255, 255, 0.9);
+		color: #2d2a25;
+		font: inherit;
+		font-size: 0.78rem;
+		padding: 0.45rem 0.5rem;
+	}
+
+	.view-toggle {
+		display: flex;
+		padding: 0.18rem;
+		border: 1px solid #d7d0c2;
+		border-radius: 0.45rem;
+		background: #eee8dd;
+	}
+
+	.view-toggle button {
+		flex: 1;
+		border: none;
+		border-radius: 0.32rem;
+		background: transparent;
+		color: #6f6b62;
+		font: inherit;
+		font-size: 0.68rem;
+		font-weight: 700;
+		padding: 0.35rem 0.3rem;
+		cursor: pointer;
+	}
+
+	.view-toggle button.active {
+		background: white;
+		color: var(--color-accent);
+		box-shadow: 0 1px 3px rgba(31, 26, 18, 0.12);
+	}
+
+	.lens-note {
+		margin: 0;
+		font-size: 0.68rem;
+		line-height: 1.35;
+		color: #6f6b62;
 	}
 
 	.layer-panel-header {
@@ -1253,16 +1408,6 @@
 		color: #aaa;
 	}
 
-	/* ---- Run groups ---- */
-	.run-group {
-		border-top: 1px solid #e8e8e8;
-	}
-
-	.clim-group {
-		border-top: 2px solid #e8e8e8;
-		background: rgba(0, 0, 0, 0.015);
-	}
-
 	.boundary-group {
 		border-top: 1px solid #e1e5ea;
 		background: rgba(246, 248, 250, 0.88);
@@ -1279,18 +1424,6 @@
 		font-size: 0.72rem;
 		font-weight: 700;
 		color: #222;
-	}
-
-	.clim-badge {
-		font-size: 0.52rem;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
-		color: #7a5c9a;
-		background: #f3eafa;
-		border: 1px solid #d9b8f0;
-		padding: 0.05rem 0.35rem;
-		border-radius: 0.25rem;
 	}
 
 	/* ---- Layer rows ---- */
@@ -1397,67 +1530,6 @@
 		line-height: 1.25;
 	}
 
-	/* ---- Opacity slider ---- */
-	.opacity-row {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		padding: 0.05rem 0.5rem 0.35rem;
-		background: rgba(0, 0, 0, 0.03);
-		box-sizing: border-box;
-		width: 100%;
-		min-width: 0;
-	}
-	.opacity-icon {
-		font-size: 0.7rem;
-		color: #999;
-		flex-shrink: 0;
-	}
-
-	.opacity-slider {
-		flex: 1;
-		min-width: 0;
-		height: 6px;
-		appearance: none;
-		background: linear-gradient(
-			to right,
-			var(--color-accent, #3b82f6) 0%,
-			var(--color-accent, #3b82f6) var(--pct, 100%),
-			#ddd var(--pct, 100%),
-			#ddd 100%
-		);
-		border-radius: 3px;
-		outline: none;
-		cursor: pointer;
-	}
-	.opacity-slider::-webkit-slider-thumb {
-		appearance: none;
-		width: 13px;
-		height: 13px;
-		border-radius: 50%;
-		background: white;
-		border: 2px solid var(--color-accent, #3b82f6);
-		cursor: pointer;
-		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-	}
-	.opacity-slider::-moz-range-thumb {
-		width: 13px;
-		height: 13px;
-		border-radius: 50%;
-		background: white;
-		border: 2px solid var(--color-accent, #3b82f6);
-		cursor: pointer;
-		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-	}
-	.opacity-value {
-		font-size: 0.62rem;
-		font-family: var(--font-mono);
-		color: #555;
-		width: 1.8rem;
-		text-align: right;
-		flex-shrink: 0;
-	}
-
 	/* ---- Tooltip ---- */
 	.tooltip {
 		position: absolute;
@@ -1507,15 +1579,16 @@
 	/* ---- Legend ---- */
 	.legend {
 		position: absolute;
-		bottom: 1.5rem;
-		right: 1.5rem;
+		bottom: 1rem;
+		left: 50%;
+		transform: translateX(-50%);
 		z-index: 20;
 		background: rgba(255, 255, 255, 0.92);
 		padding: 0.6rem 0.75rem;
 		border-radius: 0.4rem;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 		border: 1px solid #ccc;
-		min-width: 160px;
+		width: min(24rem, calc(100% - 7rem));
 		display: flex;
 		flex-direction: column;
 		gap: 0.1rem;
