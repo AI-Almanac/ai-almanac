@@ -101,6 +101,10 @@
 		return scales[colorIndex % scales.length];
 	}
 
+	function sharedStops(metricValue: string): string[] {
+		return getStops(metricValue, 0);
+	}
+
 	function isHigherBetterMetric(metricValue: string): boolean {
 		return metricValue === 'acc';
 	}
@@ -283,6 +287,14 @@
 			return activeRuns.find((run) => run.modelName === 'climatology');
 		}
 		return availableModelRuns().find((run) => run.jobId === selectedReferenceJobId);
+	}
+
+	function swipeRuns() {
+		if (viewMode !== 'swipe') return null;
+		const modelRun = selectedModelRun();
+		const referenceRun = selectedReferenceRun();
+		if (!modelRun || !referenceRun || sameRun(modelRun, referenceRun)) return null;
+		return { left: modelRun, right: referenceRun };
 	}
 
 	function sameRun(a: RunDef, b: RunDef) {
@@ -604,6 +616,15 @@
 			}
 		}
 		return { type: 'FeatureCollection', features };
+	}
+
+	function buildSharedRawGeojson(
+		data: JobGridResponse,
+		stops: string[],
+		min: number,
+		max: number
+	): GridFeatureCollection {
+		return buildRawGeojson({ ...data, min, max }, stops);
 	}
 
 	// Build a layer colored by (model − reference) delta using a diverging scale.
@@ -934,6 +955,19 @@
 		const hasClimatology = Object.keys(climByMetric).length > 0;
 		activeRuns = hasClimatology ? [...modelRuns, climRun] : modelRuns;
 
+		const sharedRangeByMetric: Record<string, { min: number; max: number }> = {};
+		for (const metric of metrics) {
+			const values = modelRuns
+				.map((run) => dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value)])
+				.filter((data): data is JobGridResponse => Boolean(data));
+			if (values.length > 0) {
+				sharedRangeByMetric[metric.value] = {
+					min: Math.min(...values.map((data) => data.min)),
+					max: Math.max(...values.map((data) => data.max))
+				};
+			}
+		}
+
 		// Build raw value layers.
 		const newErrors: Record<string, string> = {};
 		for (const r of results) {
@@ -945,9 +979,21 @@
 				const layerId = mapLayerId(key);
 				const sourceId = mapSourceId(key);
 				const bounds = boundsFromGrid(data);
-				const stops = getStops(metricValue, run.colorIndex);
-				const geojson = buildRawGeojson(data, stops);
-				addLayerState(key, { layerId, sourceId, data, geojson, bounds, stops, isDelta: false });
+				const sharedRange = run.modelName === 'climatology' ? null : sharedRangeByMetric[metricValue];
+				const stops = run.modelName === 'climatology' ? getStops(metricValue, run.colorIndex) : sharedStops(metricValue);
+				const geojson = sharedRange
+					? buildSharedRawGeojson(data, stops, sharedRange.min, sharedRange.max)
+					: buildRawGeojson(data, stops);
+				const displayData = sharedRange ? { ...data, min: sharedRange.min, max: sharedRange.max } : data;
+				addLayerState(key, {
+					layerId,
+					sourceId,
+					data: displayData,
+					geojson,
+					bounds,
+					stops,
+					isDelta: false
+				});
 			}
 		}
 
@@ -1236,6 +1282,17 @@
 	{/if}
 
 	{#if viewMode === 'swipe' && visibleLayers.length === 2}
+		{@const currentSwipeRuns = swipeRuns()}
+		{#if currentSwipeRuns}
+			<div class="swipe-label swipe-label-left">
+				<span>Left</span>
+				<strong>{modelRunLabel(currentSwipeRuns.left)}</strong>
+			</div>
+			<div class="swipe-label swipe-label-right">
+				<span>Right</span>
+				<strong>{modelRunLabel(currentSwipeRuns.right)}</strong>
+			</div>
+		{/if}
 		<div class="swipe-split" style="left: {swipePosition}%">
 			<div class="swipe-line"></div>
 			<div
@@ -1753,6 +1810,47 @@
 		box-shadow:
 			0 0 0 3px rgba(67, 122, 111, 0.25),
 			0 0.35rem 1.2rem rgba(0, 0, 0, 0.22);
+	}
+
+	.swipe-label {
+		position: absolute;
+		top: 50%;
+		z-index: 22;
+		display: flex;
+		align-items: baseline;
+		gap: 0.45rem;
+		max-width: min(14rem, 32%);
+		padding: 0.45rem 0.65rem;
+		border: 1px solid rgba(213, 207, 194, 0.86);
+		border-radius: 0.4rem;
+		background: rgba(255, 255, 255, 0.9);
+		color: #2d2a25;
+		box-shadow: 0 0.2rem 0.75rem rgba(0, 0, 0, 0.14);
+		pointer-events: none;
+		transform: translateY(-50%);
+	}
+
+	.swipe-label-left {
+		left: 1rem;
+	}
+
+	.swipe-label-right {
+		right: 1rem;
+	}
+
+	.swipe-label span {
+		font-size: 0.55rem;
+		font-weight: 800;
+		letter-spacing: 0.09em;
+		text-transform: uppercase;
+		color: #7a756b;
+	}
+
+	.swipe-label strong {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.78rem;
 	}
 
 	/* ---- Legend ---- */
