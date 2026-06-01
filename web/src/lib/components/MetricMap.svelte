@@ -207,6 +207,7 @@
 	let tooltipX = $state(0);
 	let tooltipY = $state(0);
 	let tooltipContent = $state('');
+	let gridCellHover = $state(false);
 	let selectedCell = $state<{ lat: number; lon: number } | null>(null);
 	let cellResults = $state<JobCellResponse[]>([]);
 	let cellLoading = $state(false);
@@ -1012,7 +1013,7 @@
 
 		const sharedRangeByMetric: Record<string, { min: number; max: number }> = {};
 		for (const metric of metrics) {
-			const values = modelRuns
+			const values = activeRuns
 				.flatMap((run) =>
 					activeWindows.map(
 						(window) => dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
@@ -1038,8 +1039,8 @@
 				const layerId = mapLayerId(key);
 				const sourceId = mapSourceId(key);
 				const bounds = boundsFromGrid(data);
-				const sharedRange = run.modelName === 'climatology' ? null : sharedRangeByMetric[metricValue];
-				const stops = run.modelName === 'climatology' ? getStops(metricValue, run.colorIndex) : sharedStops(metricValue);
+				const sharedRange = sharedRangeByMetric[metricValue];
+				const stops = sharedStops(metricValue);
 				const geojson = sharedRange
 					? buildSharedRawGeojson(data, stops, sharedRange.min, sharedRange.max)
 					: buildRawGeojson(data, stops);
@@ -1162,10 +1163,10 @@
 				tooltipX = e.point.x + 14;
 				tooltipY = e.point.y - 10;
 				tooltipVisible = true;
-				mapContainer!.style.cursor = 'crosshair';
+				gridCellHover = true;
 			} else {
 				tooltipVisible = false;
-				mapContainer!.style.cursor = '';
+				gridCellHover = false;
 			}
 		});
 
@@ -1180,6 +1181,11 @@
 			const lon = feature?.properties?.lon;
 			if (typeof lat !== 'number' || typeof lon !== 'number') return;
 			openCellInspector(lat, lon);
+		});
+
+		map.on('mouseleave', () => {
+			tooltipVisible = false;
+			gridCellHover = false;
 		});
 
 		return () => {
@@ -1231,108 +1237,240 @@
 </script>
 
 <div class="map-root" class:fullscreen class:compact>
-	{#if anyLoading}
-		<div class="status-overlay">Loading…</div>
-	{/if}
+	<div class="map-stage" class:grid-cell-hover={gridCellHover}>
+		{#if anyLoading}
+			<div class="status-overlay">Loading…</div>
+		{/if}
 
-	<button
-		class="fullscreen-btn"
-		onclick={() => (fullscreen = !fullscreen)}
-		title={fullscreen ? 'Exit fullscreen' : 'Expand map'}
-	>
-		{#if fullscreen}⤡{:else}⤢{/if}
-	</button>
+		<button
+			class="fullscreen-btn"
+			onclick={() => (fullscreen = !fullscreen)}
+			title={fullscreen ? 'Exit fullscreen' : 'Expand map'}
+		>
+			{#if fullscreen}⤡{:else}⤢{/if}
+		</button>
 
-	<div bind:this={mapContainer} class="map-instance"></div>
+		<div bind:this={mapContainer} class="map-instance"></div>
 
-	<!-- Result lens -->
+		{#if tooltipVisible}
+			<div class="tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
+				{@html tooltipContent}
+			</div>
+		{/if}
+
+		{#if viewMode === 'swipe' && visibleLayers.length === 2}
+			{@const currentSwipeRuns = swipeRuns()}
+			{#if currentSwipeRuns}
+				<div class="swipe-label swipe-label-left">
+					<span>Left</span>
+					<strong>{modelRunLabel(currentSwipeRuns.left)} · {windowLabelFor(selectedWindow)}</strong>
+				</div>
+				<div class="swipe-label swipe-label-right">
+					<span>Right</span>
+					<strong>{modelRunLabel(currentSwipeRuns.right)} · {windowLabelFor(selectedReferenceWindow)}</strong>
+				</div>
+			{/if}
+			<div class="swipe-split" style="left: {swipePosition}%">
+				<div class="swipe-line"></div>
+				<div
+					class="swipe-handle"
+					class:dragging={draggingSwipe}
+					onpointerdown={startSwipeDrag}
+					onkeydown={moveSwipeWithKeyboard}
+					role="slider"
+					tabindex="0"
+					aria-label="Swipe comparison position"
+					aria-valuemin="5"
+					aria-valuemax="95"
+					aria-valuenow={Math.round(swipePosition)}
+				>
+					<span>‹</span>
+					<span>›</span>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Legend: one entry per visible layer -->
+		{#if visibleLayers.length > 0}
+			<div class="legend">
+				{#if viewMode === 'swipe' && visibleLayers.length === 2}
+					{@const vl = visibleLayers[0]}
+					{@const { metric: vMetric } = parseKey(vl.key)}
+					{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
+					<div class="legend-title">
+						{metricLabel(vMetric)}
+						<span class="legend-delta-badge">Shared swipe scale</span>
+					</div>
+					<div class="scale-bar" style="background: {gradient}"></div>
+					<div class="scale-labels">
+						<span>{vl.data.min.toFixed(2)}</span>
+						<span class="scale-unit">({vl.data.unit})</span>
+						<span>{vl.data.max.toFixed(2)}</span>
+					</div>
+				{:else}
+					{#each visibleLayers as vl, i}
+						{@const { modelName: vModel, metric: vMetric, window: vWindow, referenceWindow } = parseKey(vl.key)}
+						{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
+						{@const displayName = modelDisplayName(vModel)}
+						{@const referenceName = vl.referenceModelName ? modelDisplayName(vl.referenceModelName) : null}
+						{#if i > 0}<div class="legend-divider"></div>{/if}
+						<div class="legend-title">
+							{displayName} · {windowLabelFor(vWindow)} — {metricLabel(vMetric)}
+							{#if vl.isDelta && referenceName}
+								<span class="legend-delta-badge">Δ vs {referenceName} · {windowLabelFor(referenceWindow)}</span>
+							{/if}
+						</div>
+						<div class="scale-bar" style="background: {gradient}"></div>
+						{#if vl.isDelta && vl.deltaMaxAbs != null}
+							<div class="scale-labels">
+								<span>−{vl.deltaMaxAbs.toFixed(3)}</span>
+								<span class="scale-unit"
+									>{isNeutralDeltaMetric(vMetric)
+										? '(negative)'
+										: isHigherBetterMetric(vMetric)
+											? '(worse)'
+											: '(better)'}</span
+								>
+								<span>0</span>
+								<span class="scale-unit"
+									>{isNeutralDeltaMetric(vMetric)
+										? '(positive)'
+										: isHigherBetterMetric(vMetric)
+											? '(better)'
+											: '(worse)'}</span
+								>
+								<span>+{vl.deltaMaxAbs.toFixed(3)}</span>
+							</div>
+						{:else}
+							<div class="scale-labels">
+								<span>{vl.data.min.toFixed(2)}</span>
+								<span class="scale-unit">({vl.data.unit})</span>
+								<span>{vl.data.max.toFixed(2)}</span>
+							</div>
+						{/if}
+					{/each}
+				{/if}
+			</div>
+		{/if}
+
+		{#if visibleBoundaryLayers.length > 0}
+			<div class="boundary-attribution">
+				Boundaries: geoBoundaries gbOpen
+				{#each visibleBoundaryLayers as boundaryLayer, i}
+					{#if i === 0}({:else};
+					{/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
+				{/each}
+			</div>
+		{/if}
+
+		{#if selectedCell}
+			<GridCellInspector
+				cell={selectedCell}
+				forecastWindow={selectedWindow}
+				{metrics}
+				results={cellResults}
+				loading={cellLoading}
+				error={cellError}
+				onclose={closeCellInspector}
+			/>
+		{/if}
+	</div>
+
+	<!-- Map controls -->
 	<div class="layer-panel result-lens" class:collapsed={panelCollapsed}>
 		<button class="layer-panel-header" onclick={() => (panelCollapsed = !panelCollapsed)}>
-			<span class="layer-panel-title">Result lens</span>
+			<span class="layer-panel-title">Map controls</span>
 			<span class="panel-toggle">{panelCollapsed ? '▸' : '▾'}</span>
 		</button>
 
 		{#if !panelCollapsed}
 			<div class="lens-controls">
-				<label class="control-field">
-					<span>Metric</span>
-					<select bind:value={selectedMetric}>
-						{#each metrics as metric}
-							<option value={metric.value}>{metric.label}</option>
-						{/each}
-					</select>
-				</label>
-
-				<label class="control-field">
-					<span>Lead time</span>
-					<select bind:value={selectedWindow}>
-						{#each activeWindows as window}
-							<option value={window.value}>{window.label}</option>
-						{/each}
-					</select>
-				</label>
-
-				<div class="view-toggle" aria-label="Map view">
-					<button class:active={viewMode === 'single'} onclick={() => (viewMode = 'single')}>
-						Values
-					</button>
-					<button
-						class:active={viewMode === 'baseline'}
-						onclick={() => {
-							viewMode = 'baseline';
-							selectedReferenceJobId = 'climatology';
-						}}
-					>
-						Skill
-					</button>
-					<button class:active={viewMode === 'difference'} onclick={() => (viewMode = 'difference')}>
-						Difference
-					</button>
-					<button class:active={viewMode === 'swipe'} onclick={() => (viewMode = 'swipe')}>
-						Swipe
-					</button>
-				</div>
-				<p class="lens-note">{viewModeDescription(viewMode)}</p>
-
-				<label class="control-field">
-					<span>Model</span>
-					<select bind:value={selectedModelJobId}>
-						{#each availableModelRuns() as run}
-							<option value={run.jobId}>{modelRunLabel(run)}</option>
-						{/each}
-					</select>
-				</label>
-
-				{#if viewMode === 'difference' || viewMode === 'swipe'}
+				<div class="control-row primary-row">
 					<label class="control-field">
-						<span>Compare with</span>
-						<select bind:value={selectedReferenceJobId}>
-							{#if activeRuns.some((run) => run.modelName === 'climatology')}
-								<option value="climatology">Climatology</option>
-							{/if}
-							{#each availableModelRuns() as run}
-								<option value={run.jobId}>{modelRunLabel(run)}</option>
+						<span>Metric</span>
+						<select bind:value={selectedMetric}>
+							{#each metrics as metric}
+								<option value={metric.value}>{metric.label}</option>
 							{/each}
 						</select>
 					</label>
+
 					<label class="control-field">
-						<span>Compare lead time</span>
-						<select bind:value={selectedReferenceWindow}>
+						<span>Lead time</span>
+						<select bind:value={selectedWindow}>
 							{#each activeWindows as window}
 								<option value={window.value}>{window.label}</option>
 							{/each}
 						</select>
 					</label>
-				{:else if viewMode === 'baseline'}
-					<p class="lens-note">Blue is better for error metrics; red is worse.</p>
-				{/if}
-			</div>
 
-			<div class="boundary-group">
-				<div class="run-header">
-					<span class="run-label">Boundaries</span>
+					<label class="control-field model-field">
+						<span>Model</span>
+						<select bind:value={selectedModelJobId}>
+							{#each availableModelRuns() as run}
+								<option value={run.jobId}>{modelRunLabel(run)}</option>
+							{/each}
+						</select>
+					</label>
 				</div>
 
+				<div class="control-row mode-row">
+					<div class="view-toggle" aria-label="Map view">
+						<button class:active={viewMode === 'single'} onclick={() => (viewMode = 'single')}>
+							Values
+						</button>
+						<button
+							class:active={viewMode === 'baseline'}
+							onclick={() => {
+								viewMode = 'baseline';
+								selectedReferenceJobId = 'climatology';
+							}}
+						>
+							Skill
+						</button>
+						<button class:active={viewMode === 'difference'} onclick={() => (viewMode = 'difference')}>
+							Difference
+						</button>
+						<button class:active={viewMode === 'swipe'} onclick={() => (viewMode = 'swipe')}>
+							Swipe
+						</button>
+					</div>
+					<p class="lens-note">{viewModeDescription(viewMode)}</p>
+				</div>
+
+				<div class="control-row secondary-row">
+					{#if viewMode === 'difference' || viewMode === 'swipe'}
+						<label class="control-field">
+							<span>Compare with</span>
+							<select bind:value={selectedReferenceJobId}>
+								{#if activeRuns.some((run) => run.modelName === 'climatology')}
+									<option value="climatology">Climatology</option>
+								{/if}
+								{#each availableModelRuns() as run}
+									<option value={run.jobId}>{modelRunLabel(run)}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="control-field">
+							<span>Compare lead time</span>
+							<select bind:value={selectedReferenceWindow}>
+								{#each activeWindows as window}
+									<option value={window.value}>{window.label}</option>
+								{/each}
+							</select>
+						</label>
+					{:else if viewMode === 'baseline'}
+						<p class="lens-note">Blue is better for error metrics; red is worse.</p>
+					{/if}
+				</div>
+			</div>
+
+			<details class="boundary-group">
+				<summary class="run-header">
+					<span class="run-label">Boundaries</span>
+				</summary>
+
+				<div class="boundary-options">
 				{#each Object.entries(BOUNDARY_LEVELS) as [level, def]}
 					{@const boundaryLevel = level as BoundaryLevel}
 					{@const isVisible = visibleBoundaryLevels.has(boundaryLevel)}
@@ -1357,128 +1495,24 @@
 						{/if}
 					</div>
 				{/each}
-			</div>
+				</div>
+			</details>
 		{/if}
 	</div>
-
-	{#if tooltipVisible}
-		<div class="tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
-			{@html tooltipContent}
-		</div>
-	{/if}
-
-	{#if viewMode === 'swipe' && visibleLayers.length === 2}
-		{@const currentSwipeRuns = swipeRuns()}
-		{#if currentSwipeRuns}
-			<div class="swipe-label swipe-label-left">
-				<span>Left</span>
-				<strong>{modelRunLabel(currentSwipeRuns.left)} · {windowLabelFor(selectedWindow)}</strong>
-			</div>
-			<div class="swipe-label swipe-label-right">
-				<span>Right</span>
-				<strong>{modelRunLabel(currentSwipeRuns.right)} · {windowLabelFor(selectedReferenceWindow)}</strong>
-			</div>
-		{/if}
-		<div class="swipe-split" style="left: {swipePosition}%">
-			<div class="swipe-line"></div>
-			<div
-				class="swipe-handle"
-				class:dragging={draggingSwipe}
-				onpointerdown={startSwipeDrag}
-				onkeydown={moveSwipeWithKeyboard}
-				role="slider"
-				tabindex="0"
-				aria-label="Swipe comparison position"
-				aria-valuemin="5"
-				aria-valuemax="95"
-				aria-valuenow={Math.round(swipePosition)}
-			>
-				<span>‹</span>
-				<span>›</span>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Legend: one entry per visible layer -->
-	{#if visibleLayers.length > 0}
-		<div class="legend">
-			{#each visibleLayers as vl, i}
-				{@const { modelName: vModel, metric: vMetric, window: vWindow, referenceWindow } = parseKey(vl.key)}
-				{@const gradient = `linear-gradient(to right, ${vl.stops.join(', ')})`}
-				{@const displayName = modelDisplayName(vModel)}
-				{@const referenceName = vl.referenceModelName ? modelDisplayName(vl.referenceModelName) : null}
-				{#if i > 0}<div class="legend-divider"></div>{/if}
-				<div class="legend-title">
-					{displayName} · {windowLabelFor(vWindow)} — {metricLabel(vMetric)}
-					{#if vl.isDelta && referenceName}
-						<span class="legend-delta-badge">Δ vs {referenceName} · {windowLabelFor(referenceWindow)}</span>
-					{/if}
-				</div>
-				<div class="scale-bar" style="background: {gradient}"></div>
-				{#if vl.isDelta && vl.deltaMaxAbs != null}
-					<div class="scale-labels">
-						<span>−{vl.deltaMaxAbs.toFixed(3)}</span>
-						<span class="scale-unit"
-							>{isNeutralDeltaMetric(vMetric)
-								? '(negative)'
-								: isHigherBetterMetric(vMetric)
-									? '(worse)'
-									: '(better)'}</span
-						>
-						<span>0</span>
-						<span class="scale-unit"
-							>{isNeutralDeltaMetric(vMetric)
-								? '(positive)'
-								: isHigherBetterMetric(vMetric)
-									? '(better)'
-									: '(worse)'}</span
-						>
-						<span>+{vl.deltaMaxAbs.toFixed(3)}</span>
-					</div>
-				{:else}
-					<div class="scale-labels">
-						<span>{vl.data.min.toFixed(2)}</span>
-						<span class="scale-unit">({vl.data.unit})</span>
-						<span>{vl.data.max.toFixed(2)}</span>
-					</div>
-				{/if}
-			{/each}
-		</div>
-	{/if}
-
-	{#if visibleBoundaryLayers.length > 0}
-		<div class="boundary-attribution">
-			Boundaries: geoBoundaries gbOpen
-			{#each visibleBoundaryLayers as boundaryLayer, i}
-				{#if i === 0}({:else};
-				{/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
-			{/each}
-		</div>
-	{/if}
-
-	{#if selectedCell}
-		<GridCellInspector
-			cell={selectedCell}
-			forecastWindow={selectedWindow}
-			{metrics}
-			results={cellResults}
-			loading={cellLoading}
-			error={cellError}
-			onclose={closeCellInspector}
-		/>
-	{/if}
 </div>
 
 <style>
 	/* ---- Map root ---- */
 	.map-root {
 		position: relative;
+		display: flex;
+		flex-direction: column;
 		width: 100%;
-		height: 600px;
-		border: 1px solid var(--color-border-subtle);
+		border: 1px solid #d8d0c2;
 		border-radius: 0.5rem;
 		overflow: hidden;
-		background: var(--color-surface);
+		background: rgba(255, 253, 248, 0.98);
+		box-shadow: 0 0.45rem 1.6rem rgba(43, 36, 24, 0.08);
 		transition:
 			height 0.3s ease,
 			border-radius 0.3s ease;
@@ -1494,8 +1528,83 @@
 		border: none;
 	}
 
-	.map-root.compact {
+	.map-root.fullscreen .layer-panel {
+		position: absolute;
+		left: 50%;
+		bottom: 1rem;
+		transform: translateX(-50%);
+		width: min(58rem, calc(100% - 2rem));
+		border: 1px solid rgba(215, 208, 194, 0.9);
+		border-radius: 0.5rem;
+		box-shadow: 0 0.6rem 2rem rgba(0, 0, 0, 0.28);
+		max-height: min(36dvh, 18rem);
+		background: rgba(255, 253, 248, 0.94);
+		backdrop-filter: blur(8px);
+		overflow-y: auto;
+	}
+
+	.map-root.fullscreen .layer-panel.collapsed {
+		width: min(18rem, calc(100% - 2rem));
+		left: 1rem;
+		transform: none;
+	}
+
+	.map-root.fullscreen .layer-panel-header {
+		padding: 0.42rem 0.65rem;
+	}
+
+	.map-root.fullscreen .lens-controls {
+		gap: 0.45rem;
+		padding: 0.55rem 0.65rem;
+	}
+
+	.map-root.fullscreen .primary-row {
+		grid-template-columns: minmax(8rem, 1fr) minmax(7rem, 0.85fr) minmax(8rem, 1fr);
+	}
+
+	.map-root.fullscreen .mode-row {
+		grid-template-columns: minmax(14rem, 0.9fr) minmax(12rem, 1.1fr);
+	}
+
+	.map-root.fullscreen .control-field select {
+		font-size: 0.72rem;
+		padding: 0.34rem 0.45rem;
+	}
+
+	.map-root.fullscreen .view-toggle button {
+		font-size: 0.64rem;
+		padding: 0.28rem 0.25rem;
+	}
+
+	.map-root.fullscreen .lens-note {
+		font-size: 0.64rem;
+	}
+
+	.map-root.fullscreen .boundary-group {
+		margin-bottom: 0;
+	}
+
+	.map-root.fullscreen .map-instance {
+		height: 100%;
+	}
+
+	.map-root.compact .map-stage {
 		height: 430px;
+	}
+
+	.map-stage {
+		position: relative;
+		order: 1;
+		flex: none;
+		height: 600px;
+		overflow: hidden;
+		background: #101418;
+	}
+
+	.map-root.fullscreen .map-stage {
+		flex: 1;
+		height: auto;
+		min-height: 0;
 	}
 
 	:global(.map-root.fullscreen.obscured-by-lightbox) {
@@ -1505,6 +1614,7 @@
 	.map-instance {
 		width: 100%;
 		height: 100%;
+		background: #101418;
 	}
 	.map-instance :global(.maplibregl-canvas-container),
 	.map-instance :global(.maplibregl-canvas) {
@@ -1512,7 +1622,11 @@
 		height: 100% !important;
 	}
 	.map-instance :global(.maplibregl-canvas) {
-		border-radius: 0.5rem;
+		border-radius: 0;
+	}
+	.map-stage.grid-cell-hover :global(.maplibregl-canvas-container),
+	.map-stage.grid-cell-hover :global(.maplibregl-canvas) {
+		cursor: crosshair !important;
 	}
 	.map-instance :global(.maplibregl-ctrl button) {
 		background-color: rgba(255, 255, 255, 0.85);
@@ -1566,35 +1680,57 @@
 		color: #111;
 	}
 
-	/* ---- Layer panel ---- */
+	/* ---- Result controls ---- */
 	.layer-panel {
-		position: absolute;
-		top: 0.75rem;
-		right: 0.75rem;
-		z-index: 20;
-		background: rgba(255, 255, 255, 0.96);
-		border: 1px solid #ccc;
-		border-radius: 0.4rem;
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-		width: clamp(14rem, 24vw, 20rem);
+		position: relative;
+		order: 2;
+		z-index: 30;
+		background: rgba(255, 253, 248, 0.98);
+		border-top: 1px solid var(--color-border-subtle);
+		width: 100%;
 		overflow: hidden;
-		max-height: calc(100% - 1.5rem);
+		max-height: 45%;
 		overflow-y: auto;
 	}
 
 	.lens-controls {
 		display: flex;
 		flex-direction: column;
-		gap: 0.65rem;
-		padding: 0.65rem;
+		gap: 0.55rem;
+		padding: 0.65rem 0.7rem 0.5rem;
 		border-top: 1px solid #e1e5ea;
-		background: rgba(250, 248, 242, 0.96);
+		background: transparent;
+	}
+
+	.control-row {
+		display: grid;
+		align-items: end;
+		gap: 0.65rem;
+	}
+
+	.primary-row {
+		grid-template-columns: minmax(10rem, 1.15fr) minmax(8rem, 0.9fr) minmax(12rem, 1.4fr);
+	}
+
+	.mode-row {
+		grid-template-columns: minmax(18rem, 0.9fr) minmax(14rem, 1.1fr);
+		align-items: center;
+	}
+
+	.secondary-row {
+		grid-template-columns: minmax(12rem, 1fr) minmax(10rem, 1fr) minmax(12rem, 1fr);
+		align-items: center;
 	}
 
 	.control-field {
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
+		min-width: 0;
+	}
+
+	.model-field {
+		min-width: 0;
 	}
 
 	.control-field span {
@@ -1619,6 +1755,7 @@
 
 	.view-toggle {
 		display: flex;
+		align-self: stretch;
 		padding: 0.18rem;
 		border: 1px solid #d7d0c2;
 		border-radius: 0.45rem;
@@ -1650,9 +1787,10 @@
 
 	.lens-note {
 		margin: 0;
-		font-size: 0.68rem;
+		font-size: 0.72rem;
 		line-height: 1.35;
 		color: #6f6b62;
+		align-self: center;
 	}
 
 	.layer-panel-header {
@@ -1660,17 +1798,14 @@
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 0.45rem 0.5rem 0.35rem;
+		padding: 0.42rem 0.7rem 0.34rem;
 		border: none;
-		background: rgba(255, 255, 255, 0.96);
+		background: rgba(246, 242, 234, 0.75);
 		cursor: pointer;
 		font-family: var(--font-body);
-		position: sticky;
-		top: 0;
-		z-index: 1;
 	}
 	.layer-panel-header:hover {
-		background: rgba(0, 0, 0, 0.03);
+		background: rgba(238, 232, 221, 0.82);
 	}
 
 	.layer-panel-title {
@@ -1687,15 +1822,42 @@
 	}
 
 	.boundary-group {
-		border-top: 1px solid #e1e5ea;
-		background: rgba(246, 248, 250, 0.88);
+		margin: 0 0.7rem 0.55rem;
+		width: min(13.5rem, calc(100% - 1.4rem));
+		background: rgba(246, 248, 250, 0.72);
+		border: 1px solid #d8dde5;
+		border-radius: 0.4rem;
+		overflow: hidden;
 	}
 
 	.run-header {
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		padding: 0.45rem 0.5rem 0.25rem;
+		padding: 0.45rem 0.65rem;
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.run-header::-webkit-details-marker {
+		display: none;
+	}
+
+	.boundary-group .run-header::after {
+		content: '▾';
+		margin-left: auto;
+		color: #8a857a;
+		font-size: 0.65rem;
+	}
+
+	.boundary-group:not([open]) .run-header::after {
+		content: '▸';
+	}
+
+	.boundary-options {
+		border-top: 1px solid #d8dde5;
+		padding: 0.25rem 0;
+		background: rgba(255, 255, 255, 0.68);
 	}
 
 	.run-label {
@@ -1906,20 +2068,19 @@
 
 	.swipe-label {
 		position: absolute;
-		top: 50%;
+		top: 1rem;
 		z-index: 22;
 		display: flex;
 		align-items: baseline;
-		gap: 0.45rem;
-		max-width: min(14rem, 32%);
-		padding: 0.45rem 0.65rem;
+		gap: 0.35rem;
+		max-width: min(12rem, 30%);
+		padding: 0.32rem 0.5rem;
 		border: 1px solid rgba(213, 207, 194, 0.86);
 		border-radius: 0.4rem;
 		background: rgba(255, 255, 255, 0.9);
 		color: #2d2a25;
 		box-shadow: 0 0.2rem 0.75rem rgba(0, 0, 0, 0.14);
 		pointer-events: none;
-		transform: translateY(-50%);
 	}
 
 	.swipe-label-left {
@@ -1931,7 +2092,7 @@
 	}
 
 	.swipe-label span {
-		font-size: 0.55rem;
+		font-size: 0.48rem;
 		font-weight: 800;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
@@ -1942,7 +2103,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.78rem;
+		font-size: 0.68rem;
 	}
 
 	/* ---- Legend ---- */
@@ -1953,11 +2114,11 @@
 		transform: translateX(-50%);
 		z-index: 20;
 		background: rgba(255, 255, 255, 0.92);
-		padding: 0.6rem 0.75rem;
+		padding: 0.45rem 0.6rem;
 		border-radius: 0.4rem;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 		border: 1px solid #ccc;
-		width: min(24rem, calc(100% - 7rem));
+		width: min(18rem, calc(100% - 7rem));
 		display: flex;
 		flex-direction: column;
 		gap: 0.1rem;
@@ -1981,12 +2142,12 @@
 		display: none;
 	}
 	.legend-title {
-		font-size: 0.6rem;
+		font-size: 0.54rem;
 		font-weight: 700;
 		color: #333;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
-		margin-bottom: 0.3rem;
+		margin-bottom: 0.22rem;
 		text-align: center;
 	}
 	.legend-divider {
@@ -1997,7 +2158,7 @@
 
 	.legend-delta-badge {
 		display: inline-block;
-		font-size: 0.5rem;
+		font-size: 0.46rem;
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -2010,20 +2171,20 @@
 		vertical-align: middle;
 	}
 	.scale-bar {
-		height: 10px;
+		height: 8px;
 		border-radius: 2px;
-		margin-bottom: 0.2rem;
+		margin-bottom: 0.15rem;
 	}
 	.scale-labels {
 		display: flex;
 		justify-content: space-between;
-		font-size: 0.6rem;
+		font-size: 0.54rem;
 		font-family: var(--font-mono);
 		color: #555;
 	}
 	.scale-unit {
 		color: #999;
-		font-size: 0.58rem;
+		font-size: 0.52rem;
 	}
 
 	.boundary-attribution {
