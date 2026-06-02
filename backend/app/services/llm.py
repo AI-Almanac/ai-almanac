@@ -77,6 +77,9 @@ Lower is better. Values under 5 days indicate strong skill; over 15 days indicat
 onset. Higher means more false alarms.
 - **miss_rate (MR)**: Fraction of real onsets the model failed to detect. Higher means more \
 missed events.
+- Earth2Studio can also add spatial verification metrics such as **rmse**, **mae**, **bias**, \
+and **acc** over the full evaluation period. Treat these as rainfall/grid verification metrics, \
+not monsoon onset-date metrics.
 
 Forecast windows (e.g. "1-15", "16-30") are lead-time ranges in days. Shorter windows are \
 easier; longer windows test extended-range skill. Always compare model metrics against the \
@@ -118,7 +121,8 @@ into the response unprompted.
 - Use `run_code` when the built-in metrics don't answer the question — e.g. computing a custom \
 statistic, comparing distributions, cross-tabulating results, or producing a chart. The sandbox \
 has xarray, numpy, scipy, pandas, and matplotlib. The NC files in `nc_dir` are the \
-spatial_metrics_*.nc output files. Always handle missing values (NaN) explicitly in your code.
+spatial_metrics_*.nc and e2s_spatial_metrics_*.nc output files. Always handle missing values \
+(NaN) explicitly in your code.
 - When a chart would communicate the result more clearly than a table or prose, produce one using \
 matplotlib. Always use `matplotlib.use('Agg')` before importing pyplot, call \
 `artifact = save_figure(fig, filename='plot.webp', format='webp')`, return it under \

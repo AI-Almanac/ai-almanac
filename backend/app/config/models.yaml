@@ -26,6 +26,23 @@
   start_year_clim: 1998
   end_year_clim: 2000
 
+- id: e2s-test
+  display_name: "E2S (Test)"
+  region: bangladesh
+  model_type: AIWP
+  compute_e2s_metrics: true
+  model_var: tp
+  unit_cvt: 1000
+  file_pattern: "{}.nc"
+  probabilistic: false
+  members: null
+  init_days: "0,3"
+  date_filter_year: 2020
+  start_date: "2020-05-01"
+  end_date: "2022-09-30"
+  start_year_clim: 2020
+  end_year_clim: 2022
+
 - id: aifs
   display_name: "AIFS"
   region: india

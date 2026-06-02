@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ..auth import CurrentUser
-from ..config import get_demo_datasets
+from ..config import REMOTE_OBS_PROVIDERS, get_demo_datasets
 from ..database import get_db
 from ..services.storage import get_storage
 
@@ -45,6 +45,7 @@ class DatasetOut(BaseModel):
     ready_at: str | None = None
     error: str | None = None
     is_demo: bool = False
+    provider: str | None = None
     obs_file_pattern: str | None = None
     obs_year_start: int | None = None
     obs_year_end: int | None = None
@@ -161,7 +162,9 @@ async def list_datasets(user: CurrentUser):
 
     demo_datasets = []
     for d in get_demo_datasets():
-        yr_start, yr_end = _obs_year_range(d["obs_dir"])
+        yr_start, yr_end = (None, None)
+        if d.get("provider") not in REMOTE_OBS_PROVIDERS and d.get("obs_dir"):
+            yr_start, yr_end = _obs_year_range(d["obs_dir"])
         demo_datasets.append(
             DatasetOut(
                 id=d["id"],
@@ -170,6 +173,7 @@ async def list_datasets(user: CurrentUser):
                 region=d.get("region"),
                 created_at="",
                 is_demo=True,
+                provider=d.get("provider"),
                 obs_file_pattern=d.get("obs_file_pattern"),
                 obs_year_start=yr_start,
                 obs_year_end=yr_end,

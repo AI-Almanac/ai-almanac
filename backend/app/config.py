@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
 _DATASETS_YAML = Path(__file__).parent / "config" / "datasets.yaml"
 _ROMP_YAML = Path(__file__).parent / "config" / "romp.yaml"
+_REGIONS_YAML = Path(__file__).parent / "config" / "regions.yaml"
 _ENV_FILE_NAMES = (Path.cwd() / ".env", Path(__file__).resolve().parents[1] / ".env")
 
 
@@ -83,9 +84,7 @@ class Settings(BaseSettings):
 
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
-    romp_wrapper_image: str = (
-        ""  # if set, used instead of romp_image for Cloud Run jobs
-    )
+    romp_wrapper_image: str = ""  # if set, used instead of romp_image for job runners
     job_timeout_seconds: int = 3600
     job_cpu: str = "4"
     job_memory: str = "16Gi"
@@ -104,6 +103,11 @@ class Settings(BaseSettings):
     # from env; these fields just make them available for validation/logging.
     modal_token_id: str = ""
     modal_token_secret: str = ""
+
+    # Earth2Studio / CDS API credentials for local Modal dev runs.
+    # Forwarded only by JOB_RUNNER=modal-local when an Earth2Studio dataset is selected.
+    cdsapi_url: str = "https://cds.climate.copernicus.eu/api"
+    cdsapi_key: str = ""
 
     # ---------------------------------------------------------------------------
     # LLM.
@@ -186,31 +190,73 @@ def get_romp_defaults() -> dict:
 
 
 def get_metric_definitions() -> list[dict]:
-    """Return all metric definitions (deterministic + probabilistic)."""
-    cfg = get_romp_config()["metrics"]
-    return cfg["deterministic"] + cfg["probabilistic"]
+    """Return all metric definitions: ROMP (deterministic + probabilistic) plus e2s metrics."""
+    cfg = get_romp_config()
+    romp_metrics = cfg["metrics"]["deterministic"] + cfg["metrics"]["probabilistic"]
+    e2s_metrics = cfg.get("e2s_metrics", [])
+    return romp_metrics + e2s_metrics
+
+
+REMOTE_OBS_PROVIDERS = {"earth2studio", "era5_arco"}
+
+
+def get_regions() -> list[dict]:
+    """Load all region definitions from regions.yaml."""
+    return yaml.safe_load(_REGIONS_YAML.read_text())
+
+
+def get_region(region_id: str) -> dict | None:
+    """Look up a region by id (case-insensitive). Returns None if not found."""
+    for r in get_regions():
+        if r["id"].lower() == region_id.lower():
+            return r
+    return None
 
 
 def get_demo_datasets() -> list[dict]:
-    """Load demo dataset definitions from datasets.yaml; resolve obs_dir from env vars.
+    """Load demo dataset definitions from datasets.yaml.
 
-    Env var pattern: {ID}_OBS_DIR (uppercased, hyphens → underscores).
-    Datasets whose env var is unset or empty are excluded.
+    Local datasets: resolved via {ID}_OBS_DIR env var; excluded if unset.
+    Remote datasets: resolved via required_env var (or always included if null).
     """
     raw = yaml.safe_load(_DATASETS_YAML.read_text())
     result = []
     for entry in raw:
-        env_key = _env_key(entry["id"], "obs_dir")
-        obs_dir = _env_value(env_key)
-        if not obs_dir:
-            continue
-        result.append(
-            {
-                "id": "demo:" + entry["id"],
-                "name": entry["name"],
-                "region": entry.get("region", ""),
-                "obs_dir": obs_dir,
-                "obs_file_pattern": entry.get("obs_file_pattern"),
-            }
-        )
+        provider = entry.get("provider", "local")
+
+        if provider in REMOTE_OBS_PROVIDERS:
+            required_env = entry.get("required_env")
+            if required_env and not _env_value(required_env):
+                continue
+            result.append(
+                {
+                    "id": "demo:" + entry["id"],
+                    "name": entry["name"],
+                    "region": entry.get("region", ""),
+                    "provider": provider,
+                    "e2s_class": entry.get("e2s_class"),
+                    "arco_url": entry.get("arco_url"),
+                    "precip_var": entry.get("precip_var", "tp"),
+                    "unit_cvt": entry.get("unit_cvt", 1.0),
+                    "lat_bounds": entry.get("lat_bounds"),
+                    "lon_bounds": entry.get("lon_bounds"),
+                    "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
+                    "obs_dir": None,
+                }
+            )
+        else:
+            env_key = _env_key(entry["id"], "obs_dir")
+            obs_dir = _env_value(env_key)
+            if not obs_dir:
+                continue
+            result.append(
+                {
+                    "id": "demo:" + entry["id"],
+                    "name": entry["name"],
+                    "region": entry.get("region", ""),
+                    "provider": "local",
+                    "obs_dir": obs_dir,
+                    "obs_file_pattern": entry.get("obs_file_pattern"),
+                }
+            )
     return result

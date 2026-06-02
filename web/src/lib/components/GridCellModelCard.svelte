@@ -1,6 +1,16 @@
 <script lang="ts">
-	import type { JobCellResponse } from '$lib/api';
+	import type { JobCellResponse, MetricDefinition } from '$lib/api';
 	import YearOnsetHeatmap from '$lib/components/YearOnsetHeatmap.svelte';
+	import {
+		formatMetricDelta,
+		formatMetricValue,
+		isAnnualMaeMetric,
+		metricLabel as displayMetricLabel,
+		metricMap,
+		metricUnit,
+		orderMetricKeys,
+		windowLabel
+	} from '$lib/metric-metadata';
 
 	type MetricDef = { value: string; label: string };
 
@@ -10,11 +20,29 @@
 	};
 
 	let { result, metrics }: Props = $props();
-
-	const SUMMARY_METRICS = ['mean_mae', 'false_alarm_rate', 'miss_rate'];
+	const definitionsById = $derived(
+		metricMap(
+			metrics.map(
+				(metric) =>
+					({
+						id: metric.value,
+						label: metric.label,
+						abbreviation: metric.label,
+						unit: null,
+						description: ''
+					}) satisfies MetricDefinition
+			)
+		)
+	);
+	const visibleMetrics = $derived(
+		orderMetricKeys(
+			Object.keys(result.metrics).filter((metric) => !isAnnualMaeMetric(metric)),
+			definitionsById
+		)
+	);
 
 	function metricLabel(metricValue: string) {
-		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
+		return displayMetricLabel(metricValue, definitionsById);
 	}
 
 	function modelDisplayName(modelName: string) {
@@ -28,22 +56,8 @@
 		return labels[modelName.toLowerCase()] ?? modelName;
 	}
 
-	function formatValue(value: number | null | undefined, digits = 2): string {
-		return value == null ? '—' : value.toFixed(digits);
-	}
-
-	function formatDelta(value: number | null | undefined, digits = 2): string {
-		if (value == null) return '—';
-		return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
-	}
-
-	function metricUnit(metricValue: string): string {
-		if (metricValue === 'false_alarm_rate' || metricValue === 'miss_rate') return 'fraction';
-		return 'days';
-	}
-
-	function metricDigits(metricValue: string): number {
-		return metricValue === 'mean_mae' ? 2 : 3;
+	function tileUnit(metricValue: string, apiUnit: string | undefined): string {
+		return metricUnit(metricValue, apiUnit, definitionsById);
 	}
 </script>
 
@@ -55,19 +69,18 @@
 				Nearest grid: latitude {result.lat.toFixed(2)}°N, longitude {result.lon.toFixed(2)}°E
 			</p>
 		</div>
-		<span class="cell-window">Days {result.window}</span>
+		<span class="cell-window">{windowLabel(result.window)}</span>
 	</div>
 
 	<div class="metric-tiles">
-		{#each SUMMARY_METRICS as metricValue}
+		{#each visibleMetrics as metricValue}
 			{@const item = result.metrics[metricValue]}
-			{@const digits = metricDigits(metricValue)}
+			{@const unit = tileUnit(metricValue, item?.unit)}
 			<div class="metric-tile">
 				<span class="metric-name">{metricLabel(metricValue)}</span>
-				<strong>{formatValue(item?.model, digits)}</strong>
+				<strong>{formatMetricValue(item?.model, unit)}</strong>
 				<span class="metric-context">
-					Δ {formatDelta(item?.delta, digits)}
-					{metricUnit(metricValue)}
+					Δ {formatMetricDelta(item?.delta, unit)}
 				</span>
 			</div>
 		{/each}

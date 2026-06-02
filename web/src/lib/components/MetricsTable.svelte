@@ -1,6 +1,17 @@
 <script lang="ts">
 	import { type JobMetrics, type WindowMetrics, type BboxFilter, type GridInfo } from '$lib/api';
+	import type { MetricDefinition } from '$lib/api';
 	import { getCachedJobMetrics } from '$lib/benchmarks.svelte';
+	import {
+		formatMetricValue,
+		isAnnualMaeMetric,
+		loadMetricDefinitions,
+		metricLabel,
+		metricMap,
+		metricUnit,
+		orderMetricKeys,
+		windowLabel
+	} from '$lib/metric-metadata';
 
 	type Props = { jobId: string };
 	let { jobId }: Props = $props();
@@ -10,6 +21,8 @@
 	let loading = $state(false);
 	let fetchError = $state<string | null>(null);
 	let grid = $state<GridInfo | null>(null); // full domain grid, set once
+	let metricDefinitions = $state<MetricDefinition[]>([]);
+	const definitionsById = $derived(metricMap(metricDefinitions));
 
 	// Bbox filter state
 	let bboxInput = $state({ lat_min: '', lat_max: '', lon_min: '', lon_max: '' });
@@ -58,6 +71,12 @@
 
 	$effect(() => {
 		fetchMetrics();
+	});
+
+	$effect(() => {
+		loadMetricDefinitions().then((definitions) => {
+			metricDefinitions = definitions;
+		});
 	});
 
 	/** Returns an error string if no grid points fall within the entered bbox, null if valid. */
@@ -122,25 +141,14 @@
 
 	// --- Table rendering helpers ---
 
-	const VAR_META: Record<string, { label: string }> = {
-		false_alarm_rate: { label: 'False alarm rate' },
-		miss_rate: { label: 'Miss rate' },
-		mean_mae: { label: 'Mean absolute error' }
-	};
-
-	const PRIMARY_VARS = ['false_alarm_rate', 'miss_rate', 'mean_mae'];
 	let showPerYear = $state(false);
 
 	function varLabel(key: string): string {
-		if (VAR_META[key]) return VAR_META[key].label;
-		const m = key.match(/^mae_(\d{4})$/);
-		if (m) return `Mean absolute error ${m[1]}`;
-		return key;
+		return metricLabel(key, definitionsById);
 	}
 
 	function fmt(v: number, unit: string): string {
-		if (unit === 'fraction') return (v * 100).toFixed(1) + '%';
-		return v.toFixed(1) + ' d';
+		return formatMetricValue(v, unit);
 	}
 
 	function cellColor(v: number, min: number, max: number): string {
@@ -152,11 +160,16 @@
 	}
 
 	function visibleVars(win: WindowMetrics): string[] {
-		const primary = PRIMARY_VARS.filter((v) => v in win.metrics);
-		const perYear = Object.keys(win.metrics)
-			.filter((k) => /^mae_\d{4}$/.test(k))
-			.sort();
-		return showPerYear ? [...primary, ...perYear] : primary;
+		const keys = Object.keys(win.metrics);
+		const summary = orderMetricKeys(
+			keys.filter((key) => !isAnnualMaeMetric(key)),
+			definitionsById
+		);
+		const perYear = orderMetricKeys(
+			keys.filter((key) => isAnnualMaeMetric(key)),
+			definitionsById
+		);
+		return showPerYear ? [...summary, ...perYear] : summary;
 	}
 </script>
 
@@ -295,7 +308,7 @@
 			{@const vars = visibleVars(win)}
 			<section class="window-section">
 				<h3 class="window-heading">
-					{win.model.toUpperCase()} — Days {win.window}
+					{win.model.toUpperCase()} — {windowLabel(win.window)}
 					{#if win.tolerance_days != null}
 						<span class="tolerance">±{win.tolerance_days} day tolerance</span>
 					{/if}
@@ -318,22 +331,17 @@
 							{#each vars as varKey}
 								{@const s = win.metrics[varKey]}
 								{#if s}
+									{@const unit = metricUnit(varKey, s.unit, definitionsById)}
 									<tr>
 										<td class="metric-name">{varLabel(varKey)}</td>
-										<td style="background:{cellColor(s.mean, s.min, s.max)}"
-											>{fmt(s.mean, s.unit)}</td
+										<td style="background:{cellColor(s.mean, s.min, s.max)}">{fmt(s.mean, unit)}</td
 										>
-										<td style="background:{cellColor(s.min, s.min, s.max)}">{fmt(s.min, s.unit)}</td
-										>
-										<td style="background:{cellColor(s.p50, s.min, s.max)}">{fmt(s.p50, s.unit)}</td
-										>
-										<td style="background:{cellColor(s.p75, s.min, s.max)}">{fmt(s.p75, s.unit)}</td
-										>
-										<td style="background:{cellColor(s.p90, s.min, s.max)}">{fmt(s.p90, s.unit)}</td
-										>
-										<td style="background:{cellColor(s.max, s.min, s.max)}">{fmt(s.max, s.unit)}</td
-										>
-										<td class="unit">{s.unit}</td>
+										<td style="background:{cellColor(s.min, s.min, s.max)}">{fmt(s.min, unit)}</td>
+										<td style="background:{cellColor(s.p50, s.min, s.max)}">{fmt(s.p50, unit)}</td>
+										<td style="background:{cellColor(s.p75, s.min, s.max)}">{fmt(s.p75, unit)}</td>
+										<td style="background:{cellColor(s.p90, s.min, s.max)}">{fmt(s.p90, unit)}</td>
+										<td style="background:{cellColor(s.max, s.min, s.max)}">{fmt(s.max, unit)}</td>
+										<td class="unit">{unit}</td>
 									</tr>
 								{/if}
 							{/each}

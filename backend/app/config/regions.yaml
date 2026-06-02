@@ -1,0 +1,40 @@
+# Region registry
+#
+# Each entry defines a named geographic region the system can benchmark against.
+# Regions with a `romp_name` map to ROMP's built-in region definitions.
+# Regions without `romp_name` use ROMP's custom region support with explicit
+# lat/lon bounds and no shapefile masking.
+#
+# The bbox coordinates are also used by the obs/forecast prep scripts to
+# extract the right spatial slice from global data sources.
+
+- id: ethiopia
+  display_name: "Ethiopia"
+  romp_name: "Ethiopia"
+  boundary_iso: "ETH"
+  description: "Kiremt (June–September) rainy season onset over the Ethiopian highlands."
+  lat_min: 3.0
+  lat_max: 15.0
+  lon_min: 33.0
+  lon_max: 48.0
+
+- id: india
+  display_name: "India"
+  romp_name: "India"
+  boundary_iso: "IND"
+  description: "South-Asian summer monsoon onset using the Modified Moron–Robertson (MOK) definition."
+  lat_min: 6.46
+  lat_max: 35.51
+  lon_min: 68.11
+  lon_max: 91.4
+
+- id: bangladesh
+  display_name: "Bangladesh"
+  boundary_iso: "BGD"
+  description: "Pre-monsoon and monsoon season onset over Bangladesh."
+  lat_min: 20.0
+  lat_max: 27.0
+  lon_min: 88.0
+  lon_max: 93.0
+  land_only: false
+  shp_only: false

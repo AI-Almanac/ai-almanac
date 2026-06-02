@@ -2,8 +2,9 @@
 Job runner — local Docker vs Cloud Batch.
 
 Selected via JOB_RUNNER env var:
-  docker  — runs ROMP in a local Docker container (default for dev)
-  batch   — submits a Cloud Batch job (production)
+  docker       — runs ROMP in a local Docker container (default for dev)
+  modal-local  — stages local files to Modal without GCS (dev)
+  batch        — submits a Cloud Batch job (production)
 
 Both call run_job(job_id, config) and return immediately; status updates
 happen asynchronously as the job completes.
@@ -12,9 +13,12 @@ happen asynchronously as the job completes.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import subprocess
+import tarfile
 import threading
+import traceback
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -37,6 +41,72 @@ def _to_host_path(path: str) -> str:
         if path.startswith(container_prefix):
             return host_prefix + path[len(container_prefix) :]
     return path
+
+
+def _romp_config_override_lines(env: dict[str, str]) -> str:
+    extra: list[str] = [
+        "plot_spatial_far_mr_mae = False",
+        "plot_heatmap_bss_auc = False",
+        "plot_reliability = False",
+        "plot_portrait = False",
+        "plot_climatology_onset = False",
+        "plot_panel_heatmap_error = False",
+        "plot_panel_heatmap_skill = False",
+        "plot_bar_bss_rpss_auc = False",
+    ]
+
+    for env_key, cfg_key in (
+        ("ROMP_LAND_ONLY", "land_only"),
+        ("ROMP_SHP_ONLY", "shp_only"),
+    ):
+        val = env.get(env_key)
+        if val is not None:
+            bool_val = "False" if val.lower() in ("false", "0", "no") else "True"
+            extra.append(f"{cfg_key} = {bool_val}")
+
+    for env_key, cfg_key in (
+        ("ROMP_LAT_MIN", "lat_min"),
+        ("ROMP_LAT_MAX", "lat_max"),
+        ("ROMP_LON_MIN", "lon_min"),
+        ("ROMP_LON_MAX", "lon_max"),
+    ):
+        val = env.get(env_key)
+        if val is not None:
+            extra.append(f"{cfg_key} = {val}")
+
+    return "\n".join(extra)
+
+
+def _romp_entry_command(
+    config_overrides: str, compute_e2s_metrics: bool = False
+) -> list[str]:
+    script = [
+        "set -eu",
+        'config_path="${ROMP_CONFIG_PATH:-/tmp/romp_job.in}"',
+        'echo "==> Generating config from environment..."',
+        "python3 /app/scripts/generate_config.py",
+    ]
+    if config_overrides:
+        script.append(
+            "cat >> \"$config_path\" <<'ALMANAC_ROMP_OVERRIDES'\n"
+            "\n# Extended region parameters (appended by almanac runner)\n"
+            f"{config_overrides}\n"
+            "ALMANAC_ROMP_OVERRIDES"
+        )
+    script.extend(['echo "==> Starting ROMP..."', 'momp-run -p "$config_path"'])
+    if compute_e2s_metrics:
+        script.extend(
+            [
+                'echo "==> Starting Earth2Studio metrics..."',
+                "python3 /almanac/e2s_metrics_runner.py || "
+                'echo "WARNING: Earth2Studio metrics failed; ROMP outputs are still available."',
+            ]
+        )
+    return ["-c", "\n".join(script)]
+
+
+def _e2s_metrics_runner_host_path() -> str:
+    return _to_host_path(str(Path(__file__).with_name("e2s_metrics_runner.py")))
 
 
 class JobRunner(ABC):
@@ -63,10 +133,22 @@ class DockerRunner(JobRunner):
 
     def _run(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
         from .storage import LocalStorage
+        from ..config import REMOTE_OBS_PROVIDERS
 
         assert isinstance(self._storage, LocalStorage), (
             "DockerRunner requires LocalStorage"
         )
+
+        dataset_config = config.get("dataset_config", {})
+        if dataset_config.get("provider") in REMOTE_OBS_PROVIDERS:
+            _update_status(
+                job_id,
+                "failed",
+                error="Remote observation datasets are not supported with the local Docker runner.",
+                loop=loop,
+            )
+            logger.error("Job %s: remote obs dataset rejected by DockerRunner", job_id)
+            return
 
         output_dir, figure_dir = self._storage.job_output_uri(job_id)
         log_path = self._storage.log_path(job_id)
@@ -111,6 +193,8 @@ class DockerRunner(JobRunner):
             "--rm",
             "--name",
             f"romp-{job_id}",
+            "--entrypoint",
+            "/bin/sh",
             "-v",
             f"{_to_host_path(config['obs_dir'])}:/data/obs:ro",
             "-v",
@@ -119,11 +203,19 @@ class DockerRunner(JobRunner):
             f"{_to_host_path(output_dir)}:/data/output",
             "-v",
             f"{_to_host_path(figure_dir)}:/data/figure",
+            "-v",
+            f"{_e2s_metrics_runner_host_path()}:/almanac/e2s_metrics_runner.py:ro",
             *extra_mounts,
         ]
         for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]
         cmd.append(self._image)
+        cmd.extend(
+            _romp_entry_command(
+                _romp_config_override_lines(env),
+                compute_e2s_metrics=bool(config.get("compute_e2s_metrics")),
+            )
+        )
 
         logger.info("Starting ROMP container for job %s", job_id)
         try:
@@ -376,8 +468,16 @@ class ModalRunner(JobRunner):
         import time
         import modal
 
+        preflight_error = self._preflight_error(config)
+        if preflight_error:
+            _update_status(job_id, "failed", error=preflight_error, loop=loop)
+            logger.error(
+                "Modal job %s rejected before spawn: %s", job_id, preflight_error
+            )
+            return
+
         try:
-            run_romp = modal.Function.from_name("almanac-romp", "run_romp")
+            run_romp = modal.Function.from_name("almanac-romp", "run_benchmark")
             handle = run_romp.spawn(job_id, config, self._outputs_bucket)
             logger.info("Spawned Modal function for job %s", job_id)
         except Exception as exc:
@@ -401,13 +501,247 @@ class ModalRunner(JobRunner):
             except TimeoutError:
                 continue  # still running
             except Exception as exc:
-                _update_status(job_id, "failed", error=str(exc), loop=loop)
-                logger.error("Modal job %s failed: %s", job_id, exc)
+                error = self._modal_failure_error(job_id, exc)
+                _update_status(job_id, "failed", error=error, loop=loop)
+                logger.error("Modal job %s failed: %s", job_id, error)
                 return
 
         handle.cancel()
         _update_status(job_id, "failed", error="Job exceeded timeout", loop=loop)
         logger.error("Modal job %s timed out", job_id)
+
+    def _modal_failure_error(self, job_id: str, exc: Exception) -> str:
+        try:
+            from google.cloud import storage as gcs
+
+            blob = gcs.Client().bucket(self._outputs_bucket).blob(f"{job_id}/run.log")
+            if not blob.exists():
+                return str(exc)
+            log_text = blob.download_as_text()
+            tail = "\n".join(log_text.strip().splitlines()[-20:])
+            if not tail:
+                return str(exc)
+            return f"{exc}\n\nLast run log lines:\n{tail}"
+        except Exception:
+            logger.exception("Could not fetch Modal run log for failed job %s", job_id)
+            return str(exc)
+
+    def _preflight_error(self, config: dict) -> str | None:
+        from ..config import REMOTE_OBS_PROVIDERS
+
+        if not self._outputs_bucket:
+            return "JOB_RUNNER=modal requires GCS_OUTPUTS_BUCKET. Use JOB_RUNNER=modal-local for local filesystem outputs."
+
+        dataset_config = config.get("dataset_config", {})
+        if dataset_config.get("provider") not in REMOTE_OBS_PROVIDERS:
+            obs_dir = config.get("obs_dir", "")
+            if not str(obs_dir).startswith("gs://"):
+                return (
+                    f"JOB_RUNNER=modal requires obs_dir to be a gs:// URI; got {obs_dir!r}. "
+                    "Use JOB_RUNNER=modal-local for local filesystem inputs."
+                )
+
+        model_dir = config.get("model_dir", "")
+        if not str(model_dir).startswith("gs://"):
+            return (
+                f"JOB_RUNNER=modal requires model_dir to be a gs:// URI; got {model_dir!r}. "
+                "Use JOB_RUNNER=modal-local for local filesystem inputs."
+            )
+
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Modal local runner (dev, no GCS)
+# ---------------------------------------------------------------------------
+
+
+class ModalLocalRunner(JobRunner):
+    def __init__(self, job_timeout_seconds: int, storage):
+        from .storage import LocalStorage
+
+        assert isinstance(storage, LocalStorage), (
+            "ModalLocalRunner requires STORAGE_BACKEND=local"
+        )
+        self._timeout = job_timeout_seconds
+        self._storage = storage
+
+    def run_job(self, job_id: str, config: dict) -> None:
+        loop = asyncio.get_event_loop()
+        t = threading.Thread(
+            target=self._submit_and_poll, args=(job_id, config, loop), daemon=True
+        )
+        t.start()
+
+    def _submit_and_poll(
+        self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        import time
+        import modal
+
+        try:
+            bundle = _build_modal_local_bundle(config)
+            runtime_env = _modal_local_runtime_env(config)
+            run_benchmark = modal.Function.from_name(
+                "almanac-romp", "run_benchmark_local"
+            )
+            handle = run_benchmark.spawn(job_id, config, bundle, runtime_env)
+            logger.info("Spawned local Modal function for job %s", job_id)
+        except Exception as exc:
+            self._write_failure_log(
+                job_id,
+                "Failed to spawn local Modal function",
+                exc,
+            )
+            _update_status(
+                job_id,
+                "failed",
+                error=f"Failed to spawn local Modal function: {exc}",
+                loop=loop,
+            )
+            logger.exception("Failed to spawn local Modal job %s", job_id)
+            return
+
+        deadline = time.time() + self._timeout
+        while time.time() < deadline:
+            time.sleep(15)
+            try:
+                result = handle.get(timeout=0)
+                if not result.get("ok", False):
+                    self._persist_result(job_id, result)
+                    error = result.get("error") or "Local Modal benchmark failed"
+                    _update_status(job_id, "failed", error=error, loop=loop)
+                    logger.error("Local Modal job %s failed: %s", job_id, error)
+                    return
+                self._persist_result(job_id, result)
+                _update_status(job_id, "complete", loop=loop)
+                logger.info("Local Modal job %s completed", job_id)
+                return
+            except TimeoutError:
+                continue
+            except Exception as exc:
+                self._write_failure_log(
+                    job_id,
+                    "Local Modal function failed before returning logs",
+                    exc,
+                )
+                _update_status(job_id, "failed", error=str(exc), loop=loop)
+                logger.error("Local Modal job %s failed: %s", job_id, exc)
+                return
+
+        handle.cancel()
+        log_path = self._storage.log_path(job_id)
+        log_path.write_text("Local Modal benchmark exceeded timeout.\n")
+        _update_status(job_id, "failed", error="Job exceeded timeout", loop=loop)
+        logger.error("Local Modal job %s timed out", job_id)
+
+    def _persist_result(self, job_id: str, result: dict) -> None:
+        output_dir, figure_dir = self._storage.job_output_uri(job_id)
+        dirs = {"output": Path(output_dir), "figure": Path(figure_dir)}
+
+        for file_info in result.get("files", []):
+            kind = file_info.get("kind")
+            filename = file_info.get("filename")
+            data = file_info.get("data")
+            if kind not in dirs or not filename or not isinstance(data, bytes):
+                continue
+            safe_name = Path(filename).name
+            (dirs[kind] / safe_name).write_bytes(data)
+
+        log_path = self._storage.log_path(job_id)
+        log_text = result.get("log") or ""
+        if not log_text and result.get("error"):
+            log_text = f"Local Modal benchmark failed: {result['error']}\n"
+        log_path.write_text(log_text)
+
+    def _write_failure_log(self, job_id: str, summary: str, exc: Exception) -> None:
+        log_path = self._storage.log_path(job_id)
+        log_path.write_text(
+            f"{summary}: {exc}\n\n"
+            f"{''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}"
+        )
+
+
+def _build_modal_local_bundle(config: dict) -> bytes:
+    from ..config import REMOTE_OBS_PROVIDERS
+
+    dataset_config = config.get("dataset_config", {})
+    uses_remote_obs = dataset_config.get("provider") in REMOTE_OBS_PROVIDERS
+
+    obs_dir = config.get("obs_dir")
+    model_dir = config.get("model_dir")
+    if not model_dir:
+        raise ValueError("modal-local requires local model_dir")
+    if not obs_dir and not uses_remote_obs:
+        raise ValueError("modal-local requires local obs_dir for local datasets")
+
+    model_path = Path(model_dir).resolve()
+    if not model_path.is_dir():
+        raise ValueError(f"model_dir is not a directory: {model_path}")
+    obs_path = Path(obs_dir).resolve() if obs_dir else None
+    if obs_path is not None and not obs_path.is_dir():
+        raise ValueError(f"obs_dir is not a directory: {obs_path}")
+
+    romp_params = config.get("romp_params", {})
+    start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
+    end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
+    year_files = {f"{year}.nc" for year in range(start_year, end_year + 1)}
+    missing_model_files = sorted(
+        name for name in year_files if not (model_path / name).is_file()
+    )
+    if missing_model_files:
+        preview = ", ".join(missing_model_files[:5])
+        suffix = (
+            ""
+            if len(missing_model_files) <= 5
+            else f", ... ({len(missing_model_files)} missing)"
+        )
+        raise ValueError(
+            f"model_dir is missing required year files for modal-local: {preview}{suffix}. "
+            f"model_dir={model_path}"
+        )
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        if obs_path is not None:
+            _add_directory_children(tar, obs_path, "obs")
+        _add_directory_children(tar, model_path, "model", include_names=year_files)
+    return buffer.getvalue()
+
+
+def _modal_local_runtime_env(config: dict) -> dict[str, str]:
+    dataset_config = config.get("dataset_config", {})
+    if dataset_config.get("provider") != "earth2studio":
+        return {}
+
+    from ..config import settings
+
+    env: dict[str, str] = {}
+    if settings.cdsapi_url:
+        env["CDSAPI_URL"] = settings.cdsapi_url
+    if settings.cdsapi_key:
+        env["CDSAPI_KEY"] = settings.cdsapi_key
+
+    if not env.get("CDSAPI_KEY"):
+        raise ValueError(
+            "modal-local Earth2Studio datasets require CDSAPI_KEY in backend/.env "
+            "or the backend process environment."
+        )
+    return env
+
+
+def _add_directory_children(
+    tar: tarfile.TarFile,
+    source_dir: Path,
+    arc_dir: str,
+    include_names: set[str] | None = None,
+) -> None:
+    for path in sorted(source_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if include_names is not None and path.name not in include_names:
+            continue
+        tar.add(path, arcname=f"{arc_dir}/{path.name}")
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +803,11 @@ def _make_runner() -> JobRunner:
     from .storage import get_storage
 
     runner = settings.job_runner.lower()
+    if runner in ("modal-local", "modal_local", "modaldev", "modal-dev"):
+        return ModalLocalRunner(
+            job_timeout_seconds=settings.job_timeout_seconds,
+            storage=get_storage(),
+        )
     if runner == "modal":
         return ModalRunner(
             outputs_bucket=settings.gcs_outputs_bucket,
@@ -490,7 +829,7 @@ def _make_runner() -> JobRunner:
         )
     # Default: docker
     return DockerRunner(
-        romp_image=settings.romp_image,
+        romp_image=settings.romp_wrapper_image or settings.romp_image,
         job_timeout_seconds=settings.job_timeout_seconds,
         storage=get_storage(),
     )

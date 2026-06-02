@@ -83,11 +83,15 @@ export type MultiRunFormData = {
 	perModelOverrides?: Record<string, Partial<JobParams>>;
 };
 
+function jobRegionLabel(job: Job): string {
+	return job.region_name ?? job.region_id ?? job.params?.region ?? 'Unknown';
+}
+
 function buildRunGroups(jobs: Job[]): RunGroup[] {
 	const map = new globalThis.Map<string, Job[]>();
 	for (const job of jobs) {
 		const eventType = job.params?.event_type ?? 'monsoon_onset';
-		const region = job.params?.region ?? 'unknown';
+		const region = job.region_id ?? job.params?.region ?? 'unknown';
 		const start = job.params?.start_date ?? 'unknown';
 		const end = job.params?.end_date ?? 'unknown';
 		// Group by run_id when available (set at submit time), fall back to param-based
@@ -107,7 +111,7 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
 			return {
 				key,
 				eventType: first.params?.event_type ?? 'monsoon_onset',
-				region: first.params?.region ?? 'Unknown',
+				region: jobRegionLabel(first),
 				startDate: first.params?.start_date ?? '',
 				endDate: first.params?.end_date ?? '',
 				jobs: groupJobs,
@@ -205,7 +209,7 @@ export class BenchmarkStore {
 		const first = results[0];
 		const key =
 			first.run_id ??
-			`${first.params?.event_type ?? 'monsoon_onset'}||${first.params?.region ?? 'unknown'}||${first.params?.start_date ?? 'unknown'}||${first.params?.end_date ?? 'unknown'}`;
+			`${first.params?.event_type ?? 'monsoon_onset'}||${first.region_id ?? first.params?.region ?? 'unknown'}||${first.params?.start_date ?? 'unknown'}||${first.params?.end_date ?? 'unknown'}`;
 		this.selectedGroupKey = key;
 		this.showForm = false;
 	}

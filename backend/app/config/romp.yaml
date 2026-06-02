@@ -30,13 +30,13 @@ metrics:
         Fraction of observed events that were not forecast.
         MR = FN / (TP + FN).
 
-    - id: mae
+    - id: mean_mae
       label: "Mean Absolute Error"
       abbreviation: MAE
-      unit: mm
+      unit: days
       lower_is_better: true
       description: >
-        Average absolute difference between forecast and observed rainfall.
+        Average absolute difference between forecast and observed onset date.
 
   probabilistic:
     - id: brier_score
@@ -95,6 +95,46 @@ metrics:
       description: >
         Calibration of probability forecasts: how closely forecast
         probabilities match observed frequencies.
+
+# Extended metrics computed via earth2studio data pipeline (RMSE, ACC, etc.).
+# These are merged with ROMP metrics in the API response.
+e2s_metrics:
+  - id: rmse
+    label: "Root Mean Squared Error"
+    abbreviation: RMSE
+    unit: mm
+    lower_is_better: true
+    description: >
+      RMS error of the forecast against ground truth, computed over all
+      evaluation days. Lower is better.
+
+  - id: mae
+    label: "Mean Absolute Error"
+    abbreviation: MAE
+    unit: mm
+    lower_is_better: true
+    description: >
+      Average absolute difference between forecast and observed rainfall,
+      computed over all evaluation days. Lower is better.
+
+  - id: acc
+    label: "Anomaly Correlation Coefficient"
+    abbreviation: ACC
+    unit: dimensionless
+    range: [-1, 1]
+    lower_is_better: false
+    description: >
+      Correlation of forecast anomalies with observed anomalies relative to
+      the climatological mean. >0.6 is generally considered skilful.
+
+  - id: bias
+    label: "Mean Bias"
+    abbreviation: Bias
+    unit: mm
+    lower_is_better: false
+    description: >
+      Systematic offset of the forecast from observations.
+      Positive values indicate over-forecasting.
 
 # Default values for optional ROMP run parameters.
 # Keys match the ROMP_* env var suffix (lowercased).
