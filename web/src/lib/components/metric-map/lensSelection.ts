@@ -1,5 +1,12 @@
 import { deltaLayerKey, rawLayerKey } from './layerKeys';
-import type { MapViewMode, MetricDef, RunDef, WindowDef } from './types';
+import type {
+	MapViewMode,
+	MetricDef,
+	MetricWindowAvailability,
+	MetricWindowAvailabilityByJob,
+	RunDef,
+	WindowDef
+} from './types';
 
 export type LensSelection = {
 	viewMode: MapViewMode;
@@ -15,6 +22,8 @@ type LensSelectionContext = {
 	activeWindows: WindowDef[];
 	forecastWindow: string;
 	metrics: MetricDef[];
+	metricWindowAvailability?: MetricWindowAvailability;
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob;
 };
 
 export function availableModelRuns(activeRuns: RunDef[]) {
@@ -41,10 +50,32 @@ export function selectedReferenceRun(selection: LensSelection, activeRuns: RunDe
 
 export function normalizeLensSelection(
 	selection: LensSelection,
-	{ activeRuns, activeWindows, forecastWindow, metrics }: LensSelectionContext
+	{
+		activeRuns,
+		activeWindows,
+		forecastWindow,
+		metrics,
+		metricWindowAvailability,
+		metricWindowAvailabilityByJob
+	}: LensSelectionContext
 ): LensSelection {
 	const modelRuns = availableModelRuns(activeRuns);
 	const next = { ...selection };
+	if (!next.selectedModelJobId || !modelRuns.some((run) => run.jobId === next.selectedModelJobId)) {
+		next.selectedModelJobId = modelRuns[0]?.jobId ?? '';
+	}
+	const selectedModelAvailability =
+		metricWindowAvailabilityByJob?.[next.selectedModelJobId] ?? metricWindowAvailability;
+	const availableWindowsForMetric = (metric: string) =>
+		activeWindows.filter(
+			(window) =>
+				!selectedModelAvailability || selectedModelAvailability[metric]?.includes(window.value)
+		);
+	const availableMetricsForWindow = (window: string) =>
+		metrics.filter(
+			(metric) =>
+				!selectedModelAvailability || selectedModelAvailability[metric.value]?.includes(window)
+		);
 
 	if (
 		!next.selectedWindow ||
@@ -58,11 +89,32 @@ export function normalizeLensSelection(
 	) {
 		next.selectedReferenceWindow = next.selectedWindow;
 	}
-	if (!next.selectedMetric || !metrics.some((metric) => metric.value === next.selectedMetric)) {
-		next.selectedMetric = metrics[0]?.value ?? '';
+	if (
+		!next.selectedMetric ||
+		!metrics.some((metric) => metric.value === next.selectedMetric) ||
+		!availableMetricsForWindow(next.selectedWindow).some(
+			(metric) => metric.value === next.selectedMetric
+		)
+	) {
+		next.selectedMetric =
+			availableMetricsForWindow(next.selectedWindow)[0]?.value ?? metrics[0]?.value ?? '';
 	}
-	if (!next.selectedModelJobId || !modelRuns.some((run) => run.jobId === next.selectedModelJobId)) {
-		next.selectedModelJobId = modelRuns[0]?.jobId ?? '';
+	if (
+		next.selectedMetric &&
+		!availableWindowsForMetric(next.selectedMetric).some(
+			(window) => window.value === next.selectedWindow
+		)
+	) {
+		next.selectedWindow =
+			availableWindowsForMetric(next.selectedMetric)[0]?.value ?? forecastWindow;
+	}
+	if (
+		next.selectedMetric &&
+		!availableWindowsForMetric(next.selectedMetric).some(
+			(window) => window.value === next.selectedReferenceWindow
+		)
+	) {
+		next.selectedReferenceWindow = next.selectedWindow;
 	}
 	if (
 		next.selectedReferenceJobId !== 'climatology' &&

@@ -30,6 +30,7 @@
   display_name: "E2S (Test)"
   region: bangladesh
   model_type: AIWP
+  compute_e2s_metrics: true
   model_var: tp
   unit_cvt: 1000
   file_pattern: "{}.nc"

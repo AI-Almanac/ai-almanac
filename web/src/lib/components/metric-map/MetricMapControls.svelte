@@ -1,12 +1,22 @@
 <script lang="ts">
 	import { BASEMAP_STYLES, BOUNDARY_LEVELS, type BasemapStyleId } from './constants';
 	import { modelRunLabel, viewModeDescription } from './mapUi';
-	import type { BoundaryLevel, MapViewMode, MetricDef, RunDef, WindowDef } from './types';
+	import type {
+		BoundaryLevel,
+		MapViewMode,
+		MetricDef,
+		MetricWindowAvailability,
+		MetricWindowAvailabilityByJob,
+		RunDef,
+		WindowDef
+	} from './types';
 
 	type Props = {
 		panelCollapsed: boolean;
 		metrics: MetricDef[];
 		activeWindows: WindowDef[];
+		metricWindowAvailability?: MetricWindowAvailability;
+		metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob;
 		activeRuns: RunDef[];
 		availableModelRuns: RunDef[];
 		selectedMetric: string;
@@ -34,6 +44,8 @@
 		panelCollapsed,
 		metrics,
 		activeWindows,
+		metricWindowAvailability,
+		metricWindowAvailabilityByJob,
 		activeRuns,
 		availableModelRuns,
 		selectedMetric,
@@ -56,6 +68,27 @@
 		onSelectBasemap,
 		onToggleBoundary
 	}: Props = $props();
+
+	function availabilityForJob(jobId: string): MetricWindowAvailability | undefined {
+		return metricWindowAvailabilityByJob?.[jobId] ?? metricWindowAvailability;
+	}
+
+	const selectableMetrics = $derived(
+		metrics.filter((metric) => {
+			const availability = availabilityForJob(selectedModelJobId);
+			return !availability || availability[metric.value]?.includes(selectedWindow);
+		})
+	);
+
+	const selectableReferenceWindows = $derived(
+		activeWindows.filter((window) => {
+			const availability =
+				selectedReferenceJobId === 'climatology'
+					? metricWindowAvailability
+					: availabilityForJob(selectedReferenceJobId);
+			return !availability || availability[selectedMetric]?.includes(window.value);
+		})
+	);
 </script>
 
 <div class="layer-panel result-lens" class:collapsed={panelCollapsed}>
@@ -73,7 +106,7 @@
 						value={selectedMetric}
 						onchange={(event) => onSelectMetric(event.currentTarget.value)}
 					>
-						{#each metrics as metric}
+						{#each selectableMetrics as metric}
 							<option value={metric.value}>{metric.label}</option>
 						{/each}
 					</select>
@@ -150,7 +183,7 @@
 							value={selectedReferenceWindow}
 							onchange={(event) => onSelectReferenceWindow(event.currentTarget.value)}
 						>
-							{#each activeWindows as window}
+							{#each selectableReferenceWindows as window}
 								<option value={window.value}>{window.label}</option>
 							{/each}
 						</select>

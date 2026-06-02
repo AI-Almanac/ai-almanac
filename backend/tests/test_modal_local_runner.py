@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.services.runner import (
+    ModalRunner,
     _build_modal_local_bundle,
     _modal_local_runtime_env,
     _romp_config_override_lines,
@@ -118,10 +119,69 @@ def test_romp_config_overrides_disable_custom_region_climatology_plot() -> None:
     assert "plot_climatology_onset = False" in overrides
 
 
-def test_romp_entry_command_appends_config_overrides() -> None:
+def test_romp_entry_command_skips_e2s_metrics_by_default() -> None:
     command = _romp_entry_command("plot_climatology_onset = False")
 
     assert command[0] == "-c"
     assert "generate_config.py" in command[1]
     assert "ALMANAC_ROMP_OVERRIDES" in command[1]
     assert "momp-run -p" in command[1]
+    assert "python3 /almanac/e2s_metrics_runner.py" not in command[1]
+
+
+def test_romp_entry_command_runs_e2s_metrics_when_enabled() -> None:
+    command = _romp_entry_command(
+        "plot_climatology_onset = False", compute_e2s_metrics=True
+    )
+
+    assert command[0] == "-c"
+    assert "generate_config.py" in command[1]
+    assert "ALMANAC_ROMP_OVERRIDES" in command[1]
+    assert "momp-run -p" in command[1]
+    assert "python3 /almanac/e2s_metrics_runner.py" in command[1]
+    assert "Earth2Studio metrics failed" in command[1]
+
+
+def test_modal_runner_rejects_local_input_paths() -> None:
+    runner = ModalRunner(outputs_bucket="outputs-bucket", job_timeout_seconds=60)
+
+    error = runner._preflight_error(
+        {
+            "obs_dir": "/romp-data/ethiopia/obs",
+            "model_dir": "gs://bucket/models/fuxi",
+            "dataset_config": {"provider": "local"},
+        }
+    )
+
+    assert error is not None
+    assert "JOB_RUNNER=modal requires obs_dir" in error
+    assert "modal-local" in error
+
+
+def test_modal_runner_allows_remote_obs_with_gcs_model_path() -> None:
+    runner = ModalRunner(outputs_bucket="outputs-bucket", job_timeout_seconds=60)
+
+    error = runner._preflight_error(
+        {
+            "obs_dir": None,
+            "model_dir": "gs://bucket/models/fuxi",
+            "dataset_config": {"provider": "era5_arco"},
+        }
+    )
+
+    assert error is None
+
+
+def test_modal_runner_requires_outputs_bucket() -> None:
+    runner = ModalRunner(outputs_bucket="", job_timeout_seconds=60)
+
+    error = runner._preflight_error(
+        {
+            "obs_dir": "gs://bucket/obs",
+            "model_dir": "gs://bucket/models/fuxi",
+            "dataset_config": {"provider": "local"},
+        }
+    )
+
+    assert error is not None
+    assert "GCS_OUTPUTS_BUCKET" in error

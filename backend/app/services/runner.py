@@ -71,7 +71,7 @@ def _romp_config_override_lines(env: dict[str, str]) -> str:
     return "\n".join(extra)
 
 
-def _romp_entry_command(config_overrides: str) -> list[str]:
+def _romp_entry_command(config_overrides: str, compute_e2s_metrics: bool = False) -> list[str]:
     script = [
         "set -eu",
         'config_path="${ROMP_CONFIG_PATH:-/tmp/romp_job.in}"',
@@ -85,13 +85,20 @@ def _romp_entry_command(config_overrides: str) -> list[str]:
             f"{config_overrides}\n"
             "ALMANAC_ROMP_OVERRIDES"
         )
-    script.extend(
-        [
-            'echo "==> Starting ROMP..."',
-            'momp-run -p "$config_path"',
-        ]
-    )
+    script.extend(['echo "==> Starting ROMP..."', 'momp-run -p "$config_path"'])
+    if compute_e2s_metrics:
+        script.extend(
+            [
+                'echo "==> Starting Earth2Studio metrics..."',
+                "python3 /almanac/e2s_metrics_runner.py || "
+                'echo "WARNING: Earth2Studio metrics failed; ROMP outputs are still available."',
+            ]
+        )
     return ["-c", "\n".join(script)]
+
+
+def _e2s_metrics_runner_host_path() -> str:
+    return _to_host_path(str(Path(__file__).with_name("e2s_metrics_runner.py")))
 
 
 class JobRunner(ABC):
@@ -188,12 +195,19 @@ class DockerRunner(JobRunner):
             f"{_to_host_path(output_dir)}:/data/output",
             "-v",
             f"{_to_host_path(figure_dir)}:/data/figure",
+            "-v",
+            f"{_e2s_metrics_runner_host_path()}:/almanac/e2s_metrics_runner.py:ro",
             *extra_mounts,
         ]
         for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]
         cmd.append(self._image)
-        cmd.extend(_romp_entry_command(_romp_config_override_lines(env)))
+        cmd.extend(
+            _romp_entry_command(
+                _romp_config_override_lines(env),
+                compute_e2s_metrics=bool(config.get("compute_e2s_metrics")),
+            )
+        )
 
         logger.info("Starting ROMP container for job %s", job_id)
         try:
@@ -446,6 +460,12 @@ class ModalRunner(JobRunner):
         import time
         import modal
 
+        preflight_error = self._preflight_error(config)
+        if preflight_error:
+            _update_status(job_id, "failed", error=preflight_error, loop=loop)
+            logger.error("Modal job %s rejected before spawn: %s", job_id, preflight_error)
+            return
+
         try:
             run_romp = modal.Function.from_name("almanac-romp", "run_benchmark")
             handle = run_romp.spawn(job_id, config, self._outputs_bucket)
@@ -495,6 +515,30 @@ class ModalRunner(JobRunner):
         except Exception:
             logger.exception("Could not fetch Modal run log for failed job %s", job_id)
             return str(exc)
+
+    def _preflight_error(self, config: dict) -> str | None:
+        from ..config import REMOTE_OBS_PROVIDERS
+
+        if not self._outputs_bucket:
+            return "JOB_RUNNER=modal requires GCS_OUTPUTS_BUCKET. Use JOB_RUNNER=modal-local for local filesystem outputs."
+
+        dataset_config = config.get("dataset_config", {})
+        if dataset_config.get("provider") not in REMOTE_OBS_PROVIDERS:
+            obs_dir = config.get("obs_dir", "")
+            if not str(obs_dir).startswith("gs://"):
+                return (
+                    f"JOB_RUNNER=modal requires obs_dir to be a gs:// URI; got {obs_dir!r}. "
+                    "Use JOB_RUNNER=modal-local for local filesystem inputs."
+                )
+
+        model_dir = config.get("model_dir", "")
+        if not str(model_dir).startswith("gs://"):
+            return (
+                f"JOB_RUNNER=modal requires model_dir to be a gs:// URI; got {model_dir!r}. "
+                "Use JOB_RUNNER=modal-local for local filesystem inputs."
+            )
+
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +805,7 @@ def _make_runner() -> JobRunner:
         )
     # Default: docker
     return DockerRunner(
-        romp_image=settings.romp_image,
+        romp_image=settings.romp_wrapper_image or settings.romp_image,
         job_timeout_seconds=settings.job_timeout_seconds,
         storage=get_storage(),
     )

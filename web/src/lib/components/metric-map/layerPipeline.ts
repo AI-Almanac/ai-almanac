@@ -7,7 +7,14 @@ import {
 	buildSharedRawGeojson
 } from './gridData';
 import { deltaLayerKey, mapLayerId, mapSourceId, rawLayerKey } from './layerKeys';
-import type { LayerState, MetricDef, RunDef, WindowDef } from './types';
+import type {
+	LayerState,
+	MetricDef,
+	MetricWindowAvailability,
+	MetricWindowAvailabilityByJob,
+	RunDef,
+	WindowDef
+} from './types';
 import { sameRun } from './lensSelection';
 
 export type FetchResult =
@@ -36,14 +43,42 @@ export function buildClimatologyRun(jobs: Job[]): RunDef | null {
 	};
 }
 
+function metricAvailableForWindow(
+	availability: MetricWindowAvailability | undefined,
+	metric: string,
+	window: string
+) {
+	return !availability || availability[metric]?.includes(window);
+}
+
+function availabilityForRun(
+	run: RunDef,
+	globalAvailability: MetricWindowAvailability | undefined,
+	availabilityByJob: MetricWindowAvailabilityByJob | undefined
+) {
+	return run.modelName === 'climatology'
+		? globalAvailability
+		: (availabilityByJob?.[run.jobId] ?? globalAvailability);
+}
+
 export function allRawLayerKeys(
 	fetchRuns: RunDef[],
 	activeWindows: WindowDef[],
-	metrics: MetricDef[]
+	metrics: MetricDef[],
+	metricWindowAvailability?: MetricWindowAvailability,
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
 ) {
 	return fetchRuns.flatMap((run) =>
 		activeWindows.flatMap((window) =>
-			metrics.map((metric) => rawLayerKey(run.jobId, run.modelName, metric.value, window.value))
+			metrics
+				.filter((metric) =>
+					metricAvailableForWindow(
+						availabilityForRun(run, metricWindowAvailability, metricWindowAvailabilityByJob),
+						metric.value,
+						window.value
+					)
+				)
+				.map((metric) => rawLayerKey(run.jobId, run.modelName, metric.value, window.value))
 		)
 	);
 }
@@ -52,6 +87,8 @@ export async function fetchGridResults(
 	fetchRuns: RunDef[],
 	activeWindows: WindowDef[],
 	metrics: MetricDef[],
+	metricWindowAvailability: MetricWindowAvailability | undefined,
+	metricWindowAvailabilityByJob: MetricWindowAvailabilityByJob | undefined,
 	getGrid: (
 		jobId: string,
 		modelName: string,
@@ -62,19 +99,27 @@ export async function fetchGridResults(
 	return Promise.all(
 		fetchRuns.flatMap((run) =>
 			activeWindows.flatMap((window) =>
-				metrics.map(async (metric) => {
-					try {
-						const data = await getGrid(run.jobId, run.modelName, window.value, metric.value);
-						return { run, windowValue: window.value, metricValue: metric.value, data };
-					} catch (e) {
-						return {
-							run,
-							windowValue: window.value,
-							metricValue: metric.value,
-							error: e instanceof Error ? e.message : 'Failed to load'
-						};
-					}
-				})
+				metrics
+					.filter((metric) =>
+						metricAvailableForWindow(
+							availabilityForRun(run, metricWindowAvailability, metricWindowAvailabilityByJob),
+							metric.value,
+							window.value
+						)
+					)
+					.map(async (metric) => {
+						try {
+							const data = await getGrid(run.jobId, run.modelName, window.value, metric.value);
+							return { run, windowValue: window.value, metricValue: metric.value, data };
+						} catch (e) {
+							return {
+								run,
+								windowValue: window.value,
+								metricValue: metric.value,
+								error: e instanceof Error ? e.message : 'Failed to load'
+							};
+						}
+					})
 			)
 		)
 	);
@@ -101,16 +146,26 @@ export function computeSharedRanges(
 	activeRuns: RunDef[],
 	activeWindows: WindowDef[],
 	metrics: MetricDef[],
-	dataByRunMetric: Record<string, JobGridResponse>
+	dataByRunMetric: Record<string, JobGridResponse>,
+	metricWindowAvailability?: MetricWindowAvailability,
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
 ) {
 	const sharedRangeByMetric: Record<string, { min: number; max: number }> = {};
 	for (const metric of metrics) {
 		const values = activeRuns
 			.flatMap((run) =>
-				activeWindows.map(
-					(window) =>
-						dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
-				)
+				activeWindows
+					.filter((window) =>
+						metricAvailableForWindow(
+							availabilityForRun(run, metricWindowAvailability, metricWindowAvailabilityByJob),
+							metric.value,
+							window.value
+						)
+					)
+					.map(
+						(window) =>
+							dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
+					)
 			)
 			.filter((data): data is JobGridResponse => Boolean(data));
 		if (values.length > 0) {
@@ -174,18 +229,38 @@ export function buildDeltaLayerEntries(
 	activeRuns: RunDef[],
 	activeWindows: WindowDef[],
 	metrics: MetricDef[],
-	dataByRunMetric: Record<string, JobGridResponse>
+	dataByRunMetric: Record<string, JobGridResponse>,
+	metricWindowAvailability?: MetricWindowAvailability,
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
 ) {
 	const entries: LayerEntry[] = [];
 
 	for (const run of modelRuns) {
 		for (const metric of metrics) {
 			for (const window of activeWindows) {
+				const runAvailability = availabilityForRun(
+					run,
+					metricWindowAvailability,
+					metricWindowAvailabilityByJob
+				);
+				if (!metricAvailableForWindow(runAvailability, metric.value, window.value)) {
+					continue;
+				}
 				const modelData =
 					dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)];
 				if (!modelData) continue;
 				for (const reference of activeRuns) {
 					for (const referenceWindow of activeWindows) {
+						const referenceAvailability = availabilityForRun(
+							reference,
+							metricWindowAvailability,
+							metricWindowAvailabilityByJob
+						);
+						if (
+							!metricAvailableForWindow(referenceAvailability, metric.value, referenceWindow.value)
+						) {
+							continue;
+						}
 						if (sameRun(reference, run) && referenceWindow.value === window.value) continue;
 						const referenceData =
 							dataByRunMetric[

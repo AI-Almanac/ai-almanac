@@ -3,6 +3,8 @@ import type { JobGridResponse } from '$lib/api';
 
 export type MetricDef = { value: string; label: string };
 export type WindowDef = { value: string; label: string };
+export type MetricWindowAvailability = Record<string, string[]>;
+export type MetricWindowAvailabilityByJob = Record<string, MetricWindowAvailability>;
 
 export type RunDef = {
 	jobId: string;

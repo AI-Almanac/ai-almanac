@@ -321,6 +321,11 @@ async def create_job(body: JobCreate, user: CurrentUser):
     else:
         dataset_config = {"provider": "local"}
 
+    compute_e2s_metrics = bool(
+        model_cfg.get("compute_e2s_metrics")
+        or dataset_config.get("compute_e2s_metrics")
+    )
+
     config = {
         "model_name": body.model_name,
         "obs_dir": obs_dir,
@@ -329,6 +334,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
         "region_name": region_def["display_name"] if region_def else None,
         "romp_region": region_def.get("romp_name", "custom") if region_def else region_id,
         "dataset_config": dataset_config,
+        "compute_e2s_metrics": compute_e2s_metrics,
         "romp_params": romp_params,
     }
 

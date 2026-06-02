@@ -23,9 +23,14 @@ import subprocess
 import tempfile
 import tarfile
 import zipfile
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import modal
+
+if TYPE_CHECKING:
+    import xarray as xr
 
 app = modal.App("almanac-romp")
 
@@ -40,7 +45,7 @@ ROMP_IMAGE_URI = os.environ.get(
 )
 GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentials")
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
-E2S_SECRET_NAME = os.environ.get("ALMANAC_MODAL_E2S_SECRET_NAME", "e2s-credentials")
+E2S_SECRET_NAME = os.environ.get("ALMANAC_MODAL_E2S_SECRET_NAME", "")
 
 
 def _media_type_for_filename(filename: str) -> str:
@@ -190,10 +195,15 @@ romp_image = modal.Image.from_registry(
 )
 
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME) if ENABLE_GCS_FUNCTIONS else None
+e2s_secret = modal.Secret.from_name(E2S_SECRET_NAME) if E2S_SECRET_NAME else None
 
-# Extends the ROMP image with earth2studio for obs fetching and extended metrics.
-# Requires secret "e2s-credentials" with CDSAPI_KEY (create with placeholder if not using ERA5).
-benchmark_image = romp_image.pip_install("earth2studio[data]")
+E2S_METRICS_RUNNER = Path(__file__).resolve().parents[1] / "backend/app/services/e2s_metrics_runner.py"
+
+# Extends the ROMP image with earth2studio for metrics and public data readers.
+benchmark_image = (
+    romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr")
+    .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +211,23 @@ benchmark_image = romp_image.pip_install("earth2studio[data]")
 # ---------------------------------------------------------------------------
 
 
+def _split_gcs_uri(uri: str, label: str) -> tuple[str, str]:
+    if not uri.startswith("gs://"):
+        raise ValueError(
+            f"{label} must be a GCS URI for Modal production runs; got {uri!r}. "
+            "Use JOB_RUNNER=modal-local for local filesystem inputs."
+        )
+    bucket_name, _, prefix = uri.removeprefix("gs://").partition("/")
+    if not bucket_name:
+        raise ValueError(f"{label} has no bucket name: {uri!r}")
+    return bucket_name, prefix
+
+
 def _stage_gcs_prefix(client, uri: str, local_dir: Path) -> int:
     """Download all direct children of a GCS prefix into local_dir."""
     from google.cloud.storage import transfer_manager
 
-    bucket_name, _, prefix = uri.removeprefix("gs://").partition("/")
+    bucket_name, prefix = _split_gcs_uri(uri, "obs_dir")
     prefix = prefix.rstrip("/") + "/"
     bucket = client.bucket(bucket_name)
     names = [
@@ -227,7 +249,7 @@ def _stage_gcs_years(client, uri: str, local_dir: Path, start_year: int, end_yea
     """Download {year}.nc files from a GCS prefix filtered to the given year range."""
     from google.cloud.storage import transfer_manager
 
-    bucket_name, _, prefix = uri.removeprefix("gs://").partition("/")
+    bucket_name, prefix = _split_gcs_uri(uri, "model_dir")
     prefix = prefix.rstrip("/") + "/"
     year_names = {f"{y}.nc" for y in range(start_year, end_year + 1)}
     bucket = client.bucket(bucket_name)
@@ -259,6 +281,32 @@ def _extract_local_bundle(bundle: bytes, stage_root: Path) -> tuple[Path, Path]:
     return stage_root / "obs", stage_root / "model"
 
 
+def _log(message: str) -> None:
+    print(message, flush=True)
+
+
+class _LogTee:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+            stream.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
+def _size_summary(obj) -> str:
+    sizes = getattr(obj, "sizes", {})
+    if not sizes:
+        return "size=unknown"
+    return ", ".join(f"{name}={value}" for name, value in sizes.items())
+
+
 def _configure_cdsapi_from_env() -> None:
     """Materialize CDSAPI_URL/CDSAPI_KEY into the rc file cdsapi expects."""
     cdsapi_key = os.environ.get("CDSAPI_KEY")
@@ -273,11 +321,92 @@ def _configure_cdsapi_from_env() -> None:
     os.environ["CDSAPI_RC"] = str(rc_path)
 
 
+def _required_obs_date_ranges(
+    romp_params: dict,
+    dataset_config: dict,
+) -> list[tuple[datetime, datetime]]:
+    start = datetime.strptime(romp_params.get("start_date", "2019-05-01"), "%Y-%m-%d")
+    end = datetime.strptime(romp_params.get("end_date", "2024-07-31"), "%Y-%m-%d")
+    start_year = int(romp_params.get("start_year_clim", start.year))
+    end_year = int(romp_params.get("end_year_clim", end.year))
+    end_buffer_days = int(dataset_config.get("obs_end_buffer_days", 47))
+
+    fallback_date = romp_params.get("fallback_date")
+    if isinstance(fallback_date, str):
+        fallback_month_day = datetime.strptime(fallback_date, "%m-%d")
+        start_month, start_day = min(
+            (start.month, start.day),
+            (fallback_month_day.month, fallback_month_day.day),
+        )
+    else:
+        start_month, start_day = start.month, start.day
+
+    years = range(min(start.year, start_year), max(end.year, end_year) + 1)
+    return [
+        (
+            datetime(year, start_month, start_day),
+            datetime(year, end.month, end.day) + timedelta(days=end_buffer_days),
+        )
+        for year in years
+    ]
+
+
+def _daily_dates(ranges: list[tuple[datetime, datetime]]) -> list[datetime]:
+    dates: list[datetime] = []
+    seen: set[datetime] = set()
+    for start, end in ranges:
+        current = start
+        while current <= end:
+            if current not in seen:
+                seen.add(current)
+                dates.append(current)
+            current += timedelta(days=1)
+    return sorted(dates)
+
+
+def _monthly_date_ranges(
+    start: datetime,
+    end: datetime,
+) -> list[tuple[int, int, list[str]]]:
+    current = datetime(start.year, start.month, 1)
+    result: list[tuple[int, int, list[str]]] = []
+    while current <= end:
+        if current.month == 12:
+            next_month = datetime(current.year + 1, 1, 1)
+        else:
+            next_month = datetime(current.year, current.month + 1, 1)
+        month_start = max(start, current)
+        month_end = min(end, next_month - timedelta(days=1))
+        days = [f"{day:02d}" for day in range(month_start.day, month_end.day + 1)]
+        result.append((current.year, current.month, days))
+        current = next_month
+    return result
+
+
+def _remote_obs_provider(config: dict) -> str:
+    return str(config.get("provider", "local")).lower()
+
+
+def _uses_remote_obs(config: dict) -> bool:
+    return _remote_obs_provider(config) in {"earth2studio", "era5_arco"}
+
+
+def _fetch_remote_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> None:
+    provider = _remote_obs_provider(dataset_config)
+    _log(f"==> Preparing remote obs provider={provider}")
+    if provider == "era5_arco":
+        _fetch_era5_daily_precip_from_arco(dataset_config, romp_params, local_obs)
+        return
+    if provider == "earth2studio":
+        _fetch_e2s_obs(dataset_config, romp_params, local_obs)
+        return
+    raise ValueError(f"Unsupported remote obs provider: {provider!r}")
+
+
 def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> None:
     """Fetch obs via earth2studio DataSource and write annual {year}.nc files."""
     import importlib
     from collections import defaultdict
-    from datetime import datetime, timedelta
 
     import pandas as pd
     import xarray as xr
@@ -293,19 +422,10 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
     obs_var = romp_params.get("obs_var", "RAINFALL")
     lat_bounds = dataset_config.get("lat_bounds")
     lon_bounds = dataset_config.get("lon_bounds")
+    ranges = _required_obs_date_ranges(romp_params, dataset_config)
+    dates = _daily_dates(ranges)
 
-    start_str = romp_params.get("start_date", "2019-05-01")
-    end_str = romp_params.get("end_date", "2024-07-31")
-    start = datetime.strptime(start_str, "%Y-%m-%d")
-    end = datetime.strptime(end_str, "%Y-%m-%d")
-
-    dates = []
-    current = start
-    while current <= end:
-        dates.append(current)
-        current += timedelta(days=1)
-
-    print(f"==> Fetching e2s obs ({e2s_class_name}, var={precip_var}): {len(dates)} dates")
+    _log(f"==> Fetching e2s obs ({e2s_class_name}, var={precip_var}): {len(dates)} dates")
     _configure_cdsapi_from_env()
 
     if e2s_class_name == "CDS" and precip_var in {"tp", "total_precipitation"}:
@@ -313,8 +433,7 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
             dataset_config=dataset_config,
             romp_params=romp_params,
             local_obs=local_obs,
-            start=start,
-            end=end,
+            ranges=ranges,
         )
         return
 
@@ -335,8 +454,9 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
     chunk = 365
     for i in range(0, len(dates), chunk):
         batch = dates[i : i + chunk]
-        print(f"  batch: {batch[0].date()} — {batch[-1].date()}")
+        _log(f"  e2s batch: {batch[0].date()} to {batch[-1].date()}")
         da = data_source(batch, [precip_var])  # (time, variable, lat, lon)
+        _log(f"  e2s batch loaded: {_size_summary(da)}")
         da = da * unit_cvt
 
         lat_dim = "lat" if "lat" in da.dims else "latitude"
@@ -352,69 +472,283 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
             by_year[year].append(precip.sel(time=t_val))
 
     for year, slices in sorted(by_year.items()):
-        ds_year = xr.concat(slices, dim="time").to_dataset(name=obs_var)
+        by_year[year] = [_canonicalize_data_array(xr.concat(slices, dim="time"), obs_var)]
+    _write_romp_daily_obs_files(by_year, obs_var, local_obs)
+
+
+def _coord_slice(values, bounds: list[float] | tuple[float, float]):
+    low, high = min(bounds), max(bounds)
+    if len(values) >= 2 and float(values[0]) > float(values[-1]):
+        return slice(high, low)
+    return slice(low, high)
+
+
+def _select_lat_lon_bounds(da, lat_bounds, lon_bounds):
+    selectors = {}
+    if lat_bounds:
+        selectors["lat"] = _coord_slice(da["lat"].values, lat_bounds)
+    if lon_bounds:
+        selectors["lon"] = _coord_slice(da["lon"].values, lon_bounds)
+    if not selectors:
+        return da
+    return da.sel(selectors)
+
+
+def _era5_arco_variable(ds, configured_name: str) -> str:
+    aliases = {
+        "tp": ["tp", "total_precipitation"],
+        "total_precipitation": ["total_precipitation", "tp"],
+    }
+    for name in aliases.get(configured_name, [configured_name]):
+        if name in ds.data_vars:
+            return name
+    available = ", ".join(sorted(ds.data_vars))
+    raise KeyError(
+        f"ARCO ERA5 variable {configured_name!r} is not available. "
+        f"Available variables: {available}"
+    )
+
+
+def _rename_canonical_coords(da):
+    rename = {
+        name: canonical
+        for name in set(da.dims).union(da.coords)
+        if (canonical := _canonical_dim_name(str(name))) != name
+    }
+    return da.rename(rename)
+
+
+def _write_romp_daily_obs_files(by_year: dict[int, list], obs_var: str, local_obs: Path) -> None:
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    for year, parts in sorted(by_year.items()):
+        _log(f"  writing obs file for {year}: {len(parts)} daily chunks")
+        da = xr.concat(parts, dim="time").sortby("time")
+        _, unique_indexes = np.unique(pd.to_datetime(da.time.values), return_index=True)
+        da = da.isel(time=sorted(unique_indexes))
+        da = da.rename({"time": "TIME", "lat": "LATITUDE", "lon": "LONGITUDE"})
+        da = da.transpose("TIME", "LATITUDE", "LONGITUDE")
+        da.name = obs_var
+        out_ds = da.to_dataset()
+        out_ds[obs_var].attrs.update({"units": "mm/day", "time_step": "day"})
         out_path = local_obs / f"{year}.nc"
-        ds_year.to_netcdf(out_path)
-        print(f"  wrote: {out_path.name} ({len(slices)} days)")
+        _log(f"  saving {out_path.name}: {_size_summary(out_ds)}")
+        out_ds.to_netcdf(out_path)
+        _log(f"  wrote: {out_path.name} ({out_ds.sizes.get('TIME', 0)} days)")
 
 
-def _fetch_era5_daily_precip_from_cds(
+def _write_romp_daily_obs_file(year: int, da, obs_var: str, local_obs: Path) -> None:
+    _write_romp_daily_obs_files({year: [da]}, obs_var, local_obs)
+
+
+def _configure_zarr_for_low_memory() -> None:
+    os.environ.setdefault("ZARR_ASYNC_CONCURRENCY", "1")
+    try:
+        import zarr
+
+        zarr.config.set({"async.concurrency": 1})
+    except Exception as exc:
+        _log(f"  zarr low-memory config not applied: {exc}")
+
+
+def _load_arco_daily_precip_day(
+    source,
+    day: datetime,
+    unit_cvt: float,
+    lat_bounds,
+    lon_bounds,
+):
+    import gc
+    import pandas as pd
+
+    day_end = day + timedelta(hours=23)
+    hourly = source.sel(time=slice(day, day_end))
+    hourly = _select_lat_lon_bounds(hourly, lat_bounds, lon_bounds)
+    hourly = hourly.transpose("time", "lat", "lon").sortby(["lat", "lon"])
+    daily = (
+        (hourly.astype("float32").sum(dim="time") * unit_cvt)
+        .astype("float32")
+        .load()
+    )
+    daily = daily.expand_dims(time=[pd.Timestamp(day)])
+    del hourly
+    gc.collect()
+    return daily
+
+
+def _write_arco_month_file(
+    source,
+    year: int,
+    month: int,
+    days: list[str],
+    unit_cvt: float,
+    lat_bounds,
+    lon_bounds,
+    obs_var: str,
+    local_obs: Path,
+) -> Path:
+    import gc
+    import xarray as xr
+
+    daily_parts = []
+    for day_label in days:
+        day = datetime(year, month, int(day_label))
+        _log(f"    loading ARCO day {day.date()}")
+        daily_parts.append(
+            _load_arco_daily_precip_day(source, day, unit_cvt, lat_bounds, lon_bounds)
+        )
+
+    month_daily = xr.concat(daily_parts, dim="time").sortby("time")
+    month_path = local_obs / f".era5_arco_{year}_{month:02d}.nc"
+    month_daily.to_dataset(name=obs_var).to_netcdf(month_path)
+    _log(f"    wrote temporary {month_path.name}: {_size_summary(month_daily)}")
+    del daily_parts, month_daily
+    gc.collect()
+    return month_path
+
+
+def _fetch_era5_daily_precip_from_arco(
     dataset_config: dict,
     romp_params: dict,
     local_obs: Path,
-    start,
-    end,
 ) -> None:
-    """Fetch ERA5 daily total precipitation directly from CDS daily statistics."""
-    import cdsapi
+    import gc
     import xarray as xr
 
+    source_url = dataset_config.get(
+        "arco_url",
+        "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
+    )
+    precip_var = dataset_config.get("precip_var", "total_precipitation")
     obs_var = romp_params.get("obs_var", "RAINFALL")
     unit_cvt = float(dataset_config.get("unit_cvt", 1000.0))
     lat_bounds = dataset_config.get("lat_bounds")
     lon_bounds = dataset_config.get("lon_bounds")
+    ranges = _required_obs_date_ranges(romp_params, dataset_config)
 
-    client = cdsapi.Client()
-    dataset = "derived-era5-single-levels-daily-statistics"
-    years = range(start.year, end.year + 1)
-    print(
-        "==> Fetching ERA5 daily total precipitation from CDS daily statistics "
-        f"({start.year}–{end.year})"
+    first_start = min(start for start, _ in ranges)
+    last_end = max(end for _, end in ranges)
+    requested_days = sum((end - start).days + 1 for start, end in ranges)
+    _log(
+        "==> Fetching ERA5 daily total precipitation from ARCO ERA5 "
+        f"({first_start.date()} to {last_end.date()}, "
+        f"windows={len(ranges)}, days={requested_days})"
     )
 
-    for year in years:
-        year_start = max(start, start.__class__(year, 1, 1))
-        year_end = min(end, end.__class__(year, 12, 31))
-        months = [f"{month:02d}" for month in range(year_start.month, year_end.month + 1)]
-        days = [f"{day:02d}" for day in range(1, 32)]
+    _configure_zarr_for_low_memory()
 
-        request = {
-            "product_type": "reanalysis",
-            "variable": ["total_precipitation"],
-            "year": str(year),
-            "month": months,
-            "day": days,
-            "daily_statistic": "daily_sum",
-            "time_zone": "utc+00:00",
-            "frequency": "1_hourly",
-            "data_format": "netcdf",
-            "download_format": "zip",
-        }
-        if lat_bounds and lon_bounds:
-            south, north = min(lat_bounds), max(lat_bounds)
-            west, east = min(lon_bounds), max(lon_bounds)
-            request["area"] = [north, west, south, east]
-
-        target = local_obs / f"era5_daily_precip_{year}.zip"
-        print(
-            f"  requesting {year}: {len(months)} months, {len(days)} day labels, "
-            f"area={request.get('area', 'global')}"
+    for index, (start, end) in enumerate(ranges, start=1):
+        _log(
+            f"  ARCO window {index}/{len(ranges)}: "
+            f"processing {start.date()} to {end.date()}"
         )
-        client.retrieve(dataset, request, str(target))
+
+        # Open a fresh store for each window so the Zarr chunk cache is bounded to
+        # one season's worth of reads and is fully released when we close the store.
+        _log(f"  opening ARCO Zarr store: {source_url}")
+        ds = xr.open_zarr(source_url, chunks=None, storage_options={"token": "anon"})
+        _log(f"  opened ARCO store: variables={len(ds.data_vars)}, {_size_summary(ds)}")
+        valid_start = ds.attrs.get("valid_time_start")
+        valid_stop = ds.attrs.get("valid_time_stop")
+        if valid_start and valid_stop:
+            ds = ds.sel(time=slice(valid_start, valid_stop))
+        data_var = _era5_arco_variable(ds, precip_var)
+        source = _rename_canonical_coords(ds[data_var])
+        _log(f"  prepared ARCO source variable: {_size_summary(source)}")
+
+        month_paths: dict[int, list[Path]] = {}
+        for year, month, days in _monthly_date_ranges(start, end):
+            month_start = datetime(year, month, int(days[0]))
+            month_end = datetime(year, month, int(days[-1]))
+            _log(
+                f"  ARCO window {index}/{len(ranges)} month {year}-{month:02d}: "
+                f"selecting {month_start.date()} to {month_end.date()}, "
+                f"lat={lat_bounds or 'all'} lon={lon_bounds or 'all'}"
+            )
+            month_path = _write_arco_month_file(
+                source=source,
+                year=year,
+                month=month,
+                days=days,
+                unit_cvt=unit_cvt,
+                lat_bounds=lat_bounds,
+                lon_bounds=lon_bounds,
+                obs_var=obs_var,
+                local_obs=local_obs,
+            )
+            month_paths.setdefault(year, []).append(month_path)
+            gc.collect()
+
+        # Close the store before merging month files; the merge reads only from disk.
+        ds.close()
+        del source, ds
+        gc.collect()
+
+        for year, paths in sorted(month_paths.items()):
+            datasets = [xr.open_dataset(path) for path in paths]
+            try:
+                parts = [
+                    _canonicalize_data_array(ds_part[obs_var].astype(float), obs_var).load()
+                    for ds_part in datasets
+                ]
+            finally:
+                for ds_part in datasets:
+                    ds_part.close()
+            _write_romp_daily_obs_files({year: parts}, obs_var, local_obs)
+            for path in paths:
+                path.unlink(missing_ok=True)
+            del datasets, parts
+            gc.collect()
+
+
+def _fetch_cds_month(
+    client,
+    dataset_name: str,
+    year: int,
+    month: int,
+    days: list[str],
+    window_start: datetime,
+    window_end: datetime,
+    unit_cvt: float,
+    lat_bounds,
+    lon_bounds,
+    local_obs: Path,
+) -> "xr.DataArray":
+    """Download one month from CDS, load it into memory, and delete all temp files."""
+    import shutil
+    import xarray as xr
+
+    request: dict = {
+        "product_type": "reanalysis",
+        "variable": ["total_precipitation"],
+        "year": str(year),
+        "month": [f"{month:02d}"],
+        "day": days,
+        "daily_statistic": "daily_sum",
+        "time_zone": "utc+00:00",
+        "frequency": "1_hourly",
+        "data_format": "netcdf",
+        "download_format": "zip",
+    }
+    if lat_bounds and lon_bounds:
+        south, north = min(lat_bounds), max(lat_bounds)
+        west, east = min(lon_bounds), max(lon_bounds)
+        request["area"] = [north, west, south, east]
+
+    target = local_obs / f"era5_daily_precip_{year}_{month:02d}.zip"
+    extract_dir = local_obs / f"era5_daily_precip_{year}_{month:02d}"
+    print(
+        f"  requesting {year}-{month:02d}: {len(days)} days, "
+        f"area={request.get('area', 'global')}"
+    )
+
+    try:
+        client.retrieve(dataset_name, request, str(target))
 
         nc_files: list[Path] = []
         if zipfile.is_zipfile(target):
-            extract_dir = local_obs / f"era5_daily_precip_{year}"
             extract_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(target) as archive:
                 archive.extractall(extract_dir)
@@ -423,7 +757,10 @@ def _fetch_era5_daily_precip_from_cds(
             nc_files = [target]
 
         if not nc_files:
-            raise RuntimeError(f"CDS daily precipitation request for {year} returned no NetCDF files")
+            raise RuntimeError(
+                f"CDS daily precipitation request for {year}-{month:02d} "
+                "returned no NetCDF files"
+            )
 
         datasets = [xr.open_dataset(path) for path in nc_files]
         try:
@@ -431,116 +768,329 @@ def _fetch_era5_daily_precip_from_cds(
             data_var = "tp" if "tp" in ds.data_vars else "total_precipitation"
             if data_var not in ds.data_vars:
                 data_var = next(iter(ds.data_vars))
-            da = ds[data_var].astype(float) * unit_cvt
-
-            rename = {}
-            for coord in da.coords:
-                lower = coord.lower()
-                if lower in {"valid_time", "time"}:
-                    rename[coord] = "TIME"
-                elif lower in {"latitude", "lat"}:
-                    rename[coord] = "LATITUDE"
-                elif lower in {"longitude", "lon"}:
-                    rename[coord] = "LONGITUDE"
-            da = da.rename(rename)
-
-            if "TIME" not in da.dims:
-                time_dim = next(dim for dim in da.dims if dim.lower() in {"time", "valid_time"})
-                da = da.rename({time_dim: "TIME"})
-            if "LATITUDE" not in da.dims:
-                lat_dim = next(dim for dim in da.dims if dim.lower() in {"lat", "latitude"})
-                da = da.rename({lat_dim: "LATITUDE"})
-            if "LONGITUDE" not in da.dims:
-                lon_dim = next(dim for dim in da.dims if dim.lower() in {"lon", "longitude"})
-                da = da.rename({lon_dim: "LONGITUDE"})
-
-            da = da.transpose("TIME", "LATITUDE", "LONGITUDE")
-            da.name = obs_var
-            out_ds = da.to_dataset()
-            out_ds[obs_var].attrs.update({"units": "mm/day", "time_step": "day"})
-            out_path = local_obs / f"{year}.nc"
-            out_ds.to_netcdf(out_path)
-            print(f"  wrote: {out_path.name} ({out_ds.sizes.get('TIME', 0)} days)")
+            da = _canonicalize_data_array(ds[data_var].astype(float), data_var)
+            da = da.sel(time=slice(window_start, window_end)) * unit_cvt
+            return da.load()
         finally:
             for ds_part in datasets:
                 ds_part.close()
+    finally:
+        # Delete temp files immediately so disk usage doesn't accumulate across months.
+        target.unlink(missing_ok=True)
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
 
 
-def _compute_extended_metrics(
-    model_name: str,
+def _fetch_era5_daily_precip_from_cds(
+    dataset_config: dict,
+    romp_params: dict,
+    local_obs: Path,
+    ranges: list[tuple[datetime, datetime]],
+) -> None:
+    """Fetch ERA5 daily total precipitation directly from CDS daily statistics."""
+    import gc
+    import cdsapi
+
+    obs_var = romp_params.get("obs_var", "RAINFALL")
+    unit_cvt = float(dataset_config.get("unit_cvt", 1000.0))
+    lat_bounds = dataset_config.get("lat_bounds")
+    lon_bounds = dataset_config.get("lon_bounds")
+
+    client = cdsapi.Client()
+    dataset_name = "derived-era5-single-levels-daily-statistics"
+    first_start = min(start for start, _ in ranges)
+    last_end = max(end for _, end in ranges)
+    print(
+        "==> Fetching ERA5 daily total precipitation from CDS daily statistics "
+        f"({first_start.date()} to {last_end.date()})"
+    )
+
+    # Group months by year so each year's data can be written and freed before
+    # the next year begins. Each entry is (window_start, window_end, month, days).
+    months_by_year: dict[int, list[tuple[datetime, datetime, int, list[str]]]] = {}
+    for start, end in ranges:
+        for year, month, days in _monthly_date_ranges(start, end):
+            months_by_year.setdefault(year, []).append((start, end, month, days))
+
+    for year in sorted(months_by_year):
+        year_parts = []
+        for window_start, window_end, month, days in months_by_year[year]:
+            da = _fetch_cds_month(
+                client, dataset_name, year, month, days,
+                window_start, window_end, unit_cvt, lat_bounds, lon_bounds, local_obs,
+            )
+            year_parts.append(da)
+        _write_romp_daily_obs_files({year: year_parts}, obs_var, local_obs)
+        del year_parts
+        gc.collect()
+
+
+def _canonical_dim_name(name: str) -> str:
+    lower = name.lower()
+    if lower in {"time", "valid_time"}:
+        return "time"
+    if lower in {"lat", "latitude"}:
+        return "lat"
+    if lower in {"lon", "longitude"}:
+        return "lon"
+    return name
+
+
+def _canonicalize_data_array(da, variable_name: str):
+    rename = {
+        name: canonical
+        for name in set(da.dims).union(da.coords)
+        if (canonical := _canonical_dim_name(str(name))) != name
+    }
+    da = da.rename(rename)
+    missing = {"time", "lat", "lon"} - set(da.dims)
+    if missing:
+        raise ValueError(f"{variable_name} is missing required dimensions: {sorted(missing)}")
+    return da.transpose("time", "lat", "lon").sortby(["time", "lat", "lon"])
+
+
+def _select_metric_variable(ds, preferred_name: str):
+    name = preferred_name if preferred_name in ds.data_vars else next(iter(ds.data_vars))
+    return _canonicalize_data_array(ds[name].astype(float), str(name))
+
+
+def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
+    local_obs = stage_root / "obs"
+    local_model = stage_root / "model"
+    local_out = stage_root / "output"
+    local_fig = stage_root / "figure"
+    for path in (local_obs, local_model, local_out, local_fig):
+        path.mkdir(parents=True, exist_ok=True)
+    return local_obs, local_model, local_out, local_fig
+
+
+def _romp_env(
+    config: dict,
     local_obs: Path,
     local_model: Path,
     local_out: Path,
-    romp_params: dict,
+    local_fig: Path,
+) -> dict:
+    romp_params = config.get("romp_params", {})
+    return {
+        **os.environ,
+        "ROMP_OBS_DIR": str(local_obs),
+        "ROMP_MODEL_DIR": str(local_model),
+        "ROMP_MODEL_NAME": config["model_name"],
+        "ROMP_DIR_OUT": str(local_out),
+        "ROMP_DIR_FIG": str(local_fig),
+        **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
+    }
+
+
+def _patch_romp_config(config_path: str, env: dict) -> None:
+    """Append region fields as a safety override after generate_config.py runs.
+
+    generate_config.py already writes lat_min/lat_max/lon_min/lon_max and
+    land_only/shp_only from env vars, but appending here ensures any future
+    version mismatch doesn't silently fall back to wrong defaults.
+    Last-assignment wins when ROMP exec()s the config file.
+    """
+    extra: list[str] = []
+
+    for env_key, cfg_key in (
+        ("ROMP_LAND_ONLY", "land_only"),
+        ("ROMP_SHP_ONLY", "shp_only"),
+    ):
+        val = env.get(env_key)
+        if val is not None:
+            bool_val = "False" if str(val).lower() in ("false", "0", "no") else "True"
+            extra.append(f"{cfg_key} = {bool_val}")
+
+    for env_key, cfg_key in (
+        ("ROMP_LAT_MIN", "lat_min"),
+        ("ROMP_LAT_MAX", "lat_max"),
+        ("ROMP_LON_MIN", "lon_min"),
+        ("ROMP_LON_MAX", "lon_max"),
+    ):
+        val = env.get(env_key)
+        if val is not None:
+            extra.append(f"{cfg_key} = {val}")
+
+    if str(env.get("ROMP_REGION", "")).lower() == "custom":
+        # ROMP's climatology-onset basemap path currently calls domain(region)
+        # without forwarding custom lat/lon bounds. The metric NetCDFs and
+        # spatial metric figures are still written without this plot.
+        extra.append("plot_climatology_onset = False")
+
+    if extra:
+        with open(config_path, "a") as f:
+            f.write("\n# Extended region parameters (appended by almanac runner)\n")
+            for line in extra:
+                f.write(line + "\n")
+
+
+def _run_subprocess(cmd: list[str], env: dict, capture_output: bool) -> subprocess.CompletedProcess:
+    result = subprocess.run(cmd, env=env, capture_output=capture_output, text=capture_output)
+    if capture_output:
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="")
+    return result
+
+
+def _run_romp_entry(env: dict, local_out: Path, capture_output: bool) -> None:
+    config_path = env.get("ROMP_CONFIG_PATH", "/tmp/romp_job.in")
+
+    print("==> Generating config from environment...")
+    gen = _run_subprocess(
+        ["python3", "/app/scripts/generate_config.py"],
+        env=env,
+        capture_output=capture_output,
+    )
+    if gen.returncode != 0:
+        raise RuntimeError(f"Config generation failed with code {gen.returncode}")
+
+    _patch_romp_config(config_path, env)
+
+    print("==> Starting ROMP...")
+    result = _run_subprocess(
+        ["momp-run", "-p", config_path],
+        env=env,
+        capture_output=capture_output,
+    )
+    if result.returncode not in (0, -11, 139):
+        raise RuntimeError(f"ROMP exited with code {result.returncode}")
+    if result.returncode in (-11, 139) and not any(local_out.iterdir()):
+        raise RuntimeError("ROMP segfaulted with no output")
+
+
+def _run_staged_benchmark(
+    job_id: str,
+    config: dict,
+    local_obs: Path,
+    local_model: Path,
+    local_out: Path,
+    local_fig: Path,
+    capture_output: bool = False,
 ) -> None:
-    """Compute spatial RMSE, MAE, ACC, and bias from staged obs/model netCDF files."""
-    import numpy as np
-    import xarray as xr
-
-    obs_var = romp_params.get("obs_var", "RAINFALL")
-    model_var = romp_params.get("model_var", "tp")
-
-    obs_files = sorted(local_obs.glob("*.nc"))
-    model_files = sorted(local_model.glob("*.nc"))
-    if not obs_files or not model_files:
-        print("  skipping extended metrics: insufficient staged files")
-        return
-
-    print("==> Computing extended metrics (RMSE, MAE, ACC, bias)...")
-    try:
-        obs_ds = xr.open_mfdataset(obs_files, combine="by_coords")
-        model_ds = xr.open_mfdataset(model_files, combine="by_coords")
-
-        obs_var_actual = obs_var if obs_var in obs_ds else list(obs_ds.data_vars)[0]
-        model_var_actual = model_var if model_var in model_ds else list(model_ds.data_vars)[0]
-
-        obs_da = obs_ds[obs_var_actual].astype(float)
-        model_da = model_ds[model_var_actual].astype(float)
-
-        # Regrid model to obs grid if resolutions differ
-        lat_dim = "lat" if "lat" in obs_da.dims else "latitude"
-        lon_dim = "lon" if "lon" in obs_da.dims else "longitude"
-        model_lat = "lat" if "lat" in model_da.dims else "latitude"
-        model_lon = "lon" if "lon" in model_da.dims else "longitude"
-        if not (
-            obs_da[lat_dim].equals(model_da[model_lat])
-            and obs_da[lon_dim].equals(model_da[model_lon])
-        ):
-            model_da = model_da.interp(
-                {model_lat: obs_da[lat_dim], model_lon: obs_da[lon_dim]},
-                method="linear",
+    env = _romp_env(config, local_obs, local_model, local_out, local_fig)
+    print(f"==> Running benchmark for {job_id}")
+    print(f"    obs files: {sum(1 for _ in local_obs.iterdir())}")
+    print(f"    model files: {sum(1 for _ in local_model.iterdir())}")
+    _run_romp_entry(
+        env,
+        local_out,
+        capture_output,
+    )
+    if config.get("compute_e2s_metrics"):
+        try:
+            result = _run_subprocess(
+                ["python3", "/almanac/e2s_metrics_runner.py"],
+                env=env,
+                capture_output=capture_output,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Earth2Studio metrics exited with code {result.returncode}")
+        except Exception as exc:
+            print(
+                "WARNING: Earth2Studio metrics failed; "
+                f"ROMP outputs are still available. Error: {exc}"
             )
 
-        obs_da, model_da = xr.align(obs_da, model_da, join="inner")
-        if len(obs_da.time) == 0:
-            print("  no overlapping time steps — skipping extended metrics")
-            return
 
-        diff = model_da - obs_da
-        rmse = np.sqrt((diff**2).mean(dim="time"))
-        mae = abs(diff).mean(dim="time")
-        bias = diff.mean(dim="time")
+def _write_gcp_credentials_from_secret() -> None:
+    sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(sa_json)
+        sa_key_path = f.name
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
 
-        clim = obs_da.mean(dim="time")
-        obs_anom = obs_da - clim
-        model_anom = model_da - clim
-        cov = (obs_anom * model_anom).mean(dim="time")
-        denom = obs_anom.std(dim="time") * model_anom.std(dim="time")
-        acc = xr.where(denom > 1e-10, cov / denom, float("nan"))
 
-        out_ds = xr.Dataset({"rmse": rmse, "mae": mae, "bias": bias, "acc": acc})
-        out_ds.attrs["model"] = model_name
-        out_ds.attrs["verification_window"] = "all"
+def _stage_gcs_benchmark_inputs(
+    client,
+    config: dict,
+    local_obs: Path,
+    local_model: Path,
+) -> None:
+    romp_params = config.get("romp_params", {})
+    dataset_config = config.get("dataset_config", {})
+    start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
+    end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
 
-        out_path = local_out / f"e2s_spatial_metrics_{model_name}_all.nc"
-        out_ds.to_netcdf(out_path)
-        print(f"  extended metrics saved: {out_path.name}")
+    if _uses_remote_obs(dataset_config):
+        _fetch_remote_obs(dataset_config, romp_params, local_obs)
+    else:
+        obs_uri = config["obs_dir"]
+        print(f"==> Staging obs from {obs_uri}")
+        count = _stage_gcs_prefix(client, obs_uri, local_obs)
+        print(f"    obs staged: {count} files")
 
-    except Exception as exc:
-        import traceback
+    model_uri = config["model_dir"]
+    print(f"==> Staging model ({start_year}-{end_year}) from {model_uri}")
+    count = _stage_gcs_years(client, model_uri, local_model, start_year, end_year)
+    print(f"    model staged: {count} files")
 
-        print(f"  WARNING: extended metrics failed: {exc}")
-        traceback.print_exc()
+
+def _upload_outputs_to_gcs(
+    client,
+    outputs_bucket: str,
+    job_id: str,
+    local_out: Path,
+    local_fig: Path,
+) -> None:
+    from google.cloud.storage import transfer_manager
+
+    if not outputs_bucket:
+        raise ValueError("outputs_bucket is required for Modal production runs")
+    print(f"==> Uploading outputs to gs://{outputs_bucket}/{job_id}/")
+    out_bucket = client.bucket(outputs_bucket)
+    for kind, local_dir in (("output", local_out), ("figure", local_fig)):
+        files = [f.name for f in local_dir.iterdir() if f.is_file()]
+        if not files:
+            continue
+        results = transfer_manager.upload_many_from_filenames(
+            out_bucket,
+            files,
+            source_directory=str(local_dir),
+            blob_name_prefix=f"{job_id}/{kind}/",
+            worker_type="thread",
+        )
+        for name, upload_result in zip(files, results):
+            if isinstance(upload_result, Exception):
+                print(f"  upload FAILED: {kind}/{name}: {upload_result}")
+            else:
+                print(f"  uploaded: {kind}/{name}")
+
+
+def _upload_run_log_to_gcs(
+    client,
+    outputs_bucket: str,
+    job_id: str,
+    log_text: str,
+) -> None:
+    if not log_text or not outputs_bucket:
+        if log_text and not outputs_bucket:
+            _log("WARNING: outputs_bucket is empty; cannot upload run log")
+        return
+    bucket = client.bucket(outputs_bucket)
+    bucket.blob(f"{job_id}/run.log").upload_from_string(
+        log_text,
+        content_type="text/plain",
+    )
+    _log(f"==> Uploaded run log to gs://{outputs_bucket}/{job_id}/run.log")
+
+
+def _capture_output_files(local_out: Path, local_fig: Path) -> list[dict]:
+    files: list[dict] = []
+    for kind, local_dir in (("output", local_out), ("figure", local_fig)):
+        for path in sorted(local_dir.iterdir()):
+            if path.is_file():
+                files.append(
+                    {
+                        "kind": kind,
+                        "filename": path.name,
+                        "data": path.read_bytes(),
+                    }
+                )
+                print(f"  captured: {kind}/{path.name}")
+    return files
 
 
 if ENABLE_GCS_FUNCTIONS:
@@ -550,93 +1100,61 @@ if ENABLE_GCS_FUNCTIONS:
         cpu=(6, 12),
         memory=(16384, 32768),
         timeout=7200,
-        secrets=[gcp_secret, modal.Secret.from_name(E2S_SECRET_NAME)],
+        secrets=[secret for secret in (gcp_secret, e2s_secret) if secret is not None],
     )
     def run_benchmark(job_id: str, config: dict, outputs_bucket: str) -> None:
         """
-        Unified benchmark runner: prepares obs (GCS or earth2studio), runs ROMP,
+        Unified benchmark runner: prepares obs (GCS or remote source), runs ROMP,
         computes extended metrics (RMSE, MAE, ACC, bias).
 
         Required secrets:
           gcp-service-account — SERVICE_ACCOUNT_JSON
-          e2s-credentials     — CDSAPI_KEY (use placeholder value if not using ERA5 datasets)
+          e2s-credentials     — CDSAPI_KEY (only needed for Earth2Studio/CDS datasets)
         """
         from google.cloud import storage as gcs
+        from contextlib import redirect_stderr, redirect_stdout
+        import io as _io
+        import sys
+        import traceback
 
-        sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(sa_json)
-            sa_key_path = f.name
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
+        log_buffer = _io.StringIO()
+        client = None
+        failure: Exception | None = None
 
-        romp_params = config.get("romp_params", {})
-        dataset_config = config.get("dataset_config", {})
-        start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
-        end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
+        with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
+            _LogTee(sys.stderr, log_buffer)
+        ):
+            try:
+                _write_gcp_credentials_from_secret()
+                client = gcs.Client()
+                local_obs, local_model, local_out, local_fig = _stage_paths(
+                    Path("/tmp/romp_stage")
+                )
 
-        stage_root = Path("/tmp/romp_stage")
-        local_obs = stage_root / "obs"
-        local_model = stage_root / "model"
-        local_out = stage_root / "output"
-        local_fig = stage_root / "figure"
-        for d in (local_obs, local_model, local_out, local_fig):
-            d.mkdir(parents=True, exist_ok=True)
+                _stage_gcs_benchmark_inputs(client, config, local_obs, local_model)
+                _run_staged_benchmark(
+                    job_id, config, local_obs, local_model, local_out, local_fig
+                )
+                _upload_outputs_to_gcs(
+                    client, outputs_bucket, job_id, local_out, local_fig
+                )
+                print("==> Done.")
+            except Exception as exc:
+                failure = exc
+                traceback.print_exc()
+            finally:
+                if client is not None:
+                    try:
+                        _upload_run_log_to_gcs(
+                            client, outputs_bucket, job_id, log_buffer.getvalue()
+                        )
+                    except Exception:
+                        traceback.print_exc()
 
-        client = gcs.Client()
-
-        if dataset_config.get("provider") == "earth2studio":
-            _fetch_e2s_obs(dataset_config, romp_params, local_obs)
-        else:
-            obs_uri = config["obs_dir"]
-            print(f"==> Staging obs from {obs_uri}")
-            count = _stage_gcs_prefix(client, obs_uri, local_obs)
-            print(f"    obs staged: {count} files")
-
-        model_uri = config["model_dir"]
-        print(f"==> Staging model ({start_year}–{end_year}) from {model_uri}")
-        count = _stage_gcs_years(client, model_uri, local_model, start_year, end_year)
-        print(f"    model staged: {count} files")
-
-        env = {
-            **os.environ,
-            "ROMP_OBS_DIR": str(local_obs),
-            "ROMP_MODEL_DIR": str(local_model),
-            "ROMP_MODEL_NAME": config["model_name"],
-            "ROMP_DIR_OUT": str(local_out),
-            "ROMP_DIR_FIG": str(local_fig),
-            **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
-        }
-        print("==> Running ROMP...")
-        result = subprocess.run(["/app/scripts/entrypoint.sh"], env=env, capture_output=False)
-        if result.returncode not in (0, -11, 139):
-            raise RuntimeError(f"ROMP exited with code {result.returncode}")
-        if result.returncode in (-11, 139) and not any(local_out.iterdir()):
-            raise RuntimeError("ROMP segfaulted with no output")
-
-        _compute_extended_metrics(config["model_name"], local_obs, local_model, local_out, romp_params)
-
-        from google.cloud.storage import transfer_manager
-
-        print(f"==> Uploading outputs to gs://{outputs_bucket}/{job_id}/")
-        out_bucket = client.bucket(outputs_bucket)
-        for kind, local_dir in (("output", local_out), ("figure", local_fig)):
-            files = [f.name for f in local_dir.iterdir() if f.is_file()]
-            if not files:
-                continue
-            results = transfer_manager.upload_many_from_filenames(
-                out_bucket,
-                files,
-                source_directory=str(local_dir),
-                blob_name_prefix=f"{job_id}/{kind}/",
-                worker_type="thread",
-            )
-            for name, upload_result in zip(files, results):
-                if isinstance(upload_result, Exception):
-                    print(f"  upload FAILED: {kind}/{name}: {upload_result}")
-                else:
-                    print(f"  uploaded: {kind}/{name}")
-
-        print("==> Done.")
+        if failure is not None:
+            raise RuntimeError(
+                f"Benchmark job {job_id} failed; see run.log for details: {failure}"
+            ) from failure
 
 
 @app.function(
@@ -661,13 +1179,16 @@ def run_benchmark_local(
     """
     from contextlib import redirect_stderr, redirect_stdout
     import io as _io
+    import sys
     import traceback
 
     log_buffer = _io.StringIO()
     files: list[dict] = []
 
     try:
-        with redirect_stdout(log_buffer), redirect_stderr(log_buffer):
+        with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
+            _LogTee(sys.stderr, log_buffer)
+        ):
             romp_params = config.get("romp_params", {})
             dataset_config = config.get("dataset_config", {})
             if runtime_env:
@@ -679,60 +1200,22 @@ def run_benchmark_local(
             local_obs, local_model = _extract_local_bundle(input_bundle, stage_root)
             local_out = stage_root / "output"
             local_fig = stage_root / "figure"
-            for d in (local_obs, local_out, local_fig):
-                d.mkdir(parents=True, exist_ok=True)
+            for path in (local_obs, local_model, local_out, local_fig):
+                path.mkdir(parents=True, exist_ok=True)
 
-            if dataset_config.get("provider") == "earth2studio":
-                _fetch_e2s_obs(dataset_config, romp_params, local_obs)
+            if _uses_remote_obs(dataset_config):
+                _fetch_remote_obs(dataset_config, romp_params, local_obs)
 
-            print(f"==> Running local Modal benchmark for {job_id}")
-            print(f"    obs files: {sum(1 for _ in local_obs.iterdir())}")
-            print(f"    model files: {sum(1 for _ in local_model.iterdir())}")
-
-            env = {
-                **os.environ,
-                "ROMP_OBS_DIR": str(local_obs),
-                "ROMP_MODEL_DIR": str(local_model),
-                "ROMP_MODEL_NAME": config["model_name"],
-                "ROMP_DIR_OUT": str(local_out),
-                "ROMP_DIR_FIG": str(local_fig),
-                **{
-                    f"ROMP_{k.upper()}": str(v)
-                    for k, v in romp_params.items()
-                    if v is not None
-                },
-            }
-
-            result = subprocess.run(
-                ["/app/scripts/entrypoint.sh"],
-                env=env,
+            _run_staged_benchmark(
+                job_id,
+                config,
+                local_obs,
+                local_model,
+                local_out,
+                local_fig,
                 capture_output=True,
-                text=True,
             )
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="")
-            if result.returncode not in (0, -11, 139):
-                raise RuntimeError(f"ROMP exited with code {result.returncode}")
-            if result.returncode in (-11, 139) and not any(local_out.iterdir()):
-                raise RuntimeError("ROMP segfaulted with no output")
-
-            _compute_extended_metrics(
-                config["model_name"], local_obs, local_model, local_out, romp_params
-            )
-
-            for kind, local_dir in (("output", local_out), ("figure", local_fig)):
-                for path in sorted(local_dir.iterdir()):
-                    if path.is_file():
-                        files.append(
-                            {
-                                "kind": kind,
-                                "filename": path.name,
-                                "data": path.read_bytes(),
-                            }
-                        )
-                        print(f"  captured: {kind}/{path.name}")
+            files = _capture_output_files(local_out, local_fig)
 
             print("==> Done.")
     except Exception as exc:
@@ -740,139 +1223,6 @@ def run_benchmark_local(
         return {"ok": False, "error": str(exc), "log": log_buffer.getvalue(), "files": files}
 
     return {"ok": True, "log": log_buffer.getvalue(), "files": files}
-
-
-@app.function(
-    image=romp_image,
-    cpu=(6, 12),
-    memory=(16384, 32768),  # 16 GiB request, 32Gib limit
-    timeout=3600,
-    secrets=[gcp_secret] if ENABLE_GCS_FUNCTIONS else [],
-)
-def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """
-    Run ROMP for a single job.
-
-    Replicates the staging logic from docker/romp-wrapper/entrypoint.sh, then
-    calls /app/scripts/entrypoint.sh (the inner ROMP entry) with the same env
-    vars that DockerRunner uses.
-
-    Raises on failure so the caller's poll loop can catch it.
-    """
-    from google.cloud import storage as gcs
-    from google.cloud.storage import transfer_manager
-
-    # Write SA key so google-cloud-storage can authenticate.
-    sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        f.write(sa_json)
-        sa_key_path = f.name
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
-
-    romp_params = config.get("romp_params", {})
-    start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
-    end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
-
-    stage_root = Path("/tmp/romp_stage")
-    local_obs = stage_root / "obs"
-    local_model = stage_root / "model"
-    local_out = stage_root / "output"
-    local_fig = stage_root / "figure"
-    for d in (local_obs, local_model, local_out, local_fig):
-        d.mkdir(parents=True, exist_ok=True)
-
-    client = gcs.Client()
-
-    # --- Stage obs (all files in prefix, downloaded in parallel) ---
-    obs_uri = config["obs_dir"]  # gs://bucket/prefix
-    print(f"==> Staging obs from {obs_uri}")
-    bucket_name, _, prefix = obs_uri.removeprefix("gs://").partition("/")
-    prefix = prefix.rstrip("/") + "/"
-    obs_bucket = client.bucket(bucket_name)
-    obs_names = [
-        blob.name[len(prefix):]
-        for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] and not blob.name[len(prefix):].endswith("/")
-    ]
-    if obs_names:
-        results = transfer_manager.download_many_to_path(
-            obs_bucket, obs_names, str(local_obs), blob_name_prefix=prefix, worker_type="thread",
-        )
-        for name, result in zip(obs_names, results):
-            if isinstance(result, Exception):
-                print(f"  obs FAILED: {name}: {result}")
-            else:
-                print(f"  obs: {name}")
-    print(f"    obs staged: {sum(1 for _ in local_obs.iterdir())} files")
-
-    # --- Stage model (list prefix once, filter by year range, download in parallel) ---
-    model_uri = config["model_dir"]  # gs://bucket/prefix
-    print(f"==> Staging model ({start_year}–{end_year}) from {model_uri}")
-    bucket_name, _, prefix = model_uri.removeprefix("gs://").partition("/")
-    prefix = prefix.rstrip("/") + "/"
-    year_names = {f"{year}.nc" for year in range(start_year, end_year + 1)}
-    model_bucket = client.bucket(bucket_name)
-    model_names = [
-        blob.name[len(prefix):]
-        for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] in year_names
-    ]
-    if model_names:
-        results = transfer_manager.download_many_to_path(
-            model_bucket, model_names, str(local_model), blob_name_prefix=prefix, worker_type="thread",
-        )
-        for name, result in zip(model_names, results):
-            if isinstance(result, Exception):
-                print(f"  model FAILED: {name}: {result}")
-            else:
-                print(f"  model: {name}")
-    print(f"    model staged: {sum(1 for _ in local_model.iterdir())} files")
-
-    # --- Build ROMP env (matches DockerRunner env construction) ---
-    env = {
-        **os.environ,
-        "ROMP_OBS_DIR": str(local_obs),
-        "ROMP_MODEL_DIR": str(local_model),
-        "ROMP_MODEL_NAME": config["model_name"],
-        "ROMP_DIR_OUT": str(local_out),
-        "ROMP_DIR_FIG": str(local_fig),
-        **{
-            f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None
-        },
-    }
-
-    # --- Run ROMP ---
-    print("==> Running ROMP...")
-    result = subprocess.run(
-        ["/app/scripts/entrypoint.sh"],
-        env=env,
-        capture_output=False,  # stream stdout/stderr to Modal logs
-    )
-
-    # Treat SIGSEGV as success if outputs exist (matches DockerRunner behaviour).
-    if result.returncode not in (0, -11, 139):
-        raise RuntimeError(f"ROMP exited with code {result.returncode}")
-    if result.returncode in (-11, 139) and not any(local_out.iterdir()):
-        raise RuntimeError("ROMP segfaulted with no output")
-
-    # --- Upload outputs to GCS (parallel) ---
-    print(f"==> Uploading outputs to gs://{outputs_bucket}/{job_id}/")
-    out_bucket = client.bucket(outputs_bucket)
-    for kind, local_dir in (("output", local_out), ("figure", local_fig)):
-        files = [f.name for f in local_dir.iterdir() if f.is_file()]
-        if not files:
-            continue
-        results = transfer_manager.upload_many_from_filenames(
-            out_bucket, files, source_directory=str(local_dir),
-            blob_name_prefix=f"{job_id}/{kind}/", worker_type="thread",
-        )
-        for name, result in zip(files, results):
-            if isinstance(result, Exception):
-                print(f"  upload FAILED: {kind}/{name}: {result}")
-            else:
-                print(f"  uploaded: {kind}/{name}")
-
-    print("==> Done.")
 
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,36 @@
 			definitionsById
 		)
 	);
+	const metricWindowAvailability = $derived(
+		currentMetrics.reduce<Record<string, string[]>>((availability, metrics) => {
+			for (const windowMetrics of metrics.windows) {
+				if (windowMetrics.model === 'climatology') continue;
+				for (const metric of Object.keys(windowMetrics.metrics)) {
+					const windows = availability[metric] ?? [];
+					if (!windows.includes(windowMetrics.window)) {
+						availability[metric] = [...windows, windowMetrics.window];
+					}
+				}
+			}
+			return availability;
+		}, {})
+	);
+	const metricWindowAvailabilityByJob = $derived(
+		currentMetrics.reduce<Record<string, Record<string, string[]>>>((availability, metrics) => {
+			const jobAvailability = availability[metrics.job_id] ?? {};
+			for (const windowMetrics of metrics.windows) {
+				if (windowMetrics.model === 'climatology') continue;
+				for (const metric of Object.keys(windowMetrics.metrics)) {
+					const windows = jobAvailability[metric] ?? [];
+					if (!windows.includes(windowMetrics.window)) {
+						jobAvailability[metric] = [...windows, windowMetrics.window];
+					}
+				}
+			}
+			availability[metrics.job_id] = jobAvailability;
+			return availability;
+		}, {})
+	);
 
 	$effect(() => {
 		loadMetricDefinitions().then((definitions) => {
@@ -82,7 +112,6 @@
 			});
 		}
 	});
-
 </script>
 
 <div class="viewer">
@@ -92,6 +121,8 @@
 			forecastWindow={windowOptions[0].value}
 			forecastWindows={windowOptions}
 			metrics={mapMetrics}
+			{metricWindowAvailability}
+			{metricWindowAvailabilityByJob}
 		/>
 	{:else}
 		<p class="empty">No spatial data available for this run set.</p>

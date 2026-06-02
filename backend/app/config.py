@@ -84,9 +84,7 @@ class Settings(BaseSettings):
 
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
-    romp_wrapper_image: str = (
-        ""  # if set, used instead of romp_image for Cloud Run jobs
-    )
+    romp_wrapper_image: str = ""  # if set, used instead of romp_image for job runners
     job_timeout_seconds: int = 3600
     job_cpu: str = "4"
     job_memory: str = "16Gi"

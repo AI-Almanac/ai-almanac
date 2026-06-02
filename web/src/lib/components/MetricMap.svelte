@@ -41,6 +41,8 @@
 		BoundaryLevel,
 		LayerState,
 		MetricDef,
+		MetricWindowAvailability,
+		MetricWindowAvailabilityByJob,
 		RunDef,
 		WindowDef
 	} from '$lib/components/metric-map/types';
@@ -50,9 +52,19 @@
 		forecastWindow: string;
 		metrics: MetricDef[];
 		forecastWindows?: WindowDef[];
+		metricWindowAvailability?: MetricWindowAvailability;
+		metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob;
 		compact?: boolean;
 	};
-	let { jobs, forecastWindow, metrics, forecastWindows, compact = false }: Props = $props();
+	let {
+		jobs,
+		forecastWindow,
+		metrics,
+		forecastWindows,
+		metricWindowAvailability,
+		metricWindowAvailabilityByJob,
+		compact = false
+	}: Props = $props();
 
 	let mapContainer = $state<HTMLElement | null>(null);
 	let map = $state<maplibregl.Map | null>(null);
@@ -137,6 +149,66 @@
 		return activeWindows.find((window) => window.value === value)?.label ?? value;
 	}
 
+	function metricAvailabilityForJob(jobId: string): MetricWindowAvailability | undefined {
+		return metricWindowAvailabilityByJob?.[jobId] ?? metricWindowAvailability;
+	}
+
+	function windowsForMetric(metric: string, jobId = lens.selectedModelJobId) {
+		const availability = metricAvailabilityForJob(jobId);
+		return activeWindows.filter(
+			(window) => !availability || availability[metric]?.includes(window.value)
+		);
+	}
+
+	function metricsForWindow(window: string, jobId = lens.selectedModelJobId) {
+		const availability = metricAvailabilityForJob(jobId);
+		return metrics.filter(
+			(metric) => !availability || availability[metric.value]?.includes(window)
+		);
+	}
+
+	function selectMetric(value: string) {
+		lens.selectedMetric = value;
+		const availableWindows = windowsForMetric(value);
+		if (
+			availableWindows.length > 0 &&
+			!availableWindows.some((window) => window.value === lens.selectedWindow)
+		) {
+			lens.selectedWindow = availableWindows[0].value;
+		}
+		if (
+			availableWindows.length > 0 &&
+			!availableWindows.some((window) => window.value === lens.selectedReferenceWindow)
+		) {
+			lens.selectedReferenceWindow = lens.selectedWindow;
+		}
+	}
+
+	function selectWindow(value: string) {
+		lens.selectedWindow = value;
+		const availableMetrics = metricsForWindow(value);
+		if (
+			availableMetrics.length > 0 &&
+			!availableMetrics.some((metric) => metric.value === lens.selectedMetric)
+		) {
+			lens.selectedMetric = availableMetrics[0].value;
+		}
+		const availableReferenceWindows = windowsForMetric(lens.selectedMetric);
+		if (
+			availableReferenceWindows.length > 0 &&
+			!availableReferenceWindows.some((window) => window.value === lens.selectedReferenceWindow)
+		) {
+			lens.selectedReferenceWindow = lens.selectedWindow;
+		}
+	}
+
+	function selectReferenceWindow(value: string) {
+		const availableWindows = windowsForMetric(lens.selectedMetric);
+		lens.selectedReferenceWindow = availableWindows.some((window) => window.value === value)
+			? value
+			: (availableWindows[0]?.value ?? lens.selectedWindow);
+	}
+
 	function lensSelection(): LensSelection {
 		return { ...lens };
 	}
@@ -151,7 +223,9 @@
 			activeRuns,
 			activeWindows,
 			forecastWindow,
-			metrics
+			metrics,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob
 		});
 		if (!lensSelectionsEqual(current, normalized)) setLensSelection(normalized);
 		return normalized;
@@ -481,17 +555,32 @@
 				activeRuns: [...modelRuns, climRun],
 				activeWindows,
 				forecastWindow,
-				metrics
+				metrics,
+				metricWindowAvailability,
+				metricWindowAvailabilityByJob
 			})
 		);
 
 		const fetchRuns = [...modelRuns, climRun];
-		const allKeys = allRawLayerKeys(fetchRuns, activeWindows, metrics);
+		const allKeys = allRawLayerKeys(
+			fetchRuns,
+			activeWindows,
+			metrics,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob
+		);
 		visibleKeys = new Set([...previousVisibleKeys].filter((key) => allKeys.includes(key)));
 		opacities = Object.fromEntries(allKeys.map((key) => [key, previousOpacities[key] ?? 1]));
 		loading = new Set(allKeys);
 
-		const results = await fetchGridResults(fetchRuns, activeWindows, metrics, getCachedJobGrid);
+		const results = await fetchGridResults(
+			fetchRuns,
+			activeWindows,
+			metrics,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob,
+			getCachedJobGrid
+		);
 		if (requestId !== loadRequestId) return;
 
 		const { dataByRunMetric, hasClimatology } = indexGridResults(results);
@@ -501,7 +590,9 @@
 			activeRuns,
 			activeWindows,
 			metrics,
-			dataByRunMetric
+			dataByRunMetric,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob
 		);
 		const rawLayers = buildRawLayerEntries(results, sharedRangeByMetric);
 		for (const { key, state } of rawLayers.entries) addLayerState(key, state);
@@ -511,7 +602,9 @@
 			activeRuns,
 			activeWindows,
 			metrics,
-			dataByRunMetric
+			dataByRunMetric,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob
 		);
 		for (const { key, state } of deltaLayers) {
 			addLayerState(key, state);
@@ -650,9 +743,10 @@
 
 	$effect(() => {
 		const cell = selectedCell;
-		if (cell && jobIds && lens.selectedWindow) {
-			const jobsSnapshot = jobs;
-			const window = lens.selectedWindow;
+		const window = lens.selectedWindow;
+		const activeJobIds = jobIds;
+		if (cell && activeJobIds && window) {
+			const jobsSnapshot = untrack(() => jobs);
 			untrack(() => loadCellResults(cell.lat, cell.lon, window, jobsSnapshot));
 		}
 	});
@@ -729,6 +823,8 @@
 		{panelCollapsed}
 		{metrics}
 		{activeWindows}
+		{metricWindowAvailability}
+		{metricWindowAvailabilityByJob}
 		{activeRuns}
 		availableModelRuns={availableModelRuns()}
 		selectedMetric={lens.selectedMetric}
@@ -742,15 +838,15 @@
 		{boundaryLoading}
 		{boundaryErrors}
 		onTogglePanel={() => (panelCollapsed = !panelCollapsed)}
-		onSelectMetric={(value) => (lens.selectedMetric = value)}
-		onSelectWindow={(value) => (lens.selectedWindow = value)}
+		onSelectMetric={selectMetric}
+		onSelectWindow={selectWindow}
 		onSelectModel={(value) => (lens.selectedModelJobId = value)}
 		onSelectViewMode={(value) => {
 			lens.viewMode = value;
 			if (value === 'baseline') lens.selectedReferenceJobId = 'climatology';
 		}}
 		onSelectReferenceJob={(value) => (lens.selectedReferenceJobId = value)}
-		onSelectReferenceWindow={(value) => (lens.selectedReferenceWindow = value)}
+		onSelectReferenceWindow={selectReferenceWindow}
 		onSelectBasemap={(value) => (selectedBasemap = value)}
 		onToggleBoundary={toggleBoundaryLayer}
 	/>

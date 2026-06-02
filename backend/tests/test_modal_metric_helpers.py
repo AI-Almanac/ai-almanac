@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xarray as xr
 
 
@@ -42,8 +43,11 @@ def test_canonicalize_data_array_accepts_era5_daily_dimension_names() -> None:
     assert result.lon.values.tolist() == [40.0, 41.0]
 
 
-def test_clip_time_range_limits_extended_metric_inputs_to_job_dates() -> None:
-    modal_app = load_modal_app()
+def test_clip_time_range_limits_e2s_metric_inputs_to_job_dates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import e2s_metrics_runner
+
     da = xr.DataArray(
         np.arange(4),
         dims=("time",),
@@ -54,10 +58,10 @@ def test_clip_time_range_limits_extended_metric_inputs_to_job_dates() -> None:
             )
         },
     )
+    monkeypatch.setenv("ROMP_START_DATE", "2020-06-01")
+    monkeypatch.setenv("ROMP_END_DATE", "2020-06-02")
 
-    result = modal_app._clip_time_range(
-        da, {"start_date": "2020-06-01", "end_date": "2020-06-02"}
-    )
+    result = e2s_metrics_runner._clip_time_range(da)
 
     assert result.values.tolist() == [1, 2]
 
@@ -92,6 +96,26 @@ def test_monthly_date_ranges_use_exact_day_labels() -> None:
         (2020, 6, [str(day).zfill(2) for day in range(1, 31)]),
         (2020, 7, ["01", "02"]),
     ]
+
+
+def test_split_gcs_uri_rejects_local_paths() -> None:
+    modal_app = load_modal_app()
+
+    with pytest.raises(ValueError, match="modal-local"):
+        modal_app._split_gcs_uri("/romp-data/ethiopia/obs", "obs_dir")
+
+
+def test_upload_run_log_skips_empty_outputs_bucket(capsys) -> None:
+    modal_app = load_modal_app()
+
+    modal_app._upload_run_log_to_gcs(
+        client=object(),
+        outputs_bucket="",
+        job_id="job-1",
+        log_text="failure log",
+    )
+
+    assert "cannot upload run log" in capsys.readouterr().out
 
 
 def test_patch_romp_config_disables_custom_region_climatology_plot(tmp_path: Path) -> None:
@@ -176,5 +200,65 @@ def test_fetch_era5_daily_precip_from_arco_writes_romp_annual_files(
             [2000.0, 2000.0],
             [2000.0, 2000.0],
         ]
+    finally:
+        result.close()
+
+
+def test_e2s_metrics_runner_computes_known_error_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("earth2studio")
+    from app.services import e2s_metrics_runner
+
+    obs_dir = tmp_path / "obs"
+    model_dir = tmp_path / "model"
+    out_dir = tmp_path / "output"
+    obs_dir.mkdir()
+    model_dir.mkdir()
+    out_dir.mkdir()
+
+    time = np.array(["2020-06-01", "2020-06-02", "2020-06-03"], dtype="datetime64[ns]")
+    lat = np.array([10.0, 11.0])
+    lon = np.array([40.0, 41.0])
+    obs = np.array(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[2.0, 3.0], [4.0, 5.0]],
+            [[3.0, 4.0], [5.0, 6.0]],
+        ]
+    )
+    err = np.array(
+        [
+            [[1.0, -1.0], [2.0, -2.0]],
+            [[2.0, -2.0], [4.0, -4.0]],
+            [[3.0, -3.0], [6.0, -6.0]],
+        ]
+    )
+    model = obs + err
+
+    xr.Dataset(
+        {"RAINFALL": (("time", "lat", "lon"), obs)},
+        coords={"time": time, "lat": lat, "lon": lon},
+    ).to_netcdf(obs_dir / "2020.nc")
+    xr.Dataset(
+        {"tp": (("time", "lat", "lon"), model)},
+        coords={"time": time, "lat": lat, "lon": lon},
+    ).to_netcdf(model_dir / "2020.nc")
+
+    monkeypatch.setenv("ROMP_OBS_DIR", str(obs_dir))
+    monkeypatch.setenv("ROMP_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("ROMP_DIR_OUT", str(out_dir))
+    monkeypatch.setenv("ROMP_MODEL_NAME", "e2s-test")
+    monkeypatch.setenv("ROMP_OBS_VAR", "RAINFALL")
+    monkeypatch.setenv("ROMP_MODEL_VAR", "tp")
+
+    e2s_metrics_runner.main()
+
+    result = xr.open_dataset(out_dir / "e2s_spatial_metrics_e2s-test_all.nc")
+    try:
+        np.testing.assert_allclose(result["mae"].values, np.mean(np.abs(err), axis=0))
+        np.testing.assert_allclose(result["bias"].values, np.mean(err, axis=0))
+        np.testing.assert_allclose(result["rmse"].values, np.sqrt(np.mean(err**2, axis=0)))
+        assert result["acc"].dims == ("lat", "lon")
     finally:
         result.close()
