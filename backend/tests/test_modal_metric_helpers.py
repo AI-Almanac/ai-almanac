@@ -139,6 +139,8 @@ def test_patch_romp_config_disables_custom_region_climatology_plot(tmp_path: Pat
     assert "lat_min = 20.0" in config
     assert "lon_max = 93.0" in config
     assert "plot_climatology_onset = False" in config
+    assert "plot_spatial_far_mr_mae = False" in config
+    assert "plot_panel_heatmap_error = False" in config
 
 
 def test_fetch_era5_daily_precip_from_arco_writes_romp_annual_files(

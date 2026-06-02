@@ -14,6 +14,17 @@ from app.services.runner import (
     _romp_entry_command,
 )
 
+GRAPHICS_OVERRIDES = (
+    "plot_spatial_far_mr_mae = False",
+    "plot_heatmap_bss_auc = False",
+    "plot_reliability = False",
+    "plot_portrait = False",
+    "plot_climatology_onset = False",
+    "plot_panel_heatmap_error = False",
+    "plot_panel_heatmap_skill = False",
+    "plot_bar_bss_rpss_auc = False",
+)
+
 
 def tar_names(bundle: bytes) -> set[str]:
     with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
@@ -46,6 +57,25 @@ def test_modal_local_bundle_packages_obs_and_requested_model_years(tmp_path: Pat
         "model/1998.nc",
         "model/1999.nc",
     }
+
+
+def test_modal_local_bundle_requires_requested_model_years(tmp_path: Path) -> None:
+    obs_dir = tmp_path / "obs"
+    model_dir = tmp_path / "model"
+    obs_dir.mkdir()
+    model_dir.mkdir()
+    (obs_dir / "1998.nc").write_text("obs-1998")
+    (model_dir / "2000.nc").write_text("model-2000")
+
+    with pytest.raises(ValueError, match="1998.nc"):
+        _build_modal_local_bundle(
+            {
+                "obs_dir": str(obs_dir),
+                "model_dir": str(model_dir),
+                "dataset_config": {"provider": "local"},
+                "romp_params": {"start_date": "1998-05-01", "end_date": "1998-07-31"},
+            }
+        )
 
 
 def test_modal_local_bundle_packages_only_model_for_earth2studio_dataset(tmp_path: Path) -> None:
@@ -116,7 +146,8 @@ def test_romp_config_overrides_disable_custom_region_climatology_plot() -> None:
     assert "lat_min = 20.0" in overrides
     assert "lon_max = 93.0" in overrides
     assert "land_only = False" in overrides
-    assert "plot_climatology_onset = False" in overrides
+    for line in GRAPHICS_OVERRIDES:
+        assert line in overrides
 
 
 def test_romp_entry_command_skips_e2s_metrics_by_default() -> None:

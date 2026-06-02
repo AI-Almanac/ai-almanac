@@ -891,7 +891,16 @@ def _patch_romp_config(config_path: str, env: dict) -> None:
     version mismatch doesn't silently fall back to wrong defaults.
     Last-assignment wins when ROMP exec()s the config file.
     """
-    extra: list[str] = []
+    extra: list[str] = [
+        "plot_spatial_far_mr_mae = False",
+        "plot_heatmap_bss_auc = False",
+        "plot_reliability = False",
+        "plot_portrait = False",
+        "plot_climatology_onset = False",
+        "plot_panel_heatmap_error = False",
+        "plot_panel_heatmap_skill = False",
+        "plot_bar_bss_rpss_auc = False",
+    ]
 
     for env_key, cfg_key in (
         ("ROMP_LAND_ONLY", "land_only"),
@@ -912,17 +921,10 @@ def _patch_romp_config(config_path: str, env: dict) -> None:
         if val is not None:
             extra.append(f"{cfg_key} = {val}")
 
-    if str(env.get("ROMP_REGION", "")).lower() == "custom":
-        # ROMP's climatology-onset basemap path currently calls domain(region)
-        # without forwarding custom lat/lon bounds. The metric NetCDFs and
-        # spatial metric figures are still written without this plot.
-        extra.append("plot_climatology_onset = False")
-
-    if extra:
-        with open(config_path, "a") as f:
-            f.write("\n# Extended region parameters (appended by almanac runner)\n")
-            for line in extra:
-                f.write(line + "\n")
+    with open(config_path, "a") as f:
+        f.write("\n# Almanac runner overrides\n")
+        for line in extra:
+            f.write(line + "\n")
 
 
 def _run_subprocess(cmd: list[str], env: dict, capture_output: bool) -> subprocess.CompletedProcess:

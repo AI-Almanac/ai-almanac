@@ -44,7 +44,16 @@ def _to_host_path(path: str) -> str:
 
 
 def _romp_config_override_lines(env: dict[str, str]) -> str:
-    extra: list[str] = []
+    extra: list[str] = [
+        "plot_spatial_far_mr_mae = False",
+        "plot_heatmap_bss_auc = False",
+        "plot_reliability = False",
+        "plot_portrait = False",
+        "plot_climatology_onset = False",
+        "plot_panel_heatmap_error = False",
+        "plot_panel_heatmap_skill = False",
+        "plot_bar_bss_rpss_auc = False",
+    ]
 
     for env_key, cfg_key in (
         ("ROMP_LAND_ONLY", "land_only"),
@@ -64,9 +73,6 @@ def _romp_config_override_lines(env: dict[str, str]) -> str:
         val = env.get(env_key)
         if val is not None:
             extra.append(f"{cfg_key} = {val}")
-
-    if env.get("ROMP_REGION", "").lower() == "custom":
-        extra.append("plot_climatology_onset = False")
 
     return "\n".join(extra)
 
@@ -676,6 +682,14 @@ def _build_modal_local_bundle(config: dict) -> bytes:
     start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
     end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
     year_files = {f"{year}.nc" for year in range(start_year, end_year + 1)}
+    missing_model_files = sorted(name for name in year_files if not (model_path / name).is_file())
+    if missing_model_files:
+        preview = ", ".join(missing_model_files[:5])
+        suffix = "" if len(missing_model_files) <= 5 else f", ... ({len(missing_model_files)} missing)"
+        raise ValueError(
+            f"model_dir is missing required year files for modal-local: {preview}{suffix}. "
+            f"model_dir={model_path}"
+        )
 
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
