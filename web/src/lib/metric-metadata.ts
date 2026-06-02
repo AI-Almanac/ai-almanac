@@ -5,15 +5,7 @@ export type MetricOption = {
 	label: string;
 };
 
-const FALLBACK_ORDER = [
-	'false_alarm_rate',
-	'miss_rate',
-	'mean_mae',
-	'rmse',
-	'mae',
-	'bias',
-	'acc'
-];
+const FALLBACK_ORDER = ['false_alarm_rate', 'miss_rate', 'mean_mae', 'rmse', 'mae', 'bias', 'acc'];
 
 let cachedDefinitions: Promise<MetricDefinition[]> | null = null;
 
@@ -30,8 +22,12 @@ export function isAnnualMaeMetric(metric: string): boolean {
 	return /^mae_\d{4}$/.test(metric);
 }
 
-export function metricLabel(metric: string, definitions: MetricDefinition[] | Map<string, MetricDefinition>): string {
-	const definition = definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
+export function metricLabel(
+	metric: string,
+	definitions: MetricDefinition[] | Map<string, MetricDefinition>
+): string {
+	const definition =
+		definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
 	if (definition) return definition.label;
 	const annual = metric.match(/^mae_(\d{4})$/);
 	if (annual) return `Mean absolute error ${annual[1]}`;
@@ -46,11 +42,19 @@ export function metricUnit(
 	apiUnit: string | null | undefined,
 	definitions: MetricDefinition[] | Map<string, MetricDefinition>
 ): string {
-	const definition = definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
-	return definition?.unit ?? apiUnit ?? (metric === 'false_alarm_rate' || metric === 'miss_rate' ? 'fraction' : 'days');
+	const definition =
+		definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
+	return (
+		definition?.unit ??
+		apiUnit ??
+		(metric === 'false_alarm_rate' || metric === 'miss_rate' ? 'fraction' : 'days')
+	);
 }
 
-export function formatMetricValue(value: number | null | undefined, unit: string | null | undefined): string {
+export function formatMetricValue(
+	value: number | null | undefined,
+	unit: string | null | undefined
+): string {
 	if (value == null) return '—';
 	if (unit === 'fraction') return `${(value * 100).toFixed(1)}%`;
 	if (unit === 'days') return `${value.toFixed(1)} d`;
@@ -59,19 +63,29 @@ export function formatMetricValue(value: number | null | undefined, unit: string
 	return `${value.toFixed(2)} ${unit}`;
 }
 
-export function formatMetricDelta(value: number | null | undefined, unit: string | null | undefined): string {
+export function formatMetricDelta(
+	value: number | null | undefined,
+	unit: string | null | undefined
+): string {
 	if (value == null) return '—';
 	const formatted = formatMetricValue(Math.abs(value), unit);
 	return `${value >= 0 ? '+' : '-'}${formatted}`;
 }
 
-export function metricSortValue(metric: string, definitions: MetricDefinition[] | Map<string, MetricDefinition>): number {
-	const ids = definitions instanceof Map ? [...definitions.keys()] : definitions.map((definition) => definition.id);
+export function metricSortValue(
+	metric: string,
+	definitions: MetricDefinition[] | Map<string, MetricDefinition>
+): number {
+	const ids =
+		definitions instanceof Map
+			? [...definitions.keys()]
+			: definitions.map((definition) => definition.id);
 	const index = ids.indexOf(metric);
 	if (index >= 0) return index;
 	const fallbackIndex = FALLBACK_ORDER.indexOf(metric);
 	if (fallbackIndex >= 0) return ids.length + fallbackIndex;
-	if (isAnnualMaeMetric(metric)) return ids.length + FALLBACK_ORDER.length + 1000 + Number(metric.slice(4));
+	if (isAnnualMaeMetric(metric))
+		return ids.length + FALLBACK_ORDER.length + 1000 + Number(metric.slice(4));
 	return ids.length + FALLBACK_ORDER.length + 2000;
 }
 
@@ -90,7 +104,8 @@ export function lowerIsBetter(
 	definitions: MetricDefinition[] | Map<string, MetricDefinition>
 ): boolean | null {
 	if (metric === 'bias') return null;
-	const definition = definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
+	const definition =
+		definitions instanceof Map ? definitions.get(metric) : metricMap(definitions).get(metric);
 	return definition?.lower_is_better ?? null;
 }
 

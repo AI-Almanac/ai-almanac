@@ -340,7 +340,9 @@ def compute_job_cell(
 
         for metric in metric_vars:
             model_value = read_cell(ds_model, metric)
-            baseline_value = read_cell(ds_baseline, metric) if ds_baseline is not None else None
+            baseline_value = (
+                read_cell(ds_baseline, metric) if ds_baseline is not None else None
+            )
             metrics[metric] = CellMetricComparison(
                 model=model_value,
                 baseline=baseline_value,
@@ -361,7 +363,9 @@ def compute_job_cell(
         for year in years:
             var = f"mae_{year}"
             model_value = read_cell(ds_model, var)
-            baseline_value = read_cell(ds_baseline, var) if ds_baseline is not None else None
+            baseline_value = (
+                read_cell(ds_baseline, var) if ds_baseline is not None else None
+            )
             mae_series.append(
                 CellMaePoint(
                     year=year,

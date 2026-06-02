@@ -147,7 +147,9 @@ def test_compute_job_cell_compares_shared_dynamic_metrics(tmp_path: Path) -> Non
     assert result.mae_series == []
 
 
-def test_compute_job_cell_returns_model_metrics_without_baseline(tmp_path: Path) -> None:
+def test_compute_job_cell_returns_model_metrics_without_baseline(
+    tmp_path: Path,
+) -> None:
     job_id = "job-1"
     write_metrics_file(
         tmp_path,

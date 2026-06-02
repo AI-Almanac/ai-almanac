@@ -334,19 +334,13 @@
 									{@const unit = metricUnit(varKey, s.unit, definitionsById)}
 									<tr>
 										<td class="metric-name">{varLabel(varKey)}</td>
-										<td style="background:{cellColor(s.mean, s.min, s.max)}"
-											>{fmt(s.mean, unit)}</td
+										<td style="background:{cellColor(s.mean, s.min, s.max)}">{fmt(s.mean, unit)}</td
 										>
-										<td style="background:{cellColor(s.min, s.min, s.max)}">{fmt(s.min, unit)}</td
-										>
-										<td style="background:{cellColor(s.p50, s.min, s.max)}">{fmt(s.p50, unit)}</td
-										>
-										<td style="background:{cellColor(s.p75, s.min, s.max)}">{fmt(s.p75, unit)}</td
-										>
-										<td style="background:{cellColor(s.p90, s.min, s.max)}">{fmt(s.p90, unit)}</td
-										>
-										<td style="background:{cellColor(s.max, s.min, s.max)}">{fmt(s.max, unit)}</td
-										>
+										<td style="background:{cellColor(s.min, s.min, s.max)}">{fmt(s.min, unit)}</td>
+										<td style="background:{cellColor(s.p50, s.min, s.max)}">{fmt(s.p50, unit)}</td>
+										<td style="background:{cellColor(s.p75, s.min, s.max)}">{fmt(s.p75, unit)}</td>
+										<td style="background:{cellColor(s.p90, s.min, s.max)}">{fmt(s.p90, unit)}</td>
+										<td style="background:{cellColor(s.max, s.min, s.max)}">{fmt(s.max, unit)}</td>
 										<td class="unit">{unit}</td>
 									</tr>
 								{/if}

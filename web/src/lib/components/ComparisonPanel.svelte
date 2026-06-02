@@ -107,7 +107,13 @@
 		if (Math.abs(delta) < 0.005) return 'delta-neutral';
 		const preference = lowerIsBetter(metric, definitionsById);
 		if (preference == null) return 'delta-neutral';
-		return preference ? (delta < 0 ? 'delta-better' : 'delta-worse') : delta > 0 ? 'delta-better' : 'delta-worse';
+		return preference
+			? delta < 0
+				? 'delta-better'
+				: 'delta-worse'
+			: delta > 0
+				? 'delta-better'
+				: 'delta-worse';
 	}
 
 	// --- Figure comparison ---

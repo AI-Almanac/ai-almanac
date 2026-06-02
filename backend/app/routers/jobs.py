@@ -332,7 +332,9 @@ async def create_job(body: JobCreate, user: CurrentUser):
         "model_dir": model_cfg["model_dir"],
         "region_id": region_def["id"] if region_def else None,
         "region_name": region_def["display_name"] if region_def else None,
-        "romp_region": region_def.get("romp_name", "custom") if region_def else region_id,
+        "romp_region": region_def.get("romp_name", "custom")
+        if region_def
+        else region_id,
         "dataset_config": dataset_config,
         "compute_e2s_metrics": compute_e2s_metrics,
         "romp_params": romp_params,

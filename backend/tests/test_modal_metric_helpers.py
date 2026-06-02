@@ -87,9 +87,7 @@ def test_required_obs_date_ranges_include_climatology_and_end_buffer() -> None:
 def test_monthly_date_ranges_use_exact_day_labels() -> None:
     modal_app = load_modal_app()
 
-    result = modal_app._monthly_date_ranges(
-        datetime(2020, 5, 15), datetime(2020, 7, 2)
-    )
+    result = modal_app._monthly_date_ranges(datetime(2020, 5, 15), datetime(2020, 7, 2))
 
     assert result == [
         (2020, 5, [str(day).zfill(2) for day in range(15, 32)]),
@@ -118,7 +116,9 @@ def test_upload_run_log_skips_empty_outputs_bucket(capsys) -> None:
     assert "cannot upload run log" in capsys.readouterr().out
 
 
-def test_patch_romp_config_disables_custom_region_climatology_plot(tmp_path: Path) -> None:
+def test_patch_romp_config_disables_custom_region_climatology_plot(
+    tmp_path: Path,
+) -> None:
     modal_app = load_modal_app()
     config_path = tmp_path / "romp_job.in"
     config_path.write_text("region = 'custom'\n")
@@ -260,7 +260,9 @@ def test_e2s_metrics_runner_computes_known_error_metrics(
     try:
         np.testing.assert_allclose(result["mae"].values, np.mean(np.abs(err), axis=0))
         np.testing.assert_allclose(result["bias"].values, np.mean(err, axis=0))
-        np.testing.assert_allclose(result["rmse"].values, np.sqrt(np.mean(err**2, axis=0)))
+        np.testing.assert_allclose(
+            result["rmse"].values, np.sqrt(np.mean(err**2, axis=0))
+        )
         assert result["acc"].dims == ("lat", "lon")
     finally:
         result.close()

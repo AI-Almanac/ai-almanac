@@ -77,7 +77,9 @@ def _romp_config_override_lines(env: dict[str, str]) -> str:
     return "\n".join(extra)
 
 
-def _romp_entry_command(config_overrides: str, compute_e2s_metrics: bool = False) -> list[str]:
+def _romp_entry_command(
+    config_overrides: str, compute_e2s_metrics: bool = False
+) -> list[str]:
     script = [
         "set -eu",
         'config_path="${ROMP_CONFIG_PATH:-/tmp/romp_job.in}"',
@@ -469,7 +471,9 @@ class ModalRunner(JobRunner):
         preflight_error = self._preflight_error(config)
         if preflight_error:
             _update_status(job_id, "failed", error=preflight_error, loop=loop)
-            logger.error("Modal job %s rejected before spawn: %s", job_id, preflight_error)
+            logger.error(
+                "Modal job %s rejected before spawn: %s", job_id, preflight_error
+            )
             return
 
         try:
@@ -682,10 +686,16 @@ def _build_modal_local_bundle(config: dict) -> bytes:
     start_year = int((romp_params.get("start_date") or "1990-01-01")[:4])
     end_year = int((romp_params.get("end_date") or "2024-01-01")[:4])
     year_files = {f"{year}.nc" for year in range(start_year, end_year + 1)}
-    missing_model_files = sorted(name for name in year_files if not (model_path / name).is_file())
+    missing_model_files = sorted(
+        name for name in year_files if not (model_path / name).is_file()
+    )
     if missing_model_files:
         preview = ", ".join(missing_model_files[:5])
-        suffix = "" if len(missing_model_files) <= 5 else f", ... ({len(missing_model_files)} missing)"
+        suffix = (
+            ""
+            if len(missing_model_files) <= 5
+            else f", ... ({len(missing_model_files)} missing)"
+        )
         raise ValueError(
             f"model_dir is missing required year files for modal-local: {preview}{suffix}. "
             f"model_dir={model_path}"

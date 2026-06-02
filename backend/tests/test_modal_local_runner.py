@@ -31,7 +31,9 @@ def tar_names(bundle: bytes) -> set[str]:
         return set(tar.getnames())
 
 
-def test_modal_local_bundle_packages_obs_and_requested_model_years(tmp_path: Path) -> None:
+def test_modal_local_bundle_packages_obs_and_requested_model_years(
+    tmp_path: Path,
+) -> None:
     obs_dir = tmp_path / "obs"
     model_dir = tmp_path / "model"
     obs_dir.mkdir()
@@ -78,7 +80,9 @@ def test_modal_local_bundle_requires_requested_model_years(tmp_path: Path) -> No
         )
 
 
-def test_modal_local_bundle_packages_only_model_for_earth2studio_dataset(tmp_path: Path) -> None:
+def test_modal_local_bundle_packages_only_model_for_earth2studio_dataset(
+    tmp_path: Path,
+) -> None:
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / "1998.nc").write_text("model-1998")
@@ -96,7 +100,9 @@ def test_modal_local_bundle_packages_only_model_for_earth2studio_dataset(tmp_pat
     assert tar_names(bundle) == {"model/1998.nc"}
 
 
-def test_modal_local_bundle_packages_only_model_for_arco_dataset(tmp_path: Path) -> None:
+def test_modal_local_bundle_packages_only_model_for_arco_dataset(
+    tmp_path: Path,
+) -> None:
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / "1998.nc").write_text("model-1998")
@@ -114,21 +120,26 @@ def test_modal_local_bundle_packages_only_model_for_arco_dataset(tmp_path: Path)
     assert tar_names(bundle) == {"model/1998.nc"}
 
 
-def test_modal_local_runtime_env_requires_cdsapi_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_modal_local_runtime_env_requires_cdsapi_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("app.config.settings.cdsapi_key", "")
 
     with pytest.raises(ValueError, match="CDSAPI_KEY"):
         _modal_local_runtime_env({"dataset_config": {"provider": "earth2studio"}})
 
 
-def test_modal_local_runtime_env_forwards_cdsapi_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_modal_local_runtime_env_forwards_cdsapi_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("app.config.settings.cdsapi_key", "test-key")
-    monkeypatch.setattr("app.config.settings.cdsapi_url", "https://cds.example.test/api")
+    monkeypatch.setattr(
+        "app.config.settings.cdsapi_url", "https://cds.example.test/api"
+    )
 
-    assert _modal_local_runtime_env({"dataset_config": {"provider": "earth2studio"}}) == {
-        "CDSAPI_URL": "https://cds.example.test/api",
-        "CDSAPI_KEY": "test-key"
-    }
+    assert _modal_local_runtime_env(
+        {"dataset_config": {"provider": "earth2studio"}}
+    ) == {"CDSAPI_URL": "https://cds.example.test/api", "CDSAPI_KEY": "test-key"}
 
 
 def test_romp_config_overrides_disable_custom_region_climatology_plot() -> None:
