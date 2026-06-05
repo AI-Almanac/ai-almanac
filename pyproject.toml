@@ -1,0 +1,63 @@
+[project]
+name = "ai-almanac"
+version = "0.1.0"
+description = "Local-first benchmarking platform for AI weather and climate models."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "AI Almanac contributors" }]
+dependencies = [
+    "fastapi>=0.135.3",
+    "uvicorn[standard]>=0.44.0",
+    "sqlalchemy>=2.0.49",
+    "aiosqlite>=0.20.0",
+    "alembic>=1.18.4",
+    "pydantic-settings>=2.13.1",
+    "platformdirs>=4.3.6",
+    "typer>=0.15.1",
+    "python-dotenv>=1.0.1",
+    "pyyaml>=6.0.2",
+    "h5netcdf>=1.8.1",
+    "h5py>=3.16.0",
+    "netcdf4>=1.7.4",
+    "xarray>=2026.2.0",
+    "greenlet>=3.4.0",
+    # LLM/chat — kept for the LLM-centric UI surface.
+    "pydantic-ai>=1.89.1",
+    "openai>=2.32.0",
+    "httpx>=0.28.1",
+]
+
+[project.scripts]
+ai-almanac = "ai_almanac.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.11",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_almanac"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# The SvelteKit SPA is built into web/build by `npm run build` and bundled
+# into the wheel so `pip install ai-almanac` ships the UI.
+"web/build" = "ai_almanac/server/static"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

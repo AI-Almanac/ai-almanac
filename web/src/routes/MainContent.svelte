@@ -9,6 +9,12 @@
 
 	const workflows = [
 		{
+			id: 'almanac',
+			title: 'Browse the almanac',
+			description: 'Read reference pages for model families, datasets, and architectures.',
+			href: '/almanac'
+		},
+		{
 			id: 'benchmark',
 			title: 'Benchmark models',
 			description: 'Compare forecast models against ground truth observations.',
