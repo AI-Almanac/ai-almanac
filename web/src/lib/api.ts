@@ -12,6 +12,38 @@ const BASE_URL =
 	import.meta.env.VITE_API_URL ||
 	'';
 
+// ---- WebSocket job streaming ------------------------------------------------
+
+export type JobStreamEvent =
+	| { type: 'status'; payload: { status: string } }
+	| { type: 'log'; payload: { line: string } }
+	| { type: 'done'; payload: { status: string; exit_code?: number } }
+	| { type: 'metric'; payload: Record<string, unknown> };
+
+/**
+ * Subscribe to live job events (status, log lines, completion). Replaces HTTP
+ * polling of `/jobs/{id}` and `/jobs/{id}/logs`. Returns a closer that
+ * unsubscribes when called.
+ */
+export function subscribeJob(
+	jobId: string,
+	onEvent: (event: JobStreamEvent) => void,
+	onClose?: (clean: boolean) => void
+): () => void {
+	const wsScheme = BASE_URL.startsWith('https:') ? 'wss:' : 'ws:';
+	const wsBase = BASE_URL ? BASE_URL.replace(/^https?:/, wsScheme) : '';
+	const ws = new WebSocket(`${wsBase}/jobs/${jobId}/stream`);
+	ws.onmessage = (e) => {
+		try {
+			onEvent(JSON.parse(e.data) as JobStreamEvent);
+		} catch {
+			/* ignore non-JSON frames */
+		}
+	};
+	ws.onclose = (e) => onClose?.(e.wasClean);
+	return () => ws.close();
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const res = await fetch(`${BASE_URL}${path}`, {
 		...init,

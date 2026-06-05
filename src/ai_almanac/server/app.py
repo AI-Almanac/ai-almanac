@@ -32,9 +32,22 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _apply_migrations() -> None:
+    """Run alembic to `head` on startup so users never need to run it manually."""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config(str(Path(__file__).parent / "alembic.ini"))
+    cfg.set_main_option(
+        "script_location", str(Path(__file__).parent / "alembic")
+    )
+    command.upgrade(cfg, "head")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_layout()
+    _apply_migrations()
     yield
 
 

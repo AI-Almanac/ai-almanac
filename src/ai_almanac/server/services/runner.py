@@ -27,6 +27,7 @@ from sqlalchemy import text
 from ai_almanac.envs.manager import run as pixi_run
 from ai_almanac.paths import benchmark_env_dir
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services.job_events import JobEvent, get_broker
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.settings import REMOTE_OBS_PROVIDERS, settings
 
@@ -151,14 +152,24 @@ class InProcessRunner:
             compute_e2s_metrics=compute_e2s,
         )
 
+        broker = get_broker()
+
         try:
             _update_status(job_id, "running", loop=loop)
+            broker.publish_threadsafe(
+                job_id, JobEvent(type="status", payload={"status": "running"}), loop
+            )
             with log_path.open("w") as logf:
                 proc = pixi_run(["bash", "-c", script], env=env)
                 assert proc.stdout is not None
                 for line in proc.stdout:
                     logf.write(line)
                     logf.flush()
+                    broker.publish_threadsafe(
+                        job_id,
+                        JobEvent(type="log", payload={"line": line.rstrip("\n")}),
+                        loop,
+                    )
                 rc = proc.wait(timeout=self._timeout)
             if rc != 0:
                 _update_status(
@@ -167,8 +178,21 @@ class InProcessRunner:
                     error=f"benchmark exited with code {rc}; see {log_path}",
                     loop=loop,
                 )
+                broker.publish_threadsafe(
+                    job_id,
+                    JobEvent(
+                        type="done",
+                        payload={"status": "failed", "exit_code": rc},
+                    ),
+                    loop,
+                )
                 return
             _update_status(job_id, "complete", loop=loop)
+            broker.publish_threadsafe(
+                job_id,
+                JobEvent(type="done", payload={"status": "complete"}),
+                loop,
+            )
         except FileNotFoundError as e:
             _update_status(
                 job_id,

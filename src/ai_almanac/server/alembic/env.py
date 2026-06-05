@@ -1,7 +1,17 @@
-import asyncio
+"""Alembic environment for ai-almanac.
+
+Uses a sync engine so migrations work whether they're invoked from the CLI
+(`alembic upgrade head`) or from inside the FastAPI lifespan event handler
+(where an asyncio loop is already running).
+"""
+
+from __future__ import annotations
+
 from logging.config import fileConfig
 
 from alembic import context
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 
 config = context.config
 
@@ -11,39 +21,34 @@ if config.config_file_name is not None:
 target_metadata = None
 
 
-def do_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
-    with context.begin_transaction():
-        context.run_migrations()
+def _sync_url() -> str:
+    """Return a sync SQLAlchemy URL derived from the configured database URL."""
+    from ai_almanac.settings import settings
 
-
-async def run_async_migrations() -> None:
-    from ai_almanac.server.db import _make_engine
-
-    connectable = _make_engine()
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_migrations)
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    url = make_url(settings.resolve_database_url())
+    # Strip the async driver suffix (sqlite+aiosqlite -> sqlite, postgresql+asyncpg -> postgresql).
+    driver = url.drivername.split("+", 1)[0]
+    return str(url.set(drivername=driver))
 
 
 def run_migrations_offline() -> None:
-    from ai_almanac.settings import settings
-    from sqlalchemy.engine import make_url
-
-    url = make_url(settings.database_url)
-    url = url.set(drivername="postgresql+asyncpg")
     context.configure(
-        url=str(url),
+        url=_sync_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():
         context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    engine = create_engine(_sync_url())
+    with engine.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+    engine.dispose()
 
 
 if context.is_offline_mode():

@@ -5,7 +5,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from dataclasses import asdict
+
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -394,6 +396,39 @@ async def get_job(job_id: str, user: CurrentUser):
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     return _row_to_job_out(dict(row), user["id"])
+
+
+@router.websocket("/{job_id}/stream")
+async def stream_job(ws: WebSocket, job_id: str) -> None:
+    """Push live status, log lines, and completion events for a running job.
+
+    Subscribes the connection to the job's event channel via the in-process
+    broker. The frontend uses this in place of polling `/jobs/{id}` and
+    `/jobs/{id}/logs`. No auth — local-first.
+    """
+    from ai_almanac.server.services.job_events import get_broker
+
+    await ws.accept()
+    broker = get_broker()
+    queue = await broker.subscribe(job_id)
+
+    # Send any historical log lines first so a late subscriber catches up.
+    storage = get_storage()
+    backlog = await asyncio.to_thread(storage.read_log, job_id)
+    if backlog:
+        for line in backlog.splitlines():
+            await ws.send_json({"type": "log", "payload": {"line": line}})
+
+    try:
+        while True:
+            event = await queue.get()
+            await ws.send_json({"type": event.type, "payload": event.payload})
+            if event.type == "done":
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await broker.unsubscribe(job_id, queue)
 
 
 @router.get("/{job_id}/logs")
