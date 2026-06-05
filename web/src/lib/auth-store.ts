@@ -1,18 +1,11 @@
-import { readable } from 'svelte/store';
-import { browser } from '$app/environment';
-import { getManager } from './auth';
+// No-op auth store — the app has no built-in auth, so `isAuthenticated` is
+// always true and the existing gated routes stay accessible.
 
-/**
- * Reactive store for the current authentication state.
- * Always `false` during SSR or when auth is not configured.
- */
-export const isAuthenticated = readable<boolean>(false, (set) => {
-	if (!browser) return;
-	const manager = getManager();
-	if (!manager) return;
-	set(manager.authenticated);
-	const unsubscribe = manager.events.authenticated.addListener(({ isAuthenticated }) => {
-		set(isAuthenticated);
-	});
-	return unsubscribe;
+import { readable } from 'svelte/store';
+
+export const isAuthenticated = readable<boolean>(true);
+
+export const currentUser = readable<{ name: string; email: string | null }>({
+	name: 'You',
+	email: null
 });

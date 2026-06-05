@@ -1,36 +1,22 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
-
-import { getManager } from './auth';
-
-function authHeaders(): HeadersInit {
-	const manager = getManager();
-	if (!manager) throw new Error('Not authenticated');
-	const authToken = manager.getGlobusAuthToken();
-	const apiToken = authToken?.other_tokens?.find(
-		(t: any) => t.resource_server === '50964632-afc7-4d4c-abf4-b288cc18a3af'
-	);
-	if (!apiToken) throw new Error('API token not found — re-login may be required');
-	return { Authorization: `Bearer ${apiToken.access_token}` };
+// API base URL — read at runtime from `window.__ALMANAC_CONFIG__` (injected by
+// the backend's `/config.js`) so a single built SPA can target any backend.
+// Falls back to the build-time Vite env (dev), then to same-origin.
+declare global {
+	interface Window {
+		__ALMANAC_CONFIG__?: { apiUrl?: string; submittedByEnabled?: boolean };
+	}
 }
 
-async function request<T>(path: string, init: RequestInit = {}, _retry = false): Promise<T> {
+const BASE_URL =
+	(typeof window !== 'undefined' && window.__ALMANAC_CONFIG__?.apiUrl) ||
+	import.meta.env.VITE_API_URL ||
+	'';
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const res = await fetch(`${BASE_URL}${path}`, {
 		...init,
-		headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init.headers }
+		headers: { 'Content-Type': 'application/json', ...init.headers }
 	});
-
-	if (res.status === 401 && !_retry) {
-		const manager = getManager();
-		if (manager) {
-			try {
-				await manager.refreshTokens();
-				return request<T>(path, init, true);
-			} catch {
-				await manager.revoke();
-				throw new Error('Session expired — please log in again.');
-			}
-		}
-	}
 
 	if (!res.ok) {
 		const body = await res.text();
@@ -113,28 +99,23 @@ export async function deleteJob(id: string): Promise<void> {
 
 /**
  * Fetch a result file (figure/output) as an object URL for display.
- * The backend requires auth headers so we can't use a plain <img src=...>.
- * Results are cached in memory by URL so repeated views don't re-fetch.
+ * Cached in memory by URL so repeated views don't re-fetch.
  */
 const blobCache = new Map<string, string>();
 
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
 	if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
 
-	// First, hit the backend with auth to get the file or a signed-URL redirect.
 	const res = await fetch(`${BASE_URL}${resultUrl}`, {
-		headers: authHeaders(),
-		redirect: 'manual' // don't auto-follow so we can strip auth before GCS redirect
+		redirect: 'manual'
 	});
 
 	let blob: Blob;
 	if (res.type === 'opaqueredirect') {
-		// Production: backend returned a 302 to a GCS signed URL.
-		// Fetch the redirect location without the Authorization header — GCS rejects it.
 		const location = res.headers.get('Location');
 		if (!location) throw new Error('Redirect response missing Location header');
 		const gcsRes = await fetch(location);
-		if (!gcsRes.ok) throw new Error(`Failed to fetch result from GCS: ${gcsRes.status}`);
+		if (!gcsRes.ok) throw new Error(`Failed to fetch result: ${gcsRes.status}`);
 		blob = await gcsRes.blob();
 	} else if (res.ok) {
 		// Local dev: backend served the file directly.
@@ -632,7 +613,7 @@ export async function* sendChatMessage(
 ): AsyncGenerator<ChatEvent> {
 	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ content, scope })
 	});
 	if (!res.ok) {

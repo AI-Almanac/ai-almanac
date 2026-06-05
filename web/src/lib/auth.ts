@@ -1,27 +1,24 @@
-import { authorization } from '@globus/sdk';
-import type { AuthorizationManager } from '@globus/sdk/core/authorization/AuthorizationManager';
+// ai-almanac has no built-in authentication. This module is a no-op shim that
+// preserves the old `getManager()` API so call sites compile unchanged. Public
+// deployments authenticate at a reverse proxy (oauth2-proxy / Caddy with OIDC
+// / Cloudflare Access) which forwards the user identity via the
+// `X-Forwarded-User` header. The backend reads that header and records it as
+// `submitted_by` on jobs/datasets, for attribution only.
 
-let _manager: AuthorizationManager | null = null;
+export interface AuthShim {
+	authenticated: boolean;
+	user: { name: string; email: string | null };
+	login(): void;
+	revoke(): Promise<void>;
+}
 
-export function getManager(): AuthorizationManager | null {
-	// Only runs in the browser — never called during SSR.
-	const client = import.meta.env.VITE_GLOBUS_CLIENT_ID;
-	const redirect = import.meta.env.VITE_GLOBUS_REDIRECT_URL;
+const shim: AuthShim = {
+	authenticated: true,
+	user: { name: 'You', email: null },
+	login() {},
+	async revoke() {}
+};
 
-	if (!client || !redirect) {
-		console.warn('auth: VITE_GLOBUS_CLIENT_ID or VITE_GLOBUS_REDIRECT_URL is not set.');
-		return null;
-	}
-
-	if (!_manager) {
-		_manager = authorization.create({
-			client,
-			redirect,
-			storage: localStorage,
-			scopes:
-				'https://auth.globus.org/scopes/50964632-afc7-4d4c-abf4-b288cc18a3af/api offline_access',
-			useRefreshTokens: true
-		});
-	}
-	return _manager;
+export function getManager(): AuthShim {
+	return shim;
 }

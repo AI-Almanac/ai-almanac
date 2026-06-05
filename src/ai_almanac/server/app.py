@@ -15,7 +15,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ai_almanac.paths import ensure_layout, uploads_dir
 from ai_almanac.server.routers import chat, config, datasets, jobs, regions
@@ -67,6 +69,7 @@ app.add_middleware(
 
 app.include_router(chat.router)
 app.include_router(config.router)
+app.include_router(config.root_router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
 app.include_router(regions.router)
@@ -91,8 +94,21 @@ async def local_upload(storage_key: str, request: Request):
 # Bundled SvelteKit SPA. The static directory is populated at wheel-build time
 # from `web/build/`. When the directory is absent (e.g. in `uv sync` dev mode),
 # the mount is skipped and the Vite dev server on :5173 serves the UI instead.
+class _SPAStaticFiles(StaticFiles):
+    """Serve a SvelteKit static build with SPA-style fallback to index.html."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                # SPA client-side routing: serve index.html for unknown paths.
+                return FileResponse(self.directory / "index.html")
+            raise
+
+
 if _STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="spa")
+    app.mount("/", _SPAStaticFiles(directory=_STATIC_DIR, html=True), name="spa")
 else:
     logger.info(
         "static SPA bundle not found at %s; serve the frontend separately "

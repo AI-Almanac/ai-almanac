@@ -37,8 +37,6 @@
 		"vitest": "^4.1.5"
 	},
 	"dependencies": {
-		"@globus/sdk": "^6.2.0",
-		"@sveltejs/adapter-node": "^5.5.4",
 		"dompurify": "^3.4.0",
 		"maplibre-gl": "^5.24.0",
 		"marked": "^18.0.0",

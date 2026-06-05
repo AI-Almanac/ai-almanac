@@ -16,7 +16,7 @@
 			class="flex h-fit w-full max-w-[400px] flex-col gap-1.5 rounded-[0.6rem] border border-[var(--color-border-subtle)] bg-[var(--color-surface-raised)] p-8"
 		>
 			<p class="eyebrow">Account</p>
-			<h1 class="name">{user?.name ?? user?.preferred_username ?? 'User'}</h1>
+			<h1 class="name">{user?.name ?? 'User'}</h1>
 			{#if user?.email}
 				<p class="m-0 text-[0.875rem] text-[var(--color-text-muted)]">{user.email}</p>
 			{/if}
