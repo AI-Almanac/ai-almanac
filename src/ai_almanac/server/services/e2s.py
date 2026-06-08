@@ -1,4 +1,24 @@
-"""Compute Earth2Studio spatial metrics from ROMP-staged NetCDF files."""
+"""Earth2Studio spatial metrics — RMSE, MAE, ACC, bias.
+
+This script runs as a subprocess inside the pixi-managed benchmark environment
+(see `ai_almanac.envs.manager`) because earth2studio + torch + CUDA are too
+heavy to live in the web server's own env. The `InProcessRunner` invokes it
+via `python -m ai_almanac.server.services.e2s` after ROMP completes.
+
+Inputs (from ROMP_* env vars):
+  ROMP_OBS_DIR / ROMP_MODEL_DIR — directories of yearly `.nc` files
+  ROMP_DIR_OUT                  — where to write `e2s_spatial_metrics_*.nc`
+  ROMP_MODEL_NAME               — included in output filenames + attrs
+  ROMP_OBS_VAR / ROMP_MODEL_VAR — variable names within the NetCDF files
+  ROMP_TIME_START / ROMP_TIME_END — optional ISO date clip
+
+Obs fetching note: the pre-rearchitecture stack had ARCO-ERA5 / CDS download
+helpers that pulled observation data on-demand at job time. Local installs
+expect obs files to be pre-staged in `ROMP_OBS_DIR` — users either point at
+already-downloaded ERA5 data or use the synthetic `testdata/` bundles. The
+ARCO/CDS fetch path will return when the local UI exposes a "download obs"
+step that runs once per dataset rather than once per job.
+"""
 
 from __future__ import annotations
 

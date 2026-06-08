@@ -198,7 +198,7 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
 
     monkeypatch.setattr(benchmark_domain, "_load_benchmark_config", load_config)
     monkeypatch.setattr(benchmark_domain, "_save_benchmark_state", save_state)
-    monkeypatch.setattr("app.database.get_db", lambda: DbContext())
+    monkeypatch.setattr("ai_almanac.server.db.get_db", lambda: DbContext())
     monkeypatch.setattr(
         benchmark_domain,
         "_validation_for_config",
@@ -219,7 +219,7 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
             }
         ],
     )
-    monkeypatch.setattr("app.routers.jobs.create_job", create_job)
+    monkeypatch.setattr("ai_almanac.server.routers.jobs.create_job", create_job)
 
     await benchmark_domain._exec_submit_benchmark(
         {},
@@ -237,8 +237,8 @@ async def test_trim_chat_history_limits_messages_and_tool_payloads(
 ) -> None:
     from ai_almanac.server.services.llm import trim_chat_history
 
-    monkeypatch.setattr("app.services.llm.settings.llm_history_max_messages", 2)
-    monkeypatch.setattr("app.services.llm.settings.llm_tool_result_max_chars", 8)
+    monkeypatch.setattr("ai_almanac.settings.settings.llm_history_max_messages", 2)
+    monkeypatch.setattr("ai_almanac.settings.settings.llm_tool_result_max_chars", 8)
 
     messages = [
         ModelRequest(
@@ -293,7 +293,7 @@ async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
     from ai_almanac.server.services.llm import ChatDeps, _build_agent
     from ai_almanac.server.services.chat_state import ChatScope
 
-    monkeypatch.setattr("app.services.llm.settings.llm_base_url", "http://test.local")
+    monkeypatch.setattr("ai_almanac.settings.settings.llm_base_url", "http://test.local")
     model = TestModel(call_tools=[], custom_output_text="ready")
     scope = ChatScope(
         kind="benchmark_run_group",
@@ -332,7 +332,7 @@ async def test_stream_response_runs_with_pydantic_ai_test_model(
     from ai_almanac.server.services.chat_state import ChatScope
 
     monkeypatch.setattr(
-        "app.services.llm._build_model",
+        "ai_almanac.server.services.llm._build_model",
         lambda: TestModel(call_tools=[], custom_output_text="Synthetic answer."),
     )
     scope = ChatScope(
@@ -466,7 +466,7 @@ async def test_send_message_persists_user_and_assistant_turns(
             }
         )
 
-    monkeypatch.setattr("app.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -512,7 +512,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
         yield json.dumps({"type": "text_delta", "content": "Partial"})
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr("app.routers.chat.stream_response", failing_stream_response)
+    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", failing_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -594,7 +594,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
             }
         )
 
-    monkeypatch.setattr("app.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -641,7 +641,7 @@ async def test_send_message_refreshes_scope_job_ids(
             }
         )
 
-    monkeypatch.setattr("app.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -687,7 +687,7 @@ async def test_get_job_metrics_returns_tool_error_for_unreadable_nc(
             assert path == "/outputs/spatial_metrics_model_1-15.nc"
             raise RuntimeError("NetCDF: HDF error")
 
-    monkeypatch.setattr("app.services.storage.get_storage", lambda: UnreadableStorage())
+    monkeypatch.setattr("ai_almanac.server.services.storage.get_storage", lambda: UnreadableStorage())
 
     payload = await get_job_metrics(
         job_id,
@@ -734,9 +734,9 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
                 ],
             }
 
-    monkeypatch.setattr("app.config.settings.enable_run_code_sandbox", True)
-    monkeypatch.setattr("app.config.settings.modal_token_id", "token-id")
-    monkeypatch.setattr("app.config.settings.modal_token_secret", "token-secret")
+    monkeypatch.setattr("ai_almanac.settings.settings.enable_run_code_sandbox", True)
+    monkeypatch.setattr("ai_almanac.settings.settings.modal_token_id", "token-id")
+    monkeypatch.setattr("ai_almanac.settings.settings.modal_token_secret", "token-secret")
     monkeypatch.setattr("modal.Function.from_name", lambda *args: FakeModalFunction())
 
     async def fake_create_chat_figure_artifact(
@@ -762,7 +762,7 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
         )
 
     monkeypatch.setattr(
-        "app.services.chat_tools.create_chat_figure_artifact",
+        "ai_almanac.server.services.chat_tools.create_chat_figure_artifact",
         fake_create_chat_figure_artifact,
     )
 

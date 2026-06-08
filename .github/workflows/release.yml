@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Build SvelteKit SPA
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Build Python wheel + sdist
+        run: |
+          uv build
+          ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write   # OIDC trust for PyPI Trusted Publishers
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # The Homebrew tap and .deb package live in adjacent repos:
+  #   github.com/<org>/homebrew-ai-almanac   — formula
+  #   github.com/<org>/ai-almanac-apt        — fpm-built .deb + apt repo
+  # Each repo's own release.yml watches for the version bump and re-publishes
+  # its artifact. They're not built here so this workflow stays focused on the
+  # PyPI source of truth.
