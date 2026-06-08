@@ -52,6 +52,11 @@ def settings_file() -> Path:
     return data_root() / "settings.json"
 
 
+def config_yaml_path() -> Path:
+    """User-editable settings overlay. Edited via the Settings UI."""
+    return data_root() / "config.yaml"
+
+
 def ensure_layout() -> Path:
     """Create the standard subdirectories under `data_root()`. Idempotent."""
     root = data_root()

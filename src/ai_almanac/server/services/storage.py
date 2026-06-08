@@ -182,13 +182,20 @@ StorageBackend = LocalStorage
 
 
 _instance: LocalStorage | None = None
+_instance_outputs_dir: str | None = None
 
 
 def get_storage() -> LocalStorage:
-    global _instance
-    if _instance is None:
-        _instance = LocalStorage(
-            upload_dir=uploads_dir(),
-            job_outputs_dir=jobs_dir(),
-        )
+    """Return the process-wide storage instance.
+
+    Rebuilds when `settings.output_dir` changes so hot-reloading that setting
+    via the Settings UI takes effect on the next job submission.
+    """
+    global _instance, _instance_outputs_dir
+    from ai_almanac.settings import settings
+
+    desired = settings.job_outputs_dir  # honors the user-configurable `output_dir`
+    if _instance is None or _instance_outputs_dir != desired:
+        _instance = LocalStorage(upload_dir=uploads_dir(), job_outputs_dir=Path(desired))
+        _instance_outputs_dir = desired
     return _instance

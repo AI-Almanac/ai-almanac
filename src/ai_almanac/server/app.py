@@ -20,7 +20,15 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ai_almanac.paths import ensure_layout, uploads_dir
-from ai_almanac.server.routers import chat, config, data_sources, datasets, jobs, regions
+from ai_almanac.server.routers import (
+    chat,
+    config,
+    data_sources,
+    datasets,
+    jobs,
+    regions,
+    settings as settings_router,
+)
 from ai_almanac.settings import settings
 
 logging.basicConfig(
@@ -48,8 +56,16 @@ def _apply_migrations() -> None:
 async def lifespan(app: FastAPI):
     ensure_layout()
     _apply_migrations()
+    _reload_user_config()
     await _seed_data_sources()
     yield
+
+
+def _reload_user_config() -> None:
+    """Layer `$AI_ALMANAC_DATA_DIR/config.yaml` onto the settings singleton."""
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
 
 
 async def _seed_data_sources() -> None:
@@ -102,6 +118,7 @@ app.include_router(data_sources.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
 app.include_router(regions.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/health")

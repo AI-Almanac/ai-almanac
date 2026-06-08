@@ -15,7 +15,13 @@ import yaml
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ai_almanac.paths import database_path, ensure_layout, jobs_dir, uploads_dir
+from ai_almanac.paths import (
+    config_yaml_path,
+    database_path,
+    ensure_layout,
+    jobs_dir,
+    uploads_dir,
+)
 
 # ---------------------------------------------------------------------------
 # YAML registries (packaged as `ai_almanac.server.config`).
@@ -90,6 +96,11 @@ class Settings(BaseSettings):
     # 'pixi' once `ai-almanac env prepare` has set up the benchmark env.
     runner_mode: str = "stub"
 
+    # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
+    # Set this to a bulk-storage path on hosts with separate fast/bulk disks.
+    # Empty string = use the default under the data dir.
+    output_dir: str = ""
+
     # Attribution header. When ai-almanac runs behind a reverse proxy that has
     # authenticated the user, the proxy can forward the user's identity in this
     # header. The value is recorded on jobs/datasets as `submitted_by`. No
@@ -137,10 +148,106 @@ class Settings(BaseSettings):
 
     @property
     def job_outputs_dir(self) -> str:
-        return str(jobs_dir())
+        return self.output_dir or str(jobs_dir())
 
 
 settings = Settings()
+
+
+# ---------------------------------------------------------------------------
+# config.yaml layering + hot reload.
+# ---------------------------------------------------------------------------
+#
+# Resolution order, lowest to highest precedence:
+#   1. Code defaults (the Settings field defaults above)
+#   2. config.yaml at $AI_ALMANAC_DATA_DIR/config.yaml (edited via the UI)
+#   3. Environment variables / .env files
+#
+# config.yaml is the user-editable surface. Env vars still win so headless /
+# CI deployments can override anything via env without touching the file.
+
+
+# Fields that need a server restart to fully take effect (e.g. baked into the
+# DB engine, CORS middleware, etc.). Mutating these at runtime updates the
+# `settings` value but the system component that consumed it earlier doesn't
+# re-read. UI surfaces a warning when these are edited.
+RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
+    {
+        "database_url",
+        "frontend_url",
+        "cors_allow_all",
+        "submitted_by_header",
+    }
+)
+
+# Fields whose values must not be returned in plaintext from GET /settings
+# (they're masked with "***" unless an explicit `?reveal=true` is requested).
+SENSITIVE_FIELDS: frozenset[str] = frozenset(
+    {
+        "cdsapi_key",
+        "llm_api_key",
+        "chat_figure_signing_secret",
+    }
+)
+
+
+def _load_config_yaml() -> dict:
+    path = config_yaml_path()
+    if not path.exists():
+        return {}
+    try:
+        loaded = yaml.safe_load(path.read_text())
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _apply_yaml_overrides() -> None:
+    """Overlay config.yaml values onto the `settings` singleton, but never
+    overwrite a field whose corresponding environment variable is set.
+    """
+    data = _load_config_yaml()
+    for key, value in data.items():
+        if key not in settings.model_fields:
+            continue
+        if key.upper() in os.environ:
+            continue  # env wins
+        try:
+            setattr(settings, key, value)
+        except Exception:
+            # Bad value type — skip silently; the schema validator surfaces it
+            # on the next save.
+            continue
+
+
+def reload_settings() -> "Settings":
+    """Re-read code defaults + env + config.yaml; mutate the singleton in place.
+
+    Called by the Settings PATCH endpoint after writing changes, and once on
+    server startup. Mutates `settings` so existing imports stay valid.
+    """
+    fresh = Settings()  # defaults + env (no YAML)
+    for name in fresh.model_fields:
+        setattr(settings, name, getattr(fresh, name))
+    _apply_yaml_overrides()
+    return settings
+
+
+def write_config_yaml(updates: dict) -> dict:
+    """Persist a partial settings update to config.yaml.
+
+    Merges into the existing file (does not clobber unrelated keys). Returns
+    the full new config.yaml contents as a dict.
+    """
+    path = config_yaml_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = _load_config_yaml()
+    merged = {**current, **updates}
+    # Drop keys whose value is `None` so users can revert to default by
+    # clearing a field in the UI.
+    merged = {k: v for k, v in merged.items() if v is not None}
+    path.write_text(yaml.safe_dump(merged, sort_keys=True, default_flow_style=False))
+    return merged
 
 
 # ---------------------------------------------------------------------------

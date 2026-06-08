@@ -62,6 +62,48 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ---- Config ------------------------------------------------------------------
 
+// ---- Settings ---------------------------------------------------------------
+
+export interface SettingsField {
+	name: string;
+	label: string;
+	description: string;
+	type: 'string' | 'int' | 'float' | 'bool';
+	default: unknown;
+	sensitive: boolean;
+	restart_required: boolean;
+}
+
+export interface SettingsGroup {
+	name: string;
+	fields: SettingsField[];
+}
+
+export async function getSettingsSchema(): Promise<{ groups: SettingsGroup[] }> {
+	return request<{ groups: SettingsGroup[] }>('/settings/schema');
+}
+
+export async function getSettings(reveal = false): Promise<Record<string, unknown>> {
+	const q = reveal ? '?reveal=true' : '';
+	const res = await request<{ values: Record<string, unknown> }>(`/settings${q}`);
+	return res.values;
+}
+
+export async function patchSettings(
+	values: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+	const res = await request<{ values: Record<string, unknown> }>('/settings', {
+		method: 'PATCH',
+		body: JSON.stringify({ values })
+	});
+	return res.values;
+}
+
+export async function getConfigYamlPath(): Promise<string> {
+	const res = await request<{ path: string }>('/settings/config-yaml-path');
+	return res.path;
+}
+
 // ---- Data sources -----------------------------------------------------------
 
 export interface DataSource {

@@ -18,7 +18,9 @@
 			>
 				Data
 			</a>
-			<a href="/user" class:active={$page.url.pathname === '/user'}>Account</a>
+			<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
+				Settings
+			</a>
 		</div>
 	</div>
 </nav>
