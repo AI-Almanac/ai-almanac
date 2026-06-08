@@ -5,7 +5,8 @@ from typing import Any
 import aiohttp
 from fastapi import APIRouter, HTTPException
 
-from ai_almanac.settings import get_demo_datasets, get_regions
+from ai_almanac.server.services.regions import list_region_options
+from ai_almanac.settings import get_regions
 
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
@@ -19,26 +20,9 @@ _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 @router.get("")
-def list_regions() -> list[dict]:
-    """
-    Return all regions from regions.yaml with a has_data flag indicating whether
-    at least one configured obs dataset is associated with the region.
-    """
-    # Index demo datasets by their region field for O(1) lookup
-    configured_regions = {d["region"] for d in get_demo_datasets() if d.get("region")}
-
-    result = []
-    for region in get_regions():
-        result.append(
-            {
-                "id": region["id"],
-                "display_name": region["display_name"],
-                "romp_region": region.get("romp_name", "custom"),
-                "description": region.get("description", ""),
-                "has_data": region["id"] in configured_regions,
-            }
-        )
-    return result
+async def list_regions() -> list[dict]:
+    """Return benchmark regions annotated with locally configured data."""
+    return await list_region_options()
 
 
 @router.get("/{region}/boundaries/{level}")

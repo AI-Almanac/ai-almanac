@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -21,7 +21,11 @@ from ai_almanac.settings import settings
 def _make_engine():
     url = make_url(settings.resolve_database_url())
     if url.drivername.startswith("sqlite"):
-        return create_async_engine(url, pool_pre_ping=True)
+        return create_async_engine(
+            url,
+            pool_pre_ping=True,
+            connect_args={"timeout": 30},
+        )
     return create_async_engine(
         url,
         pool_pre_ping=True,
@@ -65,7 +69,7 @@ async def get_or_create_user(
             "id": user_id,
             "eid": external_id,
             "email": email,
-            "now": datetime.now(timezone.utc).isoformat(),
+            "now": datetime.now(UTC).isoformat(),
         },
     )
     return dict(result.mappings().fetchone())

@@ -25,10 +25,15 @@ That's it.
 | API | FastAPI, served on the same port as the UI |
 | Database | SQLite under `~/.local/share/ai-almanac/almanac.db` (auto-migrated) |
 | Storage | Filesystem under the same data directory |
-| Benchmark runner | In-process, shells out to ROMP / earth2studio in a pixi-managed env |
-| Auth | None in the app. Bind 127.0.0.1 for local use, or put oauth2-proxy in front for public deployments |
+| Benchmark runner | Detached local supervisor, with ROMP / earth2studio in a pixi-managed env |
+| Access model | Local, single-user application bound to the loopback interface |
 
 One Python package. One process. One port. One data directory.
+
+Benchmark jobs run in detached local supervisor processes. Closing or restarting
+the web server does not stop active work. Restarting `ai-almanac serve`
+reconciles queued and running jobs from SQLite, and active jobs can be canceled
+from the benchmark UI.
 
 ---
 
@@ -75,10 +80,6 @@ ai-almanac serve                       # default: 127.0.0.1:8765, opens browser
 ai-almanac serve --port 9000           # alternate port
 ai-almanac serve --no-open             # don't auto-launch a browser tab
 ai-almanac serve --reload              # dev mode (uvicorn auto-reload)
-ai-almanac serve --bind 0.0.0.0 --allow-public
-                                       # bind to all interfaces — REQUIRED
-                                       # behind a reverse proxy doing auth
-
 ai-almanac env prepare                 # install / update the benchmark env
 ai-almanac env info                    # show installed package versions
 
@@ -103,35 +104,18 @@ $AI_ALMANAC_DATA_DIR/
 └── cache/              ← weight cache (HuggingFace), ARCO chunks
 ```
 
-Override with `AI_ALMANAC_DATA_DIR=/some/path ai-almanac serve` — useful for
-sharing a data directory across multiple researchers on one box (each runs
-their own `ai-almanac serve` on their own port; the FS perms decide what's
-shared).
+Override with `AI_ALMANAC_DATA_DIR=/some/path ai-almanac serve` to move one
+instance's private state. Do not point multiple running instances at the same
+application data directory. Researchers may register the same read-only input
+dataset directories from separate AI Almanac instances.
 
 ---
 
-## Public deployment
+## Adding data
 
-ai-almanac has no built-in authentication. To host a publicly-reachable
-instance, run it bound to localhost and put a reverse proxy in front that
-handles auth. See [`DEPLOY_PUBLIC.md`](./DEPLOY_PUBLIC.md) for Caddy +
-oauth2-proxy + Globus OIDC examples.
-
-The app reads `X-Forwarded-User` (header name configurable via
-`SUBMITTED_BY_HEADER`) and records it on jobs/datasets as `submitted_by`
-for attribution. It does not enforce anything — the proxy is the trust
-boundary.
-
----
-
-## Adding a model
-
-1. Add an entry to `src/ai_almanac/server/config/models.yaml` with
-   `id`, `display_name`, `region`, etc.
-2. Set the env var `{REGION}_{ID}_MODEL_DIR` to where the model's NetCDF
-   files live on disk (or `gs://...` for an ARCO-style remote zarr).
-3. Restart `ai-almanac serve`. Models whose env var is unset get filtered
-   out of the registry automatically.
+Open **Data** in the web UI and register local observation or model-output
+directories. AI Almanac checks the file pattern and configured NetCDF variable
+before making a source available to benchmark workflows.
 
 ---
 

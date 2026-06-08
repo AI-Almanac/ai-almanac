@@ -191,54 +191,22 @@ def _region_by_id(region_id: object) -> dict | None:
 
 
 async def _dataset_candidates(user_id: str) -> list[dict]:
-    from ai_almanac.settings import get_demo_datasets
-    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.data_sources import get_obs_sources
 
-    demo = []
-    for dataset in get_demo_datasets():
-        obs_dir = dataset.get("obs_dir")
-        start, end = _obs_year_range(obs_dir) if obs_dir else (None, None)
-        demo.append(
-            {
-                "id": dataset["id"],
-                "name": dataset["name"],
-                "region": dataset.get("region"),
-                "is_demo": True,
-                "obs_file_pattern": dataset.get("obs_file_pattern"),
-                "obs_year_start": start,
-                "obs_year_end": end,
-            }
-        )
-
-    async with get_db() as conn:
-        rows = (
-            (
-                await conn.execute(
-                    sa.text("""
-                    SELECT id, name
-                    FROM datasets
-                    WHERE user_id = :uid AND status = 'ready'
-                    ORDER BY created_at DESC
-                    """),
-                    {"uid": user_id},
-                )
-            )
-            .mappings()
-            .fetchall()
-        )
-    user_datasets = [
+    sources = await get_obs_sources()
+    return [
         {
-            "id": row["id"],
-            "name": row["name"],
-            "region": None,
+            "id": source["id"],
+            "name": source["name"],
+            "region": source.get("region"),
             "is_demo": False,
-            "obs_file_pattern": None,
-            "obs_year_start": None,
-            "obs_year_end": None,
+            "obs_file_pattern": source["metadata"].get("obs_file_pattern"),
+            "obs_year_start": source["metadata"].get("start_year"),
+            "obs_year_end": source["metadata"].get("end_year"),
         }
-        for row in rows
+        for source in sources
+        if source.get("status") == "ready"
     ]
-    return demo + user_datasets
 
 
 def _region_models(region_id: str | None) -> list[dict]:
@@ -416,21 +384,9 @@ def benchmark_payload(
 
 
 async def _exec_list_regions(args: dict, user_id: str, scope: BenchmarkScope) -> str:
-    from ai_almanac.settings import get_demo_datasets, get_regions
+    from ai_almanac.server.services.regions import list_region_options
 
-    configured_regions = {d["region"] for d in get_demo_datasets() if d.get("region")}
-    result = []
-    for region in get_regions():
-        result.append(
-            {
-                "id": region["id"],
-                "display_name": region["display_name"],
-                "romp_region": region.get("romp_name", "custom"),
-                "description": region.get("description", ""),
-                "has_data": region["id"] in configured_regions,
-            }
-        )
-    return json.dumps(result)
+    return json.dumps(await list_region_options())
 
 
 async def _exec_list_datasets(args: dict, user_id: str, scope: BenchmarkScope) -> str:
@@ -678,7 +634,11 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> st
         _jobs.c.created_at,
     ).where(_jobs.c.user_id == sa.bindparam("uid"))
     if isinstance(status_filter, str) and status_filter in {
+        "queued",
+        "starting",
         "running",
+        "canceling",
+        "canceled",
         "complete",
         "failed",
     }:

@@ -62,6 +62,38 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ---- Config ------------------------------------------------------------------
 
+// ---- Filesystem browser -----------------------------------------------------
+
+export interface FsEntry {
+	name: string;
+	kind: 'file' | 'dir';
+	size: number | null;
+	is_hidden: boolean;
+}
+
+export interface FsListing {
+	path: string;
+	parent: string | null;
+	entries: FsEntry[];
+}
+
+export interface QuickPath {
+	label: string;
+	path: string;
+}
+
+export async function fsList(path = '', includeHidden = false): Promise<FsListing> {
+	const params = new URLSearchParams();
+	if (path) params.set('path', path);
+	if (includeHidden) params.set('include_hidden', 'true');
+	const q = params.toString();
+	return request<FsListing>(`/fs/list${q ? '?' + q : ''}`);
+}
+
+export async function fsQuickPaths(): Promise<QuickPath[]> {
+	return request<QuickPath[]>('/fs/quick-paths');
+}
+
 // ---- Settings ---------------------------------------------------------------
 
 export interface SettingsField {
@@ -113,8 +145,11 @@ export interface DataSource {
 	path: string;
 	region: string | null;
 	metadata: Record<string, unknown>;
+	location_type: 'local_directory';
+	status: 'ready' | 'invalid';
+	validation_error: string | null;
 	created_at: string;
-	exists: boolean;
+	updated_at: string | null;
 }
 
 export interface DataSourceCreate {
@@ -137,6 +172,20 @@ export async function createDataSource(body: DataSourceCreate): Promise<DataSour
 	});
 }
 
+export async function updateDataSource(
+	id: string,
+	body: Omit<DataSourceCreate, 'kind'>
+): Promise<DataSource> {
+	return request<DataSource>(`/data-sources/${id}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function revalidateDataSource(id: string): Promise<DataSource> {
+	return request<DataSource>(`/data-sources/${id}/revalidate`, { method: 'POST' });
+}
+
 export async function deleteDataSource(id: string): Promise<void> {
 	await request<void>(`/data-sources/${id}`, { method: 'DELETE' });
 }
@@ -147,6 +196,14 @@ export async function getMetricDefinitions() {
 
 export async function getRompDefaults() {
 	return request<RompDefaults>('/config/romp-defaults');
+}
+
+export type AppCapabilities = {
+	chat: boolean;
+};
+
+export async function getCapabilities(): Promise<AppCapabilities> {
+	return request<AppCapabilities>('/config/capabilities');
 }
 
 // ---- Regions -----------------------------------------------------------------
@@ -206,6 +263,10 @@ export async function getJobLogs(id: string) {
 
 export async function deleteJob(id: string): Promise<void> {
 	await request<void>(`/jobs/${id}`, { method: 'DELETE' });
+}
+
+export async function cancelJob(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/cancel`, { method: 'POST' });
 }
 
 /**
@@ -303,7 +364,14 @@ export type BenchmarkSubmitResponse = {
 	benchmark_validation: BenchmarkValidation;
 };
 
-export type JobStatus = 'running' | 'complete' | 'failed';
+export type JobStatus =
+	| 'queued'
+	| 'starting'
+	| 'running'
+	| 'canceling'
+	| 'canceled'
+	| 'complete'
+	| 'failed';
 
 export type Job = {
 	id: string;

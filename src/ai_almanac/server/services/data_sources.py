@@ -9,22 +9,26 @@ launch so testdata works without configuration.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import yaml
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
-from ai_almanac.settings import _DATASETS_YAML, _MODELS_YAML, _env_value, _env_key
+from ai_almanac.settings import _DATASETS_YAML, _MODELS_YAML, _env_key, _env_value
 
 Kind = Literal["obs", "model"]
+Status = Literal["ready", "invalid"]
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _decode_metadata(value) -> dict:
@@ -40,7 +44,104 @@ def _decode_metadata(value) -> dict:
 def _row_dict(row) -> dict:
     d = dict(row)
     d["metadata"] = _decode_metadata(d.get("metadata"))
+    if isinstance(d.get("region"), str):
+        d["region"] = d["region"].strip().lower() or None
     return d
+
+
+def _file_glob(pattern: str) -> str:
+    return pattern.replace("{}", "*")
+
+
+def _coverage_years(files: list[Path]) -> tuple[int | None, int | None]:
+    years = []
+    for file in files:
+        match = re.search(r"(?:19|20)\d{2}", file.name)
+        if match:
+            years.append(int(match.group(0)))
+    if not years:
+        return None, None
+    return min(years), max(years)
+
+
+def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
+    normalized = dict(metadata)
+    variable_key = "obs_var" if kind == "obs" else "model_var"
+    pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
+    default_variable = "RAINFALL" if kind == "obs" else "tp"
+    normalized[variable_key] = str(
+        normalized.get(variable_key) or default_variable
+    ).strip()
+    normalized[pattern_key] = str(normalized.get(pattern_key) or "{}.nc").strip()
+
+    start_year, end_year = _coverage_years(files)
+    if start_year is not None:
+        normalized["start_year"] = start_year
+        normalized["end_year"] = end_year
+
+    if kind == "model":
+        normalized.setdefault("model_type", "AIWP")
+        normalized.setdefault("unit_cvt", 1.0)
+        normalized.setdefault("probabilistic", False)
+        normalized.setdefault("members", None)
+        normalized.setdefault("init_days", "0")
+        if start_year is not None and end_year is not None:
+            normalized.setdefault("start_date", f"{start_year}-01-01")
+            normalized.setdefault("end_date", f"{end_year}-12-31")
+            normalized.setdefault("start_year_clim", start_year)
+            normalized.setdefault("end_year_clim", end_year)
+    return normalized
+
+
+def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+    directory = Path(path)
+    if not directory.exists():
+        return "invalid", "Directory does not exist.", metadata
+    if not directory.is_dir():
+        return "invalid", "Path is not a directory.", metadata
+    try:
+        next(directory.iterdir(), None)
+    except PermissionError:
+        return "invalid", "Directory is not readable.", metadata
+
+    pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
+    pattern = str(metadata.get(pattern_key) or "{}.nc").strip()
+    files = sorted(file for file in directory.glob(_file_glob(pattern)) if file.is_file())
+    if not files:
+        return "invalid", f"No files match {pattern!r}.", metadata
+
+    normalized = _normalized_metadata(kind, metadata, files)
+    variable_key = "obs_var" if kind == "obs" else "model_var"
+    variable = normalized[variable_key]
+    try:
+        import xarray as xr
+
+        with xr.open_dataset(files[0]) as dataset:
+            available = sorted(dataset.data_vars)
+    except Exception as exc:
+        return (
+            "invalid",
+            f"Could not open {files[0].name} as NetCDF: {type(exc).__name__}: {exc}",
+            normalized,
+        )
+    if variable not in available:
+        names = ", ".join(available[:8]) or "none"
+        return (
+            "invalid",
+            f"Variable {variable!r} was not found in {files[0].name}. Available variables: {names}.",
+            normalized,
+        )
+    if kind == "model" and normalized.get("start_year") is None:
+        return (
+            "invalid",
+            "Could not infer model coverage years from matching filenames.",
+            normalized,
+        )
+    return "ready", None, normalized
+
+
+async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+    return await asyncio.to_thread(_inspect_local_source, kind, path, metadata)
 
 
 async def list_sources(kind: Kind | None = None) -> list[dict]:
@@ -66,28 +167,126 @@ async def create_source(
     metadata: dict | None = None,
 ) -> dict:
     """Insert a new data source. Returns the created row."""
+    normalized_region = region.strip().lower() if region else None
     source_id = str(uuid.uuid4())
+    status, validation_error, normalized_metadata = await validate_source(
+        kind, path, metadata or {}
+    )
+    now = _now()
     async with get_db() as conn:
         await conn.execute(
             text(
-                "INSERT INTO data_sources (id, kind, name, path, region, metadata, created_at) "
-                "VALUES (:id, :kind, :name, :path, :region, :metadata, :now)"
+                "INSERT INTO data_sources "
+                "(id, kind, name, path, region, metadata, location_type, status, "
+                "validation_error, created_at, updated_at) "
+                "VALUES (:id, :kind, :name, :path, :region, :metadata, "
+                "'local_directory', :status, :validation_error, :now, :now)"
             ),
             {
                 "id": source_id,
                 "kind": kind,
                 "name": name,
                 "path": path,
-                "region": region,
+                "region": normalized_region,
                 # SQLite's JSON column doesn't auto-serialize Python dicts; emit a string.
-                "metadata": json.dumps(metadata or {}),
-                "now": _now(),
+                "metadata": json.dumps(normalized_metadata),
+                "status": status,
+                "validation_error": validation_error,
+                "now": now,
             },
         )
         result = await conn.execute(
             text("SELECT * FROM data_sources WHERE id = :id"), {"id": source_id}
         )
         return _row_dict(result.mappings().fetchone())
+
+
+async def update_source(
+    source_id: str,
+    *,
+    name: str,
+    path: str,
+    region: str | None,
+    metadata: dict,
+) -> dict | None:
+    normalized_region = region.strip().lower() if region else None
+    async with get_db() as conn:
+        existing = (
+            (
+                await conn.execute(
+                    text("SELECT kind FROM data_sources WHERE id = :id"),
+                    {"id": source_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not existing:
+        return None
+
+    kind: Kind = existing["kind"]
+    status, validation_error, normalized_metadata = await validate_source(
+        kind, path, metadata
+    )
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(
+                "UPDATE data_sources SET name = :name, path = :path, region = :region, "
+                "metadata = :metadata, status = :status, validation_error = :error, "
+                "updated_at = :now WHERE id = :id RETURNING *"
+            ),
+            {
+                "id": source_id,
+                "name": name,
+                "path": path,
+                "region": normalized_region,
+                "metadata": json.dumps(normalized_metadata),
+                "status": status,
+                "error": validation_error,
+                "now": _now(),
+            },
+        )
+        row = result.mappings().fetchone()
+        return _row_dict(row) if row else None
+
+
+async def revalidate_source(source_id: str) -> dict | None:
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM data_sources WHERE id = :id"),
+                    {"id": source_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row:
+        return None
+    source = _row_dict(row)
+    return await update_source(
+        source_id,
+        name=source["name"],
+        path=source["path"],
+        region=source.get("region"),
+        metadata=source["metadata"],
+    )
+
+
+async def get_source(source_id: str) -> dict | None:
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM data_sources WHERE id = :id"),
+                    {"id": source_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    return _row_dict(row) if row else None
 
 
 async def delete_source(source_id: str) -> bool:
@@ -129,8 +328,21 @@ async def seed_from_yaml_if_empty() -> int:
         existing = (
             await conn.execute(text("SELECT COUNT(*) FROM data_sources"))
         ).scalar()
-        if existing and existing > 0:
-            return 0
+        rows = (
+            (
+                await conn.execute(
+                    text("SELECT id FROM data_sources WHERE status != 'ready'")
+                )
+            )
+            .mappings()
+            .fetchall()
+            if existing
+            else []
+        )
+    if existing:
+        for row in rows:
+            await revalidate_source(row["id"])
+        return 0
 
     inserted = 0
 
@@ -154,6 +366,7 @@ async def seed_from_yaml_if_empty() -> int:
             metadata={
                 "yaml_id": entry["id"],
                 "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
+                "obs_var": entry.get("obs_var", "RAINFALL"),
             },
         )
         inserted += 1

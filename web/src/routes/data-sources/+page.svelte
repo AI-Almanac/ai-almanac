@@ -3,9 +3,12 @@
 	import {
 		listDataSources,
 		createDataSource,
+		updateDataSource,
+		revalidateDataSource,
 		deleteDataSource,
 		type DataSource
 	} from '$lib/api';
+	import FilePicker from '$lib/FilePicker.svelte';
 
 	let sources = $state<DataSource[]>([]);
 	let loading = $state(true);
@@ -16,9 +19,12 @@
 	let formPath = $state('');
 	let formRegion = $state('');
 	let formFilePattern = $state('{}.nc');
-	let formVar = $state('tp');
+	let formVar = $state('RAINFALL');
 	let formModelType = $state('AIWP');
 	let submitting = $state(false);
+	let pickerOpen = $state(false);
+	let editingId = $state<string | null>(null);
+	let revalidatingId = $state<string | null>(null);
 
 	async function load() {
 		loading = true;
@@ -42,25 +48,74 @@
 			const metadata: Record<string, unknown> = {};
 			if (formKind === 'obs') {
 				if (formFilePattern) metadata.obs_file_pattern = formFilePattern;
+				if (formVar) metadata.obs_var = formVar;
 			} else {
 				if (formVar) metadata.model_var = formVar;
 				if (formModelType) metadata.model_type = formModelType;
 				if (formFilePattern) metadata.file_pattern = formFilePattern;
 			}
-			await createDataSource({
-				kind: formKind,
+			const body = {
 				name: formName.trim(),
 				path: formPath.trim(),
 				region: formKind === 'model' ? formRegion.trim() || undefined : formRegion.trim() || undefined,
 				metadata
-			});
-			formName = '';
-			formPath = '';
+			};
+			if (editingId) {
+				await updateDataSource(editingId, body);
+			} else {
+				await createDataSource({ kind: formKind, ...body });
+			}
+			resetForm();
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			submitting = false;
+		}
+	}
+
+	function resetForm() {
+		editingId = null;
+		formKind = 'obs';
+		formName = '';
+		formPath = '';
+		formRegion = '';
+		formFilePattern = '{}.nc';
+		formVar = 'RAINFALL';
+		formModelType = 'AIWP';
+	}
+
+	function onKindChange() {
+		formVar = formKind === 'obs' ? 'RAINFALL' : 'tp';
+	}
+
+	function onEdit(source: DataSource) {
+		editingId = source.id;
+		formKind = source.kind;
+		formName = source.name;
+		formPath = source.path;
+		formRegion = source.region ?? '';
+		formFilePattern = String(
+			source.metadata[source.kind === 'obs' ? 'obs_file_pattern' : 'file_pattern'] ?? '{}.nc'
+		);
+		formVar = String(
+			source.metadata[source.kind === 'obs' ? 'obs_var' : 'model_var'] ??
+				(source.kind === 'obs' ? 'RAINFALL' : 'tp')
+		);
+		formModelType = String(source.metadata.model_type ?? 'AIWP');
+		window.scrollTo({ top: 0, behavior: 'smooth' });
+	}
+
+	async function onRevalidate(source: DataSource) {
+		revalidatingId = source.id;
+		error = null;
+		try {
+			const updated = await revalidateDataSource(source.id);
+			sources = sources.map((item) => (item.id === updated.id ? updated : item));
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			revalidatingId = null;
 		}
 	}
 
@@ -98,12 +153,16 @@
 	{/if}
 
 	<section class="add">
-		<h2>Add a source</h2>
+		<h2>{editingId ? 'Edit source' : 'Add a source'}</h2>
 		<form onsubmit={onSubmit}>
 			<div class="row">
 				<label>
 					<span>Kind</span>
-					<select bind:value={formKind}>
+					<select
+						bind:value={formKind}
+						disabled={editingId !== null}
+						onchange={onKindChange}
+					>
 						<option value="obs">Observations</option>
 						<option value="model">Model forecasts</option>
 					</select>
@@ -118,15 +177,18 @@
 					/>
 				</label>
 			</div>
-			<label class="full">
-				<span>Path on disk</span>
-				<input
-					type="text"
-					bind:value={formPath}
-					placeholder="/data/era5/ethiopia or /home/me/forecasts/fuxi"
-					required
-				/>
-			</label>
+			<div class="path-row">
+				<label class="grow">
+					<span>Directory</span>
+					<input
+						type="text"
+						bind:value={formPath}
+						placeholder="/data/era5/ethiopia or /home/me/forecasts/fuxi"
+						required
+					/>
+				</label>
+				<button type="button" class="browse" onclick={() => (pickerOpen = true)}>Browse</button>
+			</div>
 			<div class="row">
 				<label class="grow">
 					<span>Region {#if formKind === 'model'}<em>(required)</em>{/if}</span>
@@ -142,12 +204,12 @@
 					<input type="text" bind:value={formFilePattern} placeholder="{`{}.nc`}" />
 				</label>
 			</div>
-			{#if formKind === 'model'}
-				<div class="row">
-					<label class="grow">
-						<span>Variable</span>
-						<input type="text" bind:value={formVar} placeholder="tp" />
-					</label>
+			<div class="row">
+				<label class="grow">
+					<span>NetCDF variable</span>
+					<input type="text" bind:value={formVar} placeholder="tp" required />
+				</label>
+				{#if formKind === 'model'}
 					<label class="grow">
 						<span>Model type</span>
 						<select bind:value={formModelType}>
@@ -156,11 +218,14 @@
 							<option value="climatology">Climatology</option>
 						</select>
 					</label>
-				</div>
-			{/if}
+				{/if}
+			</div>
 			<div class="actions">
+				{#if editingId}
+					<button type="button" class="secondary" onclick={resetForm}>Cancel</button>
+				{/if}
 				<button type="submit" disabled={submitting || !formName.trim() || !formPath.trim()}>
-					{submitting ? 'Adding…' : 'Add to catalog'}
+					{submitting ? 'Validating…' : editingId ? 'Save and validate' : 'Add and validate'}
 				</button>
 			</div>
 		</form>
@@ -201,17 +266,39 @@
 	</section>
 </main>
 
+<FilePicker
+	bind:open={pickerOpen}
+	mode="directory"
+	initialPath={formPath}
+	title="Choose data source directory"
+	onclose={() => (pickerOpen = false)}
+	onselect={(p) => (formPath = p)}
+/>
+
 {#snippet sourceRow(src: DataSource)}
-	<li class="source" class:missing={!src.exists}>
+	<li class="source" class:missing={src.status === 'invalid'}>
 		<div class="meta">
 			<div class="name">
 				{src.name}
 				{#if src.region}<span class="tag">{src.region}</span>{/if}
-				{#if !src.exists}<span class="tag warn">path missing</span>{/if}
+				<span class:warn={src.status === 'invalid'} class="tag">{src.status}</span>
 			</div>
 			<code class="path">{src.path}</code>
+			{#if src.validation_error}
+				<p class="validation-error">{src.validation_error}</p>
+			{/if}
 		</div>
-		<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
+		<div class="source-actions">
+			<button class="rm" onclick={() => onEdit(src)}>Edit</button>
+			<button
+				class="rm"
+				disabled={revalidatingId === src.id}
+				onclick={() => onRevalidate(src)}
+			>
+				{revalidatingId === src.id ? 'Checking…' : 'Revalidate'}
+			</button>
+			<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
+		</div>
 	</li>
 {/snippet}
 
@@ -266,6 +353,22 @@
 		gap: 1rem;
 		flex-wrap: wrap;
 	}
+	.path-row {
+		display: flex;
+		gap: 0.6rem;
+		align-items: flex-end;
+		width: 100%;
+	}
+	.browse {
+		background: transparent;
+		color: var(--color-text);
+		border-color: var(--color-border);
+		font-weight: 500;
+		padding: 0.5rem 0.85rem;
+		flex-shrink: 0;
+		align-self: flex-end;
+		margin-bottom: 0;
+	}
 	label {
 		display: flex;
 		flex-direction: column;
@@ -275,9 +378,6 @@
 	label.grow {
 		flex: 1;
 		min-width: 12rem;
-	}
-	label.full {
-		width: 100%;
 	}
 	label > span {
 		color: var(--color-text-muted);
@@ -299,6 +399,7 @@
 	.actions {
 		display: flex;
 		justify-content: flex-end;
+		gap: 0.65rem;
 	}
 	button {
 		padding: 0.55rem 1.1rem;
@@ -374,6 +475,21 @@
 		color: var(--color-text-muted);
 		border-color: var(--color-border);
 		font-weight: 500;
+	}
+	.secondary {
+		background: transparent;
+		color: var(--color-text);
+	}
+	.source-actions {
+		display: flex;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.validation-error {
+		margin: 0;
+		color: var(--color-danger, #c33);
+		font-size: 0.82rem;
 	}
 	.muted {
 		color: var(--color-text-muted);

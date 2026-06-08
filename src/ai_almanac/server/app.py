@@ -8,9 +8,10 @@ directive in pyproject.toml.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
@@ -25,8 +26,11 @@ from ai_almanac.server.routers import (
     config,
     data_sources,
     datasets,
+    fs,
     jobs,
     regions,
+)
+from ai_almanac.server.routers import (
     settings as settings_router,
 )
 from ai_almanac.settings import settings
@@ -37,7 +41,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_STATIC_DIR = Path(__file__).parent / "static"
+_PACKAGED_STATIC_DIR = Path(__file__).parent / "static"
+_SOURCE_STATIC_DIR = Path(__file__).resolve().parents[3] / "web" / "build"
+_STATIC_DIR = (
+    _SOURCE_STATIC_DIR if _SOURCE_STATIC_DIR.exists() else _PACKAGED_STATIC_DIR
+)
 
 
 def _apply_migrations() -> None:
@@ -58,7 +66,14 @@ async def lifespan(app: FastAPI):
     _apply_migrations()
     _reload_user_config()
     await _seed_data_sources()
-    yield
+    await _reconcile_jobs()
+    reconciler = asyncio.create_task(_job_reconciler_loop())
+    try:
+        yield
+    finally:
+        reconciler.cancel()
+        with suppress(asyncio.CancelledError):
+            await reconciler
 
 
 def _reload_user_config() -> None:
@@ -80,6 +95,21 @@ async def _seed_data_sources() -> None:
             logger.info("seeded %d data source(s) from packaged YAMLs", count)
     except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
         logger.warning("data source seeding failed: %s", e)
+
+
+async def _reconcile_jobs() -> None:
+    from ai_almanac.server.services.job_manager import reconcile_jobs
+
+    try:
+        await reconcile_jobs()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("job reconciliation failed: %s", e)
+
+
+async def _job_reconciler_loop() -> None:
+    while True:
+        await asyncio.sleep(5)
+        await _reconcile_jobs()
 
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)
@@ -116,6 +146,7 @@ app.include_router(config.router)
 app.include_router(config.root_router)
 app.include_router(data_sources.router)
 app.include_router(datasets.router)
+app.include_router(fs.router)
 app.include_router(jobs.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
@@ -145,12 +176,16 @@ class _SPAStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404:
                 # SPA client-side routing: serve index.html for unknown paths.
-                return FileResponse(self.directory / "index.html")
-            raise
+                response = FileResponse(self.directory / "index.html")
+            else:
+                raise
+        if path in ("", "index.html") or response.media_type == "text/html":
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 if _STATIC_DIR.exists():

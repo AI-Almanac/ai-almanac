@@ -6,8 +6,8 @@ Entry point exposed via `pyproject.toml [project.scripts]` as `ai-almanac`.
 from __future__ import annotations
 
 import shutil
-import sys
 import webbrowser
+from contextlib import suppress
 from typing import Annotated
 
 import typer
@@ -22,28 +22,38 @@ app = typer.Typer(
 )
 
 
+@app.command("execute-job", hidden=True)
+def execute_job_command(job_id: str) -> None:
+    """Run a detached job supervisor."""
+    from ai_almanac.server.services.job_manager import execute_job
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    execute_job(job_id)
+
+
+@app.command("run-job-workload", hidden=True)
+def run_job_workload_command(job_id: str) -> None:
+    """Run the computational child process supervised by execute-job."""
+    from ai_almanac.server.services.job_workload import run_job_workload
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    run_job_workload(job_id)
+
+
 @app.command()
 def serve(
     bind: Annotated[str, typer.Option(help="Host to bind to.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port to listen on.")] = 8765,
     open_browser: Annotated[bool, typer.Option("--open/--no-open")] = True,
     reload: Annotated[bool, typer.Option(help="Enable auto-reload (dev).")] = False,
-    allow_public: Annotated[
-        bool,
-        typer.Option(
-            "--allow-public",
-            help="Permit binding to non-loopback addresses. The app has no built-in "
-            "auth — only use this behind a trusted reverse proxy.",
-        ),
-    ] = False,
 ) -> None:
     """Boot the ai-almanac web server (FastAPI + bundled UI)."""
-    if bind not in ("127.0.0.1", "localhost", "::1") and not allow_public:
+    if bind not in ("127.0.0.1", "localhost", "::1"):
         typer.secho(
-            f"refusing to bind to {bind!r} without --allow-public.\n"
-            "ai-almanac has no built-in authentication. Only bind to non-loopback "
-            "addresses behind a trusted reverse proxy (oauth2-proxy, Caddy with "
-            "OIDC, Cloudflare Access, etc).",
+            f"refusing to bind to {bind!r}.\n"
+            "ai-almanac currently supports local, single-user operation only.",
             fg=typer.colors.RED,
             err=True,
         )
@@ -58,10 +68,8 @@ def serve(
     typer.echo(f"data dir: {data_root()}")
 
     if open_browser and not reload:
-        try:
+        with suppress(Exception):
             webbrowser.open(url)
-        except Exception:
-            pass
 
     uvicorn.run(
         "ai_almanac.server.app:app",

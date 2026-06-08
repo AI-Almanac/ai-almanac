@@ -5,32 +5,34 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dataclasses import asdict
-
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from ai_almanac.server.attribution import CurrentUser
+from ai_almanac.server.db import get_db
+from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services.job_manager import (
+    ACTIVE_STATUSES,
+    launch_job,
+    request_cancel,
+)
 from ai_almanac.settings import (
-    REMOTE_OBS_PROVIDERS,
-    get_demo_datasets,
     get_model_registry,
     get_region,
     get_regions,
 )
-from ai_almanac.server.db import get_db
-from ..services.runner import get_runner
-from ..services.storage import get_storage
+
 from ..services.metrics import (
-    compute_job_metrics,
-    compute_job_grid,
     compute_job_cell,
-    JobMetrics,
-    JobGridResponse,
+    compute_job_grid,
+    compute_job_metrics,
     JobCellResponse,
+    JobGridResponse,
+    JobMetrics,
 )
+from ..services.storage import get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
@@ -113,6 +115,18 @@ class ResultFile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _parse_metrics_cache(value: object) -> JobMetrics | None:
+    if not value:
+        return None
+    try:
+        if isinstance(value, (str, bytes, bytearray)):
+            return JobMetrics.model_validate_json(value)
+        return JobMetrics.model_validate(value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring invalid persisted metrics cache")
+        return None
+
+
 def _region_from_romp_name(romp_region: str | None) -> dict | None:
     if not romp_region:
         return None
@@ -192,24 +206,19 @@ def _apply_region_params(romp_params: dict) -> dict:
 
 
 async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str | None:
-    """Return the obs directory for a dataset, or None for remote observation datasets."""
+    """Resolve an observation source, with legacy upload compatibility."""
     if obs_dir_override:
         return obs_dir_override
-    if dataset_id.startswith("demo:"):
-        demo_map = {d["id"]: d for d in get_demo_datasets()}
-        demo = demo_map.get(dataset_id)
-        if not demo:
+    source = await data_source_service.get_source(dataset_id)
+    if source:
+        if source["kind"] != "obs":
+            raise HTTPException(status_code=400, detail="Selected source is not observations")
+        if source.get("status") != "ready":
             raise HTTPException(
-                status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}"
+                status_code=409,
+                detail=source.get("validation_error") or "Observation source is not ready",
             )
-        if demo.get("provider") in REMOTE_OBS_PROVIDERS:
-            return None
-        obs_dir = demo.get("obs_dir")
-        if not obs_dir:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}"
-            )
-        return obs_dir
+        return source["path"]
     async with get_db() as conn:
         row = (
             (
@@ -243,11 +252,15 @@ async def list_models(region: str | None = None):
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, user: CurrentUser):
-    if body.dataset_id.startswith("demo:"):
-        demo_map = {d["id"]: d for d in get_demo_datasets()}
-        if body.dataset_id not in demo_map:
+    observation_source = await data_source_service.get_source(body.dataset_id)
+    if observation_source:
+        if observation_source["kind"] != "obs":
+            raise HTTPException(status_code=400, detail="Selected source is not observations")
+        if observation_source.get("status") != "ready":
             raise HTTPException(
-                status_code=404, detail=f"Unknown demo dataset: {body.dataset_id!r}"
+                status_code=409,
+                detail=observation_source.get("validation_error")
+                or "Observation source is not ready",
             )
     else:
         async with get_db() as conn:
@@ -271,21 +284,27 @@ async def create_job(body: JobCreate, user: CurrentUser):
             )
 
     region = (body.params.region or "").lower()
-    registry = get_model_registry()
-    model_cfg = next(
-        (
-            m
-            for m in registry
-            if m["id"] == body.model_name and m.get("region", "").lower() == region
-        ),
-        None,
-    ) or next(
-        (m for m in registry if m["id"] == body.model_name),
-        None,
-    )
-    if not model_cfg:
+    model_source = await data_source_service.get_source(body.model_name)
+    if not model_source or model_source["kind"] != "model":
         raise HTTPException(
             status_code=400, detail=f"Unknown model: {body.model_name!r}"
+        )
+    if model_source.get("status") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=model_source.get("validation_error") or "Model source is not ready",
+        )
+    model_cfg = {
+        "id": model_source["id"],
+        "display_name": model_source["name"],
+        "region": model_source.get("region") or "",
+        "model_dir": model_source["path"],
+        **model_source["metadata"],
+    }
+    if region and model_cfg["region"].lower() != region:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model is not configured for region {region!r}",
         )
 
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir)
@@ -313,14 +332,18 @@ async def create_job(body: JobCreate, user: CurrentUser):
     region_def = get_region(region_id) if region_id else None
     romp_params = _apply_region_params({"region": region_id, **romp_params})
 
-    if body.dataset_id.startswith("demo:"):
-        demo_map = {d["id"]: d for d in get_demo_datasets()}
-        demo = demo_map.get(body.dataset_id, {})
-        if "obs_file_pattern" not in romp_params and demo.get("obs_file_pattern"):
-            romp_params["obs_file_pattern"] = demo["obs_file_pattern"]
-        dataset_config = {k: v for k, v in demo.items() if k not in ("obs_dir",)}
-    else:
-        dataset_config = {"provider": "local"}
+    source_metadata = observation_source["metadata"] if observation_source else {}
+    if "obs_file_pattern" not in romp_params and source_metadata.get("obs_file_pattern"):
+        romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
+    if "obs_var" not in romp_params and source_metadata.get("obs_var"):
+        romp_params["obs_var"] = source_metadata["obs_var"]
+    dataset_config = {
+        "provider": "local",
+        "source_id": body.dataset_id,
+        "source_name": observation_source["name"] if observation_source else None,
+        "region": observation_source.get("region") if observation_source else None,
+        **source_metadata,
+    }
 
     compute_e2s_metrics = bool(
         model_cfg.get("compute_e2s_metrics")
@@ -344,8 +367,8 @@ async def create_job(body: JobCreate, user: CurrentUser):
     async with get_db() as conn:
         result = await conn.execute(
             text(
-                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at, started_at) "
-                "VALUES (:id, :uid, :did, 'running', :cfg, :run_id, :now, :now) RETURNING *"
+                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at) "
+                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now) RETURNING *"
             ),
             {
                 "id": job_id,
@@ -358,7 +381,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
         )
         row = dict(result.mappings().fetchone())
 
-    get_runner().run_job(job_id, config)
+    await launch_job(job_id)
     return _row_to_job_out(row, user["id"])
 
 
@@ -400,35 +423,62 @@ async def get_job(job_id: str, user: CurrentUser):
 
 @router.websocket("/{job_id}/stream")
 async def stream_job(ws: WebSocket, job_id: str) -> None:
-    """Push live status, log lines, and completion events for a running job.
-
-    Subscribes the connection to the job's event channel via the in-process
-    broker. The frontend uses this in place of polling `/jobs/{id}` and
-    `/jobs/{id}/logs`. No auth — local-first.
-    """
-    from ai_almanac.server.services.job_events import get_broker
-
+    """Stream durable log additions and status changes."""
     await ws.accept()
-    broker = get_broker()
-    queue = await broker.subscribe(job_id)
-
-    # Send any historical log lines first so a late subscriber catches up.
     storage = get_storage()
-    backlog = await asyncio.to_thread(storage.read_log, job_id)
-    if backlog:
-        for line in backlog.splitlines():
-            await ws.send_json({"type": "log", "payload": {"line": line}})
-
+    sent_lines = 0
+    previous_status: str | None = None
     try:
         while True:
-            event = await queue.get()
-            await ws.send_json({"type": event.type, "payload": event.payload})
-            if event.type == "done":
+            logs = await asyncio.to_thread(storage.read_log, job_id)
+            lines = logs.splitlines()
+            for line in lines[sent_lines:]:
+                await ws.send_json({"type": "log", "payload": {"line": line}})
+            sent_lines = len(lines)
+
+            async with get_db() as conn:
+                row = (
+                    (
+                        await conn.execute(
+                            text("SELECT status, exit_code FROM jobs WHERE id = :id"),
+                            {"id": job_id},
+                        )
+                    )
+                    .mappings()
+                    .fetchone()
+                )
+            if not row:
+                await ws.send_json(
+                    {"type": "done", "payload": {"status": "deleted"}}
+                )
                 break
+            if row["status"] != previous_status:
+                previous_status = row["status"]
+                await ws.send_json(
+                    {"type": "status", "payload": {"status": row["status"]}}
+                )
+            if row["status"] in ("complete", "failed", "canceled"):
+                await ws.send_json(
+                    {
+                        "type": "done",
+                        "payload": {
+                            "status": row["status"],
+                            "exit_code": row["exit_code"],
+                        },
+                    }
+                )
+                break
+            await asyncio.sleep(0.75)
     except WebSocketDisconnect:
         pass
-    finally:
-        await broker.unsubscribe(job_id, queue)
+
+
+@router.post("/{job_id}/cancel", response_model=JobOut)
+async def cancel_job(job_id: str, user: CurrentUser):
+    row = await request_cancel(job_id, user["id"])
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _row_to_job_out(row, user["id"])
 
 
 @router.get("/{job_id}/logs")
@@ -552,8 +602,8 @@ async def get_metrics(
         )
 
     # Return cached result when no bbox filter is applied.
-    if not has_bbox and row["metrics_cache"]:
-        return JobMetrics.model_validate(row["metrics_cache"])
+    if not has_bbox and (cached_metrics := _parse_metrics_cache(row["metrics_cache"])):
+        return cached_metrics
 
     try:
         result = await asyncio.to_thread(
@@ -673,12 +723,17 @@ async def delete_job(job_id: str, user: CurrentUser):
     async with get_db() as conn:
         row = (
             await conn.execute(
-                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                text("SELECT id, status FROM jobs WHERE id = :id AND user_id = :uid"),
                 {"id": job_id, "uid": user["id"]},
             )
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Job not found")
+        if row.status in ACTIVE_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Cancel the job before deleting it.",
+            )
         await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
 
     storage = get_storage()

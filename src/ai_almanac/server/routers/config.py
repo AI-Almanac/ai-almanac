@@ -22,6 +22,13 @@ def romp_defaults() -> dict:
     return get_romp_defaults()
 
 
+@router.get("/capabilities")
+def capabilities() -> dict[str, bool]:
+    from ai_almanac.server.services.llm import llm_is_configured
+
+    return {"chat": llm_is_configured()}
+
+
 # Mounted at the root path (not under /config/) so the SPA's `<script
 # src="/config.js">` tag in `app.html` resolves without prefix juggling.
 root_router = APIRouter(tags=["config"])

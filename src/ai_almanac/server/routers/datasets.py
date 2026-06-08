@@ -7,8 +7,9 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ai_almanac.server.attribution import CurrentUser
-from ai_almanac.settings import REMOTE_OBS_PROVIDERS, get_demo_datasets
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services import data_sources as data_source_service
+
 from ..services.storage import get_storage
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -145,42 +146,25 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
 
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(user: CurrentUser):
-    async with get_db() as conn:
-        rows = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT * FROM datasets WHERE user_id = :uid ORDER BY created_at DESC"
-                    ),
-                    {"uid": user["id"]},
-                )
-            )
-            .mappings()
-            .fetchall()
+    sources = await data_source_service.list_sources(kind="obs")
+    return [
+        DatasetOut(
+            id=source["id"],
+            name=source["name"],
+            status=source.get("status") or "invalid",
+            region=source.get("region"),
+            created_at=source["created_at"],
+            ready_at=source.get("updated_at"),
+            error=source.get("validation_error"),
+            is_demo=False,
+            provider="local",
+            obs_file_pattern=source["metadata"].get("obs_file_pattern"),
+            obs_year_start=source["metadata"].get("start_year"),
+            obs_year_end=source["metadata"].get("end_year"),
         )
-    user_datasets = [DatasetOut(**dict(r)) for r in rows]
-
-    demo_datasets = []
-    for d in get_demo_datasets():
-        yr_start, yr_end = (None, None)
-        if d.get("provider") not in REMOTE_OBS_PROVIDERS and d.get("obs_dir"):
-            yr_start, yr_end = _obs_year_range(d["obs_dir"])
-        demo_datasets.append(
-            DatasetOut(
-                id=d["id"],
-                name=d["name"],
-                status="ready",
-                region=d.get("region"),
-                created_at="",
-                is_demo=True,
-                provider=d.get("provider"),
-                obs_file_pattern=d.get("obs_file_pattern"),
-                obs_year_start=yr_start,
-                obs_year_end=yr_end,
-            )
-        )
-
-    return demo_datasets + user_datasets
+        for source in sources
+        if source.get("status") == "ready"
+    ]
 
 
 @router.post(

@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     # Empty string = use the default under the data dir.
     output_dir: str = ""
 
+    # Server-side filesystem browser (backs the UI directory picker).
+    # Safe for local installs — the server IS the user. For public deploys
+    # behind a reverse proxy, this exposes the host's filesystem to anyone
+    # the proxy admits; set to false unless that's intentional.
+    enable_fs_browser: bool = True
+
     # Attribution header. When ai-almanac runs behind a reverse proxy that has
     # authenticated the user, the proxy can forward the user's identity in this
     # header. The value is recorded on jobs/datasets as `submitted_by`. No
@@ -305,14 +311,15 @@ def get_model_registry() -> list[dict]:
     `services.data_sources.seed_from_yaml_if_empty()` — it's not re-read here.
     """
     rows = _sync_db_query(
-        "SELECT * FROM data_sources WHERE kind = 'model' ORDER BY region, name"
+        "SELECT * FROM data_sources "
+        "WHERE kind = 'model' AND status = 'ready' ORDER BY region, name"
     )
     result = []
     for row in rows:
         meta = _ds_metadata(row)
         result.append(
             {
-                "id": meta.get("yaml_id") or row["id"],
+                "id": row["id"],
                 "display_name": row["name"],
                 "region": row["region"],
                 "model_dir": row["path"],
@@ -359,53 +366,25 @@ def get_region(region_id: str) -> dict | None:
 
 
 def get_demo_datasets() -> list[dict]:
-    """Return the registered obs datasets available in the benchmark UI.
-
-    Local datasets come from the `data_sources` table (registered via the UI).
-    Remote datasets (ARCO ERA5, E2S sources) come from the packaged
-    `datasets.yaml` since they don't fit the local-path data_sources model.
-    """
+    """Compatibility adapter for registered, executable observation sources."""
     rows = _sync_db_query(
-        "SELECT * FROM data_sources WHERE kind = 'obs' ORDER BY name"
+        "SELECT * FROM data_sources "
+        "WHERE kind = 'obs' AND status = 'ready' ORDER BY name"
     )
     result = []
     for row in rows:
         meta = _ds_metadata(row)
-        yaml_id = meta.get("yaml_id") or row["id"]
         result.append(
             {
-                "id": "demo:" + yaml_id,
+                "id": row["id"],
                 "name": row["name"],
                 "region": row.get("region", "") or "",
                 "provider": "local",
                 "obs_dir": row["path"],
                 "obs_file_pattern": meta.get("obs_file_pattern"),
-            }
-        )
-
-    # Remote datasets still come from YAML (no local path to register).
-    raw = yaml.safe_load(_DATASETS_YAML.read_text())
-    for entry in raw:
-        provider = entry.get("provider", "local")
-        if provider not in REMOTE_OBS_PROVIDERS:
-            continue
-        required_env = entry.get("required_env")
-        if required_env and not _env_value(required_env):
-            continue
-        result.append(
-            {
-                "id": "demo:" + entry["id"],
-                "name": entry["name"],
-                "region": entry.get("region", ""),
-                "provider": provider,
-                "e2s_class": entry.get("e2s_class"),
-                "arco_url": entry.get("arco_url"),
-                "precip_var": entry.get("precip_var", "tp"),
-                "unit_cvt": entry.get("unit_cvt", 1.0),
-                "lat_bounds": entry.get("lat_bounds"),
-                "lon_bounds": entry.get("lon_bounds"),
-                "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
-                "obs_dir": None,
+                "obs_var": meta.get("obs_var", "RAINFALL"),
+                "start_year": meta.get("start_year"),
+                "end_year": meta.get("end_year"),
             }
         )
     return result

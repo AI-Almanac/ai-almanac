@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 import xarray as xr
+from sqlalchemy import text
 
-from ai_almanac.server.services.metrics import compute_job_cell, compute_job_grid, compute_job_metrics
+from ai_almanac.server.db import get_db
+from ai_almanac.server.services.metrics import (
+    compute_job_cell,
+    compute_job_grid,
+    compute_job_metrics,
+)
 
 
 class FakeStorage:
@@ -166,3 +175,50 @@ def test_compute_job_cell_returns_model_metrics_without_baseline(
     assert result.metrics["acc"].model == 0.1
     assert result.metrics["acc"].baseline is None
     assert result.metrics["acc"].delta is None
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_loads_serialized_cache_after_restart(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await client.get("/jobs")
+    job_id = "persisted-metrics-job"
+    cached_metrics = {
+        "job_id": job_id,
+        "windows": [],
+        "grid": None,
+        "bbox": None,
+    }
+    async with get_db() as conn:
+        user_id = (
+            await conn.execute(
+                text("SELECT id FROM users WHERE external_id = 'local'")
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO jobs "
+                "(id, user_id, dataset_id, status, config_json, created_at, metrics_cache) "
+                "VALUES (:id, :uid, 'dataset-1', 'complete', '{}', :created_at, :cache)"
+            ),
+            {
+                "id": job_id,
+                "uid": user_id,
+                "created_at": datetime.now(UTC).isoformat(),
+                "cache": json.dumps(cached_metrics),
+            },
+        )
+
+    def fail_if_recomputed(*args, **kwargs):
+        raise AssertionError("persisted metrics should be returned without recomputing")
+
+    monkeypatch.setattr(
+        "ai_almanac.server.routers.jobs.compute_job_metrics",
+        fail_if_recomputed,
+    )
+
+    response = await client.get(f"/jobs/{job_id}/metrics")
+
+    assert response.status_code == 200
+    assert response.json() == cached_metrics
