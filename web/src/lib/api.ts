@@ -62,6 +62,43 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // ---- Config ------------------------------------------------------------------
 
+// ---- Data sources -----------------------------------------------------------
+
+export interface DataSource {
+	id: string;
+	kind: 'obs' | 'model';
+	name: string;
+	path: string;
+	region: string | null;
+	metadata: Record<string, unknown>;
+	created_at: string;
+	exists: boolean;
+}
+
+export interface DataSourceCreate {
+	kind: 'obs' | 'model';
+	name: string;
+	path: string;
+	region?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export async function listDataSources(kind?: 'obs' | 'model'): Promise<DataSource[]> {
+	const q = kind ? `?kind=${kind}` : '';
+	return request<DataSource[]>(`/data-sources${q}`);
+}
+
+export async function createDataSource(body: DataSourceCreate): Promise<DataSource> {
+	return request<DataSource>('/data-sources', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteDataSource(id: string): Promise<void> {
+	await request<void>(`/data-sources/${id}`, { method: 'DELETE' });
+}
+
 export async function getMetricDefinitions() {
 	return request<MetricDefinition[]>('/config/metrics');
 }

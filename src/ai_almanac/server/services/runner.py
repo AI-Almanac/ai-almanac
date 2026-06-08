@@ -1,14 +1,17 @@
 """In-process job runner.
 
-ai-almanac runs benchmark jobs as subprocesses inside the pixi-managed
-benchmark environment (see `ai_almanac.envs.manager`). There is no
-Docker-in-Docker and no remote runner; jobs execute on the same machine that
-serves the web UI, gated by an `asyncio.Semaphore` so the GPU isn't
-oversubscribed.
+Two implementations live here:
 
-This module exposes the `InProcessRunner` and a process-wide `get_runner()`
-factory. The historical `JobRunner` ABC and the Docker/CloudRun/Modal
-implementations have been removed.
+- `StubRunner` (default) writes synthetic but valid-shaped ROMP outputs so the
+  full UI flow (submit → status → metrics map → figures) works end-to-end
+  without pixi or ROMP installed. The output schema matches what ROMP itself
+  produces, so the metrics/map/figure rendering code doesn't care.
+- `InProcessRunner` shells out to `pixi run momp-run` inside the pixi-managed
+  benchmark env for real benchmarks. Enabled by `RUNNER_MODE=pixi` (or
+  whenever pixi + ROMP are set up).
+
+`get_runner()` picks based on the `runner_mode` setting; the default is
+`stub` so a fresh `ai-almanac serve` install is usable immediately.
 """
 
 from __future__ import annotations
@@ -286,17 +289,237 @@ def _update_status(
 
 
 # ---------------------------------------------------------------------------
+# Stub runner — synthetic outputs for POC / dev without ROMP installed.
+# ---------------------------------------------------------------------------
+
+
+class StubRunner:
+    """Produce synthetic-but-valid ROMP-shaped outputs without invoking ROMP.
+
+    Lets the full UI flow (submit → live status → metrics → spatial map →
+    figures) work end-to-end before the real pixi-backed runner is wired up.
+    Outputs land in the same paths ROMP would write to, with the same NetCDF
+    variable schema, so the downstream metrics / map / figure code doesn't
+    distinguish stub from real.
+    """
+
+    # The four forecast windows ROMP normally emits. Stub mirrors them so the
+    # frontend window picker has real options to render.
+    WINDOWS = ("1-7", "8-14", "15-21", "22-30")
+
+    # Metric variables the frontend knows how to render. Keeping this in the
+    # stub keeps the contract obvious; align with `romp.yaml` if it grows.
+    METRIC_VARS = (
+        "false_alarm_rate",
+        "miss_rate",
+        "mae",
+        "rmse",
+        "bias",
+    )
+
+    def __init__(self, storage) -> None:
+        self._storage = storage
+
+    def run_job(self, job_id: str, config: dict) -> None:
+        loop = asyncio.get_event_loop()
+        thread = threading.Thread(
+            target=self._execute, args=(job_id, config, loop), daemon=True
+        )
+        thread.start()
+
+    def _execute(
+        self,
+        job_id: str,
+        config: dict,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        import time
+
+        broker = get_broker()
+        log_path = self._storage.log_path(job_id)
+        output_dir_str, figure_dir_str = self._storage.job_output_uri(job_id)
+        output_dir = Path(output_dir_str)
+        figure_dir = Path(figure_dir_str)
+        model_name = config.get("model_name", "model")
+
+        def log(line: str) -> None:
+            with log_path.open("a") as f:
+                f.write(line + "\n")
+            broker.publish_threadsafe(
+                job_id, JobEvent(type="log", payload={"line": line}), loop
+            )
+
+        try:
+            _update_status(job_id, "running", loop=loop)
+            broker.publish_threadsafe(
+                job_id, JobEvent(type="status", payload={"status": "running"}), loop
+            )
+            log("==> [STUB RUNNER] producing synthetic ROMP-shaped outputs")
+            log(f"    model:     {model_name}")
+            log(f"    obs_dir:   {config.get('obs_dir')}")
+            log(f"    model_dir: {config.get('model_dir')}")
+            log(f"    output:    {output_dir}")
+
+            lat, lon = self._resolve_grid(config)
+            log(f"    grid:      lat={len(lat)} lon={len(lon)}")
+
+            for window in self.WINDOWS:
+                time.sleep(0.4)  # simulate work; gives the WS stream time to render live
+                out_path = output_dir / f"spatial_metrics_{model_name}_{window}.nc"
+                self._write_metric_nc(out_path, lat, lon, model_name, window)
+                log(f"    wrote {out_path.name}")
+
+            for figure_name in ("portrait", "panel_heatmap_skill"):
+                fig_path = figure_dir / f"{figure_name}_{model_name}.png"
+                self._write_placeholder_figure(fig_path, model_name, figure_name)
+                log(f"    wrote figure {fig_path.name}")
+
+            log("==> [STUB RUNNER] complete")
+            _update_status(job_id, "complete", loop=loop)
+            broker.publish_threadsafe(
+                job_id,
+                JobEvent(type="done", payload={"status": "complete"}),
+                loop,
+            )
+        except Exception as e:  # noqa: BLE001 — surface to user
+            logger.exception("stub job %s failed", job_id)
+            _update_status(
+                job_id,
+                "failed",
+                error=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+                loop=loop,
+            )
+            broker.publish_threadsafe(
+                job_id,
+                JobEvent(type="done", payload={"status": "failed"}),
+                loop,
+            )
+
+    @staticmethod
+    def _resolve_grid(config: dict) -> tuple[list[float], list[float]]:
+        """Try to read the input obs to match its grid; otherwise fall back to a 10x10 stub."""
+        import numpy as np
+
+        obs_dir = config.get("obs_dir")
+        if obs_dir:
+            try:
+                from glob import glob
+
+                ncs = sorted(glob(str(Path(obs_dir) / "*.nc")))
+                if ncs:
+                    import xarray as xr
+
+                    with xr.open_dataset(ncs[0]) as ds:
+                        # Look for lat/lon (or aliases) in either coords or data_vars.
+                        for lat_name in ("lat", "latitude", "LAT", "LATITUDE"):
+                            if lat_name in ds.coords or lat_name in ds.dims:
+                                lat_vals = ds[lat_name].values.tolist()
+                                break
+                        else:
+                            lat_vals = list(np.linspace(-10, 10, 10))
+                        for lon_name in ("lon", "longitude", "LON", "LONGITUDE"):
+                            if lon_name in ds.coords or lon_name in ds.dims:
+                                lon_vals = ds[lon_name].values.tolist()
+                                break
+                        else:
+                            lon_vals = list(np.linspace(30, 50, 10))
+                        return lat_vals, lon_vals
+            except Exception:
+                pass
+        return (
+            list(np.linspace(-10, 10, 10)),
+            list(np.linspace(30, 50, 10)),
+        )
+
+    def _write_metric_nc(
+        self,
+        out_path: Path,
+        lat: list[float],
+        lon: list[float],
+        model_name: str,
+        window: str,
+    ) -> None:
+        import numpy as np
+        import xarray as xr
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rng = np.random.default_rng(hash((model_name, window)) & 0xFFFFFFFF)
+        shape = (len(lat), len(lon))
+
+        # Plausible bounded values per metric so the map renders meaningfully.
+        values = {
+            "false_alarm_rate": rng.uniform(0.0, 0.6, size=shape),
+            "miss_rate": rng.uniform(0.0, 0.5, size=shape),
+            "mae": rng.uniform(0.5, 5.0, size=shape),
+            "rmse": rng.uniform(0.5, 6.0, size=shape),
+            "bias": rng.uniform(-2.0, 2.0, size=shape),
+        }
+        ds = xr.Dataset(
+            {name: (("lat", "lon"), arr) for name, arr in values.items()},
+            coords={"lat": lat, "lon": lon},
+            attrs={
+                "model": model_name,
+                "verification_window": window,
+                "source": "ai-almanac StubRunner — synthetic values, not real metrics",
+            },
+        )
+        ds.to_netcdf(out_path)
+
+    def _write_placeholder_figure(self, path: Path, model_name: str, figure_name: str) -> None:
+        """Render a tiny matplotlib image so the figure viewer has something to show."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import numpy as np
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.imshow(
+                np.random.default_rng(hash(figure_name) & 0xFFFFFFFF).random((20, 30)),
+                cmap="viridis",
+            )
+            ax.set_title(f"[STUB] {figure_name} — {model_name}")
+            ax.axis("off")
+            fig.tight_layout()
+            fig.savefig(path, dpi=80)
+            plt.close(fig)
+        except Exception:
+            # If matplotlib isn't installed, drop a tiny PNG so the link works.
+            path.write_bytes(
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+                b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9c"
+                b"c\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Factory.
 # ---------------------------------------------------------------------------
 
-_instance: InProcessRunner | None = None
+_instance: InProcessRunner | StubRunner | None = None
 
 
-def get_runner() -> InProcessRunner:
+def get_runner() -> InProcessRunner | StubRunner:
+    """Return the process-wide runner instance.
+
+    Selection: `settings.runner_mode` ('stub' by default, 'pixi' for real
+    ROMP execution once the benchmark env is prepared).
+    """
     global _instance
     if _instance is None:
-        _instance = InProcessRunner(
-            job_timeout_seconds=3600,
-            storage=get_storage(),
-        )
+        if settings.runner_mode == "pixi":
+            _instance = InProcessRunner(
+                job_timeout_seconds=3600,
+                storage=get_storage(),
+            )
+        else:
+            _instance = StubRunner(storage=get_storage())
     return _instance
+
+
+def reset_runner() -> None:
+    """Force re-selection of the runner on next call. For tests / config reloads."""
+    global _instance
+    _instance = None

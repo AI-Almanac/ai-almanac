@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     # Concurrency — gates simultaneous benchmark jobs so the GPU isn't oversubscribed.
     max_local_jobs: int = 1
 
+    # Runner selection. 'stub' produces synthetic ROMP-shaped outputs so the
+    # full UI works without pixi/ROMP installed (the POC default). Switch to
+    # 'pixi' once `ai-almanac env prepare` has set up the benchmark env.
+    runner_mode: str = "stub"
+
     # Attribution header. When ai-almanac runs behind a reverse proxy that has
     # authenticated the user, the proxy can forward the user's identity in this
     # header. The value is recorded on jobs/datasets as `submitted_by`. No
@@ -143,22 +148,70 @@ settings = Settings()
 # ---------------------------------------------------------------------------
 
 
-def get_model_registry() -> list[dict]:
-    """Load model definitions; resolve model_dir from env vars.
+def _sync_db_query(sql: str) -> list[dict]:
+    """Read-only sqlite query for use from sync code (registry resolvers).
 
-    Env var pattern: {REGION}_{ID}_MODEL_DIR (uppercased, hyphens → underscores).
-    Models whose env var is unset or empty are excluded.
+    The async engine in `server/db.py` is the system's source of truth for
+    writes; this helper opens a separate read connection so sync callers (the
+    YAML-derived registries below) can join in entries the user has added via
+    the data_sources UI without async-ifying the entire registry surface.
     """
-    raw = yaml.safe_load(_MODELS_YAML.read_text())
+    import sqlite3
+    from sqlalchemy.engine import make_url
+
+    from ai_almanac.paths import database_path
+
+    url = make_url(settings.resolve_database_url())
+    if not url.drivername.startswith("sqlite"):
+        # Non-SQLite deployments (Postgres) don't currently use the sync
+        # path; the data_sources rewire below silently returns empty.
+        return []
+    db_path = url.database or str(database_path())
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(sql)
+            return [dict(row) for row in cur.fetchall()]
+    except sqlite3.OperationalError:
+        # Table may not exist yet on first launch (pre-migration).
+        return []
+
+
+def _ds_metadata(row: dict) -> dict:
+    """SQLite stores JSON as text; deserialize on read."""
+    import json as _json
+
+    raw = row.get("metadata")
+    if isinstance(raw, str):
+        try:
+            return _json.loads(raw)
+        except Exception:
+            return {}
+    return raw or {}
+
+
+def get_model_registry() -> list[dict]:
+    """Return the registered model entries.
+
+    Reads from the `data_sources` table (the runtime source of truth, fed by
+    the UI). The YAML registry is used as a one-time seed on first launch via
+    `services.data_sources.seed_from_yaml_if_empty()` — it's not re-read here.
+    """
+    rows = _sync_db_query(
+        "SELECT * FROM data_sources WHERE kind = 'model' ORDER BY region, name"
+    )
     result = []
-    for entry in raw:
-        env_key = _env_key(entry["region"], entry["id"], "model_dir")
-        model_dir = _env_value(env_key)
-        if not model_dir:
-            continue
-        m = dict(entry)
-        m["model_dir"] = model_dir
-        result.append(m)
+    for row in rows:
+        meta = _ds_metadata(row)
+        result.append(
+            {
+                "id": meta.get("yaml_id") or row["id"],
+                "display_name": row["name"],
+                "region": row["region"],
+                "model_dir": row["path"],
+                **meta,
+            }
+        )
     return result
 
 
@@ -199,44 +252,53 @@ def get_region(region_id: str) -> dict | None:
 
 
 def get_demo_datasets() -> list[dict]:
-    raw = yaml.safe_load(_DATASETS_YAML.read_text())
+    """Return the registered obs datasets available in the benchmark UI.
+
+    Local datasets come from the `data_sources` table (registered via the UI).
+    Remote datasets (ARCO ERA5, E2S sources) come from the packaged
+    `datasets.yaml` since they don't fit the local-path data_sources model.
+    """
+    rows = _sync_db_query(
+        "SELECT * FROM data_sources WHERE kind = 'obs' ORDER BY name"
+    )
     result = []
+    for row in rows:
+        meta = _ds_metadata(row)
+        yaml_id = meta.get("yaml_id") or row["id"]
+        result.append(
+            {
+                "id": "demo:" + yaml_id,
+                "name": row["name"],
+                "region": row.get("region", "") or "",
+                "provider": "local",
+                "obs_dir": row["path"],
+                "obs_file_pattern": meta.get("obs_file_pattern"),
+            }
+        )
+
+    # Remote datasets still come from YAML (no local path to register).
+    raw = yaml.safe_load(_DATASETS_YAML.read_text())
     for entry in raw:
         provider = entry.get("provider", "local")
-
-        if provider in REMOTE_OBS_PROVIDERS:
-            required_env = entry.get("required_env")
-            if required_env and not _env_value(required_env):
-                continue
-            result.append(
-                {
-                    "id": "demo:" + entry["id"],
-                    "name": entry["name"],
-                    "region": entry.get("region", ""),
-                    "provider": provider,
-                    "e2s_class": entry.get("e2s_class"),
-                    "arco_url": entry.get("arco_url"),
-                    "precip_var": entry.get("precip_var", "tp"),
-                    "unit_cvt": entry.get("unit_cvt", 1.0),
-                    "lat_bounds": entry.get("lat_bounds"),
-                    "lon_bounds": entry.get("lon_bounds"),
-                    "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
-                    "obs_dir": None,
-                }
-            )
-        else:
-            env_key = _env_key(entry["id"], "obs_dir")
-            obs_dir = _env_value(env_key)
-            if not obs_dir:
-                continue
-            result.append(
-                {
-                    "id": "demo:" + entry["id"],
-                    "name": entry["name"],
-                    "region": entry.get("region", ""),
-                    "provider": "local",
-                    "obs_dir": obs_dir,
-                    "obs_file_pattern": entry.get("obs_file_pattern"),
-                }
-            )
+        if provider not in REMOTE_OBS_PROVIDERS:
+            continue
+        required_env = entry.get("required_env")
+        if required_env and not _env_value(required_env):
+            continue
+        result.append(
+            {
+                "id": "demo:" + entry["id"],
+                "name": entry["name"],
+                "region": entry.get("region", ""),
+                "provider": provider,
+                "e2s_class": entry.get("e2s_class"),
+                "arco_url": entry.get("arco_url"),
+                "precip_var": entry.get("precip_var", "tp"),
+                "unit_cvt": entry.get("unit_cvt", 1.0),
+                "lat_bounds": entry.get("lat_bounds"),
+                "lon_bounds": entry.get("lon_bounds"),
+                "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
+                "obs_dir": None,
+            }
+        )
     return result

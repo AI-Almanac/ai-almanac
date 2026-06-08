@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ai_almanac.paths import ensure_layout, uploads_dir
-from ai_almanac.server.routers import chat, config, datasets, jobs, regions
+from ai_almanac.server.routers import chat, config, data_sources, datasets, jobs, regions
 from ai_almanac.settings import settings
 
 logging.basicConfig(
@@ -48,7 +48,22 @@ def _apply_migrations() -> None:
 async def lifespan(app: FastAPI):
     ensure_layout()
     _apply_migrations()
+    await _seed_data_sources()
     yield
+
+
+async def _seed_data_sources() -> None:
+    """Populate the data_sources table from the packaged YAMLs on first launch
+    so existing testdata setups (`*_OBS_DIR`, `*_MODEL_DIR` env vars) work
+    without the user needing to register anything manually."""
+    from ai_almanac.server.services.data_sources import seed_from_yaml_if_empty
+
+    try:
+        count = await seed_from_yaml_if_empty()
+        if count:
+            logger.info("seeded %d data source(s) from packaged YAMLs", count)
+    except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
+        logger.warning("data source seeding failed: %s", e)
 
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)
@@ -83,6 +98,7 @@ app.add_middleware(
 app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(config.root_router)
+app.include_router(data_sources.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
 app.include_router(regions.router)
