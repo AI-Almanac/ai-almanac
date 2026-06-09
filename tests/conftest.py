@@ -26,6 +26,9 @@ import pytest_asyncio
 _TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="ai-almanac-tests-"))
 os.environ["AI_ALMANAC_DATA_DIR"] = str(_TEST_DATA_DIR)
 os.environ["RUNNER_MODE"] = "stub"
+# Set via env (not a settings mutation) so it survives `reload_settings()` when
+# a test exercises the real app lifespan (e.g. TestClient-based WebSocket tests).
+os.environ["LLM_BASE_URL"] = "http://test-llm.local"
 
 
 @pytest.fixture(scope="session", autouse=True)

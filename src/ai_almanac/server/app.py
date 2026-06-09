@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ai_almanac.paths import ensure_layout, uploads_dir
 from ai_almanac.server.routers import (
+    auth,
     chat,
     config,
     data_sources,
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI):
     ensure_layout()
     _apply_migrations()
     _reload_user_config()
+    _enforce_deployment()
     await _seed_regions()
     await _seed_data_sources()
     await _reconcile_jobs()
@@ -82,6 +84,14 @@ def _reload_user_config() -> None:
     from ai_almanac.settings import reload_settings
 
     reload_settings()
+
+
+def _enforce_deployment() -> None:
+    """Validate/harden config for the active deployment mode; fail fast if the
+    shared deployment is misconfigured (SQLite, no admins, etc.)."""
+    from ai_almanac.server.auth import enforce_deployment_invariants
+
+    enforce_deployment_invariants()
 
 
 async def _seed_data_sources() -> None:
@@ -153,6 +163,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(config.root_router)

@@ -88,6 +88,22 @@ class Settings(BaseSettings):
     # `DATABASE_URL` for non-default backends (e.g., Postgres for public deploys).
     database_url: str = ""  # resolved below if empty
 
+    # Deployment mode. `personal` (default) is the zero-config single-operator
+    # install: SQLite, no auth, local filesystem. `shared` is the multi-user
+    # public deployment: PostgreSQL + reverse-proxy OIDC, validated at startup
+    # by `auth.enforce_deployment_invariants()`.
+    deployment_mode: str = "personal"  # personal | shared
+
+    # Authentication mode. `none` trusts the local operator (personal installs).
+    # `proxy` parses identity from trusted reverse-proxy headers (oauth2-proxy).
+    # Shared mode forces `proxy` at startup.
+    auth_mode: str = "none"  # none | proxy
+
+    # Admin allow-lists for shared mode. Comma-separated OIDC subjects / emails;
+    # a request whose identity matches either list is granted the `admin` role.
+    admin_subjects: str = ""
+    admin_emails: str = ""
+
     # Concurrency — gates simultaneous benchmark jobs so the GPU isn't oversubscribed.
     max_local_jobs: int = 1
 
@@ -108,9 +124,15 @@ class Settings(BaseSettings):
 
     # Attribution header. When ai-almanac runs behind a reverse proxy that has
     # authenticated the user, the proxy can forward the user's identity in this
-    # header. The value is recorded on jobs/datasets as `submitted_by`. No
-    # enforcement happens in the app — this is for attribution only.
+    # header. The value is the stable subject (OIDC `sub`) parsed by
+    # `auth._resolve_identity`: attribution-only in personal mode, the trusted
+    # authenticated subject in `proxy` mode.
     submitted_by_header: str = "X-Forwarded-User"
+
+    # Additional identity headers parsed in `proxy` auth mode. The subject is
+    # read from `submitted_by_header` above.
+    identity_email_header: str = "X-Forwarded-Email"
+    identity_name_header: str = "X-Forwarded-Preferred-Username"
 
     # CORS — only relevant for the frontend dev server proxying to the API.
     frontend_url: str = "http://localhost:5173"
@@ -179,9 +201,15 @@ settings = Settings()
 RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
     {
         "database_url",
+        "deployment_mode",
+        "auth_mode",
+        "admin_subjects",
+        "admin_emails",
         "frontend_url",
         "cors_allow_all",
         "submitted_by_header",
+        "identity_email_header",
+        "identity_name_header",
     }
 )
 

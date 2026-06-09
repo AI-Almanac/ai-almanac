@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from ai_almanac.server.attribution import CurrentUser
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import data_sources as data_source_service
 
@@ -78,7 +78,7 @@ async def request_upload_url(
     body: UploadUrlRequest, user: CurrentUser, request: Request
 ):
     dataset_id = str(uuid.uuid4())
-    storage_key = f"{user['id']}/{dataset_id}/{body.filename}"
+    storage_key = f"{user.id}/{dataset_id}/{body.filename}"
 
     async with get_db() as conn:
         await conn.execute(
@@ -88,7 +88,7 @@ async def request_upload_url(
             ),
             {
                 "id": dataset_id,
-                "uid": user["id"],
+                "uid": user.id,
                 "name": body.name,
                 "key": storage_key,
                 "now": datetime.now(UTC).isoformat(),
@@ -111,7 +111,7 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
             (
                 await conn.execute(
                     text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                    {"id": dataset_id, "uid": user["id"]},
+                    {"id": dataset_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -200,7 +200,7 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
             ),
             {
                 "id": dataset_id,
-                "uid": user["id"],
+                "uid": user.id,
                 "name": body.name,
                 "key": body.obs_dir,
                 "now": now,
@@ -216,7 +216,7 @@ async def get_dataset(dataset_id: str, user: CurrentUser):
             (
                 await conn.execute(
                     text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                    {"id": dataset_id, "uid": user["id"]},
+                    {"id": dataset_id, "uid": user.id},
                 )
             )
             .mappings()
