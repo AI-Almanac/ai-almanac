@@ -20,6 +20,10 @@ from ai_almanac.settings import settings
 
 def _make_engine():
     url = make_url(settings.resolve_database_url())
+    if url.drivername == "postgresql":
+        # Bind a bare `postgresql://` URL to the installed async driver
+        # (psycopg3) instead of SQLAlchemy's asyncpg default.
+        url = url.set(drivername="postgresql+psycopg")
     if url.drivername.startswith("sqlite"):
         return create_async_engine(
             url,
