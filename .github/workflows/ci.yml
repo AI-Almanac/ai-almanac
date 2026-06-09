@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - sveltekit
+      - hholb/python-first
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          # Install the environments the check/test tasks resolve to: dev (ruff,
+          # pytest) and default (node-backed web tasks). pixi.lock is committed,
+          # so the solve is reproducible and cacheable.
+          environments: dev default
+          cache: true
+
+      - name: Lint and type-check (backend + frontend)
+        run: pixi run check
+
+      - name: Tests (backend + frontend)
+        run: pixi run test

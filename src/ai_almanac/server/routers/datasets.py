@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
@@ -91,7 +91,7 @@ async def request_upload_url(
                 "uid": user["id"],
                 "name": body.name,
                 "key": storage_key,
-                "now": datetime.now(timezone.utc).isoformat(),
+                "now": datetime.now(UTC).isoformat(),
             },
         )
 
@@ -139,7 +139,7 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
             text(
                 "UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"
             ),
-            {"now": datetime.now(timezone.utc).isoformat(), "id": dataset_id},
+            {"now": datetime.now(UTC).isoformat(), "id": dataset_id},
         )
         return DatasetOut(**dict(result.mappings().fetchone()))
 
@@ -189,7 +189,7 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
             status_code=400, detail=f"obs_dir does not exist: {body.obs_dir}"
         )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     dataset_id = str(uuid.uuid4())
 
     async with get_db() as conn:

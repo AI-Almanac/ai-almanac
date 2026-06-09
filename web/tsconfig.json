@@ -10,7 +10,12 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"moduleResolution": "bundler"
+		"moduleResolution": "bundler",
+		// Override the generated `types: ["node"]`. This is a browser SPA with no
+		// node-API usage; `@types/node` isn't installed, and an explicit `types`
+		// array otherwise hides global ambient types like GeoJSON (used by
+		// maplibre source specs in MetricMap.svelte).
+		"types": ["geojson"]
 	}
 	// Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
 	// except $lib which is handled by https://svelte.dev/docs/kit/configuration#files

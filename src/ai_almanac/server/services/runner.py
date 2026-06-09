@@ -22,7 +22,7 @@ import os
 import subprocess
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import text
@@ -263,7 +263,7 @@ def _update_status(
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     async def _do() -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with get_db() as conn:
             if status == "complete":
                 await conn.execute(

@@ -27,7 +27,6 @@ from pathlib import Path
 
 import xarray as xr
 
-
 DIM_ALIASES = {
     "TIME": "time",
     "Time": "time",

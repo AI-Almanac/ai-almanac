@@ -50,15 +50,13 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
     from ai_almanac.server.app import app
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.LifespanManager(transport=transport) if False else (
-        # FastAPI lifespan runs implicitly when ASGITransport is used inside a
-        # TestClient. For httpx.AsyncClient we trigger it manually.
-        _no_lifespan()
+    # `_no_lifespan` applies migrations/layout that the FastAPI lifespan would
+    # normally run; ASGITransport doesn't trigger lifespan for AsyncClient.
+    async with (
+        _no_lifespan(),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac,
     ):
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as ac:
-            yield ac
+        yield ac
 
 
 class _no_lifespan:

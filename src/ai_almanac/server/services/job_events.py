@@ -12,6 +12,7 @@ terminates.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,10 +58,8 @@ class JobEventBroker:
             # Drop the oldest events if a slow subscriber falls behind — better
             # than blocking the runner thread on backpressure.
             if q.full():
-                try:
+                with contextlib.suppress(asyncio.QueueEmpty):
                     q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
             q.put_nowait(event)
 
     def publish_threadsafe(

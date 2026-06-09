@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
 SpecStatus = Literal["collecting", "needs_confirmation", "runnable", "running"]
 
 

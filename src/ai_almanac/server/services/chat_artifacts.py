@@ -5,13 +5,14 @@ import base64
 import hashlib
 import hmac
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 from sqlalchemy import text
 
-from ai_almanac.settings import settings
 from ai_almanac.server.db import get_db
+from ai_almanac.settings import settings
+
 from .chat_state import ChatArtifact, ChatTurn
 from .storage import get_storage
 
@@ -31,7 +32,7 @@ def signed_chat_figure_url(
     figure_id: str, user_id: str, expires_at: int | None = None
 ) -> str:
     if expires_at is None:
-        expires_at = int(datetime.now(timezone.utc).timestamp()) + 3600
+        expires_at = int(datetime.now(UTC).timestamp()) + 3600
     sig = _chat_figure_signature(figure_id, user_id, expires_at)
     return (
         f"/chat/figures/{figure_id}/public?{urlencode({'exp': expires_at, 'sig': sig})}"
@@ -41,7 +42,7 @@ def signed_chat_figure_url(
 def verify_chat_figure_signature(
     figure_id: str, user_id: str, expires_at: int, sig: str
 ) -> bool:
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
     if expires_at < now:
         return False
     expected = _chat_figure_signature(figure_id, user_id, expires_at)
@@ -81,7 +82,7 @@ async def create_chat_figure_artifact(
     media_type: str | None = None,
 ) -> ChatArtifact:
     artifact_id = str(uuid.uuid4())
-    created_at = datetime.now(timezone.utc)
+    created_at = datetime.now(UTC)
 
     await asyncio.to_thread(get_storage().save_chat_figure, artifact_id, data)
 

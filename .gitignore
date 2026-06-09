@@ -33,3 +33,6 @@ job_outputs/
 .DS_Store
 .idea/
 .vscode/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

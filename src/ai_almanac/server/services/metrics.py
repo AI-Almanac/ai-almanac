@@ -122,8 +122,8 @@ def compute_job_metrics(
     """Aggregate spatial_metrics_*.nc and e2s_spatial_metrics_*.nc files into stats."""
     try:
         import numpy as np
-    except ImportError:
-        raise RuntimeError("numpy/xarray not available on this server")
+    except ImportError as exc:
+        raise RuntimeError("numpy/xarray not available on this server") from exc
 
     nc_files = _get_nc_files(storage, job_id)
     has_bbox = any(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
@@ -212,8 +212,8 @@ def compute_job_grid(
     """Load a single metrics NetCDF file and return the raw 2D grid."""
     try:
         import numpy as np
-    except ImportError:
-        raise RuntimeError("numpy/xarray not available on this server")
+    except ImportError as exc:
+        raise RuntimeError("numpy/xarray not available on this server") from exc
 
     match = storage.find_nc_output_file(job_id, model, window)
     if not match:
@@ -270,8 +270,8 @@ def compute_job_cell(
     """Return model-vs-baseline metrics for the nearest grid cell."""
     try:
         import numpy as np
-    except ImportError:
-        raise RuntimeError("numpy/xarray not available on this server")
+    except ImportError as exc:
+        raise RuntimeError("numpy/xarray not available on this server") from exc
 
     model_match = storage.find_nc_output_file(job_id, model, window)
     if not model_match:

@@ -15,8 +15,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import TypeVar
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -27,11 +26,7 @@ from sqlalchemy import bindparam, text
 
 from ai_almanac.server.attribution import CurrentUser
 from ai_almanac.server.db import get_db
-from ..services.chat_artifacts import (
-    delete_chat_figure_artifact,
-    hydrate_turn_artifact_urls,
-    verify_chat_figure_signature,
-)
+
 from ..services.benchmark_domain import (
     submit_benchmark_for_session,
     update_benchmark_config,
@@ -39,6 +34,11 @@ from ..services.benchmark_domain import (
 from ..services.benchmark_state import (
     BenchmarkRunSpec,
     BenchmarkValidation,
+)
+from ..services.chat_artifacts import (
+    delete_chat_figure_artifact,
+    hydrate_turn_artifact_urls,
+    verify_chat_figure_signature,
 )
 from ..services.chat_state import (
     ChatArtifact,
@@ -49,7 +49,6 @@ from ..services.chat_state import (
 from ..services.chat_tools import (
     SubmitBenchmarkApproval,
 )
-
 from ..services.llm import (
     deserialize_model_messages,
     llm_is_configured,
@@ -134,14 +133,11 @@ class BenchmarkConfigOut(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-T = TypeVar("T")
-
-
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-def _json_value(value: object, default: T) -> T:
+def _json_value[T](value: object, default: T) -> T:
     if isinstance(value, type(default)):
         return value
     if value is None:

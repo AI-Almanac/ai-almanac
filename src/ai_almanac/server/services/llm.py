@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
-from typing import AsyncIterator, Sequence
 
 from pydantic_ai import (
     Agent,
@@ -39,7 +39,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.toolsets import FunctionToolset
+
 from ai_almanac.settings import settings
+
 from . import chat_tools
 from .benchmark_state import BenchmarkRunSpec
 from .chat_state import (
