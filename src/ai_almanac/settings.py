@@ -288,33 +288,60 @@ def write_config_yaml(updates: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _sync_db_query(sql: str) -> list[dict]:
-    """Read-only sqlite query for use from sync code (registry resolvers).
+# Cached synchronous engine for the registry read path (see `_sync_db_query`).
+_sync_engine = None
+_sync_engine_url: str | None = None
 
-    The async engine in `server/db.py` is the system's source of truth for
-    writes; this helper opens a separate read connection so sync callers (the
-    YAML-derived registries below) can join in entries the user has added via
-    the data_sources UI without async-ifying the entire registry surface.
-    """
-    import sqlite3
 
+def _sync_read_url(async_url: str) -> str:
+    """Map the app's async DB URL to an equivalent synchronous-driver URL."""
     from sqlalchemy.engine import make_url
 
-    from ai_almanac.paths import database_path
+    url = make_url(async_url)
+    if url.drivername.startswith("sqlite"):
+        return str(url.set(drivername="sqlite"))
+    if url.drivername.startswith("postgresql"):
+        return str(url.set(drivername="postgresql+psycopg"))
+    return async_url
 
-    url = make_url(settings.resolve_database_url())
-    if not url.drivername.startswith("sqlite"):
-        # Non-SQLite deployments (Postgres) don't currently use the sync
-        # path; the data_sources rewire below silently returns empty.
-        return []
-    db_path = url.database or str(database_path())
+
+def _get_sync_engine():
+    """Process-wide read-only engine for the synchronous registry resolvers.
+
+    The async engine in `server/db.py` owns writes; this engine lets sync
+    callers (the YAML-derived registries below) read DB rows the user added via
+    the UI without async-ifying the entire registry surface. It is
+    driver-agnostic so it works on both SQLite (personal installs) and
+    PostgreSQL (shared deployments). `NullPool` opens a fresh connection per
+    query, matching the previous raw-sqlite behavior and keeping the path safe
+    to call from worker threads.
+    """
+    global _sync_engine, _sync_engine_url
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    url = _sync_read_url(settings.resolve_database_url())
+    if _sync_engine is None or _sync_engine_url != url:
+        if _sync_engine is not None:
+            _sync_engine.dispose()
+        _sync_engine = create_engine(url, poolclass=NullPool)
+        _sync_engine_url = url
+    return _sync_engine
+
+
+def _sync_db_query(sql: str) -> list[dict]:
+    """Run a read-only registry query against the app database (sync path).
+
+    Works on SQLite and PostgreSQL. Returns an empty list if the table does not
+    exist yet (first launch, pre-migration).
+    """
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
     try:
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.execute(sql)
-            return [dict(row) for row in cur.fetchall()]
-    except sqlite3.OperationalError:
-        # Table may not exist yet on first launch (pre-migration).
+        with _get_sync_engine().connect() as conn:
+            return [dict(row) for row in conn.execute(sql_text(sql)).mappings().all()]
+    except (OperationalError, ProgrammingError):
         return []
 
 
