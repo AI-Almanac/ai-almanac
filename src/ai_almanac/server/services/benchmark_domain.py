@@ -9,8 +9,8 @@ import re
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field
 import sqlalchemy as sa
+from pydantic import BaseModel, Field
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
 
@@ -233,7 +233,7 @@ def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
     status = "runnable" if not missing else "collecting"
     assumptions = [
         "Use the selected observation dataset as ground truth.",
-        "Use the configured monsoon onset definition for the selected region.",
+        "Clip observation data to the selected benchmark coverage.",
         "Clamp each model evaluation range to available observation coverage.",
     ]
     return spec.model_copy(
@@ -444,7 +444,6 @@ async def _exec_update_benchmark_config(
 ) -> dict:
     spec = await _load_benchmark_config(session_id, user_id)
     patch = dict(args)
-    region = _region_by_id(patch.get("region_id")) or _region_by_id(spec.region_id)
 
     datasets = await _dataset_candidates(user_id)
     dataset = None
@@ -452,13 +451,13 @@ async def _exec_update_benchmark_config(
         dataset = next((d for d in datasets if d["id"] == patch["dataset_id"]), None)
     if dataset is None and spec.dataset_id:
         dataset = next((d for d in datasets if d["id"] == spec.dataset_id), None)
-    if (
-        dataset
-        and region
-        and dataset.get("region")
-        and dataset["region"] != region["id"]
-    ):
-        dataset = None
+
+    if "region_id" in patch:
+        region = _region_by_id(patch.get("region_id"))
+    elif "dataset_id" in patch and dataset:
+        region = _region_by_id(dataset.get("region"))
+    else:
+        region = _region_by_id(spec.region_id)
 
     model_ids = (
         patch.get("model_ids")
@@ -484,7 +483,7 @@ async def _exec_update_benchmark_config(
             else spec.intent,
             "region_id": region["id"] if region else None,
             "region_name": region["display_name"] if region else None,
-            "romp_region": region.get("romp_name", "custom") if region else None,
+            "romp_region": (region.get("romp_name") or "custom") if region else None,
             "event_type": patch.get("event_type")
             if isinstance(patch.get("event_type"), str)
             else spec.event_type,
@@ -742,6 +741,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
 
 async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
+
     from ..services.storage import get_storage
 
     job_id = args["job_id"]
@@ -774,6 +774,7 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
 
 async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> dict:
     from ai_almanac.server.db import get_db
+
     from ..routers.jobs import JobCreate, RompParams, create_job
 
     job_id = args["job_id"]
@@ -838,6 +839,7 @@ def _job_status_query(scope: BenchmarkScope):
 
 async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
+
     from ..services.metrics import compute_job_metrics
     from ..services.storage import get_storage
 
@@ -881,7 +883,9 @@ async def _exec_get_spatial_summary(
     args: dict, user_id: str, scope: BenchmarkScope
 ) -> str:
     import numpy as np
+
     from ai_almanac.server.db import get_db
+
     from ..services.metrics import UNIT_MAP
     from ..services.storage import get_storage
 
@@ -984,6 +988,7 @@ async def _exec_run_code_sandbox(
 
 async def _exec_run_code(args: dict, user_id: str, scope: BenchmarkScope) -> dict | str:
     from ai_almanac.server.db import get_db
+
     from ..services.storage import get_storage
 
     reason = tool_unavailable_reason("run_code")

@@ -225,7 +225,7 @@ def _apply_yaml_overrides() -> None:
             continue
 
 
-def reload_settings() -> "Settings":
+def reload_settings() -> Settings:
     """Re-read code defaults + env + config.yaml; mutate the singleton in place.
 
     Called by the Settings PATCH endpoint after writing changes, and once on
@@ -269,6 +269,7 @@ def _sync_db_query(sql: str) -> list[dict]:
     the data_sources UI without async-ifying the entire registry surface.
     """
     import sqlite3
+
     from sqlalchemy.engine import make_url
 
     from ai_almanac.paths import database_path
@@ -353,8 +354,25 @@ def get_metric_definitions() -> list[dict]:
 REMOTE_OBS_PROVIDERS = {"earth2studio", "era5_arco"}
 
 
-def get_regions() -> list[dict]:
+def get_packaged_regions() -> list[dict]:
     return yaml.safe_load(_REGIONS_YAML.read_text())
+
+
+def get_regions() -> list[dict]:
+    packaged = get_packaged_regions()
+    packaged_ids = {region["id"] for region in packaged}
+    rows = _sync_db_query(
+        "SELECT * FROM regions ORDER BY is_builtin DESC, display_name"
+    )
+    by_id = {region["id"]: region for region in packaged}
+    by_id.update({region["id"]: region for region in rows})
+    return sorted(
+        by_id.values(),
+        key=lambda region: (
+            not bool(region.get("is_builtin", region["id"] in packaged_ids)),
+            region["display_name"].lower(),
+        ),
+    )
 
 
 def get_region(region_id: str) -> dict | None:

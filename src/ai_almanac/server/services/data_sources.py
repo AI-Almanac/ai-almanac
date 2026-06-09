@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import uuid
 from datetime import UTC, datetime
@@ -25,6 +26,14 @@ from ai_almanac.settings import _DATASETS_YAML, _MODELS_YAML, _env_key, _env_val
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
+_LATITUDE_NAMES = ("lat", "latitude")
+_LONGITUDE_NAMES = ("lon", "longitude")
+_INITIALIZATION_TIME_NAMES = (
+    "time",
+    "init_time",
+    "initialization_time",
+    "forecast_reference_time",
+)
 
 
 def _now() -> str:
@@ -64,14 +73,71 @@ def _coverage_years(files: list[Path]) -> tuple[int | None, int | None]:
     return min(years), max(years)
 
 
+def _coordinate_name(dataset, candidates: tuple[str, ...]) -> str | None:
+    names = {str(name).lower(): str(name) for name in dataset.coords}
+    return next((names[name] for name in candidates if name in names), None)
+
+
+def _spatial_bounds(dataset) -> dict[str, float]:
+    latitude = _coordinate_name(dataset, _LATITUDE_NAMES)
+    longitude = _coordinate_name(dataset, _LONGITUDE_NAMES)
+    if latitude is None or longitude is None:
+        raise ValueError(
+            "Could not identify latitude and longitude coordinates. "
+            "Supported names are lat/lon and latitude/longitude, in any letter case."
+        )
+    if dataset[latitude].ndim != 1 or dataset[longitude].ndim != 1:
+        raise ValueError("Latitude and longitude coordinates must be one-dimensional.")
+
+    bounds = {
+        "lat_min": float(dataset[latitude].min().item()),
+        "lat_max": float(dataset[latitude].max().item()),
+        "lon_min": float(dataset[longitude].min().item()),
+        "lon_max": float(dataset[longitude].max().item()),
+    }
+    if not all(math.isfinite(value) for value in bounds.values()):
+        raise ValueError("Latitude and longitude coordinates contain no finite extent.")
+    return bounds
+
+
+def _initialization_days(dataset) -> tuple[str, str, int] | None:
+    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
+    if coordinate is None or dataset[coordinate].ndim != 1:
+        return None
+
+    values = dataset[coordinate]
+    if values.size < 2:
+        return None
+    try:
+        weekdays = sorted({int(day) for day in values.dt.weekday.values.tolist()})
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not weekdays or any(day < 0 or day > 6 for day in weekdays):
+        return None
+    return ",".join(str(day) for day in weekdays), coordinate, int(values.size)
+
+
+def _normalized_initialization_days(value: object) -> str:
+    raw_days = [day.strip() for day in str(value).split(",")]
+    if not raw_days or any(not day for day in raw_days):
+        raise ValueError("Initialization days must be comma-separated weekday numbers from 0 to 6.")
+    try:
+        days = sorted({int(day) for day in raw_days})
+    except ValueError as exc:
+        raise ValueError(
+            "Initialization days must be comma-separated weekday numbers from 0 to 6."
+        ) from exc
+    if any(day < 0 or day > 6 for day in days):
+        raise ValueError("Initialization days must use weekday numbers from 0 to 6.")
+    return ",".join(str(day) for day in days)
+
+
 def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     normalized = dict(metadata)
     variable_key = "obs_var" if kind == "obs" else "model_var"
     pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
     default_variable = "RAINFALL" if kind == "obs" else "tp"
-    normalized[variable_key] = str(
-        normalized.get(variable_key) or default_variable
-    ).strip()
+    normalized[variable_key] = str(normalized.get(variable_key) or default_variable).strip()
     normalized[pattern_key] = str(normalized.get(pattern_key) or "{}.nc").strip()
 
     start_year, end_year = _coverage_years(files)
@@ -84,7 +150,6 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
         normalized.setdefault("unit_cvt", 1.0)
         normalized.setdefault("probabilistic", False)
         normalized.setdefault("members", None)
-        normalized.setdefault("init_days", "0")
         if start_year is not None and end_year is not None:
             normalized.setdefault("start_date", f"{start_year}-01-01")
             normalized.setdefault("end_date", f"{end_year}-12-31")
@@ -118,12 +183,41 @@ def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
 
         with xr.open_dataset(files[0]) as dataset:
             available = sorted(dataset.data_vars)
+            spatial_bounds = _spatial_bounds(dataset)
+            initialization_days = _initialization_days(dataset) if kind == "model" else None
     except Exception as exc:
         return (
             "invalid",
             f"Could not open {files[0].name} as NetCDF: {type(exc).__name__}: {exc}",
             normalized,
         )
+    normalized["spatial_bounds"] = spatial_bounds
+    if kind == "model":
+        existing_source = normalized.get("init_days_source")
+        configured_init_days = str(normalized.get("init_days") or "").strip()
+        has_configured_days = bool(configured_init_days) and existing_source not in {
+            "inferred",
+            "default",
+        }
+        if has_configured_days:
+            try:
+                normalized["init_days"] = _normalized_initialization_days(configured_init_days)
+            except ValueError as exc:
+                return "invalid", str(exc), normalized
+            normalized["init_days_source"] = "configured"
+            normalized.pop("init_time_coordinate", None)
+            normalized.pop("init_time_sample_count", None)
+        elif initialization_days is not None:
+            init_days, coordinate, sample_count = initialization_days
+            normalized["init_days"] = init_days
+            normalized["init_days_source"] = "inferred"
+            normalized["init_time_coordinate"] = coordinate
+            normalized["init_time_sample_count"] = sample_count
+        else:
+            normalized["init_days"] = "0"
+            normalized["init_days_source"] = "default"
+            normalized.pop("init_time_coordinate", None)
+            normalized.pop("init_time_sample_count", None)
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (
@@ -148,9 +242,7 @@ async def list_sources(kind: Kind | None = None) -> list[dict]:
     """Return all data sources, optionally filtered by kind."""
     async with get_db() as conn:
         if kind is None:
-            result = await conn.execute(
-                text("SELECT * FROM data_sources ORDER BY kind, name")
-            )
+            result = await conn.execute(text("SELECT * FROM data_sources ORDER BY kind, name"))
         else:
             result = await conn.execute(
                 text("SELECT * FROM data_sources WHERE kind = :kind ORDER BY name"),
@@ -225,9 +317,7 @@ async def update_source(
         return None
 
     kind: Kind = existing["kind"]
-    status, validation_error, normalized_metadata = await validate_source(
-        kind, path, metadata
-    )
+    status, validation_error, normalized_metadata = await validate_source(kind, path, metadata)
     async with get_db() as conn:
         result = await conn.execute(
             text(
@@ -325,15 +415,9 @@ async def seed_from_yaml_if_empty() -> int:
     Returns the number of rows inserted (0 if already seeded).
     """
     async with get_db() as conn:
-        existing = (
-            await conn.execute(text("SELECT COUNT(*) FROM data_sources"))
-        ).scalar()
+        existing = (await conn.execute(text("SELECT COUNT(*) FROM data_sources"))).scalar()
         rows = (
-            (
-                await conn.execute(
-                    text("SELECT id FROM data_sources WHERE status != 'ready'")
-                )
-            )
+            (await conn.execute(text("SELECT id FROM data_sources WHERE status != 'ready'")))
             .mappings()
             .fetchall()
             if existing

@@ -9,8 +9,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import data_sources as svc
+from ai_almanac.settings import get_region
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
+
 
 class DataSourceIn(BaseModel):
     kind: Literal["obs", "model"]
@@ -41,6 +43,15 @@ class DataSourceOut(BaseModel):
     updated_at: str | None
 
 
+class DataSourceValidationOut(BaseModel):
+    kind: Literal["obs", "model"]
+    path: str
+    region: str
+    metadata: dict
+    status: Literal["ready", "invalid"]
+    validation_error: str | None
+
+
 def _to_out(row: dict) -> DataSourceOut:
     import json as _json
 
@@ -65,24 +76,52 @@ def _to_out(row: dict) -> DataSourceOut:
     )
 
 
+def _parse_region(region: str | None) -> str:
+    normalized = region.strip().lower() if region else ""
+    if not normalized:
+        raise HTTPException(status_code=400, detail="region is required")
+    if get_region(normalized) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"region {normalized!r} is not configured",
+        )
+    return normalized
+
+
 @router.get("", response_model=list[DataSourceOut])
 async def list_data_sources(kind: Literal["obs", "model"] | None = None):
     rows = await svc.list_sources(kind=kind)
     return [_to_out(r) for r in rows]
 
 
+@router.post("/validate", response_model=DataSourceValidationOut)
+async def validate_data_source(body: DataSourceIn):
+    normalized_path = str(Path(body.path).expanduser().resolve())
+    region = _parse_region(body.region)
+    status, validation_error, metadata = await svc.validate_source(
+        body.kind,
+        normalized_path,
+        body.metadata,
+    )
+    return DataSourceValidationOut(
+        kind=body.kind,
+        path=normalized_path,
+        region=region,
+        metadata=metadata,
+        status=status,
+        validation_error=validation_error,
+    )
+
+
 @router.post("", response_model=DataSourceOut, status_code=201)
 async def create_data_source(body: DataSourceIn):
     normalized = str(Path(body.path).expanduser().resolve())
-    if body.kind == "model" and not body.region:
-        raise HTTPException(
-            status_code=400, detail="region is required for model data sources"
-        )
+    region = _parse_region(body.region)
     row = await svc.create_source(
         kind=body.kind,
         name=body.name,
         path=normalized,
-        region=body.region,
+        region=region,
         metadata=body.metadata,
     )
     return _to_out(row)
@@ -93,13 +132,12 @@ async def update_data_source(source_id: str, body: DataSourceUpdate):
     existing = await svc.get_source(source_id)
     if not existing:
         raise HTTPException(status_code=404, detail="data source not found")
-    if existing["kind"] == "model" and not body.region:
-        raise HTTPException(status_code=400, detail="region is required for model data sources")
+    region = _parse_region(body.region)
     row = await svc.update_source(
         source_id,
         name=body.name.strip(),
         path=str(Path(body.path).expanduser().resolve()),
-        region=body.region,
+        region=region,
         metadata=body.metadata,
     )
     return _to_out(row)

@@ -9,7 +9,7 @@ Output:
   testdata/ethiopia/fuxi/{1998,1999,2000}.nc  ~10 KB each
 
 Usage (from repo root):
-  cd backend && uv run python ../scripts/generate_test_data.py
+  pixi run python scripts/generate_test_data.py
 """
 
 from pathlib import Path

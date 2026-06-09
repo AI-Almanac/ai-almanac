@@ -206,7 +206,6 @@
 
 	function setRegionId(id: string) {
 		selectedRegionId = id;
-		selectedDatasetId = '';
 		selectedModelIds = [];
 		perModelOverrides = {};
 		models = [];
@@ -215,6 +214,13 @@
 
 	function setDatasetId(id: string) {
 		selectedDatasetId = id;
+		const datasetRegion = datasets.find((dataset) => dataset.id === id)?.region;
+		if (datasetRegion && datasetRegion !== selectedRegionId) {
+			selectedRegionId = datasetRegion;
+			selectedModelIds = [];
+			perModelOverrides = {};
+			models = [];
+		}
 		markManualConfigDirty();
 	}
 
@@ -428,8 +434,8 @@
 				<p class="eyebrow">Manual setup</p>
 				<h1>Configure a benchmark</h1>
 				<p>
-					Chat is unavailable because no LLM provider is configured. Use manual configuration
-					to select observations, models, and benchmark parameters.
+					Chat is unavailable because no LLM provider is configured. Use manual configuration to
+					select observations, models, and benchmark parameters.
 				</p>
 				<button type="button" onclick={() => (advancedPanelOpen = true)}>
 					Open benchmark settings

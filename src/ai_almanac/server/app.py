@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
     ensure_layout()
     _apply_migrations()
     _reload_user_config()
+    await _seed_regions()
     await _seed_data_sources()
     await _reconcile_jobs()
     reconciler = asyncio.create_task(_job_reconciler_loop())
@@ -95,6 +96,17 @@ async def _seed_data_sources() -> None:
             logger.info("seeded %d data source(s) from packaged YAMLs", count)
     except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
         logger.warning("data source seeding failed: %s", e)
+
+
+async def _seed_regions() -> None:
+    from ai_almanac.server.services.region_catalog import seed_packaged_regions
+
+    try:
+        count = await seed_packaged_regions()
+        if count:
+            logger.info("seeded %d packaged region(s)", count)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("region seeding failed: %s", e)
 
 
 async def _reconcile_jobs() -> None:
@@ -169,7 +181,7 @@ async def local_upload(storage_key: str, request: Request):
 
 
 # Bundled SvelteKit SPA. The static directory is populated at wheel-build time
-# from `web/build/`. When the directory is absent (e.g. in `uv sync` dev mode),
+# from `web/build/`. When the directory is absent (e.g. in Pixi dev mode),
 # the mount is skipped and the Vite dev server on :5173 serves the UI instead.
 class _SPAStaticFiles(StaticFiles):
     """Serve a SvelteKit static build with SPA-style fallback to index.html."""
@@ -193,6 +205,6 @@ if _STATIC_DIR.exists():
 else:
     logger.info(
         "static SPA bundle not found at %s; serve the frontend separately "
-        "(e.g. `npm run dev` in web/)",
+        "(e.g. `pixi run frontend`)",
         _STATIC_DIR,
     )

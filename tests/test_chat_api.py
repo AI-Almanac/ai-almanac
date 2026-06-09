@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
@@ -146,6 +146,25 @@ def test_job_region_metadata_maps_builtin_romp_region() -> None:
         "region_id": "india",
         "region_name": "India",
         "romp_region": "India",
+    }
+
+
+def test_job_region_metadata_preserves_persisted_region_snapshot() -> None:
+    from ai_almanac.server.routers.jobs import _job_region_metadata
+
+    metadata = _job_region_metadata(
+        {
+            "region_id": "central-highlands",
+            "region_name": "Central Highlands",
+            "romp_region": "custom",
+            "romp_params": {"region": "custom"},
+        }
+    )
+
+    assert metadata == {
+        "region_id": "central-highlands",
+        "region_name": "Central Highlands",
+        "romp_region": "custom",
     }
 
 
@@ -318,8 +337,8 @@ async def test_trim_chat_history_limits_messages_and_tool_payloads(
 async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_almanac.server.services.llm import ChatDeps, _build_agent
     from ai_almanac.server.services.chat_state import ChatScope
+    from ai_almanac.server.services.llm import ChatDeps, _build_agent
 
     monkeypatch.setattr("ai_almanac.settings.settings.llm_base_url", "http://test.local")
     model = TestModel(call_tools=[], custom_output_text="ready")
@@ -403,7 +422,7 @@ async def _create_session(
 
 
 async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -786,7 +805,7 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
             label=label,
             filename=filename,
             media_type=media_type,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
 
     monkeypatch.setattr(

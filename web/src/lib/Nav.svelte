@@ -14,13 +14,12 @@
 			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
 			<a
 				href="/data-sources"
-				class:active={$page.url.pathname.startsWith('/data-sources')}
+				class:active={$page.url.pathname.startsWith('/data-sources') ||
+					$page.url.pathname.startsWith('/regions')}
 			>
 				Data
 			</a>
-			<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
-				Settings
-			</a>
+			<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
 		</div>
 	</div>
 </nav>

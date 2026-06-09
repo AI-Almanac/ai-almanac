@@ -7,7 +7,7 @@ from backend/app/config/regions.yaml. A configurable buffer (default 1°) is
 added around the bbox before clipping so boundary grid cells are retained.
 
 Usage:
-  cd backend && uv run python ../scripts/prepare_forecasts.py \\
+  pixi run python scripts/prepare_forecasts.py \\
       --region bangladesh \\
       --input /path/to/global/model/forecasts \\
       --output /path/to/regional/output \\

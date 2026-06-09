@@ -9,7 +9,7 @@ The spatial bbox is read from backend/app/config/regions.yaml. A configurable
 buffer (default 1°) is added around the bbox.
 
 Usage:
-  cd backend && uv run python ../scripts/prepare_obs.py \\
+  pixi run python scripts/prepare_obs.py \\
       --region bangladesh \\
       --years 2020 2021 2022 \\
       --output /path/to/obs/output \\

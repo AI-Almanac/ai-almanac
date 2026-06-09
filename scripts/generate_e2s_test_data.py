@@ -15,7 +15,7 @@ Obs files (one per year):
   variable: RAINFALL (mm)
 
 Usage (from repo root):
-  cd backend && uv run python ../scripts/generate_e2s_test_data.py
+  pixi run python scripts/generate_e2s_test_data.py
 """
 
 import sys

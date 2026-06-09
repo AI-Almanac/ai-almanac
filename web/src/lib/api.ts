@@ -160,9 +160,25 @@ export interface DataSourceCreate {
 	metadata?: Record<string, unknown>;
 }
 
+export interface DataSourceValidation {
+	kind: 'obs' | 'model';
+	path: string;
+	region: string;
+	metadata: Record<string, unknown>;
+	status: 'ready' | 'invalid';
+	validation_error: string | null;
+}
+
 export async function listDataSources(kind?: 'obs' | 'model'): Promise<DataSource[]> {
 	const q = kind ? `?kind=${kind}` : '';
 	return request<DataSource[]>(`/data-sources${q}`);
+}
+
+export async function validateDataSource(body: DataSourceCreate): Promise<DataSourceValidation> {
+	return request<DataSourceValidation>('/data-sources/validate', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
 }
 
 export async function createDataSource(body: DataSourceCreate): Promise<DataSource> {
@@ -210,6 +226,34 @@ export async function getCapabilities(): Promise<AppCapabilities> {
 
 export async function getRegions() {
 	return request<Region[]>('/regions');
+}
+
+export type RegionWrite = {
+	display_name: string;
+	description: string;
+	lat_min: number;
+	lat_max: number;
+	lon_min: number;
+	lon_max: number;
+	land_only: boolean;
+};
+
+export async function createRegion(body: RegionWrite) {
+	return request<Region>('/regions', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function updateRegion(id: string, body: RegionWrite) {
+	return request<Region>(`/regions/${encodeURIComponent(id)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteRegion(id: string): Promise<void> {
+	await request<void>(`/regions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function getRegionBoundary(region: string, level: BoundaryLevel) {
@@ -309,6 +353,15 @@ export type Region = {
 	romp_region: string;
 	description: string;
 	has_data: boolean;
+	source_count: number;
+	lat_min: number | null;
+	lat_max: number | null;
+	lon_min: number | null;
+	lon_max: number | null;
+	land_only: boolean;
+	shp_only: boolean;
+	is_builtin: boolean;
+	boundary_iso: string | null;
 };
 
 export type BoundaryLevel = 'adm1' | 'adm2';

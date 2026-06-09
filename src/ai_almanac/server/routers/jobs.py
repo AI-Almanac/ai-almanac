@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -25,12 +25,12 @@ from ai_almanac.settings import (
 )
 
 from ..services.metrics import (
-    compute_job_cell,
-    compute_job_grid,
-    compute_job_metrics,
     JobCellResponse,
     JobGridResponse,
     JobMetrics,
+    compute_job_cell,
+    compute_job_grid,
+    compute_job_metrics,
 )
 from ..services.storage import get_storage
 
@@ -133,13 +133,23 @@ def _region_from_romp_name(romp_region: str | None) -> dict | None:
     if not romp_region:
         return None
     normalized = romp_region.lower()
+    if normalized == "custom":
+        return None
     for region in get_regions():
-        if region.get("romp_name", "custom").lower() == normalized:
+        if (region.get("romp_name") or "custom").lower() == normalized:
             return region
     return None
 
 
 def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
+    if cfg.get("region_id") and cfg.get("region_name"):
+        return {
+            "region_id": cfg["region_id"],
+            "region_name": cfg["region_name"],
+            "romp_region": cfg.get("romp_region")
+            or (cfg.get("romp_params") or {}).get("region"),
+        }
+
     region = get_region(cfg.get("region_id") or "")
     if region is None:
         dataset_config = cfg.get("dataset_config") or {}
@@ -151,7 +161,7 @@ def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
         return {
             "region_id": region["id"],
             "region_name": region["display_name"],
-            "romp_region": region.get("romp_name", "custom"),
+            "romp_region": region.get("romp_name") or "custom",
         }
 
     romp_region = (cfg.get("romp_params") or {}).get("region")
@@ -206,11 +216,51 @@ def _apply_region_params(romp_params: dict) -> dict:
         return params
 
     params["region"] = "custom"
+    if region_def["id"] == "custom":
+        params.setdefault("land_only", False)
+        params.setdefault("shp_only", False)
+        return params
     for key in ("lat_min", "lat_max", "lon_min", "lon_max"):
         params.setdefault(key, region_def[key])
     params.setdefault("land_only", region_def.get("land_only", False))
     params.setdefault("shp_only", region_def.get("shp_only", False))
     return params
+
+
+def _apply_inferred_custom_bounds(
+    params: dict,
+    observation_metadata: dict,
+    model_metadata: dict,
+) -> dict:
+    if params.get("region") != "custom":
+        return params
+
+    observation_bounds = observation_metadata.get("spatial_bounds")
+    model_bounds = model_metadata.get("spatial_bounds")
+    if not isinstance(observation_bounds, dict) or not isinstance(model_bounds, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Custom coverage requires inferred spatial bounds for both data sources.",
+        )
+
+    overlap = {
+        "lat_min": max(observation_bounds["lat_min"], model_bounds["lat_min"]),
+        "lat_max": min(observation_bounds["lat_max"], model_bounds["lat_max"]),
+        "lon_min": max(observation_bounds["lon_min"], model_bounds["lon_min"]),
+        "lon_max": min(observation_bounds["lon_max"], model_bounds["lon_max"]),
+    }
+    if overlap["lat_min"] > overlap["lat_max"] or overlap["lon_min"] > overlap["lon_max"]:
+        raise HTTPException(
+            status_code=400,
+            detail="The selected observation and forecast sources do not overlap geographically.",
+        )
+
+    bounded = dict(params)
+    for key, value in overlap.items():
+        bounded.setdefault(key, value)
+    bounded.setdefault("land_only", False)
+    bounded.setdefault("shp_only", False)
+    return bounded
 
 
 async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str | None:
@@ -314,11 +364,10 @@ async def create_job(body: JobCreate, user: CurrentUser):
             status_code=400,
             detail=f"Model is not configured for region {region!r}",
         )
-
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir)
 
     job_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     romp_params = body.params.model_dump(exclude_none=True)
     for key in (
@@ -341,6 +390,12 @@ async def create_job(body: JobCreate, user: CurrentUser):
     romp_params = _apply_region_params({"region": region_id, **romp_params})
 
     source_metadata = observation_source["metadata"] if observation_source else {}
+    if region_id == "custom":
+        romp_params = _apply_inferred_custom_bounds(
+            romp_params,
+            source_metadata,
+            model_source["metadata"],
+        )
     if "obs_file_pattern" not in romp_params and source_metadata.get("obs_file_pattern"):
         romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):
@@ -367,7 +422,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
         "model_config": model_cfg,
         "region_id": region_def["id"] if region_def else None,
         "region_name": region_def["display_name"] if region_def else None,
-        "romp_region": region_def.get("romp_name", "custom")
+        "romp_region": region_def.get("romp_name") or "custom"
         if region_def
         else region_id,
         "dataset_config": dataset_config,
@@ -630,7 +685,7 @@ async def get_metrics(
         )
     except Exception as e:
         logger.exception("Error computing metrics for job %s", job_id)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     # Persist unfiltered result for future requests.
     if not has_bbox:
@@ -670,9 +725,9 @@ async def get_grid(
             compute_job_grid, job_id, get_storage(), model, window, metric
         )
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.exception(
             "Error computing grid for job %s model=%s window=%s metric=%s",
@@ -681,7 +736,7 @@ async def get_grid(
             window,
             metric,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{job_id}/cell", response_model=JobCellResponse)
@@ -716,9 +771,9 @@ async def get_cell(
             compute_job_cell, job_id, get_storage(), model, window, lat, lon
         )
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.exception(
             "Error computing cell for job %s model=%s window=%s lat=%s lon=%s",
@@ -728,7 +783,7 @@ async def get_cell(
             lat,
             lon,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
