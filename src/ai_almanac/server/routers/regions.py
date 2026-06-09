@@ -6,6 +6,7 @@ import aiohttp
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ai_almanac.server.auth import AdminUser, CurrentUser
 from ai_almanac.server.services import region_catalog
 from ai_almanac.server.services.regions import list_region_options
 from ai_almanac.settings import get_region
@@ -42,13 +43,13 @@ class RegionWrite(BaseModel):
 
 
 @router.get("")
-async def list_regions() -> list[dict]:
+async def list_regions(_user: CurrentUser) -> list[dict]:
     """Return benchmark regions annotated with locally configured data."""
     return await list_region_options()
 
 
 @router.post("", status_code=201)
-async def create_region(body: RegionWrite) -> dict:
+async def create_region(body: RegionWrite, _admin: AdminUser) -> dict:
     await region_catalog.seed_packaged_regions()
     region = await region_catalog.create_region(**body.model_dump())
     return {
@@ -60,7 +61,9 @@ async def create_region(body: RegionWrite) -> dict:
 
 
 @router.put("/{region_id}")
-async def update_region(region_id: str, body: RegionWrite) -> dict:
+async def update_region(
+    region_id: str, body: RegionWrite, _admin: AdminUser
+) -> dict:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
     if not existing:
@@ -80,7 +83,7 @@ async def update_region(region_id: str, body: RegionWrite) -> dict:
 
 
 @router.delete("/{region_id}", status_code=204)
-async def delete_region(region_id: str) -> None:
+async def delete_region(region_id: str, _admin: AdminUser) -> None:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
     if not existing:
@@ -98,7 +101,9 @@ async def delete_region(region_id: str) -> None:
 
 
 @router.get("/{region}/boundaries/{level}")
-async def get_boundary(region: str, level: str) -> dict[str, Any]:
+async def get_boundary(
+    region: str, level: str, _user: CurrentUser
+) -> dict[str, Any]:
     """
     Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
 

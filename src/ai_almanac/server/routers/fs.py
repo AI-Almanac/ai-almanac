@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ai_almanac.paths import data_root
+from ai_almanac.server.auth import AdminUser
 from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/fs", tags=["fs"])
@@ -50,7 +51,9 @@ def _ensure_enabled() -> None:
 
 
 @router.get("/list", response_model=FsListing)
-def list_directory(path: str = "", include_hidden: bool = False) -> FsListing:
+def list_directory(
+    _admin: AdminUser, path: str = "", include_hidden: bool = False
+) -> FsListing:
     _ensure_enabled()
     p = (Path(path).expanduser() if path else Path.home()).resolve()
     if not p.exists():
@@ -91,7 +94,7 @@ def list_directory(path: str = "", include_hidden: bool = False) -> FsListing:
 
 
 @router.get("/quick-paths", response_model=list[QuickPath])
-def quick_paths() -> list[QuickPath]:
+def quick_paths(_admin: AdminUser) -> list[QuickPath]:
     """Common starting points the UI can show as one-click shortcuts."""
     _ensure_enabled()
     home = Path.home()

@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ai_almanac.paths import config_yaml_path
+from ai_almanac.server.auth import AdminUser
 from ai_almanac.settings import (
     RESTART_REQUIRED_FIELDS,
     SENSITIVE_FIELDS,
@@ -115,7 +116,7 @@ def _present_value(field_name: str, value: Any, reveal: bool) -> Any:
 
 
 @router.get("/schema", response_model=SettingsSchema)
-def get_schema() -> SettingsSchema:
+def get_schema(_admin: AdminUser) -> SettingsSchema:
     """Return field metadata grouped into UI sections."""
     model_fields = settings.model_fields
     groups: list[dict[str, Any]] = []
@@ -144,7 +145,7 @@ def get_schema() -> SettingsSchema:
 
 
 @router.get("", response_model=SettingsValues)
-def get_settings(reveal: bool = False) -> SettingsValues:
+def get_settings(_admin: AdminUser, reveal: bool = False) -> SettingsValues:
     """Return current effective settings. Sensitive fields are masked unless
     `?reveal=true` is passed (which the UI sends after the user explicitly
     clicks 'show' on a secret input)."""
@@ -159,7 +160,7 @@ class SettingsPatch(BaseModel):
 
 
 @router.patch("", response_model=SettingsValues)
-def patch_settings(body: SettingsPatch) -> SettingsValues:
+def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
     """Persist a partial update to config.yaml and hot-reload the settings
     singleton. Returns the new effective settings (with secrets masked)."""
     cleaned: dict[str, Any] = {}
@@ -182,7 +183,7 @@ def patch_settings(body: SettingsPatch) -> SettingsValues:
 
 
 @router.get("/config-yaml-path")
-def get_config_yaml_path() -> dict:
+def get_config_yaml_path(_admin: AdminUser) -> dict:
     """Expose the config.yaml location so the UI can tell the user where the
     file lives if they want to edit it directly."""
     return {"path": str(config_yaml_path())}

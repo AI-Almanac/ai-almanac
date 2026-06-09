@@ -107,6 +107,7 @@ def test_enforce_personal_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_enforce_shared_rejects_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "none")  # enforce mutates this
     monkeypatch.setattr(settings, "admin_subjects", "admin")
     monkeypatch.setattr(settings, "database_url", "")  # resolves to SQLite
     with pytest.raises(RuntimeError, match="PostgreSQL"):
@@ -115,6 +116,7 @@ def test_enforce_shared_rejects_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_enforce_shared_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "none")  # enforce mutates this
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
     monkeypatch.setattr(settings, "admin_subjects", "")
     monkeypatch.setattr(settings, "admin_emails", "")
@@ -135,6 +137,80 @@ def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.auth_mode == "proxy"
     assert settings.enable_fs_browser is False
     assert settings.enable_run_code is False
+
+
+# ---------------------------------------------------------------------------
+# Admin gating — settings, fs browser, and catalog mutation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_settings_open_to_admin_in_personal(client: httpx.AsyncClient) -> None:
+    # Personal mode: the local operator is admin, so settings stay accessible.
+    assert (await client.get("/settings")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_settings_rejects_missing_identity_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    assert (await client.get("/settings")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_settings_requires_admin_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+    resp = await client.get("/settings", headers={"X-Forwarded-User": "rando"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_fs_requires_admin_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    resp = await client.get("/fs/quick-paths", headers={"X-Forwarded-User": "rando"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_region_list_allowed_for_non_admin_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    resp = await client.get("/regions", headers={"X-Forwarded-User": "rando"})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_region_delete_requires_admin_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    resp = await client.delete(
+        "/regions/anything", headers={"X-Forwarded-User": "rando"}
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_data_source_delete_requires_admin_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    resp = await client.delete(
+        "/data-sources/anything", headers={"X-Forwarded-User": "rando"}
+    )
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
