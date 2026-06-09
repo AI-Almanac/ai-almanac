@@ -1,7 +1,7 @@
 # Development Guide
 
-How to hack on ai-almanac. The whole stack is one Python package — no Docker,
-no separate frontend service, no Postgres for local dev.
+How to hack on ai-almanac. Pixi manages the Python and Node runtimes, project
+dependencies, and development tasks. No Docker or external database is needed.
 
 ---
 
@@ -25,9 +25,10 @@ Auth: none — see [`DEPLOY_PUBLIC.md`](./DEPLOY_PUBLIC.md) for reverse-proxy se
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) — Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- [Node.js](https://nodejs.org/) 20+ and npm
-- [pixi](https://pixi.sh/) — only required to actually run benchmarks (not for working on the web UI / API)
+- [Pixi](https://pixi.sh/) — environment and task manager
+
+Pixi installs Python, Node.js, npm, Process Compose, and the project
+dependencies from `pixi.lock`.
 
 ---
 
@@ -37,34 +38,27 @@ Auth: none — see [`DEPLOY_PUBLIC.md`](./DEPLOY_PUBLIC.md) for reverse-proxy se
 git clone <repo>
 cd ai-almanac
 
-# Python side — installs the package editable
-uv sync
-
-# Frontend side — installs SvelteKit deps and starts the Vite dev server
-cd web && npm install
-npm run dev    # serves the SPA at http://localhost:5173
-
-# In another terminal — run the Python server with auto-reload
-cd ..
-uv run ai-almanac serve --reload --no-open
-# API + SPA fallback at http://localhost:8765
-# In dev, prefer http://localhost:5173 (Vite hot reload) and let it proxy /api/* to :8765
+pixi run dev
 ```
 
-The Vite dev server provides hot reload; the FastAPI server provides the API
-and `/config.js`. Vite proxies `/api/*` and `/config.js` to the FastAPI port
-(see `web/vite.config.ts` — adjust the proxy target if you bind FastAPI
-elsewhere).
+`pixi run dev` uses Process Compose to run both long-lived services:
+
+- SvelteKit with Vite hot module replacement at `http://localhost:5173`
+- FastAPI with Uvicorn auto-reload at `http://localhost:8765`
+
+The frontend receives `VITE_API_URL=http://localhost:8765`, so HTTP and
+WebSocket requests target FastAPI while Vite serves and reloads the UI.
+Process Compose also runs `npm install` before starting the frontend.
 
 To test a single-process production-style serve, build the SPA first so the
 backend can serve it:
 
 ```bash
-cd web && npm run build
-cd ..
-AI_ALMANAC_DATA_DIR=/tmp/almanac-dev uv run ai-almanac serve
-# Everything at http://localhost:8765 — same process serves API and SPA
+pixi run serve
 ```
+
+That builds `web/build/` and serves the API and SPA together at
+`http://localhost:8765`.
 
 ---
 
@@ -131,13 +125,10 @@ first (injected by the backend's `/config.js`), then falls back to
 ## Frontend commands
 
 ```bash
-cd web
-npm run dev      # Vite dev server with hot reload (port 5173)
-npm run build    # production SPA → web/build/
-npm run check    # svelte-check type-check
-npm run lint     # prettier
-npm run format   # prettier --write
-npm run test     # vitest
+pixi run frontend     # Vite dev server only
+pixi run build-web    # production SPA → web/build/
+pixi run check-web    # svelte-check type-check
+pixi run test-web     # vitest
 ```
 
 ---
@@ -157,20 +148,23 @@ No code changes required — the registry is YAML-driven and env-resolved.
 ## Adding Python dependencies
 
 ```bash
-uv add somepackage          # runtime
-uv add --dev somepackage    # dev only
+pixi add --pypi somepackage
+pixi add --pypi --feature dev somepackage
 ```
 
-Never edit `pyproject.toml` directly — `uv add` keeps the lockfile in sync.
+Use `pixi add` rather than editing dependency declarations manually so
+`pyproject.toml` and `pixi.lock` stay synchronized.
 
 ---
 
 ## Running tests
 
 ```bash
-uv run pytest                # unit tests
-uv run pytest -k stream      # subset
-cd web && npm run test       # frontend (vitest)
+pixi run test                # Python and frontend tests
+pixi run test-python         # Python tests
+pixi run test-python -k stream
+pixi run test-web            # frontend tests
+pixi run check               # Ruff and svelte-check
 ```
 
 ---
@@ -178,14 +172,8 @@ cd web && npm run test       # frontend (vitest)
 ## Building a release wheel
 
 ```bash
-# Build the SPA first — hatch's force-include needs web/build/ populated
-cd web && npm run build
-cd ..
-
-# Build the wheel + sdist
-uvx --from build python -m build
-
-# The wheel contains the SvelteKit SPA bundled into
-# ai_almanac/server/static/, so `pip install dist/ai_almanac-*.whl` ships
-# a self-contained ai-almanac.
+pixi run build
 ```
+
+This builds the SvelteKit SPA first, then creates the wheel and source
+distribution. The wheel includes the SPA under `ai_almanac/server/static/`.

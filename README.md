@@ -121,9 +121,15 @@ before making a source available to benchmark workflows.
 
 ## Development
 
-See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the no-Docker workflow:
-`uv sync && cd web && npm install && npm run dev` in one terminal,
-`uv run ai-almanac serve --reload` in another.
+Install [Pixi](https://pixi.sh/), then start the complete development stack:
+
+```bash
+pixi run dev
+```
+
+This runs FastAPI with Python auto-reload on `http://localhost:8765` and the
+SvelteKit Vite server with hot module replacement on `http://localhost:5173`.
+See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the full task list.
 
 ---
 

@@ -1,0 +1,31 @@
+version: "0.5"
+is_strict: true
+ordered_shutdown: true
+
+processes:
+  frontend-dependencies:
+    description: Install frontend dependencies from package-lock.json
+    command: npm install
+    working_dir: web
+    availability:
+      restart: exit_on_failure
+
+  backend:
+    description: FastAPI development server with Python auto-reload
+    command: ai-almanac serve --reload --no-open
+    environment:
+      - "PYTHONUNBUFFERED=1"
+    availability:
+      restart: on_failure
+
+  frontend:
+    description: SvelteKit development server with Vite hot module replacement
+    command: npm run dev -- --host localhost
+    working_dir: web
+    environment:
+      - "VITE_API_URL=http://localhost:8765"
+    depends_on:
+      frontend-dependencies:
+        condition: process_completed_successfully
+    availability:
+      restart: on_failure

@@ -37,6 +37,7 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.11",
+    "build>=1.5.0,<2",
 ]
 
 [build-system]
@@ -51,6 +52,11 @@ packages = ["src/ai_almanac"]
 # into the wheel so `pip install ai-almanac` ships the UI.
 "web/build" = "ai_almanac/server/static"
 
+[tool.hatch.build.targets.sdist]
+# The wheel is built from the sdist by standard Python build frontends.
+# Include the generated SPA even though web/build is ignored by Git.
+artifacts = ["web/build"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -62,3 +68,35 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+
+[tool.pixi.pypi-dependencies]
+ai-almanac = { path = ".", editable = true }
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks]
+dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
+lint-python = { cmd = "ruff check src tests", default-environment = "dev", description = "Lint Python sources and tests" }
+format-python = { cmd = "ruff format src tests", default-environment = "dev", description = "Format Python sources and tests" }
+install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
+build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }
+check-web = { cmd = "npm run check", depends-on = ["install-web"], cwd = "web", description = "Type-check the frontend" }
+test-web = { cmd = "npm test -- --run", depends-on = ["install-web"], cwd = "web", description = "Run frontend tests" }
+backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the FastAPI development server" }
+test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
+package = { cmd = "python -m build", default-environment = "dev", depends-on = ["build-web"], description = "Build the Python wheel and source distribution" }
+serve = { cmd = "ai-almanac serve --no-open", depends-on = ["build-web"], description = "Run a production-style server with the built frontend" }
+test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }
+check = { depends-on = [{ task = "lint-python" }, { task = "check-web" }], description = "Run backend lint and frontend type checks" }
+build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
+frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_API_URL = "http://localhost:8765" }, description = "Run the Vite development server" }
+
+[tool.pixi.dependencies]
+nodejs = ">=26.3.0,<26.4"
+process-compose = ">=1.103.0,<2"

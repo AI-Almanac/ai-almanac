@@ -1,133 +1,62 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Repository guidance for Claude Code.
 
-## Local dev setup
+## Development
 
-The recommended dev environment uses Docker Compose. It starts a postgres container, the FastAPI backend with hot reload, and the Vite dev server.
-
-```bash
-# First time
-cp .env.example backend/.env   # fill in GLOBUS_CLIENT_ID etc.
-cp .env.example web/.env       # fill in VITE_GLOBUS_CLIENT_ID etc.
-
-docker compose up --build
-```
-
-Services:
-- Frontend: http://localhost:5173
-- Backend: http://localhost:8000
-- Postgres: localhost:5432 (user: almanac, password: almanac, db: almanac)
-
-Source is volume-mounted into both containers so changes hot-reload without rebuilding.
-
-The compose file automatically mounts `testdata/` and sets `TEST_ETHIOPIA_OBS_DIR` and `TEST_FUXI_TEST_MODEL_DIR` to point at it. This wires up the **"FuXi (Test)"** model so you can submit a full end-to-end benchmark job without any real model data. The testdata is synthetic (seeded random rainfall over a 5×5 grid, 1998–2000); regenerate it with:
+Pixi is the project environment and task manager. Do not use `uv` for this
+repository.
 
 ```bash
-uv run scripts/generate_test_data.py
+pixi run dev
 ```
 
-### Running without Docker
+This starts:
 
-Requires a local postgres instance with the compose credentials (or update `DATABASE_URL` in `backend/.env`).
+- SvelteKit with Vite HMR at `http://localhost:5173`
+- FastAPI with Uvicorn reload at `http://localhost:8765`
+
+Useful tasks:
 
 ```bash
-# Backend
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload --port 8000
-
-# Frontend
-cd web
-npm install
-npm run dev
+pixi run test
+pixi run check
+pixi run build
+pixi run backend
+pixi run frontend
 ```
 
-### Other frontend commands
-```bash
-cd web
-npm run check        # type-check with svelte-check
-npm run lint         # prettier check
-npm run format       # prettier write
-npm run build        # production build
-```
+Use `pixi add --pypi <package>` for Python runtime dependencies and
+`pixi add --pypi --feature dev <package>` for development dependencies.
+Use npm from `web/` for frontend dependencies.
 
 ## Architecture
 
-Three-layer stack with environment-variable-driven backend switching:
+- `src/ai_almanac/`: local-first Python package and CLI
+- `src/ai_almanac/server/`: FastAPI API, SQLite persistence, job supervision
+- `src/ai_almanac/server/config/`: packaged model, dataset, region, and ROMP defaults
+- `web/`: SvelteKit frontend
+- `testdata/`: compact NetCDF fixtures
+- `src/ai_almanac/envs/`: separately managed benchmark runtime
 
-| Layer | Local | Production |
-|---|---|---|
-| Frontend | SvelteKit (Vite dev server) | Cloud Run |
-| Backend | FastAPI + uvicorn | Cloud Run |
-| Database | SQLite | Cloud SQL PostgreSQL |
-| Storage | Local filesystem | Google Cloud Storage |
-| Job runner | Docker (ROMP container) | Cloud Batch |
+The production wheel includes the static frontend build. Development uses the
+Vite server directly; `VITE_API_URL` points it at FastAPI.
 
-### Backend (`backend/app/`)
+## Testing
 
-- `main.py` — FastAPI app, CORS, lifespan hooks, local upload endpoint
-- `config.py` — All settings via pydantic-settings (reads from `.env`); also exposes `get_model_registry()`, `get_metric_definitions()`, and `get_romp_defaults()` loaders
-- `auth.py` — Globus token introspection dependency; stub mode when `GLOBUS_CLIENT_ID` is unset (raw Bearer token used as user ID)
-- `database.py` — SQLAlchemy Core; SQLite locally, PostgreSQL in prod via `DATABASE_URL`
-- `routers/config.py` — Serves `GET /config/metrics` and `GET /config/romp-defaults` from YAML (no auth required)
-- `routers/datasets.py` — Dataset registration and upload URL generation
-- `routers/jobs.py` — Job submission, polling, results, metrics
-- `services/storage.py` — `LocalStorage` / `GCSStorage` factory switching on `STORAGE_BACKEND`
-- `services/runner.py` — `DockerRunner` / `BatchRunner` factory switching on `JOB_RUNNER`
+Run focused tests while working, then use:
 
-### Config files (`backend/app/config/`)
+```bash
+pixi run test
+pixi run check
+```
 
-These YAML files are the single source of truth for domain configuration. Avoid hardcoding their contents anywhere else — the frontend fetches what it needs via `/config/*` endpoints.
+Python tests use a temporary SQLite data directory. Frontend tests use Vitest.
 
-**`models.yaml`** — Model registry. Each entry defines a model that ROMP can evaluate.
+## Data Sources
 
-To add a model:
-1. Add an entry with `id`, `display_name`, `region`, `model_type`, and the fields below.
-2. Set the corresponding env var: `{REGION}_{ID}_MODEL_DIR` (uppercased, hyphens → underscores).
-3. The model is automatically excluded at runtime if the env var is unset or empty.
+Runtime data sources and regions are managed through the application database.
+Packaged YAML files seed an empty installation and provide defaults.
 
-No changes to `config.py` are needed when adding a model.
-
-Key fields:
-- `probabilistic` — set `true` for ensemble models; affects which metrics ROMP computes and Cloud Run resource allocation
-- `init_days` — comma-separated weekday integers (0 = Monday) when forecasts are initialised
-- `start_date` / `end_date` — evaluation period; `start_year_clim` / `end_year_clim` — climatology period
-
-**`datasets.yaml`** — Demo dataset registry. Each entry defines a named observational dataset available to all users.
-
-To add a demo dataset:
-1. Add an entry with `id`, `name`, and optionally `obs_file_pattern`.
-2. Set the corresponding env var: `{ID}_OBS_DIR` (uppercased, hyphens → underscores).
-3. The dataset is automatically excluded if the env var is unset or empty.
-
-**`romp.yaml`** — Metric definitions and ROMP parameter defaults.
-
-- `metrics.deterministic` / `metrics.probabilistic` — display metadata (label, abbreviation, unit, range, `lower_is_better`, description) for every metric ROMP can produce. Add a new entry here when ROMP gains a new metric; the frontend reads this via `GET /config/metrics`.
-- `defaults` — default values for every optional ROMP `env` parameter (matches `generate_config.py` in the ROMP repo). These serve as documentation and can be used to populate UI forms. Do not duplicate these defaults in frontend code.
-
-### Frontend (`web/src/`)
-
-- `lib/auth.ts` — Globus SDK PKCE authorization manager
-- `lib/auth-store.ts` — Svelte store wrapping auth state
-- `lib/api.ts` — Typed fetch wrappers for all backend endpoints
-- `lib/benchmarks.svelte.ts` — Benchmark data state (Svelte 5 runes)
-- `lib/components/` — UI components: `MetricMap` (OpenLayers), `ResultsViewer`, `MetricsTable`, `JobLogs`, `ComparisonPanel`, `FigureCard`, `FigureLightbox`
-- `routes/benchmarks/` — Benchmark listing and detail views
-- `routes/callback/` — Globus OAuth2 redirect target
-
-### Key environment variables
-
-Backend `.env` switches:
-- `DATABASE_URL` — defaults to SQLite; set to PostgreSQL DSN for prod
-- `STORAGE_BACKEND` — `local` (default) or `gcs`
-- `JOB_RUNNER` — `docker` (default) or `batch`
-- `GLOBUS_CLIENT_ID` / `GLOBUS_CLIENT_SECRET` — leave unset for stub auth mode
-- `{ID}_OBS_DIR` — obs dir for each dataset entry in `datasets.yaml` (e.g. `TEST_ETHIOPIA_OBS_DIR`)
-
-Frontend `.env` (all `VITE_` prefix, embedded at build time):
-- `VITE_GLOBUS_CLIENT_ID`, `VITE_REDIRECT_URL`, `VITE_API_URL`
-
-## Infrastructure
-
-Terraform in `terraform/` manages GCP resources: Cloud Run services, Cloud SQL, GCS bucket, Cloud Batch, Secret Manager. See `DEVELOPMENT.md` for first-time setup steps.
+Model initialization weekdays use Python weekday numbering: Monday is `0` and
+Sunday is `6`.
