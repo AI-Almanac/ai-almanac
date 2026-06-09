@@ -153,7 +153,7 @@ async def test_user_region_bounds_are_applied_to_jobs(
     async def fake_launch(job_id: str) -> None:
         return None
 
-    monkeypatch.setattr("ai_almanac.server.routers.jobs.launch_job", fake_launch)
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     response = await client.post(
         "/jobs",
         headers=auth_headers,
@@ -235,7 +235,7 @@ async def test_broader_observations_can_support_a_custom_benchmark_region(
     async def fake_launch(job_id: str) -> None:
         return None
 
-    monkeypatch.setattr("ai_almanac.server.routers.jobs.launch_job", fake_launch)
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     response = await client.post(
         "/jobs",
         headers=auth_headers,

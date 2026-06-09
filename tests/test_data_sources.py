@@ -115,7 +115,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     async def fake_launch(job_id: str) -> None:
         launched.append(job_id)
 
-    monkeypatch.setattr("ai_almanac.server.routers.jobs.launch_job", fake_launch)
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     job_response = await client.post(
         "/jobs",
         headers=auth_headers,
@@ -309,7 +309,7 @@ async def test_custom_sources_use_inferred_overlapping_bounds(
     async def fake_launch(job_id: str) -> None:
         return None
 
-    monkeypatch.setattr("ai_almanac.server.routers.jobs.launch_job", fake_launch)
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     response = await client.post(
         "/jobs",
         headers=auth_headers,

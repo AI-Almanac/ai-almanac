@@ -13,11 +13,12 @@ from sqlalchemy import text
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
-    launch_job,
     request_cancel,
 )
+from ai_almanac.server.services.local_runner import get_job_runner
 from ai_almanac.settings import (
     get_model_registry,
     get_region,
@@ -447,7 +448,21 @@ async def create_job(body: JobCreate, user: CurrentUser):
         )
         row = dict(result.mappings().fetchone())
 
-    await launch_job(job_id)
+    storage = get_storage()
+    workspace = storage.job_dir(job_id)
+    handle = await get_job_runner().submit(
+        ExecutionRequest(
+            job_id=job_id,
+            workspace=workspace,
+            bundle_path=workspace,
+            resources=ResourceRequest(),
+        )
+    )
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE jobs SET runner = :r, runner_handle = :h WHERE id = :id"),
+            {"r": handle.runner, "h": json.dumps(handle.as_dict()), "id": job_id},
+        )
     return _row_to_job_out(row, user.id)
 
 
