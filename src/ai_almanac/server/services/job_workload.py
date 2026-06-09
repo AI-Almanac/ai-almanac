@@ -10,8 +10,9 @@ from pathlib import Path
 
 from ai_almanac.envs.manager import run as pixi_run
 from ai_almanac.paths import database_path
+from ai_almanac.server.services import stub_outputs
+from ai_almanac.server.services.bundle import build_job_env
 from ai_almanac.server.services.romp import write_romp_config
-from ai_almanac.server.services.runner import InProcessRunner, StubRunner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.settings import settings
 
@@ -36,7 +37,7 @@ def _run_pixi(job_id: str, config: dict) -> None:
     output_dir = Path(output_dir_raw)
     figure_dir = Path(figure_dir_raw)
     config_path = write_romp_config(job_id, config, output_dir, figure_dir)
-    env = InProcessRunner._job_env(job_id, config, output_dir_raw, figure_dir_raw)
+    env = build_job_env(config, output_dir_raw, figure_dir_raw)
     process_env = os.environ.copy()
     process_env.update(env)
 
@@ -76,17 +77,16 @@ def _run_stub(job_id: str, config: dict) -> None:
     output_dir = Path(output_dir_raw)
     figure_dir = Path(figure_dir_raw)
     model_name = config.get("model_name", "model")
-    runner = StubRunner(storage)
-    lat, lon = runner._resolve_grid(config)
+    lat, lon = stub_outputs.resolve_grid(config)
 
     print("==> [STUB RUNNER] producing synthetic ROMP-shaped outputs", flush=True)
-    for window in runner.WINDOWS:
+    for window in stub_outputs.WINDOWS:
         time.sleep(0.4)
         path = output_dir / f"spatial_metrics_{model_name}_{window}.nc"
-        runner._write_metric_nc(path, lat, lon, model_name, window)
+        stub_outputs.write_metric_nc(path, lat, lon, model_name, window)
         print(f"    wrote {path.name}", flush=True)
     for figure_name in ("portrait", "panel_heatmap_skill"):
         path = figure_dir / f"{figure_name}_{model_name}.png"
-        runner._write_placeholder_figure(path, model_name, figure_name)
+        stub_outputs.write_placeholder_figure(path, model_name, figure_name)
         print(f"    wrote figure {path.name}", flush=True)
     print("==> [STUB RUNNER] complete", flush=True)
