@@ -23,6 +23,7 @@ from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.artifact_store import get_artifact_store
+from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
@@ -121,6 +122,17 @@ class JobOut(BaseModel):
 class ResultFile(BaseModel):
     name: str
     type: str  # "output" | "figure"
+    url: str
+
+
+class ArtifactOut(BaseModel):
+    id: str
+    kind: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    checksum: str
+    created_at: str
     url: str
 
 
@@ -642,6 +654,19 @@ async def get_results(job_id: str, job: ReadableJob):
             url=storage.generate_result_url(job_id, kind, filename),
         )
         for kind, filename in files
+    ]
+
+
+@router.get("/{job_id}/artifacts", response_model=list[ArtifactOut])
+async def list_artifacts(job_id: str, job: ReadableJob):
+    """Return the job's indexed artifacts (published on completion)."""
+    storage = get_storage()
+    return [
+        ArtifactOut(
+            **row,
+            url=storage.generate_result_url(job_id, row["kind"], row["filename"]),
+        )
+        for row in await list_job_artifacts(job_id)
     ]
 
 

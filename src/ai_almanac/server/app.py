@@ -120,12 +120,17 @@ async def _seed_regions() -> None:
 
 
 async def _reconcile_jobs() -> None:
+    from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
     try:
         await reconcile_jobs()
     except Exception as e:  # noqa: BLE001
         logger.warning("job reconciliation failed: %s", e)
+    try:
+        await publish_pending()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("artifact publication failed: %s", e)
 
 
 async def _job_reconciler_loop() -> None:
