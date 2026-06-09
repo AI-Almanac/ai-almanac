@@ -13,7 +13,7 @@ ai-almanac (one Python process)
 │   ├── /api/...    JSON API
 │   ├── /config.js  runtime config injected into the SPA
 │   └── /...        bundled SvelteKit SPA (when built)
-└── InProcessRunner — shells out to `pixi run momp-run` in the benchmark env
+└── Durable supervisor → workload process → `pixi run momp-run`
 ```
 
 Storage: filesystem under `$AI_ALMANAC_DATA_DIR` (default:
@@ -89,7 +89,8 @@ src/ai_almanac/
     │                      regions.yaml, romp.yaml
     ├── routers/           jobs, datasets, config, regions, chat
     ├── services/
-    │   ├── runner.py      InProcessRunner — spawns momp-run via pixi
+    │   ├── romp.py        renders per-job ROMP configuration
+    │   ├── job_workload.py invokes ROMP through the managed Pixi environment
     │   ├── job_events.py  per-job WebSocket pub/sub broker
     │   ├── e2s.py         earth2studio RMSE/MAE/ACC/bias subprocess script
     │   ├── storage.py     LocalStorage (only impl)

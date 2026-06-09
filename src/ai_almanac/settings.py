@@ -91,10 +91,9 @@ class Settings(BaseSettings):
     # Concurrency — gates simultaneous benchmark jobs so the GPU isn't oversubscribed.
     max_local_jobs: int = 1
 
-    # Runner selection. 'stub' produces synthetic ROMP-shaped outputs so the
-    # full UI works without pixi/ROMP installed (the POC default). Switch to
-    # 'pixi' once `ai-almanac env prepare` has set up the benchmark env.
-    runner_mode: str = "stub"
+    # Runner selection. Pixi executes real ROMP benchmarks. Stub mode remains
+    # available for tests and UI development without the benchmark environment.
+    runner_mode: str = "pixi"
 
     # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.

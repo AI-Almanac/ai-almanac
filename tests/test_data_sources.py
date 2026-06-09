@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import text
 
 
 @pytest.mark.asyncio
@@ -87,9 +89,22 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert job["status"] == "queued"
     assert launched == [job["id"]]
     assert job["dataset_id"] == obs["id"]
-    assert job["model_name"] == model["id"]
+    assert job["model_name"] == "FuXi test"
+    assert job["model_display_name"] == "FuXi test"
+    assert job["model_source_id"] == model["id"]
     assert job["obs_dir"] == str((root / "obs").resolve())
     assert job["model_dir"] == str((root / "fuxi").resolve())
+
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT config_json FROM jobs WHERE id = :id"),
+                {"id": job["id"]},
+            )
+        ).scalar_one()
+    assert json.loads(row)["model_config"]["model_var"] == "tp"
 
 
 @pytest.mark.asyncio

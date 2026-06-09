@@ -666,10 +666,13 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> st
     jobs = []
     for r in rows:
         cfg = json.loads(r.get("config_json") or "{}")
+        model_config = cfg.get("model_config") or {}
         jobs.append(
             {
                 "job_id": r["id"],
-                "model_name": cfg.get("model_name"),
+                "model_name": cfg.get("model_display_name")
+                or model_config.get("display_name")
+                or cfg.get("model_name"),
                 "region": cfg.get("romp_params", {}).get("region"),
                 "dataset_id": r.get("dataset_id"),
                 "status": r["status"],
@@ -716,6 +719,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     cfg = json.loads(row.get("config_json") or "{}")
+    model_config = cfg.get("model_config") or {}
     return json.dumps(
         {
             "job_id": job_id,
@@ -725,7 +729,10 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
             "error": row["error"],
             "created_at": row["created_at"],
             "completed_at": row["completed_at"],
-            "model_name": cfg.get("model_name"),
+            "model_name": cfg.get("model_display_name")
+            or model_config.get("display_name")
+            or cfg.get("model_name"),
+            "model_source_id": cfg.get("model_source_id") or model_config.get("id"),
             "model_dir": cfg.get("model_dir"),
             "obs_dir": cfg.get("obs_dir"),
             "romp_params": cfg.get("romp_params", {}),
@@ -803,7 +810,9 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
     rerun = await create_job(
         JobCreate(
             dataset_id=row["dataset_id"],
-            model_name=cfg.get("model_name", ""),
+            model_name=cfg.get("model_source_id")
+            or (cfg.get("model_config") or {}).get("id")
+            or cfg.get("model_name", ""),
             params=RompParams(**params),
             run_id=row["run_id"],
         ),

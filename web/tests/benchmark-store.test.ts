@@ -22,6 +22,7 @@ function queuedJob(): Job {
 		status: 'queued',
 		dataset_id: 'observations-1',
 		model_name: 'fuxi-1',
+		model_display_name: 'FuXi',
 		run_id: 'run-1',
 		created_at: '2026-06-08T20:01:00Z',
 		params: {

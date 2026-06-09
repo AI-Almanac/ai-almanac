@@ -50,12 +50,7 @@
 			store.selectedGroupKey = null;
 		}
 		const [fetchedRegions, fetchedDatasets, fetchedParameterDefaults, fetchedCapabilities] =
-			await Promise.allSettled([
-				getRegions(),
-				getDatasets(),
-				getRompDefaults(),
-				getCapabilities()
-			]);
+			await Promise.allSettled([getRegions(), getDatasets(), getRompDefaults(), getCapabilities()]);
 		if (fetchedRegions.status === 'fulfilled') regions = fetchedRegions.value;
 		if (fetchedDatasets.status === 'fulfilled') datasets = fetchedDatasets.value;
 		if (fetchedParameterDefaults.status === 'fulfilled') {
@@ -134,7 +129,8 @@
 
 	function formatRunStatus(jobs: Job[]): string {
 		if (jobs.some((job) => job.status === 'canceling')) return 'Canceling';
-		if (jobs.some((job) => ['queued', 'starting', 'running'].includes(job.status))) return 'Running';
+		if (jobs.some((job) => ['queued', 'starting', 'running'].includes(job.status)))
+			return 'Running';
 		if (jobs.every((job) => job.status === 'complete')) return 'Complete';
 		if (jobs.every((job) => job.status === 'canceled')) return 'Canceled';
 		if (jobs.every((job) => job.status === 'failed')) return 'Failed';
@@ -280,7 +276,8 @@
 									<div class="model-run-list">
 										{#each group.jobs as job}
 											<div class="model-run-item">
-												<strong>{modelDisplayName(job.model_name)}</strong>
+												<strong>{job.model_display_name || modelDisplayName(job.model_name)}</strong
+												>
 												<span
 													class:complete={job.status === 'complete'}
 													class:failed={job.status === 'failed'}
@@ -400,7 +397,9 @@
 							<div class="failed-runs">
 								{#each failedJobs as job}
 									<div class="job-error">
-										<p class="job-error-title">{modelDisplayName(job.model_name)} failed</p>
+										<p class="job-error-title">
+											{job.model_display_name || modelDisplayName(job.model_name)} failed
+										</p>
 										{#if job.error}
 											<pre class="job-error-msg">{job.error}</pre>
 										{/if}

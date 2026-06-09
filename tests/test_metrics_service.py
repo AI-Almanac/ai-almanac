@@ -222,3 +222,5 @@ async def test_metrics_endpoint_loads_serialized_cache_after_restart(
 
     assert response.status_code == 200
     assert response.json() == cached_metrics
+    jobs_response = await client.get("/jobs")
+    assert job_id not in {job["id"] for job in jobs_response.json()}

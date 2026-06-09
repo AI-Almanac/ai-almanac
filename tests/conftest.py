@@ -14,6 +14,7 @@ local-first model.
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from uuid import uuid4
@@ -22,14 +23,14 @@ import httpx
 import pytest
 import pytest_asyncio
 
+_TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="ai-almanac-tests-"))
+os.environ["AI_ALMANAC_DATA_DIR"] = str(_TEST_DATA_DIR)
+os.environ["RUNNER_MODE"] = "stub"
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _per_session_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+def _per_session_data_dir() -> Iterator[Path]:
     """Isolate each test session in its own data dir and stub LLM config."""
-    root = tmp_path_factory.mktemp("ai-almanac-data")
-    old_dir = os.environ.get("AI_ALMANAC_DATA_DIR")
-    os.environ["AI_ALMANAC_DATA_DIR"] = str(root)
-
     # Chat routers refuse to operate without an LLM URL. Tests that exercise
     # the chat flow further mock the LLM client; this just gets past the
     # availability check.
@@ -38,13 +39,9 @@ def _per_session_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     old_llm = settings.llm_base_url
     settings.llm_base_url = "http://test-llm.local"
 
-    yield root
+    yield _TEST_DATA_DIR
 
     settings.llm_base_url = old_llm
-    if old_dir is None:
-        os.environ.pop("AI_ALMANAC_DATA_DIR", None)
-    else:
-        os.environ["AI_ALMANAC_DATA_DIR"] = old_dir
 
 
 @pytest_asyncio.fixture
@@ -66,8 +63,8 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 
 class _no_lifespan:
     async def __aenter__(self):
-        from ai_almanac.server.app import _apply_migrations
         from ai_almanac.paths import ensure_layout
+        from ai_almanac.server.app import _apply_migrations
 
         ensure_layout()
         _apply_migrations()

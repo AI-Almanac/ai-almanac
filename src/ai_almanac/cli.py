@@ -86,7 +86,7 @@ app.add_typer(env_app, name="env")
 
 @env_app.command("prepare")
 def env_prepare() -> None:
-    """Install or update the benchmark environment (torch, earth2studio, ROMP)."""
+    """Install or update the ROMP benchmark environment."""
     if shutil.which("pixi") is None:
         typer.secho(
             "pixi is not installed. Install it from https://pixi.sh and re-run.",

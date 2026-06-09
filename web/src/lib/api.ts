@@ -378,6 +378,8 @@ export type Job = {
 	status: JobStatus;
 	dataset_id: string;
 	model_name: string;
+	model_display_name: string;
+	model_source_id?: string | null;
 	model_dir?: string;
 	obs_dir?: string;
 	params?: JobParams;

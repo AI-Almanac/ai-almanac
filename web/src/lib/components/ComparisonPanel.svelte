@@ -186,7 +186,9 @@
 									<th class="metric-col">Metric</th>
 									{#each jobs as job, i}
 										<th class="job-col">
-											<span class="job-col-model">{job.model_name.toUpperCase()}</span>
+											<span class="job-col-model"
+												>{(job.model_display_name || job.model_name).toUpperCase()}</span
+											>
 											<span class="job-col-dates"
 												>{job.params?.start_date ?? ''} – {job.params?.end_date ?? ''}</span
 											>
@@ -246,7 +248,9 @@
 				<div class="fig-row-label"></div>
 				{#each jobs as job}
 					<div class="fig-col-header">
-						<span class="job-col-model">{job.model_name.toUpperCase()}</span>
+						<span class="job-col-model"
+							>{(job.model_display_name || job.model_name).toUpperCase()}</span
+						>
 						<span class="job-col-dates"
 							>{job.params?.start_date ?? ''} – {job.params?.end_date ?? ''}</span
 						>
@@ -293,7 +297,9 @@
 				<div class="fig-row-label"></div>
 				{#each jobs as job}
 					<div class="fig-col-header">
-						<span class="job-col-model">{job.model_name.toUpperCase()}</span>
+						<span class="job-col-model"
+							>{(job.model_display_name || job.model_name).toUpperCase()}</span
+						>
 					</div>
 				{/each}
 				{#each portraitPairs as pair}

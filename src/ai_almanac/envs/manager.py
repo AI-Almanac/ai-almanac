@@ -1,9 +1,8 @@
 """Pixi-managed benchmark environment.
 
-The benchmark environment carries the heavy ML deps (torch+CUDA, earth2studio,
-ROMP, NetCDF/HDF5/GDAL) separately from the ai-almanac web server's own
-environment. This keeps `pip install ai-almanac` small and stops a torch
-upgrade from breaking FastAPI's deps.
+The benchmark environment carries ROMP and its scientific dependencies
+separately from the ai-almanac web server's own environment. This keeps
+`pip install ai-almanac` small and isolates FastAPI from the benchmark stack.
 
 The env lives at `$AI_ALMANAC_DATA_DIR/benchmark-env/` and is prepared on
 first use via `ai-almanac env prepare`.
@@ -40,11 +39,10 @@ def ensure_env() -> Path:
     env_dir = benchmark_env_dir()
     env_dir.mkdir(parents=True, exist_ok=True)
 
-    # If pixi.toml doesn't exist in the env dir, copy the packaged spec in so
-    # users can edit it for local overrides if they want to.
+    # This is an application-managed environment. Refresh the manifest so an
+    # ai-almanac upgrade also updates benchmark dependencies.
     target_spec = env_dir / "pixi.toml"
-    if not target_spec.exists():
-        target_spec.write_text(_pixi_spec().read_text())
+    target_spec.write_text(_pixi_spec().read_text())
 
     subprocess.run(
         [pixi, "install", "--manifest-path", str(target_spec)],
@@ -85,9 +83,10 @@ def env_versions() -> dict[str, str]:
             "python",
             "-c",
             "import importlib.metadata as m, sys;"
-            "names=['torch','earth2studio','ROMP','xarray','netcdf4','cdsapi'];"
-            "[print(n, m.version(n) if m.distribution else '?') "
-            "for n in names]",
+            "names=['momp','xarray','netcdf4','numpy','fsspec'];"
+            "\nfor n in names:\n"
+            " try: print(n, m.version(n))\n"
+            " except m.PackageNotFoundError: print(n, 'not installed')",
         ],
         capture_output=True,
         text=True,

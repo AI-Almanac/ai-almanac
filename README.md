@@ -25,7 +25,7 @@ That's it.
 | API | FastAPI, served on the same port as the UI |
 | Database | SQLite under `~/.local/share/ai-almanac/almanac.db` (auto-migrated) |
 | Storage | Filesystem under the same data directory |
-| Benchmark runner | Detached local supervisor, with ROMP / earth2studio in a pixi-managed env |
+| Benchmark runner | Detached local supervisor, with ROMP in a Pixi-managed environment |
 | Access model | Local, single-user application bound to the loopback interface |
 
 One Python package. One process. One port. One data directory.
@@ -56,9 +56,9 @@ source of truth — those channels are thin wrappers.
 
 ### Prerequisites for running real benchmarks
 
-The web UI works out of the box, but actual benchmark execution needs the
-heavy ML stack (torch + CUDA, earth2studio, ROMP, NetCDF/HDF5). That stack
-lives in a separate pixi-managed environment to keep the core install small:
+Actual benchmark execution needs ROMP and its scientific Python stack. Those
+dependencies live in a separate Pixi-managed environment to keep the core
+install small:
 
 ```bash
 # Install pixi (one-time): https://pixi.sh
@@ -100,7 +100,7 @@ $AI_ALMANAC_DATA_DIR/
 ├── almanac.db          ← SQLite (WAL mode)
 ├── uploads/            ← user-uploaded obs datasets
 ├── jobs/<job_id>/      ← run logs, NetCDF outputs, figures
-├── benchmark-env/      ← pixi env (torch + earth2studio + ROMP + NetCDF)
+├── benchmark-env/      ← Pixi environment (ROMP + scientific/geo dependencies)
 └── cache/              ← weight cache (HuggingFace), ARCO chunks
 ```
 

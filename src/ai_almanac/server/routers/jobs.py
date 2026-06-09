@@ -90,6 +90,8 @@ class JobOut(BaseModel):
     dataset_id: str
     status: str
     model_name: str
+    model_display_name: str
+    model_source_id: str | None = None
     model_dir: str | None = None
     obs_dir: str | None = None
     params: dict | None = None
@@ -162,13 +164,19 @@ def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
 
 def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
+    model_config = cfg.get("model_config") or {}
+    model_name = cfg.get("model_name", "")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
     region_metadata = _job_region_metadata(cfg)
     return JobOut(
         id=row["id"],
         dataset_id=row["dataset_id"],
         status=row["status"],
-        model_name=cfg.get("model_name", ""),
+        model_name=model_name,
+        model_display_name=cfg.get("model_display_name")
+        or model_config.get("display_name")
+        or model_name,
+        model_source_id=cfg.get("model_source_id") or model_config.get("id"),
         model_dir=cfg.get("model_dir"),
         obs_dir=cfg.get("obs_dir"),
         params=cfg.get("romp_params") or None,
@@ -351,9 +359,12 @@ async def create_job(body: JobCreate, user: CurrentUser):
     )
 
     config = {
-        "model_name": body.model_name,
+        "model_name": model_source["name"],
+        "model_display_name": model_source["name"],
+        "model_source_id": body.model_name,
         "obs_dir": obs_dir,
         "model_dir": model_cfg["model_dir"],
+        "model_config": model_cfg,
         "region_id": region_def["id"] if region_def else None,
         "region_name": region_def["display_name"] if region_def else None,
         "romp_region": region_def.get("romp_name", "custom")
@@ -392,7 +403,9 @@ async def list_jobs(user: CurrentUser):
             (
                 await conn.execute(
                     text(
-                        "SELECT * FROM jobs WHERE user_id = :uid ORDER BY created_at DESC"
+                        "SELECT * FROM jobs "
+                        "WHERE user_id = :uid AND run_id IS NOT NULL "
+                        "ORDER BY created_at DESC"
                     ),
                     {"uid": user["id"]},
                 )

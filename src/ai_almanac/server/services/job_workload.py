@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
 
 from ai_almanac.envs.manager import run as pixi_run
 from ai_almanac.paths import database_path
-from ai_almanac.server.services.runner import (
-    StubRunner,
-    _romp_config_override_lines,
-    _romp_entry_script,
-)
+from ai_almanac.server.services.romp import write_romp_config
+from ai_almanac.server.services.runner import InProcessRunner, StubRunner
 from ai_almanac.server.services.storage import get_storage
-from ai_almanac.settings import REMOTE_OBS_PROVIDERS, settings
+from ai_almanac.settings import settings
 
 
 def run_job_workload(job_id: str) -> None:
@@ -34,20 +32,34 @@ def run_job_workload(job_id: str) -> None:
 
 def _run_pixi(job_id: str, config: dict) -> None:
     storage = get_storage()
-    output_dir, figure_dir = storage.job_output_uri(job_id)
-    from ai_almanac.server.services.runner import InProcessRunner
-
-    env = InProcessRunner._job_env(job_id, config, output_dir, figure_dir)
-    import os
-
+    output_dir_raw, figure_dir_raw = storage.job_output_uri(job_id)
+    output_dir = Path(output_dir_raw)
+    figure_dir = Path(figure_dir_raw)
+    config_path = write_romp_config(job_id, config, output_dir, figure_dir)
+    env = InProcessRunner._job_env(job_id, config, output_dir_raw, figure_dir_raw)
     process_env = os.environ.copy()
     process_env.update(env)
-    dataset_config = config.get("dataset_config", {})
-    script = _romp_entry_script(
-        _romp_config_override_lines(process_env),
-        compute_e2s_metrics=dataset_config.get("provider") in REMOTE_OBS_PROVIDERS,
-    )
-    process = pixi_run(["bash", "-c", script], env=process_env)
+
+    print(f"==> ROMP config: {config_path}", flush=True)
+    print("==> Starting ROMP...", flush=True)
+    process = pixi_run(["momp-run", "-p", str(config_path)], env=process_env)
+    _stream_process(process)
+
+    if config.get("compute_e2s_metrics"):
+        print("==> Starting Earth2Studio metrics...", flush=True)
+        e2s_script = Path(__file__).with_name("e2s.py")
+        e2s_process = pixi_run(["python", str(e2s_script)], env=process_env)
+        try:
+            _stream_process(e2s_process)
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"WARNING: Earth2Studio metrics exited with code {exc.returncode}; "
+                "ROMP outputs are still available.",
+                flush=True,
+            )
+
+
+def _stream_process(process: subprocess.Popen) -> None:
     assert process.stdout is not None
     for line in process.stdout:
         print(line, end="", flush=True)

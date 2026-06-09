@@ -149,6 +149,34 @@ def test_job_region_metadata_maps_builtin_romp_region() -> None:
     }
 
 
+def test_job_output_uses_display_name_for_legacy_uuid_model() -> None:
+    from ai_almanac.server.routers.jobs import _row_to_job_out
+
+    job = _row_to_job_out(
+        {
+            "id": "job-1",
+            "user_id": "local",
+            "dataset_id": "obs-1",
+            "status": "complete",
+            "config_json": json.dumps(
+                {
+                    "model_name": "db956a33-e511-4ac7-8484-ac6b7fc3e877",
+                    "model_config": {
+                        "id": "db956a33-e511-4ac7-8484-ac6b7fc3e877",
+                        "display_name": "FuXi Ethiopia",
+                    },
+                }
+            ),
+            "created_at": "2026-06-08T20:00:00+00:00",
+        },
+        "local",
+    )
+
+    assert job.model_name == "db956a33-e511-4ac7-8484-ac6b7fc3e877"
+    assert job.model_display_name == "FuXi Ethiopia"
+    assert job.model_source_id == "db956a33-e511-4ac7-8484-ac6b7fc3e877"
+
+
 @pytest.mark.asyncio
 async def test_submit_benchmark_passes_region_id_to_job_creation(
     monkeypatch: pytest.MonkeyPatch,

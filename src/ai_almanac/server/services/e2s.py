@@ -1,9 +1,8 @@
 """Earth2Studio spatial metrics — RMSE, MAE, ACC, bias.
 
-This script runs as a subprocess inside the pixi-managed benchmark environment
-(see `ai_almanac.envs.manager`) because earth2studio + torch + CUDA are too
-heavy to live in the web server's own env. The `InProcessRunner` invokes it
-via `python -m ai_almanac.server.services.e2s` after ROMP completes.
+This optional script runs as a subprocess when Earth2Studio is installed in a
+custom benchmark environment. The base Pixi environment contains ROMP only;
+failure to run this optional phase does not fail the ROMP benchmark.
 
 Inputs (from ROMP_* env vars):
   ROMP_OBS_DIR / ROMP_MODEL_DIR — directories of yearly `.nc` files
