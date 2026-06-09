@@ -75,13 +75,18 @@ async def launch_job(job_id: str) -> None:
     await asyncio.to_thread(LocalProcessProvisioner().launch, job_id)
 
 
-async def request_cancel(job_id: str, user_id: str) -> dict | None:
+async def signal_cancel(job_id: str) -> dict | None:
+    """Flag an active job for cancellation (the supervisor polls this flag).
+
+    No authorization — callers (router, runner) own the access decision.
+    Returns the job row, or None if the job does not exist.
+    """
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user_id},
+                    text("SELECT * FROM jobs WHERE id = :id"),
+                    {"id": job_id},
                 )
             )
             .mappings()
@@ -100,6 +105,20 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
             {"id": job_id, "now": _now()},
         )
         return dict(result.mappings().fetchone())
+
+
+async def request_cancel(job_id: str, user_id: str) -> dict | None:
+    """Cancel a job the user owns. Returns None if it is not theirs."""
+    async with get_db() as conn:
+        owned = (
+            await conn.execute(
+                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user_id},
+            )
+        ).fetchone()
+    if not owned:
+        return None
+    return await signal_cancel(job_id)
 
 
 async def reconcile_jobs() -> None:
