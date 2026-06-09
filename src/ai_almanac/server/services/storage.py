@@ -87,6 +87,10 @@ class LocalStorage:
             return str(key)
         return str((self._upload_dir / storage_key).parent)
 
+    def job_dir(self, job_id: str) -> Path:
+        """Root directory holding a job's workspace (output/, figure/, run.log)."""
+        return self._outputs_dir / job_id
+
     def job_output_uri(self, job_id: str) -> tuple[str, str]:
         output = self._outputs_dir / job_id / "output"
         figure = self._outputs_dir / job_id / "figure"

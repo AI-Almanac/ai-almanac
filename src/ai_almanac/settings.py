@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     admin_subjects: str = ""
     admin_emails: str = ""
 
+    # Allow-list of root directories that mounted data sources may resolve
+    # within (comma-separated). Empty = unrestricted (personal installs, where
+    # the operator owns the box). In shared mode, admins set this so a
+    # registered source path cannot escape the configured dataset mounts.
+    dataset_mount_roots: str = ""
+
     # Concurrency — gates simultaneous benchmark jobs so the GPU isn't oversubscribed.
     max_local_jobs: int = 1
 
