@@ -160,9 +160,23 @@ async def log_requests(request: Request, call_next):
 # CORS is only relevant when the SvelteKit Vite dev server (on a different port)
 # is talking to this API in dev. In production the SPA is served from the same
 # origin and CORS doesn't apply.
+#
+# `frontend_url` may be a comma-separated list of allowed origins. Any
+# loopback origin (localhost / 127.0.0.1, any port) is also allowed so the dev
+# server works whether you open it as localhost or 127.0.0.1 and regardless of
+# the port Vite lands on. `cors_allow_all` opens it to any origin (dev only;
+# credentials are disabled, as the spec requires with a wildcard origin).
+_LOOPBACK_ORIGIN_RE = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+def _cors_origins() -> list[str]:
+    return [origin.strip() for origin in settings.frontend_url.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.cors_allow_all else [settings.frontend_url],
+    allow_origins=["*"] if settings.cors_allow_all else _cors_origins(),
+    allow_origin_regex=None if settings.cors_allow_all else _LOOPBACK_ORIGIN_RE,
     allow_credentials=not settings.cors_allow_all,
     allow_methods=["*"],
     allow_headers=["*"],

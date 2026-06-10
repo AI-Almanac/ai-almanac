@@ -272,3 +272,30 @@ def test_ws_allows_owner() -> None:
         ) as ws:
             msg = ws.receive_json()
             assert msg["type"] in ("status", "log", "done")
+
+
+# ---------------------------------------------------------------------------
+# CORS — local dev cross-origin (Vite dev server → API)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",  # opened via 127.0.0.1 instead of localhost
+        "http://localhost:5174",  # Vite fell back to another port
+    ],
+)
+@pytest.mark.asyncio
+async def test_cors_allows_loopback_origins(
+    client: httpx.AsyncClient, origin: str
+) -> None:
+    resp = await client.get("/health", headers={"Origin": origin})
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
+@pytest.mark.asyncio
+async def test_cors_rejects_foreign_origin(client: httpx.AsyncClient) -> None:
+    resp = await client.get("/health", headers={"Origin": "https://evil.example"})
+    assert resp.headers.get("access-control-allow-origin") is None
