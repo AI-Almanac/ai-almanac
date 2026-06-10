@@ -25,36 +25,56 @@ branch_labels = None
 depends_on = None
 
 
+def _column_names(table_name: str) -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _index_names(table_name: str) -> set[str]:
+    inspector = sa.inspect(op.get_bind())
+    return {index["name"] for index in inspector.get_indexes(table_name)}
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    if column.name not in _column_names(table_name):
+        op.add_column(table_name, column)
+
+
+def _create_index_if_missing(index_name: str, table_name: str, columns: list[str]) -> None:
+    if index_name not in _index_names(table_name):
+        op.create_index(index_name, table_name, columns)
+
+
 def upgrade() -> None:
     # data_sources: ownership + visibility + how the source is backed.
-    op.add_column("data_sources", sa.Column("owner_id", sa.Text(), nullable=True))
-    op.add_column(
+    _add_column_if_missing("data_sources", sa.Column("owner_id", sa.Text(), nullable=True))
+    _add_column_if_missing(
         "data_sources",
         sa.Column(
             "visibility", sa.Text(), nullable=False, server_default="shared"
         ),  # private | shared
     )
-    op.add_column(
+    _add_column_if_missing(
         "data_sources",
         sa.Column(
             "origin", sa.Text(), nullable=False, server_default="mounted"
         ),  # mounted | upload
     )
-    op.create_index("idx_data_sources_owner", "data_sources", ["owner_id"])
+    _create_index_if_missing("idx_data_sources_owner", "data_sources", ["owner_id"])
 
     # jobs: visibility + the runner that produced them and its opaque handle.
-    op.add_column(
+    _add_column_if_missing(
         "jobs",
         sa.Column(
             "visibility", sa.Text(), nullable=False, server_default="private"
         ),  # private | shared
     )
-    op.add_column("jobs", sa.Column("runner", sa.Text(), nullable=True))
-    op.add_column("jobs", sa.Column("runner_handle", sa.JSON(), nullable=True))
-    op.create_index("idx_jobs_visibility", "jobs", ["visibility"])
+    _add_column_if_missing("jobs", sa.Column("runner", sa.Text(), nullable=True))
+    _add_column_if_missing("jobs", sa.Column("runner_handle", sa.JSON(), nullable=True))
+    _create_index_if_missing("idx_jobs_visibility", "jobs", ["visibility"])
 
     # users: human-readable display name parsed from the identity headers.
-    op.add_column("users", sa.Column("display_name", sa.Text(), nullable=True))
+    _add_column_if_missing("users", sa.Column("display_name", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
