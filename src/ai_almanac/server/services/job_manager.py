@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import sqlite3
 import subprocess
 import sys
 import time
@@ -15,9 +14,9 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from ai_almanac.paths import database_path
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services.storage import get_storage
+from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.settings import settings
 
 ACTIVE_STATUSES = ("queued", "starting", "running", "canceling")
@@ -177,126 +176,163 @@ async def reconcile_jobs() -> None:
             )
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(database_path(), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
-
-
-def _register_supervisor(
-    conn: sqlite3.Connection, job_id: str, worker_id: str
-) -> bool:
-    conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute(
-        "SELECT status, worker_id, worker_pid, heartbeat_at FROM jobs WHERE id = ?",
-        (job_id,),
-    ).fetchone()
-    if not row or row["status"] not in ("queued", "canceling"):
-        conn.rollback()
-        return False
-    if row["status"] == "canceling":
-        conn.execute(
-            "UPDATE jobs SET status = 'canceled', completed_at = ? WHERE id = ?",
-            (_now(), job_id),
+def _register_supervisor(engine, job_id: str, worker_id: str) -> bool:
+    with engine.begin() as conn:
+        lock_capacity(conn)
+        row = (
+            conn.execute(
+                text(
+                    "SELECT status, worker_id, worker_pid, heartbeat_at "
+                    "FROM jobs WHERE id = :id"
+                ),
+                {"id": job_id},
+            )
+            .mappings()
+            .fetchone()
         )
-        conn.commit()
-        return False
-    if (
-        row["worker_id"]
-        and row["worker_id"] != worker_id
-        and _process_exists(row["worker_pid"])
-        and _heartbeat_is_fresh(row["heartbeat_at"])
-    ):
-        conn.rollback()
-        return False
-    conn.execute(
-        "UPDATE jobs SET worker_id = ?, worker_pid = ?, heartbeat_at = ? WHERE id = ?",
-        (worker_id, os.getpid(), _now(), job_id),
-    )
-    conn.commit()
-    return True
-
-
-def _claim_capacity(conn: sqlite3.Connection, job_id: str, worker_id: str) -> bool:
-    conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute(
-        "SELECT status, worker_id FROM jobs WHERE id = ?", (job_id,)
-    ).fetchone()
-    if not row or row["status"] not in ("queued", "canceling"):
-        conn.rollback()
-        return False
-    if row["status"] == "canceling":
+        if not row or row["status"] not in ("queued", "canceling"):
+            return False
+        if row["status"] == "canceling":
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'canceled', completed_at = :now "
+                    "WHERE id = :id"
+                ),
+                {"now": _now(), "id": job_id},
+            )
+            return False
+        if (
+            row["worker_id"]
+            and row["worker_id"] != worker_id
+            and _process_exists(row["worker_pid"])
+            and _heartbeat_is_fresh(row["heartbeat_at"])
+        ):
+            return False
         conn.execute(
-            "UPDATE jobs SET status = 'canceled', completed_at = ? WHERE id = ?",
-            (_now(), job_id),
+            text(
+                "UPDATE jobs SET worker_id = :wid, worker_pid = :pid, "
+                "heartbeat_at = :now WHERE id = :id"
+            ),
+            {"wid": worker_id, "pid": os.getpid(), "now": _now(), "id": job_id},
         )
-        conn.commit()
-        return False
-    if row["worker_id"] != worker_id:
-        conn.rollback()
-        return False
-    active = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE status IN ('starting', 'running') AND id != ?",
-        (job_id,),
-    ).fetchone()[0]
-    if active >= settings.max_local_jobs:
-        conn.rollback()
-        return False
-    now = _now()
-    conn.execute(
-        "UPDATE jobs SET status = 'starting', worker_id = ?, worker_pid = ?, "
-        "heartbeat_at = ?, started_at = COALESCE(started_at, ?) WHERE id = ?",
-        (worker_id, os.getpid(), now, now, job_id),
-    )
-    conn.commit()
-    return True
+        return True
+
+
+def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
+    with engine.begin() as conn:
+        lock_capacity(conn)
+        row = (
+            conn.execute(
+                text("SELECT status, worker_id FROM jobs WHERE id = :id"),
+                {"id": job_id},
+            )
+            .mappings()
+            .fetchone()
+        )
+        if not row or row["status"] not in ("queued", "canceling"):
+            return False
+        if row["status"] == "canceling":
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'canceled', completed_at = :now "
+                    "WHERE id = :id"
+                ),
+                {"now": _now(), "id": job_id},
+            )
+            return False
+        if row["worker_id"] != worker_id:
+            return False
+        active = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM jobs "
+                "WHERE status IN ('starting', 'running') AND id != :id"
+            ),
+            {"id": job_id},
+        ).scalar()
+        if active >= settings.max_local_jobs:
+            return False
+        now = _now()
+        conn.execute(
+            text(
+                "UPDATE jobs SET status = 'starting', worker_id = :wid, "
+                "worker_pid = :pid, heartbeat_at = :now, "
+                "started_at = COALESCE(started_at, :now) WHERE id = :id"
+            ),
+            {"wid": worker_id, "pid": os.getpid(), "now": now, "id": job_id},
+        )
+        return True
+
+
+def _heartbeat(engine, job_id: str, worker_id: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE jobs SET heartbeat_at = :now "
+                "WHERE id = :id AND worker_id = :wid"
+            ),
+            {"now": _now(), "id": job_id, "wid": worker_id},
+        )
+
+
+def _cancel_requested(engine, job_id: str) -> bool:
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT cancel_requested_at FROM jobs WHERE id = :id"),
+            {"id": job_id},
+        ).fetchone()
+    return bool(row and row[0])
 
 
 def execute_job(job_id: str) -> None:
     """Supervisor entry point. Runs independently from the API server."""
     worker_id = str(uuid.uuid4())
-    conn = _connect()
+    engine = sync_engine()
     try:
-        if not _register_supervisor(conn, job_id, worker_id):
+        if not _register_supervisor(engine, job_id, worker_id):
             return
-        while not _claim_capacity(conn, job_id, worker_id):
-            row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
-            if not row or row["status"] != "queued":
-                return
-            conn.execute(
-                "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ?",
-                (_now(), job_id, worker_id),
-            )
-            conn.commit()
+        while not _claim_capacity(engine, job_id, worker_id):
+            with engine.begin() as conn:
+                row = conn.execute(
+                    text("SELECT status FROM jobs WHERE id = :id"), {"id": job_id}
+                ).fetchone()
+                if not row or row[0] != "queued":
+                    return
+                conn.execute(
+                    text(
+                        "UPDATE jobs SET heartbeat_at = :now "
+                        "WHERE id = :id AND worker_id = :wid"
+                    ),
+                    {"now": _now(), "id": job_id, "wid": worker_id},
+                )
             time.sleep(1)
 
         log_path = get_storage().log_path(job_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         workload = _start_workload(job_id, log_path)
         pgid = workload.pid
-        conn.execute(
-            "UPDATE jobs SET status = 'running', workload_pid = ?, process_group_id = ?, "
-            "heartbeat_at = ? WHERE id = ? AND worker_id = ?",
-            (workload.pid, pgid, _now(), job_id, worker_id),
-        )
-        conn.commit()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'running', workload_pid = :wp, "
+                    "process_group_id = :pg, heartbeat_at = :now "
+                    "WHERE id = :id AND worker_id = :wid"
+                ),
+                {
+                    "wp": workload.pid,
+                    "pg": pgid,
+                    "now": _now(),
+                    "id": job_id,
+                    "wid": worker_id,
+                },
+            )
 
         canceled = False
         while workload.poll() is None:
-            row = conn.execute(
-                "SELECT cancel_requested_at FROM jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-            if row and row["cancel_requested_at"]:
+            if _cancel_requested(engine, job_id):
                 canceled = True
                 _terminate_process_group(pgid, workload.pid)
                 break
-            conn.execute(
-                "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ?",
-                (_now(), job_id, worker_id),
-            )
-            conn.commit()
+            _heartbeat(engine, job_id, worker_id)
             time.sleep(1)
 
         try:
@@ -312,21 +348,36 @@ def execute_job(job_id: str) -> None:
         else:
             status = "failed"
             error = f"Job workload exited with code {exit_code}; see {log_path}."
-        conn.execute(
-            "UPDATE jobs SET status = ?, completed_at = ?, heartbeat_at = ?, "
-            "exit_code = ?, error = ? WHERE id = ? AND worker_id = ?",
-            (status, _now(), _now(), exit_code, error, job_id, worker_id),
-        )
-        conn.commit()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = :status, completed_at = :now, "
+                    "heartbeat_at = :now, exit_code = :ec, error = :error "
+                    "WHERE id = :id AND worker_id = :wid"
+                ),
+                {
+                    "status": status,
+                    "now": _now(),
+                    "ec": exit_code,
+                    "error": error,
+                    "id": job_id,
+                    "wid": worker_id,
+                },
+            )
     except Exception as exc:
-        conn.execute(
-            "UPDATE jobs SET status = 'failed', completed_at = ?, error = ? WHERE id = ?",
-            (_now(), f"{type(exc).__name__}: {exc}", job_id),
-        )
-        conn.commit()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'failed', completed_at = :now, "
+                    "error = :error WHERE id = :id"
+                ),
+                {
+                    "now": _now(),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "id": job_id,
+                },
+            )
         raise
-    finally:
-        conn.close()
 
 
 def _start_workload(job_id: str, log_path: Path) -> subprocess.Popen:
