@@ -335,6 +335,10 @@ async def list_models(region: str | None = None):
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, user: CurrentUser):
+    return await create_job_for_user(body, user.id)
+
+
+async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if observation_source:
         if observation_source["kind"] != "obs":
@@ -353,7 +357,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
                         text(
                             "SELECT * FROM datasets WHERE id = :id AND user_id = :uid"
                         ),
-                        {"id": body.dataset_id, "uid": user.id},
+                        {"id": body.dataset_id, "uid": user_id},
                     )
                 )
                 .mappings()
@@ -463,7 +467,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
             ),
             {
                 "id": job_id,
-                "uid": user.id,
+                "uid": user_id,
                 "did": body.dataset_id,
                 "cfg": json.dumps(config),
                 "run_id": body.run_id,
@@ -487,7 +491,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
             text("UPDATE jobs SET runner = :r, runner_handle = :h WHERE id = :id"),
             {"r": handle.runner, "h": json.dumps(handle.as_dict()), "id": job_id},
         )
-    return _row_to_job_out(row, user.id)
+    return _row_to_job_out(row, user_id)
 
 
 @router.get("", response_model=list[JobOut])

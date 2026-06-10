@@ -555,7 +555,7 @@ async def _exec_propose_benchmark_submit(
 async def _exec_submit_benchmark(
     args: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
-    from ..routers.jobs import JobCreate, RompParams, create_job
+    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
 
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
     validation = _validation_for_config(spec)
@@ -579,14 +579,14 @@ async def _exec_submit_benchmark(
     }
     for model in models:
         params = {**shared_params, **_clamp_model_params(model, spec)}
-        job = await create_job(
+        job = await create_job_for_user(
             JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
                 params=RompParams(**params),
                 run_id=run_id,
             ),
-            {"id": user_id},
+            user_id,
         )
         jobs.append(job.model_dump(mode="json"))
     submitted = spec.model_copy(update={"status": "running"})
@@ -775,7 +775,7 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
 async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> dict:
     from ai_almanac.server.db import get_db
 
-    from ..routers.jobs import JobCreate, RompParams, create_job
+    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
 
     job_id = args["job_id"]
     params_override = args.get("params_override")
@@ -808,7 +808,7 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
     params = {**(cfg.get("romp_params") or {}), **params_override}
-    rerun = await create_job(
+    rerun = await create_job_for_user(
         JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
@@ -817,7 +817,7 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
             params=RompParams(**params),
             run_id=row["run_id"],
         ),
-        {"id": user_id},
+        user_id,
     )
     return {
         "source_job_id": job_id,
