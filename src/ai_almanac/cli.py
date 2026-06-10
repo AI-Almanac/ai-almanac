@@ -21,6 +21,20 @@ app = typer.Typer(
     help="Local-first benchmarking platform for AI weather and climate models.",
 )
 
+db_app = typer.Typer(help="Manage the application database.")
+app.add_typer(db_app, name="db")
+
+
+@db_app.command("upgrade")
+def db_upgrade() -> None:
+    """Upgrade the configured database to the latest schema."""
+    from ai_almanac.server.app import _apply_migrations
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    _apply_migrations()
+    typer.echo("database upgraded")
+
 
 @app.command("execute-job", hidden=True)
 def execute_job_command(job_id: str) -> None:
@@ -50,7 +64,10 @@ def serve(
     reload: Annotated[bool, typer.Option(help="Enable auto-reload (dev).")] = False,
 ) -> None:
     """Boot the ai-almanac web server (FastAPI + bundled UI)."""
-    if bind not in ("127.0.0.1", "localhost", "::1"):
+    from ai_almanac.settings import reload_settings, settings
+
+    reload_settings()
+    if settings.deployment_mode != "shared" and bind not in ("127.0.0.1", "localhost", "::1"):
         typer.secho(
             f"refusing to bind to {bind!r}.\n"
             "ai-almanac currently supports local, single-user operation only.",

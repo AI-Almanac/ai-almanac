@@ -1,0 +1,21 @@
+{$PUBLIC_HOST} {
+	route {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username X-Auth-Request-Groups
+		}
+
+		request_header -X-Forwarded-User
+		request_header -X-Forwarded-Email
+		request_header -X-Forwarded-Preferred-Username
+		request_header -X-Forwarded-Groups
+		request_header -X-Forwarded-Issuer
+		request_header X-Forwarded-User {http.request.header.X-Auth-Request-User}
+		request_header X-Forwarded-Email {http.request.header.X-Auth-Request-Email}
+		request_header X-Forwarded-Preferred-Username {http.request.header.X-Auth-Request-Preferred-Username}
+		request_header X-Forwarded-Groups {http.request.header.X-Auth-Request-Groups}
+		request_header X-Forwarded-Issuer {$OAUTH2_PROXY_OIDC_ISSUER_URL}
+
+		reverse_proxy app:8765
+	}
+}

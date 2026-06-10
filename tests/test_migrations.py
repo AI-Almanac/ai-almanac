@@ -41,4 +41,18 @@ def test_partial_ownership_migration_resumes(tmp_path: Path, monkeypatch) -> Non
         "artifacts_published_at",
     } <= {column["name"] for column in inspector.get_columns("jobs")}
     assert "display_name" in {column["name"] for column in inspector.get_columns("users")}
+    assert {
+        "issuer",
+        "subject",
+        "status",
+        "groups",
+        "last_login_at",
+    } <= {column["name"] for column in inspector.get_columns("users")}
+    assert {
+        "upload_sessions",
+        "llm_providers",
+        "user_llm_profiles",
+        "audit_events",
+        "usage_events",
+    } <= set(inspector.get_table_names())
     engine.dispose()

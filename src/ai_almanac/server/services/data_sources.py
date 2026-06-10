@@ -238,16 +238,26 @@ async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
     return await asyncio.to_thread(_inspect_local_source, kind, path, metadata)
 
 
-async def list_sources(kind: Kind | None = None) -> list[dict]:
+async def list_sources(
+    kind: Kind | None = None,
+    *,
+    user_id: str | None = None,
+    is_admin: bool = False,
+) -> list[dict]:
     """Return all data sources, optionally filtered by kind."""
     async with get_db() as conn:
-        if kind is None:
-            result = await conn.execute(text("SELECT * FROM data_sources ORDER BY kind, name"))
-        else:
-            result = await conn.execute(
-                text("SELECT * FROM data_sources WHERE kind = :kind ORDER BY name"),
-                {"kind": kind},
-            )
+        clauses: list[str] = []
+        params: dict[str, str] = {}
+        if kind is not None:
+            clauses.append("kind = :kind")
+            params["kind"] = kind
+        if user_id is not None and not is_admin:
+            clauses.append("(owner_id = :uid OR visibility = 'shared')")
+            params["uid"] = user_id
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        result = await conn.execute(
+            text(f"SELECT * FROM data_sources{where} ORDER BY kind, name"), params
+        )
         return [_row_dict(row) for row in result.mappings().fetchall()]
 
 

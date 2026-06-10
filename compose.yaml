@@ -1,0 +1,98 @@
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - internal
+    depends_on:
+      app:
+        condition: service_healthy
+      oauth2-proxy:
+        condition: service_started
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    restart: unless-stopped
+    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    command:
+      - --provider=oidc
+      - --http-address=0.0.0.0:4180
+      - --upstream=static://202
+      - --reverse-proxy=true
+      - --set-xauthrequest=true
+      - --pass-access-token=false
+      - --pass-authorization-header=false
+      - --email-domain=*
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: almanac
+      POSTGRES_USER: almanac
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U almanac -d almanac"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
+  migrate:
+    build: .
+    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    command: ["ai-almanac", "db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - persistent_data:/data
+      - ./datasets:/datasets:ro
+    networks:
+      - internal
+    restart: "no"
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    command: ["ai-almanac", "serve", "--bind", "0.0.0.0", "--port", "8765", "--no-open"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - persistent_data:/data
+      - ./datasets:/datasets:ro
+    gpus: all
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - internal
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  persistent_data:

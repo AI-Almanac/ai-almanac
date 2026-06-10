@@ -26,7 +26,9 @@ dependencies = [
     "pydantic-ai>=1.89.1",
     "openai>=2.32.0",
     "httpx>=0.28.1",
-    "matplotlib>=3.10.9", "psycopg[binary]>=3.3.4,<4",
+    "matplotlib>=3.10.9",
+    "psycopg[binary]>=3.3.4,<4",
+    "cryptography>=48.0.1,<49",
 ]
 
 [project.scripts]
