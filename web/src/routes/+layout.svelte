@@ -3,8 +3,11 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import Nav from '$lib/Nav.svelte';
 	import Footer from '$lib/Footer.svelte';
+	import { account } from '$lib/account.svelte';
 
 	let { children } = $props();
+
+	account.load();
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
