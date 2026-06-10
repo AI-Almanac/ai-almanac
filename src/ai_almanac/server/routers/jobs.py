@@ -20,10 +20,11 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
-from ai_almanac.server.db import get_db
+from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
+from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
@@ -34,6 +35,7 @@ from ai_almanac.settings import (
     get_model_registry,
     get_region,
     get_regions,
+    settings,
 )
 
 from ..services.metrics import (
@@ -341,6 +343,11 @@ async def create_job(body: JobCreate, user: CurrentUser):
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if observation_source:
+        if (
+            observation_source.get("owner_id") not in (None, user_id)
+            and observation_source.get("visibility") != "shared"
+        ):
+            raise HTTPException(status_code=404, detail="Dataset not found")
         if observation_source["kind"] != "obs":
             raise HTTPException(status_code=400, detail="Selected source is not observations")
         if observation_source.get("status") != "ready":
@@ -460,10 +467,32 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     }
 
     async with get_db() as conn:
+        lock_clause = await lock_for_update(conn)
+        await conn.execute(
+            text(f"SELECT id FROM users WHERE id = :uid{lock_clause}"),
+            {"uid": user_id},
+        )
+        active_count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM jobs WHERE user_id = :uid "
+                    "AND status IN ('queued', 'starting', 'running', 'canceling')"
+                ),
+                {"uid": user_id},
+            )
+        ).scalar_one()
+        if active_count >= settings.max_active_jobs_per_user:
+            raise HTTPException(status_code=429, detail="active job quota exceeded")
+        runner_request = {
+            "job_id": job_id,
+            "resources": {"gpus": 1},
+            "timeout_seconds": None,
+        }
         result = await conn.execute(
             text(
-                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at) "
-                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now) RETURNING *"
+                "INSERT INTO jobs "
+                "(id, user_id, dataset_id, status, config_json, run_id, created_at, runner_request) "
+                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now, :runner_request) RETURNING *"
             ),
             {
                 "id": job_id,
@@ -472,9 +501,26 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
                 "cfg": json.dumps(config),
                 "run_id": body.run_id,
                 "now": now,
+                "runner_request": json.dumps(runner_request),
             },
         )
         row = dict(result.mappings().fetchone())
+        await audit(
+            conn,
+            "job.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            metadata={"dataset_id": body.dataset_id, "model_source_id": body.model_name},
+        )
+        await usage(
+            conn,
+            "job.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            quantity=1,
+        )
 
     storage = get_storage()
     workspace = storage.job_dir(job_id)
@@ -684,7 +730,7 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
     local_path = storage.result_file_path(job_id, kind, filename)
 
     if local_path is not None:
-        if not local_path.exists():
+        if not local_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         from fastapi.responses import FileResponse
 
@@ -804,6 +850,13 @@ async def delete_job(job_id: str, job: ModifiableJob):
             text("DELETE FROM job_artifacts WHERE job_id = :id"), {"id": job_id}
         )
         await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
+        await audit(
+            conn,
+            "job.deleted",
+            user_id=job["user_id"],
+            resource_type="job",
+            resource_id=job_id,
+        )
 
     # Remove the workspace and its files; datasets are untouched.
     await asyncio.to_thread(get_artifact_store().delete_job, job_id)
@@ -822,6 +875,13 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
             )
             .mappings()
             .fetchone()
+        )
+        await audit(
+            conn,
+            f"job.{visibility}",
+            user_id=user.id,
+            resource_type="job",
+            resource_id=job["id"],
         )
     return _row_to_job_out(dict(row), user.id)
 

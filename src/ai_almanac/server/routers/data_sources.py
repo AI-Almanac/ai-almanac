@@ -91,9 +91,9 @@ def _parse_region(region: str | None) -> str:
 
 @router.get("", response_model=list[DataSourceOut])
 async def list_data_sources(
-    _user: CurrentUser, kind: Literal["obs", "model"] | None = None
+    user: CurrentUser, kind: Literal["obs", "model"] | None = None
 ):
-    rows = await svc.list_sources(kind=kind)
+    rows = await svc.list_sources(kind=kind, user_id=user.id, is_admin=user.is_admin)
     return [_to_out(r) for r in rows]
 
 

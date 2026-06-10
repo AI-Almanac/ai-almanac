@@ -21,6 +21,7 @@ from ai_almanac.server.auth import AdminUser
 from ai_almanac.settings import (
     RESTART_REQUIRED_FIELDS,
     SENSITIVE_FIELDS,
+    SHARED_ENV_ONLY_FIELDS,
     reload_settings,
     settings,
     write_config_yaml,
@@ -167,6 +168,11 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
     for key, value in body.values.items():
         if key not in settings.model_fields:
             raise HTTPException(status_code=400, detail=f"unknown setting: {key}")
+        if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{key} is environment-only in shared deployments",
+            )
         # Treat masked-value submissions as no-ops so the UI can round-trip
         # the whole GET payload without accidentally writing "***" to a secret.
         if key in SENSITIVE_FIELDS and value == _MASK:

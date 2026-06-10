@@ -39,8 +39,10 @@ class AuthenticatedUser:
 
     id: str  # internal users.id (uuid)
     subject: str  # stable OIDC `sub` / "local"
+    issuer: str
     email: str | None
     display_name: str | None
+    groups: tuple[str, ...]
     role: Role
 
     @property
@@ -56,8 +58,10 @@ def _split_csv(value: str) -> set[str]:
     return {item.strip() for item in value.split(",") if item.strip()}
 
 
-def _is_admin(subject: str, email: str | None) -> bool:
+def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
     if subject in _split_csv(settings.admin_subjects):
+        return True
+    if groups & _split_csv(settings.admin_groups):
         return True
     return bool(
         email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)}
@@ -68,25 +72,55 @@ async def _resolve_identity(headers: Headers) -> AuthenticatedUser:
     raw_subject = (headers.get(settings.submitted_by_header) or "").strip()
     email = (headers.get(settings.identity_email_header) or "").strip() or None
     display_name = (headers.get(settings.identity_name_header) or "").strip() or None
+    issuer = (headers.get(settings.identity_issuer_header) or "").strip()
+    groups = _split_csv(headers.get(settings.identity_groups_header) or "")
 
     if settings.auth_mode == "proxy":
         if not raw_subject:
             raise _MissingIdentity
+        if not issuer:
+            if settings.deployment_mode == "shared":
+                raise _MissingIdentity
+            issuer = "legacy-proxy"
+        allowed_groups = _split_csv(settings.allowed_groups)
+        if allowed_groups and not groups & allowed_groups:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your identity is not admitted to this deployment",
+            )
         subject = raw_subject
-        role: Role = "admin" if _is_admin(subject, email) else "user"
+        external_id = (
+            f"{issuer}\x1f{subject}"
+            if settings.deployment_mode == "shared"
+            or headers.get(settings.identity_issuer_header)
+            else subject
+        )
+        role: Role = "admin" if _is_admin(subject, email, groups) else "user"
     else:
         # Personal install: header identity is optional (attribution only); the
         # operator owns the machine, so they are always admin.
         subject = raw_subject or _LOCAL_SUBJECT
+        issuer = "personal"
+        external_id = subject
         role = "admin"
 
     async with get_db() as conn:
-        row = await get_or_create_user(conn, external_id=subject, email=email)
+        row = await get_or_create_user(
+            conn,
+            external_id=external_id,
+            issuer=issuer,
+            subject=subject,
+            email=email,
+            display_name=display_name,
+            groups=sorted(groups),
+        )
     return AuthenticatedUser(
         id=row["id"],
         subject=subject,
+        issuer=issuer,
         email=email or row.get("email"),
         display_name=display_name,
+        groups=tuple(sorted(groups)),
         role=role,
     )
 
@@ -123,6 +157,12 @@ async def authenticate_websocket(websocket: WebSocket) -> AuthenticatedUser | No
     None when identity is required but absent. The caller must stop on None.
     """
     try:
+        if settings.deployment_mode == "shared":
+            origin = websocket.headers.get("origin")
+            allowed = _split_csv(settings.frontend_url)
+            if not origin or origin not in allowed:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return None
         return await _resolve_identity(websocket.headers)
     except _MissingIdentity:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -145,11 +185,23 @@ def enforce_deployment_invariants() -> None:
             "shared deployment requires PostgreSQL; set DATABASE_URL "
             "(SQLite is not allowed in shared mode)"
         )
-    if not _split_csv(settings.admin_subjects) and not _split_csv(settings.admin_emails):
+    if not any(
+        (
+            _split_csv(settings.admin_subjects),
+            _split_csv(settings.admin_emails),
+            _split_csv(settings.admin_groups),
+        )
+    ):
         raise RuntimeError(
             "shared deployment requires at least one admin; "
-            "set ADMIN_SUBJECTS or ADMIN_EMAILS"
+            "set ADMIN_SUBJECTS, ADMIN_EMAILS, or ADMIN_GROUPS"
         )
+    if not _split_csv(settings.allowed_groups):
+        raise RuntimeError("shared deployment requires ALLOWED_GROUPS")
+    if not settings.credential_encryption_key:
+        raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
+    if settings.chat_figure_signing_secret == "dev-chat-figure-secret":
+        raise RuntimeError("shared deployment rejects the development signing secret")
     for field in ("enable_fs_browser", "enable_run_code"):
         if getattr(settings, field):
             logger.warning("shared deployment: forcing %s=false", field)

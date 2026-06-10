@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     # a request whose identity matches either list is granted the `admin` role.
     admin_subjects: str = ""
     admin_emails: str = ""
+    allowed_groups: str = ""
+    admin_groups: str = ""
 
     # Allow-list of root directories that mounted data sources may resolve
     # within (comma-separated). Empty = unrestricted (personal installs, where
@@ -139,6 +141,9 @@ class Settings(BaseSettings):
     # read from `submitted_by_header` above.
     identity_email_header: str = "X-Forwarded-Email"
     identity_name_header: str = "X-Forwarded-Preferred-Username"
+    identity_issuer_header: str = "X-Forwarded-Issuer"
+    identity_groups_header: str = "X-Forwarded-Groups"
+    logout_url: str = "/oauth2/sign_out"
 
     # CORS — only relevant for the frontend dev server proxying to the API.
     frontend_url: str = "http://localhost:5173"
@@ -163,6 +168,16 @@ class Settings(BaseSettings):
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
+    credential_encryption_key: str = ""
+
+    # Shared-host quotas and upload policy.
+    max_active_jobs_per_user: int = 2
+    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    max_stored_upload_bytes_per_user: int = 10 * 1024 * 1024 * 1024
+    max_concurrent_llm_requests_per_user: int = 2
+    max_llm_requests_per_minute: int = 30
+    upload_grant_ttl_seconds: int = 900
+    allowed_upload_extensions: str = ".nc,.zip,.tar,.gz,.tgz"
 
     # Model directories and demo dataset paths are resolved dynamically from
     # env vars derived from models.yaml / datasets.yaml.
@@ -211,11 +226,16 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "auth_mode",
         "admin_subjects",
         "admin_emails",
+        "allowed_groups",
+        "admin_groups",
         "frontend_url",
         "cors_allow_all",
         "submitted_by_header",
         "identity_email_header",
         "identity_name_header",
+        "identity_issuer_header",
+        "identity_groups_header",
+        "credential_encryption_key",
     }
 )
 
@@ -225,6 +245,26 @@ SENSITIVE_FIELDS: frozenset[str] = frozenset(
     {
         "cdsapi_key",
         "llm_api_key",
+        "chat_figure_signing_secret",
+        "credential_encryption_key",
+    }
+)
+
+SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "database_url",
+        "deployment_mode",
+        "auth_mode",
+        "admin_subjects",
+        "admin_emails",
+        "allowed_groups",
+        "admin_groups",
+        "submitted_by_header",
+        "identity_email_header",
+        "identity_name_header",
+        "identity_issuer_header",
+        "identity_groups_header",
+        "credential_encryption_key",
         "chat_figure_signing_secret",
     }
 )
@@ -251,6 +291,8 @@ def _apply_yaml_overrides() -> None:
             continue
         if key.upper() in os.environ:
             continue  # env wins
+        if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
+            continue
         try:
             setattr(settings, key, value)
         except Exception:

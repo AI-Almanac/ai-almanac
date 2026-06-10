@@ -79,17 +79,17 @@ class LocalStorage:
         return base_url.rstrip("/") + f"/upload/{storage_key}"
 
     def confirm_upload(self, storage_key: str) -> bool:
-        return (self._upload_dir / storage_key).exists()
+        return self._contained(self._upload_dir, storage_key).exists()
 
     def resolve_obs_path(self, storage_key: str) -> str:
         key = Path(storage_key)
         if key.is_absolute():
             return str(key)
-        return str((self._upload_dir / storage_key).parent)
+        return str(self._contained(self._upload_dir, storage_key).parent)
 
     def job_dir(self, job_id: str) -> Path:
         """Root directory holding a job's workspace (output/, figure/, run.log)."""
-        return self._outputs_dir / job_id
+        return self._contained(self._outputs_dir, job_id)
 
     def job_output_uri(self, job_id: str) -> tuple[str, str]:
         output = self._outputs_dir / job_id / "output"
@@ -102,7 +102,16 @@ class LocalStorage:
         return f"/jobs/{job_id}/results/{kind}/{filename}"
 
     def result_file_path(self, job_id: str, kind: str, filename: str) -> Path | None:
-        return self._outputs_dir / job_id / kind / filename
+        if kind not in {"output", "figure"} or Path(filename).name != filename:
+            return None
+        return self._contained(self._outputs_dir, f"{job_id}/{kind}/{filename}")
+
+    @staticmethod
+    def _contained(root: Path, relative: str) -> Path:
+        path = (root / relative).resolve()
+        if path == root or not path.is_relative_to(root):
+            raise ValueError("storage key escapes its configured root")
+        return path
 
     def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
         results = []

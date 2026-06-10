@@ -131,12 +131,54 @@ def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "auth_mode", "none")
     monkeypatch.setattr(settings, "enable_fs_browser", True)
     monkeypatch.setattr(settings, "enable_run_code", True)
+    monkeypatch.setattr(settings, "allowed_groups", "users")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
 
     enforce_deployment_invariants()
 
     assert settings.auth_mode == "proxy"
     assert settings.enable_fs_browser is False
     assert settings.enable_run_code is False
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejects_user_outside_allowed_groups(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "allowed_groups", "researchers")
+    response = await client.get(
+        "/auth/me",
+        headers={
+            "X-Forwarded-User": "outside",
+            "X-Forwarded-Groups": "other",
+        },
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_proxy_uses_issuer_and_subject_as_stable_identity(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "allowed_groups", "researchers")
+    base = {
+        "X-Forwarded-User": "same-subject",
+        "X-Forwarded-Groups": "researchers",
+    }
+    first = (
+        await client.get(
+            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-a"}
+        )
+    ).json()
+    second = (
+        await client.get(
+            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-b"}
+        )
+    ).json()
+    assert first["id"] != second["id"]
 
 
 # ---------------------------------------------------------------------------

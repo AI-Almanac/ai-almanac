@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from ai_almanac.paths import ensure_layout, uploads_dir
+from ai_almanac.paths import ensure_layout
 from ai_almanac.server.routers import (
     auth,
     chat,
@@ -29,7 +30,9 @@ from ai_almanac.server.routers import (
     datasets,
     fs,
     jobs,
+    llm_profiles,
     regions,
+    uploads,
 )
 from ai_almanac.server.routers import (
     settings as settings_router,
@@ -44,9 +47,7 @@ logger = logging.getLogger(__name__)
 
 _PACKAGED_STATIC_DIR = Path(__file__).parent / "static"
 _SOURCE_STATIC_DIR = Path(__file__).resolve().parents[3] / "web" / "build"
-_STATIC_DIR = (
-    _SOURCE_STATIC_DIR if _SOURCE_STATIC_DIR.exists() else _PACKAGED_STATIC_DIR
-)
+_STATIC_DIR = _SOURCE_STATIC_DIR if _SOURCE_STATIC_DIR.exists() else _PACKAGED_STATIC_DIR
 
 
 def _apply_migrations() -> None:
@@ -55,18 +56,17 @@ def _apply_migrations() -> None:
     from alembic.config import Config
 
     cfg = Config(str(Path(__file__).parent / "alembic.ini"))
-    cfg.set_main_option(
-        "script_location", str(Path(__file__).parent / "alembic")
-    )
+    cfg.set_main_option("script_location", str(Path(__file__).parent / "alembic"))
     command.upgrade(cfg, "head")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_layout()
-    _apply_migrations()
     _reload_user_config()
     _enforce_deployment()
+    if settings.deployment_mode == "personal":
+        _apply_migrations()
     await _seed_regions()
     await _seed_data_sources()
     await _reconcile_jobs()
@@ -131,6 +131,14 @@ async def _reconcile_jobs() -> None:
         await publish_pending()
     except Exception as e:  # noqa: BLE001
         logger.warning("artifact publication failed: %s", e)
+    try:
+        from ai_almanac.server.routers.uploads import cleanup_expired_uploads
+
+        cleaned = await cleanup_expired_uploads()
+        if cleaned:
+            logger.info("expired %d abandoned upload(s)", cleaned)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("upload cleanup failed: %s", e)
 
 
 async def _job_reconciler_loop() -> None:
@@ -155,6 +163,22 @@ async def log_requests(request: Request, call_next):
         duration_ms,
     )
     return response
+
+
+@app.middleware("http")
+async def enforce_cookie_csrf(request: Request, call_next):
+    if (
+        settings.deployment_mode == "shared"
+        and request.method not in {"GET", "HEAD", "OPTIONS"}
+        and request.headers.get("cookie")
+    ):
+        allowed_origins = set(_cors_origins())
+        origin = request.headers.get("origin")
+        if not origin or origin not in allowed_origins:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse({"detail": "Invalid request origin"}, status_code=403)
+    return await call_next(request)
 
 
 # CORS is only relevant when the SvelteKit Vite dev server (on a different port)
@@ -190,8 +214,10 @@ app.include_router(data_sources.router)
 app.include_router(datasets.router)
 app.include_router(fs.router)
 app.include_router(jobs.router)
+app.include_router(llm_profiles.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
+app.include_router(uploads.router)
 
 
 @app.get("/health")
@@ -199,15 +225,32 @@ async def health():
     return {"status": "ok"}
 
 
-@app.put("/upload/{storage_key:path}", status_code=status.HTTP_200_OK)
-async def local_upload(storage_key: str, request: Request):
-    """Receive a user-uploaded obs dataset into the local uploads directory."""
-    dest = uploads_dir() / storage_key
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
-    return {"stored": str(dest)}
+@app.get("/ready")
+async def ready():
+    from sqlalchemy import text
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.local_runner import get_job_runner
+
+    checks: dict[str, bool] = {}
+    try:
+        async with get_db() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["database"] = True
+    except Exception:
+        checks["database"] = False
+    data_dir = Path(settings.upload_dir)
+    checks["storage"] = data_dir.exists() and os.access(data_dir, os.W_OK)
+    checks["runner"] = bool(get_job_runner().name)
+    checks["auth"] = settings.deployment_mode != "shared" or (
+        settings.auth_mode == "proxy"
+        and bool(settings.allowed_groups)
+        and bool(settings.credential_encryption_key)
+    )
+    return JSONResponse(
+        {"status": "ready" if all(checks.values()) else "not_ready", "checks": checks},
+        status_code=200 if all(checks.values()) else 503,
+    )
 
 
 # Bundled SvelteKit SPA. The static directory is populated at wheel-build time
