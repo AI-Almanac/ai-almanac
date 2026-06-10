@@ -48,6 +48,14 @@ async def get_db():
         yield conn
 
 
+async def lock_for_update(conn: AsyncConnection) -> str:
+    """Acquire the dialect's write lock and return its SELECT lock clause."""
+    if conn.dialect.name == "sqlite":
+        await conn.exec_driver_sql("BEGIN IMMEDIATE")
+        return ""
+    return " FOR UPDATE"
+
+
 async def get_or_create_user(
     conn: AsyncConnection, external_id: str, email: str | None = None
 ) -> dict:

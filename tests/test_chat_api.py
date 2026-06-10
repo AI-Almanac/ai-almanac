@@ -239,7 +239,8 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
     async def save_state(*args) -> None:
         return None
 
-    async def create_job(body, user):
+    async def create_job_for_user(body, user_id):
+        assert user_id == "user-1"
         captured_params.append(body.params.model_dump(exclude_none=True))
         return CreatedJob()
 
@@ -266,7 +267,10 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
             }
         ],
     )
-    monkeypatch.setattr("ai_almanac.server.routers.jobs.create_job", create_job)
+    monkeypatch.setattr(
+        "ai_almanac.server.routers.jobs.create_job_for_user",
+        create_job_for_user,
+    )
 
     await benchmark_domain._exec_submit_benchmark(
         {},
