@@ -4,23 +4,24 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 from pathlib import Path
 
+from sqlalchemy import text
+
 from ai_almanac.envs.manager import run as pixi_run
-from ai_almanac.paths import database_path
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
 from ai_almanac.server.services.romp import write_romp_config
 from ai_almanac.server.services.storage import get_storage
+from ai_almanac.server.sync_db import sync_engine
 from ai_almanac.settings import settings
 
 
 def run_job_workload(job_id: str) -> None:
-    with sqlite3.connect(database_path()) as conn:
+    with sync_engine().connect() as conn:
         row = conn.execute(
-            "SELECT config_json FROM jobs WHERE id = ?", (job_id,)
+            text("SELECT config_json FROM jobs WHERE id = :id"), {"id": job_id}
         ).fetchone()
     if not row:
         raise RuntimeError(f"job not found: {job_id}")

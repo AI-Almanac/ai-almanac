@@ -11,8 +11,7 @@ AI Almanac runs in one of two modes, selected by `DEPLOYMENT_MODE`:
 | LLM host-side code execution | Enabled | Disabled |
 | Storage / runner | Local filesystem, local process | Local filesystem, local process |
 
-Personal mode is the supported path for actually running benchmarks today. See
-[Current limitations](#current-limitations) before standing up a shared
+See [Current limitations](#current-limitations) before standing up a shared
 deployment.
 
 ---
@@ -233,25 +232,17 @@ If your proxy emits different header names, point AI Almanac at them with
 
 ## Current limitations
 
-The multi-user **application layer** — authentication, roles, per-user
-ownership, sharing, the catalog, and artifact indexing — works on PostgreSQL.
-**Job execution does not yet.** The durable job supervisor and workload
-(`ai-almanac execute-job` / `run-job-workload`) read and write job state through
-a local SQLite database under the data directory, independent of
-`DATABASE_URL`. In a PostgreSQL deployment the API would record a job in
-PostgreSQL while the supervisor looks for it in SQLite, so benchmarks submitted
-in shared mode will not run.
-
-Until the supervisor is ported to the configured database:
-
-- Use **personal mode** to actually run benchmarks.
-- Treat the **shared profile** as the target architecture for the auth,
-  catalog, and review surfaces — and as the deployment shape to validate on
-  staging — not as a job-running production system yet.
-
-Object storage and remote runners (Modal, Slurm, batch services) are also
-deferred; the storage and runner interfaces are designed to accept them without
-changing the public product concepts.
+- **Single execution host.** Benchmarks run as local processes on the host
+  running AI Almanac, and job concurrency is gated per host by
+  `MAX_LOCAL_JOBS`. A shared deployment is one application host with a locally
+  mounted GPU and storage; there is no remote/worker fan-out yet. Job state and
+  the capacity gate use the configured database (SQLite or PostgreSQL), so the
+  supervisor works correctly on both backends.
+- **Artifacts on local disk.** Job outputs, uploads, and logs live on the
+  application host's filesystem (the data volume), not in object storage.
+- **Deferred backends.** Object storage and remote runners (Modal, Slurm, batch
+  services) are not implemented; the storage and runner interfaces are designed
+  to accept them later without changing the public product concepts.
 
 ## Configuration reference
 
