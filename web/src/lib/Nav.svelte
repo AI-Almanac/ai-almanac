@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { account } from '$lib/account.svelte';
 </script>
 
 <nav class="site-nav" class:almanac-nav={$page.url.pathname.startsWith('/almanac')}>
@@ -19,8 +20,18 @@
 			>
 				Data
 			</a>
-			<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
+			{#if account.isAdmin}
+				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
+					Settings
+				</a>
+			{/if}
 		</div>
+		{#if account.loaded && account.isShared}
+			<span class="account" title={account.account?.email ?? account.account?.subject ?? ''}>
+				<span class="account-name">{account.label}</span>
+				{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
+			</span>
+		{/if}
 	</div>
 </nav>
 
@@ -72,6 +83,33 @@
 
 	.links {
 		gap: 0.25rem;
+	}
+
+	.account {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
+		font-weight: 650;
+		white-space: nowrap;
+	}
+
+	.account-name {
+		max-width: 12rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.role-badge {
+		padding: 0.1rem 0.4rem;
+		border-radius: 0.3rem;
+		background: var(--color-accent);
+		color: white;
+		font-size: 0.7rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
 	}
 
 	.links a {

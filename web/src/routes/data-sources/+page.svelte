@@ -16,6 +16,7 @@
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
+	import { account } from '$lib/account.svelte';
 
 	let sources = $state<DataSource[]>([]);
 	let regions = $state<Region[]>([]);
@@ -315,6 +316,7 @@
 		<div class="banner err">{error}</div>
 	{/if}
 
+	{#if account.isAdmin}
 	<section class="add">
 		<h2>{editingId ? 'Edit source' : 'Add a source'}</h2>
 		<form onsubmit={onSubmit}>
@@ -517,6 +519,7 @@
 			</div>
 		</form>
 	</section>
+	{/if}
 
 	<section>
 		<h2>Observation datasets <span class="count">({obsSources.length})</span></h2>
@@ -581,13 +584,15 @@
 				<p class="validation-error">{src.validation_error}</p>
 			{/if}
 		</div>
-		<div class="source-actions">
-			<button class="rm" onclick={() => onEdit(src)}>Edit</button>
-			<button class="rm" disabled={revalidatingId === src.id} onclick={() => onRevalidate(src)}>
-				{revalidatingId === src.id ? 'Checking…' : 'Revalidate'}
-			</button>
-			<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
-		</div>
+		{#if account.isAdmin}
+			<div class="source-actions">
+				<button class="rm" onclick={() => onEdit(src)}>Edit</button>
+				<button class="rm" disabled={revalidatingId === src.id} onclick={() => onRevalidate(src)}>
+					{revalidatingId === src.id ? 'Checking…' : 'Revalidate'}
+				</button>
+				<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
+			</div>
+		{/if}
 	</li>
 {/snippet}
 

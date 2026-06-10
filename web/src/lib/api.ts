@@ -222,6 +222,26 @@ export async function getCapabilities(): Promise<AppCapabilities> {
 	return request<AppCapabilities>('/config/capabilities');
 }
 
+// ---- Account / identity ------------------------------------------------------
+
+export type Account = {
+	id: string;
+	subject: string;
+	email: string | null;
+	display_name: string | null;
+	role: 'admin' | 'user';
+	deployment_mode: 'personal' | 'shared';
+	capabilities: {
+		can_admin: boolean;
+		can_browse_fs: boolean;
+		can_run_code: boolean;
+	};
+};
+
+export async function getAccount(): Promise<Account> {
+	return request<Account>('/auth/me');
+}
+
 // ---- Regions -----------------------------------------------------------------
 
 export async function getRegions() {
@@ -311,6 +331,29 @@ export async function deleteJob(id: string): Promise<void> {
 
 export async function cancelJob(id: string): Promise<Job> {
 	return request<Job>(`/jobs/${id}/cancel`, { method: 'POST' });
+}
+
+export async function shareJob(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/share`, { method: 'POST' });
+}
+
+export async function unshareJob(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/unshare`, { method: 'POST' });
+}
+
+export type JobArtifact = {
+	id: string;
+	kind: string;
+	filename: string;
+	media_type: string;
+	size_bytes: number;
+	checksum: string;
+	created_at: string;
+	url: string;
+};
+
+export async function getJobArtifacts(id: string): Promise<JobArtifact[]> {
+	return request<JobArtifact[]>(`/jobs/${id}/artifacts`);
 }
 
 /**
@@ -444,6 +487,7 @@ export type Job = {
 	completed_at?: string;
 	error?: string | null;
 	is_owner?: boolean;
+	visibility?: 'private' | 'shared';
 	run_id?: string | null;
 };
 
