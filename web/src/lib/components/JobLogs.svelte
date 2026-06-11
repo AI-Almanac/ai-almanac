@@ -58,7 +58,7 @@
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 4px;
 		padding: 0.75rem 1rem;
-		max-height: 400px;
+		max-height: clamp(15rem, 45vh, 25rem);
 		overflow-y: auto;
 	}
 	.log-box pre {
