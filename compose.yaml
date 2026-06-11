@@ -1,11 +1,28 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Each service receives only the configuration it needs; the application env
+# file is never handed to the edge or auth containers, so compromising one of
+# them does not yield the database password or OAuth client secret.
+# DATABASE_URL is derived from POSTGRES_PASSWORD unless set explicitly in the
+# env file (e.g. for an external database).
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://almanac:${POSTGRES_PASSWORD}@postgres:5432/almanac}
+
 services:
   caddy:
-    image: caddy:2
+    image: caddy:2.10
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
-    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST in the deployment env file}
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OAUTH2_PROXY_OIDC_ISSUER_URL}
+    logging: *default-logging
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -16,13 +33,24 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      # The oauth2-proxy image is distroless (no shell or wget), so a
+      # container healthcheck is not possible; service_started is the best
+      # available condition.
       oauth2-proxy:
         condition: service_started
 
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.13.0
     restart: unless-stopped
-    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    # Additional OAUTH2_PROXY_* settings from the env file must be added here
+    # explicitly; the full env file is intentionally not mounted.
+    environment:
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OAUTH2_PROXY_OIDC_ISSUER_URL}
+      OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL}
+    logging: *default-logging
     command:
       - --provider=oidc
       - --http-address=0.0.0.0:4180
@@ -32,6 +60,8 @@ services:
       - --pass-access-token=false
       - --pass-authorization-header=false
       - --email-domain=*
+      - --scope=openid profile email groups
+      - --oidc-groups-claim=groups
     networks:
       - internal
 
@@ -41,7 +71,8 @@ services:
     environment:
       POSTGRES_DB: almanac
       POSTGRES_USER: almanac
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the deployment env file}
+    logging: *default-logging
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
@@ -52,16 +83,41 @@ services:
     networks:
       - internal
 
+  storage-init:
+    build: .
+    user: "0:0"
+    command: ["sh", "-c", "find /data ! -user almanac -exec chown almanac:almanac {} +"]
+    volumes:
+      - persistent_data:/data
+    restart: "no"
+
   migrate:
     build: .
     env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    environment: *app-env
     command: ["ai-almanac", "db", "upgrade"]
     depends_on:
       postgres:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     volumes:
       - persistent_data:/data
       - ./datasets:/datasets:ro
+    networks:
+      - internal
+    restart: "no"
+
+  benchmark-prepare:
+    build: .
+    env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    environment: *app-env
+    command: ["ai-almanac", "env", "prepare"]
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - persistent_data:/data
     networks:
       - internal
     restart: "no"
@@ -70,16 +126,23 @@ services:
     build: .
     restart: unless-stopped
     env_file: ${AI_ALMANAC_ENV_FILE:-.env}
+    environment: *app-env
     command: ["ai-almanac", "serve", "--bind", "0.0.0.0", "--port", "8765", "--no-open"]
     depends_on:
       migrate:
         condition: service_completed_successfully
+      benchmark-prepare:
+        condition: service_completed_successfully
     volumes:
       - persistent_data:/data
       - ./datasets:/datasets:ro
-    gpus: all
+    # Benchmark jobs run inside this container; the limits keep a runaway job
+    # from taking the host (and PostgreSQL) down with it.
+    mem_limit: ${APP_MEM_LIMIT:-16g}
+    pids_limit: ${APP_PIDS_LIMIT:-4096}
+    logging: *default-logging
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/ready')"]
       interval: 10s
       timeout: 5s
       retries: 12

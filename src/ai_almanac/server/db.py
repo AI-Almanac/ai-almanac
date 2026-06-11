@@ -7,6 +7,8 @@ backends (e.g. Postgres for shared public deployments).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,6 +18,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from ai_almanac.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _make_engine():
@@ -46,6 +50,29 @@ async def get_db():
     """Yield a SQLAlchemy AsyncConnection inside a transaction."""
     async with engine.begin() as conn:
         yield conn
+
+
+async def wait_for_database(attempts: int = 30, delay: float = 2.0) -> None:
+    """Block until the database accepts connections, or raise.
+
+    Compose restart policies ignore `depends_on` after a host reboot, so the
+    server can start before PostgreSQL. Raising here exits the process nonzero
+    and lets the restart policy retry, instead of serving errors indefinitely.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return
+        except Exception as e:  # noqa: BLE001 — any connection failure is retryable
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"database unreachable after {attempts} attempts: {e}"
+                ) from e
+            logger.warning(
+                "database not ready (attempt %d/%d): %s", attempt, attempts, e
+            )
+            await asyncio.sleep(delay)
 
 
 async def lock_for_update(conn: AsyncConnection) -> str:
