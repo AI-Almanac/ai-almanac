@@ -27,9 +27,7 @@
 
 	function groupStatus(group: (typeof store.runGroups)[number]): string {
 		if (
-			group.jobs.some((job) =>
-				['queued', 'starting', 'running', 'canceling'].includes(job.status)
-			)
+			group.jobs.some((job) => ['queued', 'starting', 'running', 'canceling'].includes(job.status))
 		)
 			return 'running';
 		if (group.jobs.every((job) => job.status === 'complete')) return 'complete';
