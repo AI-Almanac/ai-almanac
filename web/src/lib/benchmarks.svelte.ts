@@ -22,6 +22,18 @@ import {
 // Only caches the no-bbox baseline fetch — bbox-filtered requests always go to the server.
 const _metricsCache = new Map<string, JobMetrics>();
 
+/** Drop cached results for a job whose status changed or that was removed. */
+export function invalidateJobCaches(jobId: string): void {
+	_metricsCache.delete(jobId);
+	const prefix = `${jobId}||`;
+	for (const key of _gridCache.keys()) {
+		if (key.startsWith(prefix)) _gridCache.delete(key);
+	}
+	for (const key of _cellCache.keys()) {
+		if (key.startsWith(prefix)) _cellCache.delete(key);
+	}
+}
+
 export async function getCachedJobMetrics(jobId: string, bbox?: BboxFilter): Promise<JobMetrics> {
 	if (!bbox) {
 		const hit = _metricsCache.get(jobId);
@@ -170,6 +182,7 @@ export class BenchmarkStore {
 		if (!group) return;
 		await Promise.all(group.jobs.map((j) => deleteJob(j.id)));
 		const removedIds = new Set(group.jobs.map((j) => j.id));
+		for (const id of removedIds) invalidateJobCaches(id);
 		this.jobs = untrack(() => this.jobs.filter((j) => !removedIds.has(j.id)));
 		if (untrack(() => this.selectedGroupKey) === key) {
 			const nextGroup = buildRunGroups(untrack(() => this.jobs))[0];
@@ -208,7 +221,9 @@ export class BenchmarkStore {
 			const updated = await Promise.all(active.map((j) => getJob(j.id)));
 			for (const u of updated) {
 				const idx = untrack(() => this.jobs.findIndex((j) => j.id === u.id));
-				if (idx !== -1) this.jobs[idx] = u;
+				if (idx === -1) continue;
+				if (untrack(() => this.jobs[idx].status) !== u.status) invalidateJobCaches(u.id);
+				this.jobs[idx] = u;
 			}
 		}, 3000);
 	}

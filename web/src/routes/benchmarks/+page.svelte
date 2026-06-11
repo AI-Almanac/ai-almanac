@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { page } from '$app/stores';
-	import LoginPrompt from '$lib/LoginPrompt.svelte';
-	import { isAuthenticated } from '$lib/auth-store';
 	import { account } from '$lib/account.svelte';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
@@ -64,7 +62,7 @@
 	}
 
 	$effect(() => {
-		if (!$isAuthenticated || initialized) return;
+		if (initialized) return;
 		initialized = true;
 		void initializePage();
 	});
@@ -167,291 +165,283 @@
 	}
 </script>
 
-{#if !$isAuthenticated}
-	<LoginPrompt message="Sign in to view and run benchmarks." />
-{:else}
-	<div class="page-layout" class:setup-mode={inSetupMode}>
-		{#if !inSetupMode}
-			<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
-		{/if}
-		<div class="main-content">
-			{#if inSetupMode}
-				<BenchmarkForm
-					{store}
-					{regions}
-					{datasets}
-					{dataLoaded}
-					{parameterDefaults}
-					{initialPrompt}
-					{chatAvailable}
-					initialManualOpen={manualSetupRequested}
-					onSubmitted={handleSubmitted}
-				/>
-			{:else if store.selectedGroup}
-				{@const group = store.selectedGroup}
-				{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
-				{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
-				{@const activeJobs = group.jobs.filter((j) =>
-					['queued', 'starting', 'running', 'canceling'].includes(j.status)
-				)}
-				{@const primaryJob = group.jobs[0]}
+<div class="page-layout" class:setup-mode={inSetupMode}>
+	{#if !inSetupMode}
+		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
+	{/if}
+	<div class="main-content">
+		{#if inSetupMode}
+			<BenchmarkForm
+				{store}
+				{regions}
+				{datasets}
+				{dataLoaded}
+				{parameterDefaults}
+				{initialPrompt}
+				{chatAvailable}
+				initialManualOpen={manualSetupRequested}
+				onSubmitted={handleSubmitted}
+			/>
+		{:else if store.selectedGroup}
+			{@const group = store.selectedGroup}
+			{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
+			{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
+			{@const activeJobs = group.jobs.filter((j) =>
+				['queued', 'starting', 'running', 'canceling'].includes(j.status)
+			)}
+			{@const primaryJob = group.jobs[0]}
 
-				<div
-					class="analysis-workspace"
-					class:side-collapsed={!resultsSidebarOpen || !chatAvailable}
-				>
-					<section class="analysis-main">
-						<header class="analysis-header">
-							<div>
-								<p class="detail-eyebrow">Analysis run</p>
-								<h1 class="detail-title">{group.region}</h1>
-								<p class="detail-subtitle">
-									{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''} · {eventTypeName(
-										group.eventType
-									)}
-									{#if group.startDate && group.endDate}
-										· {group.startDate} to {group.endDate}
-									{/if}
-								</p>
-							</div>
-							<div class="analysis-actions">
-								{#if chatAvailable}
-									<button
-										type="button"
-										class="sidebar-toggle"
-										aria-expanded={resultsSidebarOpen}
-										onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
-									>
-										{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
-									</button>
+			<div class="analysis-workspace" class:side-collapsed={!resultsSidebarOpen || !chatAvailable}>
+				<section class="analysis-main">
+					<header class="analysis-header">
+						<div>
+							<p class="detail-eyebrow">Analysis run</p>
+							<h1 class="detail-title">{group.region}</h1>
+							<p class="detail-subtitle">
+								{group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''} · {eventTypeName(
+									group.eventType
+								)}
+								{#if group.startDate && group.endDate}
+									· {group.startDate} to {group.endDate}
 								{/if}
-								{#if activeJobs.length > 0}
-									<button
-										type="button"
-										class="new-analysis"
-										onclick={() => store.cancelGroup(group.key)}
-									>
-										{activeJobs.some((job) => job.status === 'canceling')
-											? 'Canceling…'
-											: 'Cancel run'}
-									</button>
-								{/if}
-								{#if account.isShared && (account.isAdmin || group.jobs.some((job) => job.is_owner))}
-									{@const shared = group.jobs.every((job) => job.visibility === 'shared')}
-									<button
-										type="button"
-										class="new-analysis"
-										title={shared
-											? 'Visible to other users — click to make private'
-											: 'Let other users view these results read-only'}
-										onclick={() => store.shareGroup(group.key, !shared)}
-									>
-										{shared ? 'Make private' : 'Share results'}
-									</button>
-								{/if}
-								<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>
+							</p>
+						</div>
+						<div class="analysis-actions">
+							{#if chatAvailable}
+								<button
+									type="button"
+									class="sidebar-toggle"
+									aria-expanded={resultsSidebarOpen}
+									onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
+								>
+									{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
+								</button>
+							{/if}
+							{#if activeJobs.length > 0}
+								<button
+									type="button"
+									class="new-analysis"
+									onclick={() => store.cancelGroup(group.key)}
+								>
+									{activeJobs.some((job) => job.status === 'canceling')
+										? 'Canceling…'
+										: 'Cancel run'}
+								</button>
+							{/if}
+							{#if account.isShared && (account.isAdmin || group.jobs.some((job) => job.is_owner))}
+								{@const shared = group.jobs.every((job) => job.visibility === 'shared')}
+								<button
+									type="button"
+									class="new-analysis"
+									title={shared
+										? 'Visible to other users — click to make private'
+										: 'Let other users view these results read-only'}
+									onclick={() => store.shareGroup(group.key, !shared)}
+								>
+									{shared ? 'Make private' : 'Share results'}
+								</button>
+							{/if}
+							<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>
+						</div>
+					</header>
+
+					<details class="benchmark-summary">
+						<summary class="summary-trigger">
+							<span class="summary-trigger-title">Benchmark summary</span>
+							<span class="summary-trigger-meta">
+								{formatRunStatus(group.jobs)} · {group.jobs.length} model{group.jobs.length === 1
+									? ''
+									: 's'} · {forecastWindow(primaryJob?.params)} · Run {formatRunDate(
+									group.mostRecentAt
+								)}
+							</span>
+						</summary>
+
+						<div class="run-summary-grid">
+							<div class="run-fact">
+								<span>Run date</span>
+								<strong>{formatRunDate(group.mostRecentAt)}</strong>
 							</div>
-						</header>
-
-						<details class="benchmark-summary">
-							<summary class="summary-trigger">
-								<span class="summary-trigger-title">Benchmark summary</span>
-								<span class="summary-trigger-meta">
-									{formatRunStatus(group.jobs)} · {group.jobs.length} model{group.jobs.length === 1
-										? ''
-										: 's'} · {forecastWindow(primaryJob?.params)} · Run {formatRunDate(
-										group.mostRecentAt
-									)}
-								</span>
-							</summary>
-
-							<div class="run-summary-grid">
-								<div class="run-fact">
-									<span>Run date</span>
-									<strong>{formatRunDate(group.mostRecentAt)}</strong>
-								</div>
-								<div class="run-fact">
-									<span>Status</span>
-									<strong>{formatRunStatus(group.jobs)}</strong>
-								</div>
-								<div class="run-fact">
-									<span>Region</span>
-									<strong>{group.region}</strong>
-								</div>
-								<div class="run-fact">
-									<span>Event type</span>
-									<strong>{eventTypeName(group.eventType)}</strong>
-								</div>
+							<div class="run-fact">
+								<span>Status</span>
+								<strong>{formatRunStatus(group.jobs)}</strong>
 							</div>
+							<div class="run-fact">
+								<span>Region</span>
+								<strong>{group.region}</strong>
+							</div>
+							<div class="run-fact">
+								<span>Event type</span>
+								<strong>{eventTypeName(group.eventType)}</strong>
+							</div>
+						</div>
 
-							<div class="summary-detail-grid">
-								<div class="run-section">
-									<h3>Models Run</h3>
-									<div class="model-run-list">
-										{#each group.jobs as job}
-											<div class="model-run-item">
-												<strong>{job.model_display_name || modelDisplayName(job.model_name)}</strong
-												>
-												<span
-													class:complete={job.status === 'complete'}
-													class:failed={job.status === 'failed'}
-													class:running={['queued', 'starting', 'running', 'canceling'].includes(
-														job.status
-													)}
-												>
-													{job.status}
-												</span>
-											</div>
-										{/each}
-									</div>
-								</div>
-
-								<div class="run-section">
-									<h3>Benchmark Configuration</h3>
-									<div class="run-row">
-										<span>Forecast period</span>
-										<strong>{compactDateRange(group.startDate, group.endDate)}</strong>
-									</div>
-									<div class="run-row">
-										<span>Forecast window</span>
-										<strong>{forecastWindow(primaryJob?.params)}</strong>
-									</div>
-									<div class="run-row">
-										<span>Climatology period</span>
-										<strong>{climatePeriod(primaryJob?.params)}</strong>
-									</div>
-									<div class="run-row">
-										<span>Initialization days</span>
-										<strong>{initDays(primaryJob?.params)}</strong>
-									</div>
+						<div class="summary-detail-grid">
+							<div class="run-section">
+								<h3>Models Run</h3>
+								<div class="model-run-list">
+									{#each group.jobs as job}
+										<div class="model-run-item">
+											<strong>{job.model_display_name || modelDisplayName(job.model_name)}</strong>
+											<span
+												class:complete={job.status === 'complete'}
+												class:failed={job.status === 'failed'}
+												class:running={['queued', 'starting', 'running', 'canceling'].includes(
+													job.status
+												)}
+											>
+												{job.status}
+											</span>
+										</div>
+									{/each}
 								</div>
 							</div>
 
 							<div class="run-section">
-								<h3>Parameters</h3>
-								<div class="parameter-grid">
-									<div>
-										<span>Wet threshold</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.wet_threshold,
-												parameterDefaults?.wet_threshold,
-												'millimeters'
-											)}</strong
-										>
-									</div>
-									<div>
-										<span>Wet initialization</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.wet_init,
-												parameterDefaults?.wet_init,
-												'millimeters'
-											)}</strong
-										>
-									</div>
-									<div>
-										<span>Wet spell</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.wet_spell,
-												parameterDefaults?.wet_spell,
-												'days'
-											)}</strong
-										>
-									</div>
-									<div>
-										<span>Dry spell</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.dry_spell,
-												parameterDefaults?.dry_spell,
-												'days'
-											)}</strong
-										>
-									</div>
-									<div>
-										<span>Dry extent</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.dry_extent,
-												parameterDefaults?.dry_extent,
-												'days'
-											)}</strong
-										>
-									</div>
-									<div>
-										<span>Observation variable</span>
-										<strong
-											>{parameterValue(
-												primaryJob?.params?.obs_var,
-												parameterDefaults?.obs_var
-											)}</strong
-										>
-									</div>
+								<h3>Benchmark Configuration</h3>
+								<div class="run-row">
+									<span>Forecast period</span>
+									<strong>{compactDateRange(group.startDate, group.endDate)}</strong>
+								</div>
+								<div class="run-row">
+									<span>Forecast window</span>
+									<strong>{forecastWindow(primaryJob?.params)}</strong>
+								</div>
+								<div class="run-row">
+									<span>Climatology period</span>
+									<strong>{climatePeriod(primaryJob?.params)}</strong>
+								</div>
+								<div class="run-row">
+									<span>Initialization days</span>
+									<strong>{initDays(primaryJob?.params)}</strong>
 								</div>
 							</div>
-						</details>
+						</div>
 
-						{#if activeJobs.length > 0 && completeJobs.length === 0}
-							<div class="running-state">
-								<div class="spinner"></div>
+						<div class="run-section">
+							<h3>Parameters</h3>
+							<div class="parameter-grid">
 								<div>
+									<span>Wet threshold</span>
 									<strong
-										>{activeJobs.some((job) => job.status === 'canceling')
-											? 'Canceling benchmark'
-											: 'Running benchmark'}</strong
+										>{parameterValue(
+											primaryJob?.params?.wet_threshold,
+											parameterDefaults?.wet_threshold,
+											'millimeters'
+										)}</strong
 									>
-									<p>Results will appear here as soon as the first model completes.</p>
+								</div>
+								<div>
+									<span>Wet initialization</span>
+									<strong
+										>{parameterValue(
+											primaryJob?.params?.wet_init,
+											parameterDefaults?.wet_init,
+											'millimeters'
+										)}</strong
+									>
+								</div>
+								<div>
+									<span>Wet spell</span>
+									<strong
+										>{parameterValue(
+											primaryJob?.params?.wet_spell,
+											parameterDefaults?.wet_spell,
+											'days'
+										)}</strong
+									>
+								</div>
+								<div>
+									<span>Dry spell</span>
+									<strong
+										>{parameterValue(
+											primaryJob?.params?.dry_spell,
+											parameterDefaults?.dry_spell,
+											'days'
+										)}</strong
+									>
+								</div>
+								<div>
+									<span>Dry extent</span>
+									<strong
+										>{parameterValue(
+											primaryJob?.params?.dry_extent,
+											parameterDefaults?.dry_extent,
+											'days'
+										)}</strong
+									>
+								</div>
+								<div>
+									<span>Observation variable</span>
+									<strong
+										>{parameterValue(
+											primaryJob?.params?.obs_var,
+											parameterDefaults?.obs_var
+										)}</strong
+									>
 								</div>
 							</div>
-						{/if}
+						</div>
+					</details>
 
-						{#if failedJobs.length > 0}
-							<div class="failed-runs">
-								{#each failedJobs as job}
-									<div class="job-error">
-										<p class="job-error-title">
-											{job.model_display_name || modelDisplayName(job.model_name)} failed
-										</p>
-										{#if job.error}
-											<pre class="job-error-msg">{job.error}</pre>
-										{/if}
-										<JobLogs jobId={job.id} />
-									</div>
-								{/each}
+					{#if activeJobs.length > 0 && completeJobs.length === 0}
+						<div class="running-state">
+							<div class="spinner"></div>
+							<div>
+								<strong
+									>{activeJobs.some((job) => job.status === 'canceling')
+										? 'Canceling benchmark'
+										: 'Running benchmark'}</strong
+								>
+								<p>Results will appear here as soon as the first model completes.</p>
 							</div>
-						{/if}
-
-						{#if completeJobs.length > 0}
-							<ResultsViewer jobs={completeJobs} />
-						{/if}
-					</section>
-
-					{#if resultsSidebarOpen && chatAvailable}
-						<aside class="analysis-side">
-							<div class="result-chat">
-								<ChatPanel
-									jobs={group.jobs}
-									scopeKey={group.key}
-									preferredSessionId={preferredChatSessionId}
-									onJobsCreated={handleJobsCreated}
-								/>
-							</div>
-						</aside>
+						</div>
 					{/if}
-				</div>
-			{:else}
-				<div class="empty-state">
-					<p class="empty-title">No benchmark runs yet</p>
-					<p class="muted">
-						Start a new benchmark from the sidebar, or use Ask to describe the run you want.
-					</p>
-				</div>
-			{/if}
-		</div>
+
+					{#if failedJobs.length > 0}
+						<div class="failed-runs">
+							{#each failedJobs as job}
+								<div class="job-error">
+									<p class="job-error-title">
+										{job.model_display_name || modelDisplayName(job.model_name)} failed
+									</p>
+									{#if job.error}
+										<pre class="job-error-msg">{job.error}</pre>
+									{/if}
+									<JobLogs jobId={job.id} />
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if completeJobs.length > 0}
+						<ResultsViewer jobs={completeJobs} />
+					{/if}
+				</section>
+
+				{#if resultsSidebarOpen && chatAvailable}
+					<aside class="analysis-side">
+						<div class="result-chat">
+							<ChatPanel
+								jobs={group.jobs}
+								scopeKey={group.key}
+								preferredSessionId={preferredChatSessionId}
+								onJobsCreated={handleJobsCreated}
+							/>
+						</div>
+					</aside>
+				{/if}
+			</div>
+		{:else}
+			<div class="empty-state">
+				<p class="empty-title">No benchmark runs yet</p>
+				<p class="muted">
+					Start a new benchmark from the sidebar, or use Ask to describe the run you want.
+				</p>
+			</div>
+		{/if}
 	</div>
-{/if}
+</div>
 
 <style>
 	.page-layout {

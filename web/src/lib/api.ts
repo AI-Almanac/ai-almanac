@@ -358,12 +358,30 @@ export async function getJobArtifacts(id: string): Promise<JobArtifact[]> {
 
 /**
  * Fetch a result file (figure/output) as an object URL for display.
- * Cached in memory by URL so repeated views don't re-fetch.
+ * Cached in memory by URL so repeated views don't re-fetch. The cache is
+ * LRU-bounded: evicted entries have their object URLs revoked so the blobs
+ * can be garbage collected during long sessions.
  */
 const blobCache = new Map<string, string>();
+const BLOB_CACHE_MAX_ENTRIES = 100;
+
+function rememberBlob(resultUrl: string, objectUrl: string): void {
+	blobCache.set(resultUrl, objectUrl);
+	while (blobCache.size > BLOB_CACHE_MAX_ENTRIES) {
+		const oldest = blobCache.keys().next().value!;
+		URL.revokeObjectURL(blobCache.get(oldest)!);
+		blobCache.delete(oldest);
+	}
+}
 
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
-	if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
+	const hit = blobCache.get(resultUrl);
+	if (hit) {
+		// Re-insert to mark as most recently used.
+		blobCache.delete(resultUrl);
+		blobCache.set(resultUrl, hit);
+		return hit;
+	}
 
 	const res = await fetch(`${BASE_URL}${resultUrl}`, {
 		redirect: 'manual'
@@ -384,7 +402,7 @@ export async function fetchResultBlob(resultUrl: string): Promise<string> {
 	}
 
 	const objectUrl = URL.createObjectURL(blob);
-	blobCache.set(resultUrl, objectUrl);
+	rememberBlob(resultUrl, objectUrl);
 	return objectUrl;
 }
 
