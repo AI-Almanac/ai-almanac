@@ -242,13 +242,16 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
             return False
         if row["worker_id"] != worker_id:
             return False
-        active = conn.execute(
+        # Only jobs whose supervisor is still heartbeating consume capacity;
+        # a crashed job must not block the queue until reconciliation runs.
+        active_rows = conn.execute(
             text(
-                "SELECT COUNT(*) FROM jobs "
+                "SELECT heartbeat_at FROM jobs "
                 "WHERE status IN ('starting', 'running') AND id != :id"
             ),
             {"id": job_id},
-        ).scalar()
+        ).fetchall()
+        active = sum(1 for (heartbeat,) in active_rows if _heartbeat_is_fresh(heartbeat))
         if active >= settings.max_local_jobs:
             return False
         now = _now()
