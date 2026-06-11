@@ -322,6 +322,18 @@ privileges.
 - **Rollback**: redeploy the previous version against a database backup taken
   before the upgrade (migrations are additive; a forward-only schema may not
   match an older binary).
+- **Rate limiting**: the expensive paths enforce per-user limits in the
+  application — upload size and stored bytes (`MAX_UPLOAD_BYTES`,
+  `MAX_STORED_UPLOAD_BYTES_PER_USER`), chat requests
+  (`MAX_LLM_REQUESTS_PER_MINUTE`, `MAX_CONCURRENT_LLM_REQUESTS_PER_USER`), and
+  active jobs (`MAX_ACTIVE_JOBS_PER_USER`). Generic request flooding is the
+  reverse proxy's job; apply connection and request limits at Caddy (or
+  whatever fronts the stack) if your deployment is exposed to untrusted
+  networks.
+- **Audit log**: admin actions and background-maintenance failures are
+  recorded in the `audit_events` table (`background.*.failed` /
+  `background.*.recovered` events flag reconciler, artifact-publication, and
+  upload-cleanup problems).
 
 ---
 
