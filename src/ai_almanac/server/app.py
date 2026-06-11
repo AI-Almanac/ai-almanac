@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
     ensure_layout()
     _reload_user_config()
     _enforce_deployment()
+    await _wait_for_database()
     if settings.deployment_mode == "personal":
         _apply_migrations()
     await _seed_regions()
@@ -84,6 +85,14 @@ def _reload_user_config() -> None:
     from ai_almanac.settings import reload_settings
 
     reload_settings()
+
+
+async def _wait_for_database() -> None:
+    """Fail startup (and exit nonzero) if the database never becomes reachable,
+    so a process supervisor or Compose restart policy can retry."""
+    from ai_almanac.server.db import wait_for_database
+
+    await wait_for_database()
 
 
 def _enforce_deployment() -> None:
