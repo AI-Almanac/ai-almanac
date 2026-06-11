@@ -27,6 +27,13 @@ def _scope(*, job_ids: list[str] | None = None) -> dict:
     }
 
 
+def _packaged_catalog(models: tuple = ()):
+    from ai_almanac.server.services.registry import CatalogSnapshot
+    from ai_almanac.settings import get_packaged_regions
+
+    return CatalogSnapshot(regions=tuple(get_packaged_regions()), models=models)
+
+
 def _sse_events(body: str) -> list[dict]:
     events: list[dict] = []
     for chunk in body.strip().split("\n\n"):
@@ -98,7 +105,9 @@ def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
 def test_apply_region_params_adds_custom_region_bounds() -> None:
     from ai_almanac.server.routers.jobs import _apply_region_params
 
-    params = _apply_region_params({"region": "bangladesh", "start_date": "2020-05-01"})
+    params = _apply_region_params(
+        {"region": "bangladesh", "start_date": "2020-05-01"}, _packaged_catalog()
+    )
 
     assert params == {
         "region": "custom",
@@ -115,7 +124,7 @@ def test_apply_region_params_adds_custom_region_bounds() -> None:
 def test_apply_region_params_maps_builtin_region_name() -> None:
     from ai_almanac.server.routers.jobs import _apply_region_params
 
-    params = _apply_region_params({"region": "india"})
+    params = _apply_region_params({"region": "india"}, _packaged_catalog())
 
     assert params == {"region": "India"}
 
@@ -127,7 +136,8 @@ def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> 
         {
             "dataset_config": {"region": "bangladesh"},
             "romp_params": {"region": "custom"},
-        }
+        },
+        _packaged_catalog(),
     )
 
     assert metadata == {
@@ -140,7 +150,9 @@ def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> 
 def test_job_region_metadata_maps_builtin_romp_region() -> None:
     from ai_almanac.server.routers.jobs import _job_region_metadata
 
-    metadata = _job_region_metadata({"romp_params": {"region": "India"}})
+    metadata = _job_region_metadata(
+        {"romp_params": {"region": "India"}}, _packaged_catalog()
+    )
 
     assert metadata == {
         "region_id": "india",
@@ -158,7 +170,8 @@ def test_job_region_metadata_preserves_persisted_region_snapshot() -> None:
             "region_name": "Central Highlands",
             "romp_region": "custom",
             "romp_params": {"region": "custom"},
-        }
+        },
+        _packaged_catalog(),
     )
 
     assert metadata == {
@@ -189,6 +202,7 @@ def test_job_output_uses_display_name_for_legacy_uuid_model() -> None:
             "created_at": "2026-06-08T20:00:00+00:00",
         },
         "local",
+        _packaged_catalog(),
     )
 
     assert job.model_name == "db956a33-e511-4ac7-8484-ac6b7fc3e877"
@@ -250,23 +264,28 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
     monkeypatch.setattr(
         benchmark_domain,
         "_validation_for_config",
-        lambda spec: BenchmarkValidation(can_run=True, status="runnable"),
+        lambda spec, catalog: BenchmarkValidation(can_run=True, status="runnable"),
     )
-    monkeypatch.setattr(
-        benchmark_domain,
-        "_region_models",
-        lambda region_id: [
+
+    catalog = _packaged_catalog(
+        models=(
             {
                 "id": "e2s-test",
+                "region": "bangladesh",
                 "start_date": "2020-05-01",
                 "end_date": "2022-09-30",
                 "start_year_clim": 2020,
                 "end_year_clim": 2022,
                 "init_days": "0,3",
                 "probabilistic": False,
-            }
-        ],
+            },
+        )
     )
+
+    async def load_catalog():
+        return catalog
+
+    monkeypatch.setattr(benchmark_domain, "load_catalog", load_catalog)
     monkeypatch.setattr(
         "ai_almanac.server.routers.jobs.create_job_for_user",
         create_job_for_user,

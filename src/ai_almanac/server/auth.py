@@ -202,6 +202,11 @@ def enforce_deployment_invariants() -> None:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":
         raise RuntimeError("shared deployment rejects the development signing secret")
+    if not settings.dataset_mount_roots.strip():
+        raise RuntimeError(
+            "shared deployment requires DATASET_MOUNT_ROOTS; without it admins "
+            "could register data sources anywhere on the host filesystem"
+        )
     for field in ("enable_fs_browser", "enable_run_code"):
         if getattr(settings, field):
             logger.warning("shared deployment: forcing %s=false", field)
