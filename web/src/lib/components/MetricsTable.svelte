@@ -424,7 +424,7 @@
 	}
 
 	.bbox-fields input {
-		width: 80px;
+		width: 5rem;
 		padding: 0.35rem 0.5rem;
 		border: 1px solid var(--color-border);
 		border-radius: 0.3rem;
@@ -639,7 +639,7 @@
 		font-size: 0.72rem;
 		font-weight: 700;
 		color: var(--color-accent);
-		min-width: 90px;
+		min-width: 5.6rem;
 		flex-shrink: 0;
 	}
 	.g-def {

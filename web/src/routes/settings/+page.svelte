@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import {
 		getSettings,
 		getSettingsSchema,
@@ -126,9 +127,7 @@
 	}
 
 	function restartFieldsEdited(group: SettingsGroup): SettingsField[] {
-		return group.fields.filter(
-			(f) => f.restart_required && values[f.name] !== original[f.name]
-		);
+		return group.fields.filter((f) => f.restart_required && values[f.name] !== original[f.name]);
 	}
 </script>
 
@@ -136,94 +135,100 @@
 	<title>Settings · AI Almanac</title>
 </svelte:head>
 
-<main class="wrap">
-	<header>
-		<h1>Settings</h1>
-		<p class="lede">
-			Application configuration. Changes are persisted to
-			<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings.
-			Environment variables still override values set here.
-		</p>
-	</header>
+<AdminGuard>
+	<main class="wrap">
+		<header>
+			<h1>Settings</h1>
+			<p class="lede">
+				Application configuration. Changes are persisted to
+				<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings. Environment
+				variables still override values set here.
+			</p>
+		</header>
 
-	{#if error}
-		<div class="banner err">{error}</div>
-	{/if}
+		{#if error}
+			<div class="banner err">{error}</div>
+		{/if}
 
-	{#if loading}
-		<p class="muted">Loading…</p>
-	{:else}
-		{#each groups as group (group.name)}
-			<section>
-				<header class="sectionhead">
-					<h2>{group.name}</h2>
-					<div class="actions">
-						{#if savedFlash && savedFlash.startsWith(group.name)}
-							<span class="flash">✓ saved</span>
-						{/if}
-						<button
-							onclick={() => saveGroup(group)}
-							disabled={savingGroup === group.name || !dirtyInGroup(group)}
-						>
-							{savingGroup === group.name ? 'Saving…' : 'Save'}
-						</button>
-					</div>
-				</header>
-
-				{#if restartFieldsEdited(group).length > 0}
-					<div class="banner warn">
-						These changes require a server restart to fully take effect:
-						<strong>{restartFieldsEdited(group).map((f) => f.name).join(', ')}</strong>
-					</div>
-				{/if}
-
-				<div class="fields">
-					{#each group.fields as field (field.name)}
-						<div class="field" class:restart={field.restart_required}>
-							<label for={`f-${field.name}`}>
-								<span class="fieldname">{field.name}</span>
-								{#if field.restart_required}<span class="badge">restart</span>{/if}
-								{#if field.sensitive}<span class="badge">secret</span>{/if}
-							</label>
-							<p class="desc">{field.description}</p>
-							<div class="control">
-								{#if field.type === 'bool'}
-									<label class="checkrow">
-										<input
-											type="checkbox"
-											id={`f-${field.name}`}
-											checked={Boolean(values[field.name])}
-											onchange={(e) => onValueChange(field, e.currentTarget.checked)}
-										/>
-										<span>{Boolean(values[field.name]) ? 'enabled' : 'disabled'}</span>
-									</label>
-								{:else}
-									<input
-										id={`f-${field.name}`}
-										type={inputType(field)}
-										value={String(values[field.name] ?? '')}
-										oninput={(e) => onValueChange(field, e.currentTarget.value)}
-										placeholder={String(field.default ?? '')}
-									/>
-									{#if field.sensitive}
-										<button
-											type="button"
-											class="reveal"
-											onclick={() => toggleReveal(field)}
-											title={revealed[field.name] ? 'Hide' : 'Reveal'}
-										>
-											{revealed[field.name] ? 'Hide' : 'Reveal'}
-										</button>
-									{/if}
-								{/if}
-							</div>
+		{#if loading}
+			<p class="muted">Loading…</p>
+		{:else}
+			{#each groups as group (group.name)}
+				<section>
+					<header class="sectionhead">
+						<h2>{group.name}</h2>
+						<div class="actions">
+							{#if savedFlash && savedFlash.startsWith(group.name)}
+								<span class="flash">✓ saved</span>
+							{/if}
+							<button
+								onclick={() => saveGroup(group)}
+								disabled={savingGroup === group.name || !dirtyInGroup(group)}
+							>
+								{savingGroup === group.name ? 'Saving…' : 'Save'}
+							</button>
 						</div>
-					{/each}
-				</div>
-			</section>
-		{/each}
-	{/if}
-</main>
+					</header>
+
+					{#if restartFieldsEdited(group).length > 0}
+						<div class="banner warn">
+							These changes require a server restart to fully take effect:
+							<strong
+								>{restartFieldsEdited(group)
+									.map((f) => f.name)
+									.join(', ')}</strong
+							>
+						</div>
+					{/if}
+
+					<div class="fields">
+						{#each group.fields as field (field.name)}
+							<div class="field" class:restart={field.restart_required}>
+								<label for={`f-${field.name}`}>
+									<span class="fieldname">{field.name}</span>
+									{#if field.restart_required}<span class="badge">restart</span>{/if}
+									{#if field.sensitive}<span class="badge">secret</span>{/if}
+								</label>
+								<p class="desc">{field.description}</p>
+								<div class="control">
+									{#if field.type === 'bool'}
+										<label class="checkrow">
+											<input
+												type="checkbox"
+												id={`f-${field.name}`}
+												checked={Boolean(values[field.name])}
+												onchange={(e) => onValueChange(field, e.currentTarget.checked)}
+											/>
+											<span>{Boolean(values[field.name]) ? 'enabled' : 'disabled'}</span>
+										</label>
+									{:else}
+										<input
+											id={`f-${field.name}`}
+											type={inputType(field)}
+											value={String(values[field.name] ?? '')}
+											oninput={(e) => onValueChange(field, e.currentTarget.value)}
+											placeholder={String(field.default ?? '')}
+										/>
+										{#if field.sensitive}
+											<button
+												type="button"
+												class="reveal"
+												onclick={() => toggleReveal(field)}
+												title={revealed[field.name] ? 'Hide' : 'Reveal'}
+											>
+												{revealed[field.name] ? 'Hide' : 'Reveal'}
+											</button>
+										{/if}
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</section>
+			{/each}
+		{/if}
+	</main>
+</AdminGuard>
 
 <style>
 	.wrap {
