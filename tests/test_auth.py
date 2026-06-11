@@ -124,6 +124,19 @@ def test_enforce_shared_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         enforce_deployment_invariants()
 
 
+def test_enforce_shared_requires_mount_roots(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "auth_mode", "none")
+    monkeypatch.setattr(settings, "allowed_groups", "users")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "")
+    with pytest.raises(RuntimeError, match="DATASET_MOUNT_ROOTS"):
+        enforce_deployment_invariants()
+
+
 def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
@@ -134,6 +147,7 @@ def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "allowed_groups", "users")
     monkeypatch.setattr(settings, "credential_encryption_key", "configured")
     monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
 
     enforce_deployment_invariants()
 

@@ -313,7 +313,7 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
                 return {
                     "error": "Benchmark config changed after approval; please review and approve the updated plan.",
                     **chat_tools.benchmark_payload(
-                        current, chat_tools.validation_for_config(current)
+                        current, await chat_tools.validation_for_config(current)
                     ),
                 }
 
