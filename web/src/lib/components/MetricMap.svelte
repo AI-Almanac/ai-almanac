@@ -2,18 +2,15 @@
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
-	import { getRegionBoundary, type Job, type JobCellResponse } from '$lib/api';
-	import { getCachedJobGrid, getCachedJobCell } from '$lib/benchmarks.svelte';
+	import { type Job } from '$lib/api';
+	import { getCachedJobGrid } from '$lib/benchmarks.svelte';
 	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
 	import MetricMapControls from '$lib/components/metric-map/MetricMapControls.svelte';
 	import MetricMapLegend from '$lib/components/metric-map/MetricMapLegend.svelte';
 	import SwipeComparisonOverlay from '$lib/components/metric-map/SwipeComparisonOverlay.svelte';
-	import {
-		BASEMAP_STYLES,
-		BOUNDARY_LEVELS,
-		type BasemapStyleId
-	} from '$lib/components/metric-map/constants';
-	import { boundaryLayerId, boundarySourceId } from '$lib/components/metric-map/layerKeys';
+	import { BASEMAP_STYLES, type BasemapStyleId } from '$lib/components/metric-map/constants';
+	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
+	import { CellInspector } from '$lib/components/metric-map/cellInspector.svelte';
 	import {
 		availableModelRuns as getAvailableModelRuns,
 		currentLensKey as getCurrentLensKey,
@@ -36,9 +33,6 @@
 	import { modelDisplayName } from '$lib/components/metric-map/mapUi';
 	import { buildTooltipContent as formatTooltipContent } from '$lib/components/metric-map/tooltip';
 	import type {
-		BoundaryCacheEntry,
-		BoundaryLayerState,
-		BoundaryLevel,
 		LayerState,
 		MetricDef,
 		MetricWindowAvailability,
@@ -70,17 +64,8 @@
 	let map = $state<maplibregl.Map | null>(null);
 	let mapReady = $state(false);
 	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
-	type BoundaryMetadata = Awaited<ReturnType<typeof getRegionBoundary>>['metadata'];
-	const boundaryCache = new globalThis.Map<string, BoundaryCacheEntry>();
 
 	let layers = $state<Record<string, LayerState>>({});
-	let boundaryLayers = $state<Record<BoundaryLevel, BoundaryLayerState | null>>({
-		adm1: null,
-		adm2: null
-	});
-	let boundaryLoading = $state<Set<BoundaryLevel>>(new Set());
-	let boundaryErrors = $state<Partial<Record<BoundaryLevel, string>>>({});
-	let visibleBoundaryLevels = $state<Set<BoundaryLevel>>(new Set());
 	let loading = $state<Set<string>>(new Set());
 	let errors = $state<Record<string, string>>({});
 	let visibleKeys = $state<Set<string>>(new Set());
@@ -99,6 +84,12 @@
 	let loadRequestId = 0;
 	const boundaryRegion = $derived(jobs[0]?.region_id ?? jobs[0]?.params?.region);
 
+	const boundaries = new BoundaryLayers(
+		() => map,
+		() => boundaryRegion
+	);
+	const cellInspector = new CellInspector();
+
 	let panelCollapsed = $state(false);
 	let fullscreen = $state(false);
 
@@ -107,11 +98,6 @@
 	let tooltipY = $state(0);
 	let tooltipContent = $state('');
 	let gridCellHover = $state(false);
-	let selectedCell = $state<{ lat: number; lon: number } | null>(null);
-	let cellResults = $state<JobCellResponse[]>([]);
-	let cellLoading = $state(false);
-	let cellError = $state<string | null>(null);
-	let cellLoadRequestId = 0;
 
 	// ---- Derived -----------------------------------------------------------------
 
@@ -124,11 +110,6 @@
 
 	const visibleLayers = $derived(
 		[...visibleKeys].filter((k) => layers[k]).map((k) => ({ key: k, ...layers[k] }))
-	);
-	const visibleBoundaryLayers = $derived(
-		[...visibleBoundaryLevels]
-			.map((level) => boundaryLayers[level])
-			.filter((layer) => layer != null)
 	);
 	const anyLoading = $derived(loading.size > 0);
 	const activeWindows = $derived(
@@ -317,38 +298,6 @@
 		if (fit && firstKey) fitToLayer(layers[firstKey]);
 	}
 
-	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
-		const requestId = ++cellLoadRequestId;
-		cellResults = [];
-		cellError = null;
-		cellLoading = true;
-		try {
-			const results = await Promise.all(
-				jobsSnapshot.map((job) => getCachedJobCell(job.id, job.model_name, window, lat, lon))
-			);
-			if (requestId !== cellLoadRequestId) return;
-			cellResults = results;
-		} catch (e) {
-			if (requestId !== cellLoadRequestId) return;
-			cellError = e instanceof Error ? e.message : 'Failed to load cell metrics';
-		} finally {
-			if (requestId !== cellLoadRequestId) return;
-			cellLoading = false;
-		}
-	}
-
-	function openCellInspector(lat: number, lon: number) {
-		selectedCell = { lat, lon };
-	}
-
-	function closeCellInspector() {
-		cellLoadRequestId++;
-		selectedCell = null;
-		cellResults = [];
-		cellError = null;
-		cellLoading = false;
-	}
-
 	function buildTooltipContent(lat: number, lon: number): string {
 		return formatTooltipContent({
 			lat,
@@ -398,127 +347,6 @@
 		if (map.getSource(sourceId)) map.removeSource(sourceId);
 	}
 
-	function boundaryCacheKey(level: BoundaryLevel, region: string) {
-		return `${region.trim().toLowerCase()}||${level}`;
-	}
-
-	function boundaryCacheEntry(
-		metadata: BoundaryMetadata,
-		geojson: unknown,
-		level: BoundaryLevel
-	): BoundaryCacheEntry {
-		return {
-			label: `${metadata.boundaryName ?? 'Region'} ${metadata.boundaryType ?? BOUNDARY_LEVELS[level].type}`,
-			source: metadata.boundarySource ?? 'geoBoundaries',
-			geojson
-		};
-	}
-
-	function addBoundaryLayerState(
-		level: BoundaryLevel,
-		entry: BoundaryCacheEntry
-	): BoundaryLayerState | null {
-		if (!map) return null;
-		const style = BOUNDARY_LEVELS[level];
-		const sourceId = boundarySourceId(level);
-		const haloLayerId = `${boundaryLayerId(level)}-halo`;
-		const layerId = boundaryLayerId(level);
-		if (map.getLayer(haloLayerId)) map.removeLayer(haloLayerId);
-		removeMapLayer(layerId, sourceId);
-		map.addSource(sourceId, {
-			type: 'geojson',
-			data: entry.geojson as GeoJSON.GeoJSON
-		});
-		const visibility = visibleBoundaryLevels.has(level) ? 'visible' : 'none';
-		map.addLayer({
-			id: haloLayerId,
-			type: 'line',
-			source: sourceId,
-			layout: { visibility },
-			paint: {
-				'line-color': style.haloColor,
-				'line-width': style.haloWidth
-			}
-		});
-		map.addLayer({
-			id: layerId,
-			type: 'line',
-			source: sourceId,
-			layout: { visibility },
-			paint: {
-				'line-color': style.strokeColor,
-				'line-width': style.strokeWidth
-			}
-		});
-		return {
-			layerId,
-			sourceId,
-			label: entry.label,
-			source: entry.source,
-			geojson: entry.geojson
-		};
-	}
-
-	async function loadBoundaryLayer(level: BoundaryLevel) {
-		if (!map || boundaryLayers[level] || boundaryLoading.has(level)) return;
-		const region = boundaryRegion;
-		if (!region) {
-			boundaryErrors = { ...boundaryErrors, [level]: 'No geoBoundaries mapping for this region' };
-			return;
-		}
-		const cacheKey = boundaryCacheKey(level, region);
-		const cached = boundaryCache.get(cacheKey);
-		if (cached) {
-			const state = addBoundaryLayerState(level, cached);
-			if (state) boundaryLayers = { ...boundaryLayers, [level]: state };
-			return;
-		}
-
-		boundaryLoading = new Set([...boundaryLoading, level]);
-		boundaryErrors = { ...boundaryErrors, [level]: '' };
-		try {
-			const { metadata, geojson } = await getRegionBoundary(region, level);
-			const cachedState = boundaryCacheEntry(metadata, geojson, level);
-			boundaryCache.set(cacheKey, cachedState);
-			const state = addBoundaryLayerState(level, cachedState);
-			if (state) boundaryLayers = { ...boundaryLayers, [level]: state };
-		} catch (e) {
-			boundaryErrors = {
-				...boundaryErrors,
-				[level]: e instanceof Error ? e.message : 'Failed to load boundaries'
-			};
-			const next = new Set(visibleBoundaryLevels);
-			next.delete(level);
-			visibleBoundaryLevels = next;
-		} finally {
-			const next = new Set(boundaryLoading);
-			next.delete(level);
-			boundaryLoading = next;
-		}
-	}
-
-	function toggleBoundaryLayer(level: BoundaryLevel) {
-		const next = new Set(visibleBoundaryLevels);
-		if (next.has(level)) {
-			next.delete(level);
-			setBoundaryVisibility(level, false);
-		} else {
-			next.add(level);
-			setBoundaryVisibility(level, true);
-			untrack(() => loadBoundaryLayer(level));
-		}
-		visibleBoundaryLevels = next;
-	}
-
-	function setBoundaryVisibility(level: BoundaryLevel, visible: boolean) {
-		if (!map) return;
-		for (const id of [`${boundaryLayerId(level)}-halo`, boundaryLayerId(level)]) {
-			if (map.getLayer(id)) {
-				map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
-			}
-		}
-	}
-
 	// ---- Full load (called when jobs or window changes) --------------------------
 
 	async function loadAll() {
@@ -528,17 +356,10 @@
 		const previousOpacities = { ...opacities };
 
 		for (const { layerId, sourceId } of Object.values(layers)) removeMapLayer(layerId, sourceId);
-		for (const state of Object.values(boundaryLayers)) {
-			if (!state) continue;
-			if (map.getLayer(`${state.layerId}-halo`)) map.removeLayer(`${state.layerId}-halo`);
-			removeMapLayer(state.layerId, state.sourceId);
-		}
+		boundaries.clearFromMap();
 		layers = {};
-		boundaryLayers = { adm1: null, adm2: null };
 		errors = {};
 		loading = new Set();
-		boundaryErrors = {};
-		boundaryLoading = new Set();
 
 		if (jobs.length === 0 || metrics.length === 0) {
 			activeRuns = [];
@@ -618,7 +439,7 @@
 		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey]);
 
 		if (Object.values(layers).length > 0) {
-			for (const level of visibleBoundaryLevels) untrack(() => loadBoundaryLayer(level));
+			untrack(() => boundaries.reloadVisible());
 		}
 	}
 
@@ -691,7 +512,7 @@
 			const lat = feature?.properties?.lat;
 			const lon = feature?.properties?.lon;
 			if (typeof lat !== 'number' || typeof lon !== 'number') return;
-			openCellInspector(lat, lon);
+			cellInspector.open(lat, lon);
 		});
 
 		map.on('mouseleave', () => {
@@ -742,12 +563,12 @@
 	});
 
 	$effect(() => {
-		const cell = selectedCell;
+		const cell = cellInspector.selected;
 		const window = lens.selectedWindow;
 		const activeJobIds = jobIds;
 		if (cell && activeJobIds && window) {
 			const jobsSnapshot = untrack(() => jobs);
-			untrack(() => loadCellResults(cell.lat, cell.lon, window, jobsSnapshot));
+			untrack(() => cellInspector.load(window, jobsSnapshot));
 		}
 	});
 
@@ -796,25 +617,25 @@
 
 		<MetricMapLegend {visibleLayers} viewMode={lens.viewMode} {metricLabel} {windowLabelFor} />
 
-		{#if visibleBoundaryLayers.length > 0}
+		{#if boundaries.visibleLayers.length > 0}
 			<div class="boundary-attribution">
 				Boundaries: geoBoundaries gbOpen
-				{#each visibleBoundaryLayers as boundaryLayer, i}
+				{#each boundaries.visibleLayers as boundaryLayer, i}
 					{#if i === 0}({:else};
-					{/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
+					{/if}{boundaryLayer.label}{#if i === boundaries.visibleLayers.length - 1}){/if}
 				{/each}
 			</div>
 		{/if}
 
-		{#if selectedCell}
+		{#if cellInspector.selected}
 			<GridCellInspector
-				cell={selectedCell}
+				cell={cellInspector.selected}
 				forecastWindow={lens.selectedWindow}
 				{metrics}
-				results={cellResults}
-				loading={cellLoading}
-				error={cellError}
-				onclose={closeCellInspector}
+				results={cellInspector.results}
+				loading={cellInspector.loading}
+				error={cellInspector.error}
+				onclose={() => cellInspector.close()}
 			/>
 		{/if}
 	</div>
@@ -834,9 +655,9 @@
 		selectedReferenceWindow={lens.selectedReferenceWindow}
 		{selectedBasemap}
 		viewMode={lens.viewMode}
-		{visibleBoundaryLevels}
-		{boundaryLoading}
-		{boundaryErrors}
+		visibleBoundaryLevels={boundaries.visibleLevels}
+		boundaryLoading={boundaries.loading}
+		boundaryErrors={boundaries.errors}
 		onTogglePanel={() => (panelCollapsed = !panelCollapsed)}
 		onSelectMetric={selectMetric}
 		onSelectWindow={selectWindow}
@@ -848,7 +669,7 @@
 		onSelectReferenceJob={(value) => (lens.selectedReferenceJobId = value)}
 		onSelectReferenceWindow={selectReferenceWindow}
 		onSelectBasemap={(value) => (selectedBasemap = value)}
-		onToggleBoundary={toggleBoundaryLayer}
+		onToggleBoundary={(level) => boundaries.toggle(level)}
 	/>
 </div>
 
@@ -884,14 +705,14 @@
 	}
 
 	.map-root.compact .map-stage {
-		height: 430px;
+		height: clamp(18rem, 45vh, 27rem);
 	}
 
 	.map-stage {
 		position: relative;
 		order: 1;
 		flex: none;
-		height: 600px;
+		height: clamp(22rem, 60vh, 37.5rem);
 		overflow: hidden;
 		background: #101418;
 	}
@@ -989,7 +810,7 @@
 		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 		pointer-events: none;
 		line-height: 1.5;
-		min-width: 160px;
+		min-width: 10rem;
 	}
 
 	.tooltip :global(.tt-group) {
