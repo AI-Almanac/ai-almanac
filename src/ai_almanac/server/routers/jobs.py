@@ -22,6 +22,7 @@ from sqlalchemy import text
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services import job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.events import audit, usage
@@ -554,44 +555,16 @@ async def get_job(job: ReadableJob, user: CurrentUser):
     return _row_to_job_out(job, user.id, await load_catalog())
 
 
-async def _fetch_job(job_id: str) -> dict | None:
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    return dict(row) if row else None
-
-
-def _can_read(job: dict, user) -> bool:
-    """Owner, admin, or anyone when the job is shared read-only."""
-    return (
-        user.is_admin
-        or job.get("user_id") == user.id
-        or (job.get("visibility") or "private") == "shared"
-    )
-
-
-def _can_modify(job: dict, user) -> bool:
-    """Owner or admin. Sharing is read-only and never grants this."""
-    return user.is_admin or job.get("user_id") == user.id
-
-
 async def readable_job(job_id: str, user: CurrentUser) -> dict:
-    job = await _fetch_job(job_id)
-    if not job or not _can_read(job, user):
+    job = await job_access.fetch_job(job_id)
+    if not job or not job_access.can_read(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 
 async def modifiable_job(job_id: str, user: CurrentUser) -> dict:
-    job = await _fetch_job(job_id)
-    if not job or not _can_modify(job, user):
+    job = await job_access.fetch_job(job_id)
+    if not job or not job_access.can_modify(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
@@ -615,8 +588,8 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
         return  # handshake already closed (missing identity in shared mode)
     await ws.accept()
 
-    job = await _fetch_job(job_id)
-    if job is None or not _can_read(job, user):
+    job = await job_access.fetch_job(job_id)
+    if job is None or not job_access.can_read(job, user):
         # Don't leak existence of other users' jobs; reject uniformly.
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
