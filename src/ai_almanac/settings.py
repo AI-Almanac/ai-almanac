@@ -276,20 +276,20 @@ def _load_config_yaml() -> dict:
         return {}
 
 
-def _apply_yaml_overrides() -> None:
-    """Overlay config.yaml values onto the `settings` singleton, but never
-    overwrite a field whose corresponding environment variable is set.
+def _apply_yaml_overrides(target: Settings) -> None:
+    """Overlay config.yaml values onto `target`, but never overwrite a field
+    whose corresponding environment variable is set.
     """
     data = _load_config_yaml()
     for key, value in data.items():
-        if key not in settings.model_fields:
+        if key not in type(target).model_fields:
             continue
         if key.upper() in os.environ:
             continue  # env wins
-        if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
+        if target.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
             continue
         try:
-            setattr(settings, key, value)
+            setattr(target, key, value)
         except Exception:
             # Bad value type — skip silently; the schema validator surfaces it
             # on the next save.
@@ -300,12 +300,15 @@ def reload_settings() -> Settings:
     """Re-read code defaults + env + config.yaml; mutate the singleton in place.
 
     Called by the Settings PATCH endpoint after writing changes, and once on
-    server startup. Mutates `settings` so existing imports stay valid.
+    server startup. Mutates `settings` so existing imports stay valid. The new
+    values are fully resolved on a scratch instance first, so the in-place
+    update is a plain field copy with no window where config.yaml overrides
+    have been reverted to env/defaults.
     """
     fresh = Settings()  # defaults + env (no YAML)
-    for name in fresh.model_fields:
+    _apply_yaml_overrides(fresh)
+    for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
-    _apply_yaml_overrides()
     return settings
 
 

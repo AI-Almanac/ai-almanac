@@ -119,7 +119,7 @@ def _present_value(field_name: str, value: Any, reveal: bool) -> Any:
 @router.get("/schema", response_model=SettingsSchema)
 def get_schema(_admin: AdminUser) -> SettingsSchema:
     """Return field metadata grouped into UI sections."""
-    model_fields = settings.model_fields
+    model_fields = type(settings).model_fields
     groups: list[dict[str, Any]] = []
     seen: set[str] = set()
     for group_name, fields in _FIELD_GROUPS:
@@ -151,7 +151,7 @@ def get_settings(_admin: AdminUser, reveal: bool = False) -> SettingsValues:
     `?reveal=true` is passed (which the UI sends after the user explicitly
     clicks 'show' on a secret input)."""
     values: dict[str, Any] = {}
-    for name in settings.model_fields:
+    for name in type(settings).model_fields:
         values[name] = _present_value(name, getattr(settings, name), reveal)
     return SettingsValues(values=values)
 
@@ -166,7 +166,7 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
     singleton. Returns the new effective settings (with secrets masked)."""
     cleaned: dict[str, Any] = {}
     for key, value in body.values.items():
-        if key not in settings.model_fields:
+        if key not in type(settings).model_fields:
             raise HTTPException(status_code=400, detail=f"unknown setting: {key}")
         if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
             raise HTTPException(
@@ -183,7 +183,7 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
     reload_settings()
 
     values: dict[str, Any] = {}
-    for name in settings.model_fields:
+    for name in type(settings).model_fields:
         values[name] = _present_value(name, getattr(settings, name), reveal=False)
     return SettingsValues(values=values)
 
