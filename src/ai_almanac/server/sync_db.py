@@ -19,9 +19,10 @@ serialize correctly on either backend:
 from __future__ import annotations
 
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Connection, Engine, make_url
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.pool import NullPool
 
+from ai_almanac.server.database_urls import sync_database_url
 from ai_almanac.settings import settings
 
 # Fixed key for the advisory lock that serializes capacity claims on PostgreSQL.
@@ -32,12 +33,7 @@ _engine_url: str | None = None
 
 
 def _sync_url(async_url: str) -> str:
-    url = make_url(async_url)
-    if url.drivername.startswith("sqlite"):
-        return str(url.set(drivername="sqlite"))
-    if url.drivername.startswith("postgresql"):
-        return str(url.set(drivername="postgresql+psycopg"))
-    return async_url
+    return sync_database_url(async_url)
 
 
 def _configure_sqlite(engine: Engine) -> None:

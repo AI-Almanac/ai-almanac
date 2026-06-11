@@ -5,6 +5,8 @@ RUN npm ci
 COPY web ./
 RUN npm run build
 
+FROM ghcr.io/prefix-dev/pixi:latest AS pixi
+
 FROM python:3.12-slim-bookworm AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
@@ -15,9 +17,14 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-RUN groupadd --system almanac \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIXI_NO_PROGRESS=1
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system almanac \
     && useradd --system --gid almanac --create-home almanac
+COPY --from=pixi /usr/local/bin/pixi /usr/local/bin/pixi
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-cache-dir /wheels/*.whl \
     && rm -rf /wheels

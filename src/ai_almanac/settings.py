@@ -343,14 +343,9 @@ _sync_engine_url: str | None = None
 
 def _sync_read_url(async_url: str) -> str:
     """Map the app's async DB URL to an equivalent synchronous-driver URL."""
-    from sqlalchemy.engine import make_url
+    from ai_almanac.server.database_urls import sync_database_url
 
-    url = make_url(async_url)
-    if url.drivername.startswith("sqlite"):
-        return str(url.set(drivername="sqlite"))
-    if url.drivername.startswith("postgresql"):
-        return str(url.set(drivername="postgresql+psycopg"))
-    return async_url
+    return sync_database_url(async_url)
 
 
 def _get_sync_engine():
