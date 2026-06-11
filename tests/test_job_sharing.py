@@ -124,3 +124,27 @@ async def test_sharing_is_read_only_no_cancel_or_delete(
         f"/jobs/{job_id}", headers={"X-Forwarded-User": "reader"}
     )
     assert delete.status_code == 404
+
+
+class _User:
+    def __init__(self, user_id: str, is_admin: bool = False) -> None:
+        self.id = user_id
+        self.is_admin = is_admin
+
+
+@pytest.mark.asyncio
+async def test_readable_job_ids_follows_read_rules(
+    client: httpx.AsyncClient, proxy
+) -> None:
+    from ai_almanac.server.services.job_access import readable_job_ids
+
+    private_id, _ = await _owned_job(visibility="private")
+    shared_id, _ = await _owned_job(visibility="shared")
+
+    reader = _User("someone-else")
+    readable = await readable_job_ids([private_id, shared_id, "missing"], reader)
+    assert readable == {shared_id}
+
+    admin = _User("admin-user", is_admin=True)
+    readable = await readable_job_ids([private_id, shared_id], admin)
+    assert readable == {private_id, shared_id}

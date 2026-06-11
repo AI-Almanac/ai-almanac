@@ -22,10 +22,11 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from pydantic_ai import DeferredToolResults, ToolDenied
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
-from ai_almanac.server.auth import CurrentUser
+from ai_almanac.server.auth import AuthenticatedUser, CurrentUser
 from ai_almanac.server.db import get_db, lock_for_update
+from ai_almanac.server.services import job_access
 
 from ..services.benchmark_domain import (
     submit_benchmark_for_session,
@@ -317,26 +318,13 @@ async def _update_session_state(
     )
 
 
-async def _validate_scope(scope: ChatScope, user_id: str) -> ChatScope:
+async def _validate_scope(scope: ChatScope, user: AuthenticatedUser) -> ChatScope:
     job_ids = list(dict.fromkeys(scope.job_ids))
     validated_scope = scope.model_copy(update={"job_ids": job_ids})
     if not job_ids:
         return validated_scope
 
-    query = text("""
-        SELECT id
-        FROM jobs
-        WHERE user_id = :uid AND id IN :job_ids
-    """).bindparams(bindparam("job_ids", expanding=True))
-
-    async with get_db() as conn:
-        rows = (
-            (await conn.execute(query, {"uid": user_id, "job_ids": job_ids}))
-            .mappings()
-            .fetchall()
-        )
-
-    valid_ids = {row["id"] for row in rows}
+    valid_ids = await job_access.readable_job_ids(job_ids, user)
     invalid_ids = [job_id for job_id in job_ids if job_id not in valid_ids]
     if invalid_ids:
         raise HTTPException(
@@ -731,7 +719,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
     requested_scope = None
     if body.scope is not None:
-        requested_scope = await _validate_scope(body.scope, user.id)
+        requested_scope = await _validate_scope(body.scope, user)
 
     async with get_db() as conn:
         row = (
