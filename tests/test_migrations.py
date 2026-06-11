@@ -4,6 +4,8 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
+from ai_almanac.server.database_urls import sync_database_url
+
 
 def _alembic_config() -> Config:
     server_dir = Path(__file__).parents[1] / "src" / "ai_almanac" / "server"
@@ -56,3 +58,12 @@ def test_partial_ownership_migration_resumes(tmp_path: Path, monkeypatch) -> Non
         "usage_events",
     } <= set(inspector.get_table_names())
     engine.dispose()
+
+
+def test_sync_database_url_uses_psycopg3() -> None:
+    url = "postgresql+asyncpg://almanac:secret@postgres/almanac"
+
+    assert (
+        sync_database_url(url)
+        == "postgresql+psycopg://almanac:secret@postgres/almanac"
+    )

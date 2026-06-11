@@ -92,6 +92,12 @@ check-web = { cmd = "npm run check", depends-on = ["install-web"], cwd = "web", 
 test-web = { cmd = "npm test -- --run", depends-on = ["install-web"], cwd = "web", description = "Run frontend tests" }
 backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the FastAPI development server" }
 test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
+test-compose-e2e = { cmd = "./scripts/e2e-compose.sh", description = "Run the containerized PostgreSQL benchmark smoke flow" }
+self-host-local = { cmd = "./scripts/self-host-local.sh", description = "Start the local shared-mode development stack" }
+self-host-local-gpu = { cmd = "./scripts/self-host-local.sh gpu", description = "Start local shared mode with the real Pixi GPU runner" }
+self-host-local-down = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml down", description = "Stop the local shared-mode development stack" }
+self-host-local-reset = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml down --volumes", description = "Stop and delete local shared-mode development data" }
+self-host-local-logs = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml logs --follow", description = "Follow local shared-mode development logs" }
 package = { cmd = "python -m build", default-environment = "dev", depends-on = ["build-web"], description = "Build the Python wheel and source distribution" }
 serve = { cmd = "ai-almanac serve --no-open", depends-on = ["build-web"], description = "Run a production-style server with the built frontend" }
 test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }

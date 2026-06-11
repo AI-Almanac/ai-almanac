@@ -19,14 +19,14 @@ That's it.
 
 ## What you get
 
-| Layer | Where it lives |
-|---|---|
-| Web UI | SvelteKit SPA, bundled into the wheel |
-| API | FastAPI, served on the same port as the UI |
-| Database | SQLite under `~/.local/share/ai-almanac/almanac.db` (auto-migrated) |
-| Storage | Filesystem under the same data directory |
-| Benchmark runner | Detached local supervisor, with ROMP in a Pixi-managed environment |
-| Access model | Local, single-user application bound to the loopback interface |
+| Layer            | Where it lives                                                      |
+| ---------------- | ------------------------------------------------------------------- |
+| Web UI           | SvelteKit SPA, bundled into the wheel                               |
+| API              | FastAPI, served on the same port as the UI                          |
+| Database         | SQLite under `~/.local/share/ai-almanac/almanac.db` (auto-migrated) |
+| Storage          | Filesystem under the same data directory                            |
+| Benchmark runner | Detached local supervisor, with ROMP in a Pixi-managed environment  |
+| Access model     | Local, single-user application bound to the loopback interface      |
 
 One Python package. One process. One port. One data directory.
 
@@ -86,6 +86,34 @@ ai-almanac env info                    # show installed package versions
 ai-almanac reset --confirm             # wipe ~/.local/share/ai-almanac/
 ai-almanac version
 ```
+
+### Test shared mode locally
+
+Run the complete multi-user architecture locally without DNS, TLS, an OIDC
+provider, or a GPU:
+
+```bash
+pixi run self-host-local
+```
+
+Open `http://localhost:18080`. The stack uses PostgreSQL, shared ownership and
+authorization, persistent Docker volumes, and synthetic benchmark outputs.
+Switch between the built-in administrator and regular user at
+`http://localhost:18080/__dev`.
+
+On a host with NVIDIA Container Toolkit, run real benchmarks instead:
+
+```bash
+pixi run self-host-local-gpu
+```
+
+Stop the stack with `pixi run self-host-local-down`. Use
+`pixi run self-host-local-reset` to also delete its PostgreSQL and application
+data volumes.
+
+For an internet-accessible or multi-user installation, follow the
+[deployment guide](./docs/deployment.md). Do not expose personal mode to
+untrusted users.
 
 ### Where data lives
 

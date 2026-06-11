@@ -1,0 +1,21 @@
+services:
+  benchmark-prepare:
+    build: .
+    env_file: deploy/local.env
+    command: ["ai-almanac", "env", "prepare"]
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - persistent_data:/data
+    networks:
+      - internal
+    restart: "no"
+
+  app:
+    environment:
+      RUNNER_MODE: pixi
+    depends_on:
+      benchmark-prepare:
+        condition: service_completed_successfully
+    gpus: all

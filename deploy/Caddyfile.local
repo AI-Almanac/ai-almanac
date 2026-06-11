@@ -1,0 +1,55 @@
+:8080 {
+	@admin_login path /__dev/login/admin
+	handle @admin_login {
+		header Set-Cookie "ai_almanac_dev_user=admin; Path=/; HttpOnly; SameSite=Lax"
+		redir * / 303
+	}
+
+	@user_login path /__dev/login/user
+	handle @user_login {
+		header Set-Cookie "ai_almanac_dev_user=user; Path=/; HttpOnly; SameSite=Lax"
+		redir * / 303
+	}
+
+	@logout path /__dev/logout
+	handle @logout {
+		header Set-Cookie "ai_almanac_dev_user=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+		redir * /__dev 303
+	}
+
+	@dev_help path /__dev
+	handle @dev_help {
+		header Content-Type "text/html; charset=utf-8"
+		respond "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>AI Almanac local users</title></head><body><h1>AI Almanac local users</h1><p>This identity switcher is only available in the local development stack.</p><ul><li><a href=\"/__dev/login/admin\">Continue as local administrator</a></li><li><a href=\"/__dev/login/user\">Continue as local user</a></li></ul></body></html>" 200
+	}
+
+	map {http.request.cookie.ai_almanac_dev_user} {dev_subject} {
+		user local-user
+		default local-admin
+	}
+	map {http.request.cookie.ai_almanac_dev_user} {dev_email} {
+		user user@local.test
+		default admin@local.test
+	}
+	map {http.request.cookie.ai_almanac_dev_user} {dev_name} {
+		user "Local User"
+		default "Local Administrator"
+	}
+	map {http.request.cookie.ai_almanac_dev_user} {dev_groups} {
+		user local-users
+		default local-users,local-admins
+	}
+
+	request_header -X-Forwarded-User
+	request_header -X-Forwarded-Email
+	request_header -X-Forwarded-Preferred-Username
+	request_header -X-Forwarded-Groups
+	request_header -X-Forwarded-Issuer
+	request_header X-Forwarded-User {dev_subject}
+	request_header X-Forwarded-Email {dev_email}
+	request_header X-Forwarded-Preferred-Username {dev_name}
+	request_header X-Forwarded-Groups {dev_groups}
+	request_header X-Forwarded-Issuer http://local.ai-almanac.test
+
+	reverse_proxy app:8765
+}

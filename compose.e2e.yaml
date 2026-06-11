@@ -1,0 +1,82 @@
+services:
+  caddy:
+    image: caddy:2.10
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./deploy/Caddyfile.e2e:/etc/caddy/Caddyfile:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - edge
+      - internal
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: almanac
+      POSTGRES_USER: almanac
+      POSTGRES_PASSWORD: e2e-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U almanac -d almanac"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - internal
+
+  storage-init:
+    build: .
+    user: "0:0"
+    command: ["sh", "-c", "find /data ! -user almanac -exec chown almanac:almanac {} +"]
+    volumes:
+      - persistent_data:/data
+    restart: "no"
+
+  migrate:
+    build: .
+    env_file: deploy/e2e.env
+    command: ["ai-almanac", "db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    volumes:
+      - persistent_data:/data
+    networks:
+      - internal
+    restart: "no"
+
+  app:
+    build: .
+    env_file: deploy/e2e.env
+    command: ["ai-almanac", "serve", "--bind", "0.0.0.0", "--port", "8765", "--no-open"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - persistent_data:/data
+      - ./testdata:/datasets:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8765/ready')",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - internal
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  persistent_data:

@@ -1,0 +1,15 @@
+:8080 {
+	request_header -X-Forwarded-User
+	request_header -X-Forwarded-Email
+	request_header -X-Forwarded-Preferred-Username
+	request_header -X-Forwarded-Groups
+	request_header -X-Forwarded-Issuer
+
+	request_header X-Forwarded-User {http.request.header.X-E2E-User}
+	request_header X-Forwarded-Email {http.request.header.X-E2E-User}@example.test
+	request_header X-Forwarded-Preferred-Username {http.request.header.X-E2E-User}
+	request_header X-Forwarded-Groups e2e-users,e2e-admins
+	request_header X-Forwarded-Issuer https://e2e-issuer.example.test
+
+	reverse_proxy app:8765
+}

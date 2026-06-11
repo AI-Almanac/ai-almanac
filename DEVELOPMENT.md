@@ -10,16 +10,17 @@ dependencies, and development tasks. No Docker or external database is needed.
 ```
 ai-almanac (one Python process)
 ├── FastAPI server (uvicorn)
-│   ├── /api/...    JSON API
+│   ├── /...        JSON API and WebSocket routes
 │   ├── /config.js  runtime config injected into the SPA
 │   └── /...        bundled SvelteKit SPA (when built)
-└── Durable supervisor → workload process → `pixi run momp-run`
+└── Detached job supervisor → workload process → managed Pixi benchmark env
 ```
 
 Storage: filesystem under `$AI_ALMANAC_DATA_DIR` (default:
 `~/.local/share/ai-almanac/`).
 Database: SQLite at `<data-dir>/almanac.db`, auto-migrated on startup.
-Auth: none — see [`DEPLOY_PUBLIC.md`](./DEPLOY_PUBLIC.md) for reverse-proxy setup.
+Auth: none in personal mode; shared deployments use trusted proxy identity and
+application authorization. See [`docs/deployment.md`](./docs/deployment.md).
 
 ---
 
@@ -76,21 +77,25 @@ src/ai_almanac/
 │   └── benchmark.pixi.toml  benchmark env spec
 └── server/
     ├── app.py             FastAPI app, lifespan, static SPA mount
-    ├── db.py              SQLAlchemy async + auto-migrate
-    ├── attribution.py     reads X-Forwarded-User → CurrentUser shim
-    ├── alembic/           migrations (collapsed to one SQLite-native baseline)
+    ├── auth.py            request identity, admission, and role authorization
+    ├── db.py              async SQLAlchemy access and user persistence
+    ├── sync_db.py         supervisor database access and capacity locking
+    ├── alembic/           SQLite/PostgreSQL schema migrations
     ├── config/            YAML registries: models.yaml, datasets.yaml,
     │                      regions.yaml, romp.yaml
-    ├── routers/           jobs, datasets, config, regions, chat
+    ├── routers/           auth, jobs, data, settings, uploads, chat
     ├── services/
-    │   ├── romp.py        renders per-job ROMP configuration
+    │   ├── job_manager.py detached supervision and restart reconciliation
     │   ├── job_workload.py invokes ROMP through the managed Pixi environment
+    │   ├── local_runner.py submits work to the local supervisor
+    │   ├── romp.py        renders per-job ROMP configuration
     │   ├── job_events.py  per-job WebSocket pub/sub broker
     │   ├── e2s.py         earth2studio RMSE/MAE/ACC/bias subprocess script
-    │   ├── storage.py     LocalStorage (only impl)
+    │   ├── storage.py     local storage implementation
+    │   ├── artifacts.py   validates and publishes completed artifacts
     │   ├── metrics.py     ROMP metric domain aggregation
-    │   ├── benchmark_*.py LLM-driven benchmark planning state machine
-    │   └── chat_*.py      LLM chat + figure handling
+    │   ├── benchmark_*.py benchmark planning state and domain logic
+    │   └── chat_*.py      LLM chat state, tools, and figures
     └── static/            bundled SvelteKit SPA (populated at wheel-build time)
 ```
 
@@ -105,14 +110,15 @@ web/
 │   ├── app.html           includes <script src="/config.js">
 │   ├── lib/
 │   │   ├── api.ts         fetch wrappers + subscribeJob() WebSocket helper
-│   │   ├── auth.ts        no-op shim (auth lives at the proxy, not in the app)
-│   │   ├── auth-store.ts  ditto — isAuthenticated always true
+│   │   ├── account.svelte.ts identity and capability state from /auth/me
 │   │   ├── components/    MetricMap, ResultsViewer, JobLogs, etc.
 │   │   └── almanac/       static reference catalog (model families, datasets)
 │   └── routes/
 │       ├── benchmarks/    job submission + listing
 │       ├── almanac/       reference catalog pages
-│       └── user/          (vestigial — accounts aren't a thing locally)
+│       ├── data-sources/  observation and model source catalog
+│       ├── regions/       reusable geographic regions
+│       └── settings/      administrator application settings
 └── build/                 npm run build output (bundled into Python wheel)
 ```
 
