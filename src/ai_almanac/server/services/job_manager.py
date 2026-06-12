@@ -12,11 +12,12 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import text
+import sqlalchemy as sa
 
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
+from ai_almanac.server.tables import jobs
 from ai_almanac.settings import settings
 
 ACTIVE_STATUSES = ("queued", "starting", "running", "canceling")
@@ -82,12 +83,7 @@ async def signal_cancel(job_id: str) -> dict | None:
     """
     async with get_db() as conn:
         row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM jobs WHERE id = :id"),
-                    {"id": job_id},
-                )
-            )
+            (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id)))
             .mappings()
             .fetchone()
         )
@@ -97,11 +93,10 @@ async def signal_cancel(job_id: str) -> dict | None:
         if row["status"] in TERMINAL_STATUSES:
             return row
         result = await conn.execute(
-            text(
-                "UPDATE jobs SET status = 'canceling', cancel_requested_at = :now "
-                "WHERE id = :id RETURNING *"
-            ),
-            {"id": job_id, "now": _now()},
+            sa.update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(status="canceling", cancel_requested_at=_now())
+            .returning(jobs)
         )
         return dict(result.mappings().fetchone())
 
@@ -111,8 +106,9 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
     async with get_db() as conn:
         owned = (
             await conn.execute(
-                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user_id},
+                sa.select(jobs.c.id).where(
+                    jobs.c.id == job_id, jobs.c.user_id == user_id
+                )
             )
         ).fetchone()
     if not owned:
@@ -126,11 +122,14 @@ async def reconcile_jobs() -> None:
         rows = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT id, status, worker_pid, workload_pid, process_group_id "
-                        ", heartbeat_at "
-                        "FROM jobs WHERE status IN ('queued', 'starting', 'running', 'canceling')"
-                    )
+                    sa.select(
+                        jobs.c.id,
+                        jobs.c.status,
+                        jobs.c.worker_pid,
+                        jobs.c.workload_pid,
+                        jobs.c.process_group_id,
+                        jobs.c.heartbeat_at,
+                    ).where(jobs.c.status.in_(ACTIVE_STATUSES))
                 )
             )
             .mappings()
@@ -146,11 +145,9 @@ async def reconcile_jobs() -> None:
                 continue
             async with get_db() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE jobs SET worker_id = NULL, worker_pid = NULL, "
-                        "heartbeat_at = NULL WHERE id = :id AND status = 'queued'"
-                    ),
-                    {"id": row["id"]},
+                    sa.update(jobs)
+                    .where(jobs.c.id == row["id"], jobs.c.status == "queued")
+                    .values(worker_id=None, worker_pid=None, heartbeat_at=None)
                 )
             await launch_job(row["id"])
             continue
@@ -163,16 +160,12 @@ async def reconcile_jobs() -> None:
         error = None if final_status == "canceled" else "Job supervisor exited unexpectedly."
         async with get_db() as conn:
             await conn.execute(
-                text(
-                    "UPDATE jobs SET status = :status, completed_at = :now, error = :error "
-                    "WHERE id = :id AND status IN ('starting', 'running', 'canceling')"
-                ),
-                {
-                    "id": row["id"],
-                    "status": final_status,
-                    "now": _now(),
-                    "error": error,
-                },
+                sa.update(jobs)
+                .where(
+                    jobs.c.id == row["id"],
+                    jobs.c.status.in_(("starting", "running", "canceling")),
+                )
+                .values(status=final_status, completed_at=_now(), error=error)
             )
 
 
@@ -181,11 +174,12 @@ def _register_supervisor(engine, job_id: str, worker_id: str) -> bool:
         lock_capacity(conn)
         row = (
             conn.execute(
-                text(
-                    "SELECT status, worker_id, worker_pid, heartbeat_at "
-                    "FROM jobs WHERE id = :id"
-                ),
-                {"id": job_id},
+                sa.select(
+                    jobs.c.status,
+                    jobs.c.worker_id,
+                    jobs.c.worker_pid,
+                    jobs.c.heartbeat_at,
+                ).where(jobs.c.id == job_id)
             )
             .mappings()
             .fetchone()
@@ -194,11 +188,9 @@ def _register_supervisor(engine, job_id: str, worker_id: str) -> bool:
             return False
         if row["status"] == "canceling":
             conn.execute(
-                text(
-                    "UPDATE jobs SET status = 'canceled', completed_at = :now "
-                    "WHERE id = :id"
-                ),
-                {"now": _now(), "id": job_id},
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(status="canceled", completed_at=_now())
             )
             return False
         if (
@@ -209,11 +201,9 @@ def _register_supervisor(engine, job_id: str, worker_id: str) -> bool:
         ):
             return False
         conn.execute(
-            text(
-                "UPDATE jobs SET worker_id = :wid, worker_pid = :pid, "
-                "heartbeat_at = :now WHERE id = :id"
-            ),
-            {"wid": worker_id, "pid": os.getpid(), "now": _now(), "id": job_id},
+            sa.update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(worker_id=worker_id, worker_pid=os.getpid(), heartbeat_at=_now())
         )
         return True
 
@@ -223,8 +213,7 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
         lock_capacity(conn)
         row = (
             conn.execute(
-                text("SELECT status, worker_id FROM jobs WHERE id = :id"),
-                {"id": job_id},
+                sa.select(jobs.c.status, jobs.c.worker_id).where(jobs.c.id == job_id)
             )
             .mappings()
             .fetchone()
@@ -233,11 +222,9 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
             return False
         if row["status"] == "canceling":
             conn.execute(
-                text(
-                    "UPDATE jobs SET status = 'canceled', completed_at = :now "
-                    "WHERE id = :id"
-                ),
-                {"now": _now(), "id": job_id},
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(status="canceled", completed_at=_now())
             )
             return False
         if row["worker_id"] != worker_id:
@@ -245,23 +232,24 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
         # Only jobs whose supervisor is still heartbeating consume capacity;
         # a crashed job must not block the queue until reconciliation runs.
         active_rows = conn.execute(
-            text(
-                "SELECT heartbeat_at FROM jobs "
-                "WHERE status IN ('starting', 'running') AND id != :id"
-            ),
-            {"id": job_id},
+            sa.select(jobs.c.heartbeat_at).where(
+                jobs.c.status.in_(("starting", "running")), jobs.c.id != job_id
+            )
         ).fetchall()
         active = sum(1 for (heartbeat,) in active_rows if _heartbeat_is_fresh(heartbeat))
         if active >= settings.max_local_jobs:
             return False
         now = _now()
         conn.execute(
-            text(
-                "UPDATE jobs SET status = 'starting', worker_id = :wid, "
-                "worker_pid = :pid, heartbeat_at = :now, "
-                "started_at = COALESCE(started_at, :now) WHERE id = :id"
-            ),
-            {"wid": worker_id, "pid": os.getpid(), "now": now, "id": job_id},
+            sa.update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(
+                status="starting",
+                worker_id=worker_id,
+                worker_pid=os.getpid(),
+                heartbeat_at=now,
+                started_at=sa.func.coalesce(jobs.c.started_at, now),
+            )
         )
         return True
 
@@ -269,19 +257,16 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
 def _heartbeat(engine, job_id: str, worker_id: str) -> None:
     with engine.begin() as conn:
         conn.execute(
-            text(
-                "UPDATE jobs SET heartbeat_at = :now "
-                "WHERE id = :id AND worker_id = :wid"
-            ),
-            {"now": _now(), "id": job_id, "wid": worker_id},
+            sa.update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+            .values(heartbeat_at=_now())
         )
 
 
 def _cancel_requested(engine, job_id: str) -> bool:
     with engine.begin() as conn:
         row = conn.execute(
-            text("SELECT cancel_requested_at FROM jobs WHERE id = :id"),
-            {"id": job_id},
+            sa.select(jobs.c.cancel_requested_at).where(jobs.c.id == job_id)
         ).fetchone()
     return bool(row and row[0])
 
@@ -296,16 +281,14 @@ def execute_job(job_id: str) -> None:
         while not _claim_capacity(engine, job_id, worker_id):
             with engine.begin() as conn:
                 row = conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id"), {"id": job_id}
+                    sa.select(jobs.c.status).where(jobs.c.id == job_id)
                 ).fetchone()
                 if not row or row[0] != "queued":
                     return
                 conn.execute(
-                    text(
-                        "UPDATE jobs SET heartbeat_at = :now "
-                        "WHERE id = :id AND worker_id = :wid"
-                    ),
-                    {"now": _now(), "id": job_id, "wid": worker_id},
+                    sa.update(jobs)
+                    .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+                    .values(heartbeat_at=_now())
                 )
             time.sleep(1)
 
@@ -315,18 +298,14 @@ def execute_job(job_id: str) -> None:
         pgid = workload.pid
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "UPDATE jobs SET status = 'running', workload_pid = :wp, "
-                    "process_group_id = :pg, heartbeat_at = :now "
-                    "WHERE id = :id AND worker_id = :wid"
-                ),
-                {
-                    "wp": workload.pid,
-                    "pg": pgid,
-                    "now": _now(),
-                    "id": job_id,
-                    "wid": worker_id,
-                },
+                sa.update(jobs)
+                .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+                .values(
+                    status="running",
+                    workload_pid=workload.pid,
+                    process_group_id=pgid,
+                    heartbeat_at=_now(),
+                )
             )
 
         canceled = False
@@ -351,34 +330,29 @@ def execute_job(job_id: str) -> None:
         else:
             status = "failed"
             error = f"Job workload exited with code {exit_code}; see {log_path}."
+        now = _now()
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "UPDATE jobs SET status = :status, completed_at = :now, "
-                    "heartbeat_at = :now, exit_code = :ec, error = :error "
-                    "WHERE id = :id AND worker_id = :wid"
-                ),
-                {
-                    "status": status,
-                    "now": _now(),
-                    "ec": exit_code,
-                    "error": error,
-                    "id": job_id,
-                    "wid": worker_id,
-                },
+                sa.update(jobs)
+                .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+                .values(
+                    status=status,
+                    completed_at=now,
+                    heartbeat_at=now,
+                    exit_code=exit_code,
+                    error=error,
+                )
             )
     except Exception as exc:
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "UPDATE jobs SET status = 'failed', completed_at = :now, "
-                    "error = :error WHERE id = :id"
-                ),
-                {
-                    "now": _now(),
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "id": job_id,
-                },
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(
+                    status="failed",
+                    completed_at=_now(),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             )
         raise
 

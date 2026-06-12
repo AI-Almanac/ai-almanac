@@ -10,7 +10,7 @@ interprets results, or decides retention.
 
 from __future__ import annotations
 
-from sqlalchemy import text
+import sqlalchemy as sa
 
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services.execution import (
@@ -20,6 +20,7 @@ from ai_almanac.server.services.execution import (
     RunnerHandle,
 )
 from ai_almanac.server.services.job_manager import launch_job, signal_cancel
+from ai_almanac.server.tables import jobs
 
 
 class LocalProcessRunner:
@@ -35,8 +36,9 @@ class LocalProcessRunner:
             row = (
                 (
                     await conn.execute(
-                        text("SELECT status, exit_code FROM jobs WHERE id = :id"),
-                        {"id": handle.external_id},
+                        sa.select(jobs.c.status, jobs.c.exit_code).where(
+                            jobs.c.id == handle.external_id
+                        )
                     )
                 )
                 .mappings()
