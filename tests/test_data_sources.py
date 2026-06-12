@@ -336,10 +336,10 @@ async def test_custom_sources_use_inferred_overlapping_bounds(
 def test_custom_sources_must_overlap() -> None:
     from fastapi import HTTPException
 
-    from ai_almanac.server.routers.jobs import _apply_inferred_custom_bounds
+    from ai_almanac.server.services.job_submission import apply_inferred_custom_bounds
 
     with pytest.raises(HTTPException, match="do not overlap geographically"):
-        _apply_inferred_custom_bounds(
+        apply_inferred_custom_bounds(
             {"region": "custom"},
             {
                 "spatial_bounds": {

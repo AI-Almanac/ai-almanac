@@ -103,9 +103,9 @@ def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
 
 
 def test_apply_region_params_adds_custom_region_bounds() -> None:
-    from ai_almanac.server.routers.jobs import _apply_region_params
+    from ai_almanac.server.services.job_submission import apply_region_params
 
-    params = _apply_region_params(
+    params = apply_region_params(
         {"region": "bangladesh", "start_date": "2020-05-01"}, _packaged_catalog()
     )
 
@@ -122,17 +122,17 @@ def test_apply_region_params_adds_custom_region_bounds() -> None:
 
 
 def test_apply_region_params_maps_builtin_region_name() -> None:
-    from ai_almanac.server.routers.jobs import _apply_region_params
+    from ai_almanac.server.services.job_submission import apply_region_params
 
-    params = _apply_region_params({"region": "india"}, _packaged_catalog())
+    params = apply_region_params({"region": "india"}, _packaged_catalog())
 
     assert params == {"region": "India"}
 
 
 def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> None:
-    from ai_almanac.server.routers.jobs import _job_region_metadata
+    from ai_almanac.server.services.job_submission import job_region_metadata
 
-    metadata = _job_region_metadata(
+    metadata = job_region_metadata(
         {
             "dataset_config": {"region": "bangladesh"},
             "romp_params": {"region": "custom"},
@@ -148,9 +148,9 @@ def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> 
 
 
 def test_job_region_metadata_maps_builtin_romp_region() -> None:
-    from ai_almanac.server.routers.jobs import _job_region_metadata
+    from ai_almanac.server.services.job_submission import job_region_metadata
 
-    metadata = _job_region_metadata(
+    metadata = job_region_metadata(
         {"romp_params": {"region": "India"}}, _packaged_catalog()
     )
 
@@ -162,9 +162,9 @@ def test_job_region_metadata_maps_builtin_romp_region() -> None:
 
 
 def test_job_region_metadata_preserves_persisted_region_snapshot() -> None:
-    from ai_almanac.server.routers.jobs import _job_region_metadata
+    from ai_almanac.server.services.job_submission import job_region_metadata
 
-    metadata = _job_region_metadata(
+    metadata = job_region_metadata(
         {
             "region_id": "central-highlands",
             "region_name": "Central Highlands",
@@ -182,9 +182,9 @@ def test_job_region_metadata_preserves_persisted_region_snapshot() -> None:
 
 
 def test_job_output_uses_display_name_for_legacy_uuid_model() -> None:
-    from ai_almanac.server.routers.jobs import _row_to_job_out
+    from ai_almanac.server.services.job_submission import row_to_job_out
 
-    job = _row_to_job_out(
+    job = row_to_job_out(
         {
             "id": "job-1",
             "user_id": "local",
@@ -287,7 +287,7 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
 
     monkeypatch.setattr(benchmark_domain, "load_catalog", load_catalog)
     monkeypatch.setattr(
-        "ai_almanac.server.routers.jobs.create_job_for_user",
+        "ai_almanac.server.services.job_submission.create_job_for_user",
         create_job_for_user,
     )
 
