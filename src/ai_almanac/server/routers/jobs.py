@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
+import sqlalchemy as sa
 from fastapi import (
     APIRouter,
     Depends,
@@ -17,7 +18,6 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db, lock_for_update
@@ -37,6 +37,7 @@ from ai_almanac.server.services.registry import (
     load_catalog,
     load_model_registry,
 )
+from ai_almanac.server.tables import datasets, job_artifacts, jobs, users
 from ai_almanac.settings import settings
 
 from ..services.metrics import (
@@ -301,8 +302,7 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
         row = (
             (
                 await conn.execute(
-                    text("SELECT storage_key FROM datasets WHERE id = :id"),
-                    {"id": dataset_id},
+                    sa.select(datasets.c.storage_key).where(datasets.c.id == dataset_id)
                 )
             )
             .mappings()
@@ -349,10 +349,10 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             ds = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT * FROM datasets WHERE id = :id AND user_id = :uid"
-                        ),
-                        {"id": body.dataset_id, "uid": user_id},
+                        sa.select(datasets).where(
+                            datasets.c.id == body.dataset_id,
+                            datasets.c.user_id == user_id,
+                        )
                     )
                 )
                 .mappings()
@@ -456,18 +456,20 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     }
 
     async with get_db() as conn:
-        lock_clause = await lock_for_update(conn)
+        # On SQLite this takes the write lock up front; on PostgreSQL the
+        # FOR UPDATE below serializes concurrent submissions per user.
+        await lock_for_update(conn)
         await conn.execute(
-            text(f"SELECT id FROM users WHERE id = :uid{lock_clause}"),
-            {"uid": user_id},
+            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
         )
         active_count = (
             await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM jobs WHERE user_id = :uid "
-                    "AND status IN ('queued', 'starting', 'running', 'canceling')"
-                ),
-                {"uid": user_id},
+                sa.select(sa.func.count())
+                .select_from(jobs)
+                .where(
+                    jobs.c.user_id == user_id,
+                    jobs.c.status.in_(ACTIVE_STATUSES),
+                )
             )
         ).scalar_one()
         if active_count >= settings.max_active_jobs_per_user:
@@ -478,20 +480,18 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             "timeout_seconds": None,
         }
         result = await conn.execute(
-            text(
-                "INSERT INTO jobs "
-                "(id, user_id, dataset_id, status, config_json, run_id, created_at, runner_request) "
-                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now, :runner_request) RETURNING *"
-            ),
-            {
-                "id": job_id,
-                "uid": user_id,
-                "did": body.dataset_id,
-                "cfg": json.dumps(config),
-                "run_id": body.run_id,
-                "now": now,
-                "runner_request": json.dumps(runner_request),
-            },
+            sa.insert(jobs)
+            .values(
+                id=job_id,
+                user_id=user_id,
+                dataset_id=body.dataset_id,
+                status="queued",
+                config_json=json.dumps(config),
+                run_id=body.run_id,
+                created_at=now,
+                runner_request=runner_request,
+            )
+            .returning(jobs)
         )
         row = dict(result.mappings().fetchone())
         await audit(
@@ -523,8 +523,9 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
     async with get_db() as conn:
         await conn.execute(
-            text("UPDATE jobs SET runner = :r, runner_handle = :h WHERE id = :id"),
-            {"r": handle.runner, "h": json.dumps(handle.as_dict()), "id": job_id},
+            sa.update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(runner=handle.runner, runner_handle=handle.as_dict())
         )
     return _row_to_job_out(row, user_id, catalog)
 
@@ -535,12 +536,9 @@ async def list_jobs(user: CurrentUser):
         rows = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT * FROM jobs "
-                        "WHERE user_id = :uid AND run_id IS NOT NULL "
-                        "ORDER BY created_at DESC"
-                    ),
-                    {"uid": user.id},
+                    sa.select(jobs)
+                    .where(jobs.c.user_id == user.id, jobs.c.run_id.is_not(None))
+                    .order_by(jobs.c.created_at.desc())
                 )
             )
             .mappings()
@@ -609,8 +607,9 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
                 row = (
                     (
                         await conn.execute(
-                            text("SELECT status, exit_code FROM jobs WHERE id = :id"),
-                            {"id": job_id},
+                            sa.select(jobs.c.status, jobs.c.exit_code).where(
+                                jobs.c.id == job_id
+                            )
                         )
                     )
                     .mappings()
@@ -738,8 +737,9 @@ async def get_metrics(
     if not has_bbox:
         async with get_db() as conn:
             await conn.execute(
-                text("UPDATE jobs SET metrics_cache = :cache WHERE id = :id"),
-                {"cache": result.model_dump_json(), "id": job_id},
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(metrics_cache=result.model_dump(mode="json"))
             )
 
     return result
@@ -809,9 +809,9 @@ async def delete_job(job_id: str, job: ModifiableJob):
         # Remove indexed artifact records, then the job. (Explicit delete rather
         # than relying on SQLite FK cascade, which is off by default.)
         await conn.execute(
-            text("DELETE FROM job_artifacts WHERE job_id = :id"), {"id": job_id}
+            sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id)
         )
-        await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
+        await conn.execute(sa.delete(jobs).where(jobs.c.id == job_id))
         await audit(
             conn,
             "job.deleted",
@@ -829,10 +829,10 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
         row = (
             (
                 await conn.execute(
-                    text(
-                        "UPDATE jobs SET visibility = :v WHERE id = :id RETURNING *"
-                    ),
-                    {"v": visibility, "id": job["id"]},
+                    sa.update(jobs)
+                    .where(jobs.c.id == job["id"])
+                    .values(visibility=visibility)
+                    .returning(jobs)
                 )
             )
             .mappings()

@@ -12,6 +12,8 @@ from typing import Any
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
+from ai_almanac.server.tables import jobs as _jobs
+
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
 from .registry import CatalogSnapshot, load_catalog, load_model_registry
 
@@ -88,21 +90,6 @@ def _scope_params(scope: BenchmarkScope) -> dict:
     if scope.job_ids:
         params["job_ids"] = scope.job_ids
     return params
-
-
-# Lightweight table reference for building typed WHERE clauses.
-_jobs = sa.table(
-    "jobs",
-    sa.column("id"),
-    sa.column("user_id"),
-    sa.column("dataset_id"),
-    sa.column("status"),
-    sa.column("run_id"),
-    sa.column("config_json"),
-    sa.column("completed_at"),
-    sa.column("created_at"),
-    sa.column("error"),
-)
 
 
 def _env_key(*parts: str) -> str:
