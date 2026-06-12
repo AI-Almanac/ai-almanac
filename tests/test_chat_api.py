@@ -44,20 +44,20 @@ def _sse_events(body: str) -> list[dict]:
 
 
 def test_chat_json_helpers_treat_empty_strings_as_defaults() -> None:
-    from ai_almanac.server.routers.chat import _json_dict, _json_list
+    from ai_almanac.server.services.chat_turns import json_dict, json_list
 
-    assert _json_list("") == []
-    assert _json_list("  \n") == []
-    assert _json_dict("") == {}
-    assert _json_dict("  \n") == {}
+    assert json_list("") == []
+    assert json_list("  \n") == []
+    assert json_dict("") == {}
+    assert json_dict("  \n") == {}
 
 
 def test_parse_llm_event_skips_blank_events() -> None:
-    from ai_almanac.server.routers.chat import _parse_llm_event
+    from ai_almanac.server.services.chat_turns import parse_llm_event
 
-    assert _parse_llm_event("") is None
-    assert _parse_llm_event("  \n") is None
-    assert _parse_llm_event('{"type":"done"}') == {"type": "done"}
+    assert parse_llm_event("") is None
+    assert parse_llm_event("  \n") is None
+    assert parse_llm_event('{"type":"done"}') == {"type": "done"}
 
 
 def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
@@ -536,7 +536,7 @@ async def test_send_message_persists_user_and_assistant_turns(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -582,7 +582,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
         yield json.dumps({"type": "text_delta", "content": "Partial"})
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", failing_stream_response)
+    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", failing_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -664,7 +664,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -711,7 +711,7 @@ async def test_send_message_refreshes_scope_job_ids(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.routers.chat.stream_response", fake_stream_response)
+    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
