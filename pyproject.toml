@@ -100,6 +100,7 @@ self-host-local-reset = { cmd = "docker compose -p ai-almanac-local -f compose.l
 self-host-local-logs = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml logs --follow", description = "Follow local shared-mode development logs" }
 package = { cmd = "python -m build", default-environment = "dev", depends-on = ["build-web"], description = "Build the Python wheel and source distribution" }
 serve = { cmd = "ai-almanac serve --no-open", depends-on = ["build-web"], description = "Run a production-style server with the built frontend" }
+deploy-modal = { cmd = "modal deploy modal/app.py", description = "Deploy the Modal benchmark app (run_benchmark + chat tools)" }
 test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }
 check = { depends-on = [{ task = "lint-python" }, { task = "check-web" }], description = "Run backend lint and frontend type checks" }
 build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
