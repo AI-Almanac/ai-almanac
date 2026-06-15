@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 from ai_almanac.paths import (
     config_yaml_path,
@@ -88,6 +89,11 @@ class Settings(BaseSettings):
     # `DATABASE_URL` for non-default backends (e.g., Postgres for public deploys).
     database_url: str = ""  # resolved below if empty
 
+    # Password spliced into `database_url` when the URL omits one. Lets managed
+    # deployments keep the secret out of the URL itself (Cloud Run injects it
+    # from Secret Manager as `DB_PASSWORD` alongside a password-less URL).
+    db_password: str = ""
+
     # Deployment mode. `personal` (default) is the zero-config single-operator
     # install: SQLite, no auth, local filesystem. `shared` is the multi-user
     # public deployment: PostgreSQL + reverse-proxy OIDC, validated at startup
@@ -123,6 +129,13 @@ class Settings(BaseSettings):
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.
     # Empty string = use the default under the data dir.
     output_dir: str = ""
+
+    # Whether the serving process applies database migrations on startup.
+    # Local/personal installs default to True for zero-setup launch. Managed
+    # deployments set this False and run migrations as a dedicated step (the
+    # `migrate` compose service / the Cloud Run migration job) so request-
+    # serving instances don't migrate on every cold start or race each other.
+    auto_migrate: bool = True
 
     # Server-side filesystem browser (backs the UI directory picker).
     # Safe for local installs — the server IS the user. For public deploys
@@ -181,6 +194,12 @@ class Settings(BaseSettings):
 
     def resolve_database_url(self) -> str:
         if self.database_url:
+            if self.db_password:
+                url = make_url(self.database_url)
+                if not url.password:
+                    return url.set(password=self.db_password).render_as_string(
+                        hide_password=False
+                    )
             return self.database_url
         ensure_layout()
         return f"sqlite+aiosqlite:///{database_path()}"
