@@ -1,0 +1,38 @@
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+ghcr_owner  = "your-github-username-or-org"
+
+# Image overrides — leave unset to use the AR proxy paths derived from ghcr_owner.
+# frontend_image = "..."
+# backend_image  = "..."
+# romp_image     = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
+
+# Cloud SQL
+db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
+db_password = "changeme"      # also stored in Secret Manager after first apply
+# staging_db_password defaults to db_password when omitted; set it to isolate
+# staging credentials from production.
+# staging_db_password = "changeme-staging"
+
+# Custom domain for the frontend — requires domain ownership verification (see below)
+# custom_domain = "app.example.com"
+# api_domain    = "api.example.com"
+
+# Staging custom domains. Leave empty to skip staging domain mappings.
+staging_custom_domain = "staging.ai-almanac.org"
+staging_api_domain    = "api-staging.ai-almanac.org"
+staging_frontend_url  = "https://staging.ai-almanac.org"
+
+# Frontend Cloud Run URL — leave empty on first deploy (cycle), set after
+# frontend service is created to lock down CORS on the backend.
+# frontend_url = "https://almanac-frontend-abc123-uc.a.run.app"
+
+# Chat assistant / LLM
+# Leave llm_base_url empty to keep chat disabled in production.
+# llm_base_url            = "https://your-llm-provider.example/v1"
+# llm_model               = "claude-sonnet-4-6"
+# enable_run_code         = false
+# enable_run_code_sandbox = false
+
+# Job output retention (days before GCS auto-deletes outputs)
+job_output_retention_days = 30
