@@ -21,7 +21,7 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
-from ai_almanac.server.services.local_runner import get_job_runner
+from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import datasets, jobs, users

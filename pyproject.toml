@@ -28,7 +28,7 @@ dependencies = [
     "httpx>=0.28.1",
     "matplotlib>=3.10.9",
     "psycopg[binary]>=3.3.4,<4",
-    "cryptography>=48.0.1,<49", "google-cloud-storage>=3.12.0,<4", "gcsfs>=2026.5.0,<2027",
+    "cryptography>=48.0.1,<49", "google-cloud-storage>=3.12.0,<4", "gcsfs>=2026.5.0,<2027", "modal>=1.5.0,<2",
 ]
 
 [project.scripts]
