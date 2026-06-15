@@ -314,6 +314,16 @@ class GCSStorage:
                     return f"gs://{matches[0]}"
         return None
 
+    def list_dataset_files(self, path: str, glob: str) -> list[str]:
+        """List object URIs under a `gs://` source path whose name matches `glob`.
+
+        Used to validate a registered GCS data source the same way the local
+        backend globs a directory.
+        """
+        fs = self._fs()
+        base = str(path).removeprefix("gs://").rstrip("/")
+        return [f"gs://{match}" for match in sorted(fs.glob(f"{base}/{glob}"))]
+
     def open_nc_dataset(self, path):
         import xarray as xr
 
