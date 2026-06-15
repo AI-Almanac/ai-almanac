@@ -170,10 +170,3 @@ def test_registry_selects_runner_by_setting(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr("ai_almanac.settings.settings.job_runner", "local")
     assert isinstance(runner_registry.get_job_runner(), LocalProcessRunner)
-
-
-def test_runner_for_dispatches_by_handle_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.services import runner_registry
-
-    assert runner_registry.runner_for("modal").name == "modal"
-    assert runner_registry.runner_for("local").name == "local"

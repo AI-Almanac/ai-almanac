@@ -324,9 +324,9 @@ async def _make_modal_job(user_id: str, status: str) -> str:
 
 
 def _patch_modal_runner(monkeypatch, runner) -> None:
-    from ai_almanac.server.services import runner_registry
+    from ai_almanac.server.services import modal_runner
 
-    monkeypatch.setattr(runner_registry, "runner_for", lambda name: runner)
+    monkeypatch.setattr(modal_runner, "get_modal_runner", lambda: runner)
 
 
 @pytest.mark.asyncio
