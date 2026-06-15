@@ -28,6 +28,22 @@ class _FakeBlob:
     def exists(self) -> bool:
         return self.name in self._bucket.store
 
+    @property
+    def size(self) -> int | None:
+        entry = self._bucket.store.get(self.name)
+        return len(entry[0]) if entry else None
+
+    @property
+    def md5_hash(self) -> str | None:
+        import base64
+        import hashlib
+
+        entry = self._bucket.store.get(self.name)
+        return base64.b64encode(hashlib.md5(entry[0]).digest()).decode() if entry else None
+
+    def reload(self) -> None:
+        pass
+
     def upload_from_string(self, data: bytes, content_type: str | None = None) -> None:
         self._bucket.store[self.name] = (data, content_type)
 
@@ -153,3 +169,47 @@ def test_local_workspace_methods_are_unavailable(store: GCSStorage) -> None:
         store.job_dir("job1")
     with pytest.raises(NotImplementedError):
         store.log_path("job1")
+
+
+# --- GcsArtifactStore --------------------------------------------------------
+
+
+def test_gcs_artifact_store_publishes_size_and_checksum(store: GCSStorage) -> None:
+    from ai_almanac.server.services.artifact_store import GcsArtifactStore
+
+    out = store._bucket("out")
+    out.blob("job1/output/metrics.nc").upload_from_string(b"netcdf-bytes")
+    out.blob("job1/figure/plot.png").upload_from_string(_PNG)
+
+    artifacts = {a.filename: a for a in GcsArtifactStore(store).publish("job1")}
+
+    assert set(artifacts) == {"metrics.nc", "plot.png"}
+    nc = artifacts["metrics.nc"]
+    assert nc.size_bytes == len(b"netcdf-bytes")
+    assert nc.checksum  # GCS md5 populated, no download
+    assert nc.storage_key == "job1/output/metrics.nc"
+    assert nc.media_type == "application/x-netcdf"
+    assert artifacts["plot.png"].kind == "figure"
+
+
+def test_gcs_artifact_store_delete_removes_only_that_job(store: GCSStorage) -> None:
+    from ai_almanac.server.services.artifact_store import GcsArtifactStore
+
+    out = store._bucket("out")
+    out.blob("job1/output/a.nc").upload_from_string(b"1")
+    out.blob("job1/run.log").upload_from_string(b"log")
+    out.blob("job2/output/b.nc").upload_from_string(b"2")
+
+    GcsArtifactStore(store).delete_job("job1")
+
+    assert "job1/output/a.nc" not in out.store
+    assert "job1/run.log" not in out.store
+    assert "job2/output/b.nc" in out.store
+
+
+def test_gcs_artifact_store_has_no_local_open_or_workspace(store: GCSStorage) -> None:
+    from ai_almanac.server.services.artifact_store import GcsArtifactStore
+
+    artifact_store = GcsArtifactStore(store)
+    with pytest.raises(NotImplementedError):
+        artifact_store.create_workspace("job1")

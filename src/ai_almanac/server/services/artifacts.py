@@ -17,7 +17,6 @@ from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services.artifact_store import get_artifact_store
-from ai_almanac.server.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +32,7 @@ async def index_job_artifacts(job_id: str) -> int:
     Returns the number of artifacts indexed.
     """
     store = get_artifact_store()
-    workspace = get_storage().job_dir(job_id)
-    artifacts = await asyncio.to_thread(store.publish, job_id, workspace)
+    artifacts = await asyncio.to_thread(store.publish, job_id)
 
     async with get_db() as conn:
         for artifact in artifacts:
