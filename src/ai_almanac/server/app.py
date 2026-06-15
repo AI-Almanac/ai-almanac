@@ -275,7 +275,7 @@ async def ready():
     from sqlalchemy import text
 
     from ai_almanac.server.db import get_db
-    from ai_almanac.server.services.local_runner import get_job_runner
+    from ai_almanac.server.services.runner_registry import get_job_runner
 
     checks: dict[str, bool] = {}
     try:

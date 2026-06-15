@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     # available for tests and UI development without the benchmark environment.
     runner_mode: str = "pixi"
 
+    # Job execution backend. `local` runs jobs as detached local processes
+    # (default, local-first). `modal` submits the benchmark to a deployed Modal
+    # app and reconciles status from Modal (used by Cloud Run deployments).
+    job_runner: str = "local"
+    modal_app_name: str = "almanac-romp"
+    modal_function_name: str = "run_benchmark"
+
     # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.
     # Empty string = use the default under the data dir.
