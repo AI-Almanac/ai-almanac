@@ -91,6 +91,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -322,6 +323,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -547,6 +549,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -785,6 +788,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -1023,6 +1027,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -1255,6 +1260,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/da/7bed8e864afbb8f1870f8120dc4148ecec5480ba988d4241769a2b308a35/gcsfs-2026.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4a/c9/db44165ba7c581268c6d46017ef63339110378305062830104fc7fa144cb/google_auth-2.53.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/37/d3/d7dff0d58a9e9244b48044bfb6a898bfcc8ecc42e0031d1bebc695344725/google_auth_oauthlib-1.4.0-py3-none-any.whl
@@ -1445,7 +1451,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0
-  sha256: 67e90814448095405949095ef9926a34b78f39f03ea6254511920f1c8ccdeeb4
+  sha256: ca718f967d22632149428e7a5ce1d0d84eac572789391ce93dc7a5590edc93c5
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0
@@ -1471,6 +1477,7 @@ packages:
   - google-cloud-storage>=3.12.0,<4
   - gcsfs>=2026.5.0,<2027
   - modal>=1.5.0,<2
+  - globus-sdk>=4.8.0,<5
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/67/cd/0d76dfc5de72bde52f55f53e925c7d152d9c7906634ec1e0cbc7e8d4ad93/aiofile-3.11.1-py3-none-any.whl
   name: aiofile
@@ -2644,6 +2651,17 @@ packages:
   - rich>=14.3.2 ; extra == 'cli'
   - rich-argparse>=1.7.2 ; extra == 'cli'
   requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/05/81/f0802ae0e9e1b5053444c817163df1f9aa6610a8e979b761ea513a6df31c/globus_sdk-4.8.0-py3-none-any.whl
+  name: globus-sdk
+  version: 4.8.0
+  sha256: 9bf2f4b788aa491cf165ff438adf6ca46273d81e3f50db51aca3154377a59a21
+  requires_dist:
+  - requests>=2.19.1,<3.0.0
+  - pyjwt[crypto]>=2.0.0,<3.0.0
+  - cryptography>=3.3.1,!=3.4.0
+  - typing-extensions>=4.0 ; python_full_version < '3.11'
+  - importlib-resources>=5.12.0 ; python_full_version < '3.9'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/86/40/9bdbb60b03a332bd45acb8703da08bbc27d991d35286b62e42acc86d243a/google_api_core-2.31.0-py3-none-any.whl
   name: google-api-core
   version: 2.31.0
