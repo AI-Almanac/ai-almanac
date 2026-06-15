@@ -132,6 +132,33 @@ resource "google_cloud_run_v2_service" "backend_staging" {
         value = "false"
       }
 
+      # Shared deployment with app-level Globus token validation (see prod).
+      env {
+        name  = "DEPLOYMENT_MODE"
+        value = "shared"
+      }
+      env {
+        name  = "AUTH_MODE"
+        value = "globus"
+      }
+      env {
+        name  = "ADMIN_EMAILS"
+        value = var.admin_emails
+      }
+      env {
+        name  = "ADMIN_SUBJECTS"
+        value = var.admin_subjects
+      }
+      env {
+        name = "CREDENTIAL_ENCRYPTION_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.credential_encryption_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       env {
         name  = "GCS_DATA_BUCKET"
         value = google_storage_bucket.data.name
@@ -313,6 +340,7 @@ resource "google_cloud_run_v2_service" "backend_staging" {
     google_secret_manager_secret_iam_member.backend_staging_reads_chat_figure_signing_secret,
     google_secret_manager_secret_iam_member.backend_staging_reads_modal_token_id,
     google_secret_manager_secret_iam_member.backend_staging_reads_modal_token_secret,
+    google_secret_manager_secret_iam_member.backend_staging_reads_credential_encryption_key,
   ]
 }
 

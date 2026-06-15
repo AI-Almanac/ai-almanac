@@ -95,6 +95,25 @@ variable "frontend_url" {
   default     = ""
 }
 
+# ---------------------------------------------------------------------------
+# Auth (shared mode, auth_mode=globus)
+# Identities are admitted by valid Globus token; these allow-lists grant admin.
+# At least one of admin_emails / admin_subjects must be set or the backend
+# refuses to start in shared mode.
+# ---------------------------------------------------------------------------
+
+variable "admin_emails" {
+  description = "Comma-separated admin emails (Globus identity emails)."
+  type        = string
+  default     = ""
+}
+
+variable "admin_subjects" {
+  description = "Comma-separated admin Globus subjects (OIDC sub)."
+  type        = string
+  default     = ""
+}
+
 variable "staging_custom_domain" {
   description = "Custom domain for the staging frontend. Leave empty to skip."
   type        = string
