@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     # Empty string = use the default under the data dir.
     output_dir: str = ""
 
+    # Storage backend. `local` keeps artifacts on disk (default). `gcs` stores
+    # uploads, job outputs, chat figures, and logs in the buckets below and
+    # serves downloads via signed URLs (used by Cloud Run deployments).
+    storage_backend: str = "local"
+    gcs_uploads_bucket: str = ""
+    gcs_outputs_bucket: str = ""
+    gcs_data_bucket: str = ""
+
     # Whether the serving process applies database migrations on startup.
     # Local/personal installs default to True for zero-setup launch. Managed
     # deployments set this False and run migrations as a dedicated step (the
