@@ -27,6 +27,13 @@ staging_frontend_url  = "https://staging.ai-almanac.org"
 # frontend service is created to lock down CORS on the backend.
 # frontend_url = "https://almanac-frontend-abc123-uc.a.run.app"
 
+# Auth — the backend runs shared mode with app-level Globus token validation
+# (AUTH_MODE=globus, set in cloud_run.tf). Set at least one admin or the backend
+# refuses to start. Globus client id/secret and the credential-encryption-key
+# are populated in Secret Manager after the first apply (see secrets.tf).
+admin_emails = "you@example.com"
+# admin_subjects = "globus-sub-1,globus-sub-2"
+
 # Chat assistant / LLM
 # Leave llm_base_url empty to keep chat disabled in production.
 # llm_base_url            = "https://your-llm-provider.example/v1"

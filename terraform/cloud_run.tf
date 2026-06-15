@@ -145,6 +145,34 @@ resource "google_cloud_run_v2_service" "backend" {
         value = "false"
       }
 
+      # Shared deployment: the backend validates Globus bearer tokens itself
+      # (GLOBUS_CLIENT_ID/SECRET below), so it stays public with no proxy.
+      env {
+        name  = "DEPLOYMENT_MODE"
+        value = "shared"
+      }
+      env {
+        name  = "AUTH_MODE"
+        value = "globus"
+      }
+      env {
+        name  = "ADMIN_EMAILS"
+        value = var.admin_emails
+      }
+      env {
+        name  = "ADMIN_SUBJECTS"
+        value = var.admin_subjects
+      }
+      env {
+        name = "CREDENTIAL_ENCRYPTION_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.credential_encryption_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       # GCS bucket names — backend uses these to build GCS paths and signed URLs
       env {
         name  = "GCS_DATA_BUCKET"
@@ -334,6 +362,7 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.backend_reads_chat_figure_signing_secret,
     google_secret_manager_secret_iam_member.backend_reads_modal_token_id,
     google_secret_manager_secret_iam_member.backend_reads_modal_token_secret,
+    google_secret_manager_secret_iam_member.backend_reads_credential_encryption_key,
   ]
 }
 
