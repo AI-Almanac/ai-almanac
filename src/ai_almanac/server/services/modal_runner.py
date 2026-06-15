@@ -13,6 +13,7 @@ local workload resolves it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import sqlalchemy as sa
@@ -83,16 +84,28 @@ class ModalRunner:
         if error:
             raise ModalPreflightError(error)
 
+        # The Modal SDK calls below block on the network, so keep them off the
+        # event loop.
+        call_id = await asyncio.to_thread(self._spawn, request.job_id, config)
+        return RunnerHandle(runner=self.name, external_id=call_id, metadata={})
+
+    async def inspect(self, handle: RunnerHandle) -> ExecutionSnapshot:
+        return await asyncio.to_thread(self._inspect, handle.external_id)
+
+    async def cancel(self, handle: RunnerHandle) -> None:
+        await asyncio.to_thread(self._cancel, handle.external_id)
+
+    def _spawn(self, job_id: str, config: dict) -> str:
         import modal
 
         function = modal.Function.from_name(self._app_name, self._function_name)
-        call = function.spawn(request.job_id, config, self._outputs_bucket)
-        return RunnerHandle(runner=self.name, external_id=call.object_id, metadata={})
+        call = function.spawn(job_id, config, self._outputs_bucket)
+        return call.object_id
 
-    async def inspect(self, handle: RunnerHandle) -> ExecutionSnapshot:
+    def _inspect(self, call_id: str) -> ExecutionSnapshot:
         import modal
 
-        call = modal.FunctionCall.from_id(handle.external_id)
+        call = modal.FunctionCall.from_id(call_id)
         try:
             call.get(timeout=0)
         except TimeoutError:
@@ -101,10 +114,10 @@ class ModalRunner:
             return ExecutionSnapshot(status="failed", exit_code=1)
         return ExecutionSnapshot(status="complete", exit_code=0)
 
-    async def cancel(self, handle: RunnerHandle) -> None:
+    def _cancel(self, call_id: str) -> None:
         import modal
 
-        modal.FunctionCall.from_id(handle.external_id).cancel()
+        modal.FunctionCall.from_id(call_id).cancel()
 
 
 def get_modal_runner() -> ModalRunner:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import subprocess
@@ -19,6 +20,8 @@ from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.server.tables import jobs
 from ai_almanac.settings import settings
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = ("queued", "starting", "running", "canceling")
 TERMINAL_STATUSES = ("complete", "failed", "canceled")
@@ -116,6 +119,53 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
     return await signal_cancel(job_id)
 
 
+async def _finalize_remote_job(job_id: str, status: str, error: str | None) -> None:
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.status.in_(ACTIVE_STATUSES))
+            .values(status=status, completed_at=_now(), error=error)
+        )
+
+
+async def _modal_failure_log(job_id: str) -> str:
+    """Build a failure message, enriched with the tail of the GCS run log."""
+    try:
+        log = await asyncio.to_thread(get_storage().read_log, job_id)
+    except Exception:  # noqa: BLE001 — the log is best-effort enrichment
+        return "Modal job failed."
+    tail = "\n".join(log.strip().splitlines()[-20:])
+    return f"Modal job failed.\n\nLast run log lines:\n{tail}" if tail else "Modal job failed."
+
+
+async def _reconcile_modal_job(row: dict) -> None:
+    """Track a Modal-backed job by polling the runner (no local supervisor)."""
+    handle_data = row.get("runner_handle")
+    if not handle_data:
+        return  # submitted but no handle persisted yet; pick it up next tick
+
+    from ai_almanac.server.services.execution import RunnerHandle
+    from ai_almanac.server.services.runner_registry import runner_for
+
+    handle = RunnerHandle.from_dict(handle_data)
+    runner = runner_for("modal")
+
+    if row["status"] == "canceling":
+        try:
+            await runner.cancel(handle)
+        except Exception:  # noqa: BLE001 — finalize regardless of cancel outcome
+            logger.exception("Failed to cancel Modal job %s", row["id"])
+        await _finalize_remote_job(row["id"], "canceled", None)
+        return
+
+    snapshot = await runner.inspect(handle)
+    if snapshot.status == "complete":
+        await _finalize_remote_job(row["id"], "complete", None)
+    elif snapshot.status == "failed":
+        await _finalize_remote_job(row["id"], "failed", await _modal_failure_log(row["id"]))
+    # running/unknown: leave the job active for the next reconcile pass
+
+
 async def reconcile_jobs() -> None:
     """Recover queued jobs and finalize supervisors that disappeared."""
     async with get_db() as conn:
@@ -125,6 +175,8 @@ async def reconcile_jobs() -> None:
                     sa.select(
                         jobs.c.id,
                         jobs.c.status,
+                        jobs.c.runner,
+                        jobs.c.runner_handle,
                         jobs.c.worker_pid,
                         jobs.c.workload_pid,
                         jobs.c.process_group_id,
@@ -138,6 +190,11 @@ async def reconcile_jobs() -> None:
 
     for raw in rows:
         row = dict(raw)
+        # Remote runners have no local supervisor; reconcile them from the
+        # backend instead of process liveness.
+        if row.get("runner") == "modal":
+            await _reconcile_modal_job(row)
+            continue
         if row["status"] == "queued":
             if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(
                 row.get("heartbeat_at")

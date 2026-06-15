@@ -283,3 +283,105 @@ async def test_supervisor_cancels_running_workload(user_id: str) -> None:
             .one()
         )
     assert row["status"] == "canceled"
+
+
+# ---------------------------------------------------------------------------
+# Modal-backed job reconciliation (no local supervisor)
+# ---------------------------------------------------------------------------
+
+
+class _FakeModalRunner:
+    def __init__(self, status: str) -> None:
+        self._status = status
+        self.canceled = False
+
+    async def inspect(self, handle):
+        from ai_almanac.server.services.execution import ExecutionSnapshot
+
+        return ExecutionSnapshot(status=self._status)
+
+    async def cancel(self, handle):
+        self.canceled = True
+
+
+async def _make_modal_job(user_id: str, status: str) -> str:
+    import sqlalchemy as sa
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.tables import jobs
+
+    job_id = await _insert_job(user_id, status)
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(
+                runner="modal",
+                runner_handle={"runner": "modal", "external_id": "fc-1", "metadata": {}},
+            )
+        )
+    return job_id
+
+
+def _patch_modal_runner(monkeypatch, runner) -> None:
+    from ai_almanac.server.services import runner_registry
+
+    monkeypatch.setattr(runner_registry, "runner_for", lambda name: runner)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_modal_job_complete(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _make_modal_job(user_id, "running")
+    _patch_modal_runner(monkeypatch, _FakeModalRunner("complete"))
+    await job_manager.reconcile_jobs()
+
+    row = await _job_row(job_id)
+    assert row["status"] == "complete"
+    assert row["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_modal_job_failed_with_log(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _make_modal_job(user_id, "running")
+    _patch_modal_runner(monkeypatch, _FakeModalRunner("failed"))
+    await job_manager.reconcile_jobs()
+
+    row = await _job_row(job_id)
+    assert row["status"] == "failed"
+    assert "Modal job failed" in row["error"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_running_modal_job_alone(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _make_modal_job(user_id, "running")
+    _patch_modal_runner(monkeypatch, _FakeModalRunner("running"))
+    await job_manager.reconcile_jobs()
+
+    assert (await _job_row(job_id))["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_cancels_modal_job(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _make_modal_job(user_id, "canceling")
+    fake = _FakeModalRunner("running")
+    _patch_modal_runner(monkeypatch, fake)
+    await job_manager.reconcile_jobs()
+
+    assert fake.canceled is True
+    assert (await _job_row(job_id))["status"] == "canceled"
