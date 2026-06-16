@@ -1,11 +1,20 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -13,11 +22,14 @@ from sqlalchemy import text
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services.artifact_store import get_artifact_store
+from ai_almanac.server.services.artifacts import list_job_artifacts
+from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
-    launch_job,
-    request_cancel,
+    signal_cancel,
 )
+from ai_almanac.server.services.local_runner import get_job_runner
 from ai_almanac.settings import (
     get_model_registry,
     get_region,
@@ -103,12 +115,24 @@ class JobOut(BaseModel):
     completed_at: str | None
     error: str | None
     is_owner: bool = True
+    visibility: str = "private"
     run_id: str | None = None
 
 
 class ResultFile(BaseModel):
     name: str
     type: str  # "output" | "figure"
+    url: str
+
+
+class ArtifactOut(BaseModel):
+    id: str
+    kind: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    checksum: str
+    created_at: str
     url: str
 
 
@@ -196,6 +220,7 @@ def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
         completed_at=row.get("completed_at"),
         error=row.get("error"),
         is_owner=is_owner,
+        visibility=row.get("visibility") or "private",
         run_id=row.get("run_id"),
     )
 
@@ -447,7 +472,21 @@ async def create_job(body: JobCreate, user: CurrentUser):
         )
         row = dict(result.mappings().fetchone())
 
-    await launch_job(job_id)
+    storage = get_storage()
+    workspace = storage.job_dir(job_id)
+    handle = await get_job_runner().submit(
+        ExecutionRequest(
+            job_id=job_id,
+            workspace=workspace,
+            bundle_path=workspace,
+            resources=ResourceRequest(),
+        )
+    )
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE jobs SET runner = :r, runner_handle = :h WHERE id = :id"),
+            {"r": handle.runner, "h": json.dumps(handle.as_dict()), "id": job_id},
+        )
     return _row_to_job_out(row, user.id)
 
 
@@ -472,32 +511,61 @@ async def list_jobs(user: CurrentUser):
 
 
 @router.get("/{job_id}", response_model=JobOut)
-async def get_job(job_id: str, user: CurrentUser):
+async def get_job(job: ReadableJob, user: CurrentUser):
+    return _row_to_job_out(job, user.id)
+
+
+async def _fetch_job(job_id: str) -> dict | None:
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user.id},
+                    text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
                 )
             )
             .mappings()
             .fetchone()
         )
-    if not row:
+    return dict(row) if row else None
+
+
+def _can_read(job: dict, user) -> bool:
+    """Owner, admin, or anyone when the job is shared read-only."""
+    return (
+        user.is_admin
+        or job.get("user_id") == user.id
+        or (job.get("visibility") or "private") == "shared"
+    )
+
+
+def _can_modify(job: dict, user) -> bool:
+    """Owner or admin. Sharing is read-only and never grants this."""
+    return user.is_admin or job.get("user_id") == user.id
+
+
+async def readable_job(job_id: str, user: CurrentUser) -> dict:
+    job = await _fetch_job(job_id)
+    if not job or not _can_read(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_out(dict(row), user.id)
+    return job
 
 
-async def _job_owner_id(job_id: str) -> str | None:
-    async with get_db() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT user_id FROM jobs WHERE id = :id"),
-                {"id": job_id},
-            )
-        ).fetchone()
-    return row[0] if row else None
+async def modifiable_job(job_id: str, user: CurrentUser) -> dict:
+    job = await _fetch_job(job_id)
+    if not job or not _can_modify(job, user):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+ReadableJob = Annotated[dict, Depends(readable_job)]
+ModifiableJob = Annotated[dict, Depends(modifiable_job)]
+
+
+def _require_complete(job: dict) -> None:
+    if job["status"] != "complete":
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {job['status']})"
+        )
 
 
 @router.websocket("/{job_id}/stream")
@@ -508,8 +576,8 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
         return  # handshake already closed (missing identity in shared mode)
     await ws.accept()
 
-    owner_id = await _job_owner_id(job_id)
-    if owner_id is None or (owner_id != user.id and not user.is_admin):
+    job = await _fetch_job(job_id)
+    if job is None or not _can_read(job, user):
         # Don't leak existence of other users' jobs; reject uniformly.
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -563,50 +631,20 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
 
 
 @router.post("/{job_id}/cancel", response_model=JobOut)
-async def cancel_job(job_id: str, user: CurrentUser):
-    row = await request_cancel(job_id, user.id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def cancel_job(job: ModifiableJob, user: CurrentUser):
+    row = await signal_cancel(job["id"]) or job
     return _row_to_job_out(row, user.id)
 
 
 @router.get("/{job_id}/logs")
-async def get_logs(job_id: str, user: CurrentUser) -> dict:
-    async with get_db() as conn:
-        found = (
-            await conn.execute(
-                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user.id},
-            )
-        ).fetchone()
-    if not found:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    storage = get_storage()
-    logs = await asyncio.to_thread(storage.read_log, job_id)
+async def get_logs(job_id: str, job: ReadableJob) -> dict:
+    logs = await asyncio.to_thread(get_storage().read_log, job_id)
     return {"logs": logs}
 
 
 @router.get("/{job_id}/results", response_model=list[ResultFile])
-async def get_results(job_id: str, user: CurrentUser):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(
-            status_code=409, detail=f"Job is not complete (status: {row['status']})"
-        )
-
+async def get_results(job_id: str, job: ReadableJob):
+    _require_complete(job)
     storage = get_storage()
     files = await asyncio.to_thread(storage.list_result_files, job_id)
     return [
@@ -619,30 +657,25 @@ async def get_results(job_id: str, user: CurrentUser):
     ]
 
 
+@router.get("/{job_id}/artifacts", response_model=list[ArtifactOut])
+async def list_artifacts(job_id: str, job: ReadableJob):
+    """Return the job's indexed artifacts (published on completion)."""
+    storage = get_storage()
+    return [
+        ArtifactOut(
+            **row,
+            url=storage.generate_result_url(job_id, row["kind"], row["filename"]),
+        )
+        for row in await list_job_artifacts(job_id)
+    ]
+
+
 @router.get("/{job_id}/results/{kind}/{filename}")
-async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUser):
+async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJob):
     """Serve a result file — FileResponse locally, signed URL redirect in production."""
     if kind not in ("output", "figure"):
         raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(
-            status_code=409, detail=f"Job is not complete (status: {row['status']})"
-        )
-
+    _require_complete(job)
     storage = get_storage()
     local_path = storage.result_file_path(job_id, kind, filename)
 
@@ -662,36 +695,17 @@ async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUs
 @router.get("/{job_id}/metrics", response_model=JobMetrics)
 async def get_metrics(
     job_id: str,
-    user: CurrentUser,
+    job: ReadableJob,
     lat_min: float | None = None,
     lat_max: float | None = None,
     lon_min: float | None = None,
     lon_max: float | None = None,
 ):
+    _require_complete(job)
     has_bbox = any(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
 
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT status, metrics_cache FROM jobs WHERE id = :id AND user_id = :uid"
-                    ),
-                    {"id": job_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(
-            status_code=409, detail=f"Job is not complete (status: {row['status']})"
-        )
-
     # Return cached result when no bbox filter is applied.
-    if not has_bbox and (cached_metrics := _parse_metrics_cache(row["metrics_cache"])):
+    if not has_bbox and (cached_metrics := _parse_metrics_cache(job["metrics_cache"])):
         return cached_metrics
 
     try:
@@ -721,26 +735,9 @@ async def get_metrics(
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)
 async def get_grid(
-    job_id: str, user: CurrentUser, model: str, window: str, metric: str
+    job_id: str, job: ReadableJob, model: str, window: str, metric: str
 ):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(
-            status_code=409, detail=f"Job is not complete (status: {row['status']})"
-        )
-
+    _require_complete(job)
     try:
         return await asyncio.to_thread(
             compute_job_grid, job_id, get_storage(), model, window, metric
@@ -763,30 +760,13 @@ async def get_grid(
 @router.get("/{job_id}/cell", response_model=JobCellResponse)
 async def get_cell(
     job_id: str,
-    user: CurrentUser,
+    job: ReadableJob,
     model: str,
     window: str,
     lat: float,
     lon: float,
 ):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(
-            status_code=409, detail=f"Job is not complete (status: {row['status']})"
-        )
-
+    _require_complete(job)
     try:
         return await asyncio.to_thread(
             compute_job_cell, job_id, get_storage(), model, window, lat, lon
@@ -808,29 +788,47 @@ async def get_cell(
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_job(job_id: str, user: CurrentUser):
+async def delete_job(job_id: str, job: ModifiableJob):
+    if job["status"] in ACTIVE_STATUSES:
+        raise HTTPException(
+            status_code=409, detail="Cancel the job before deleting it."
+        )
     async with get_db() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT id, status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user.id},
-            )
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        if row.status in ACTIVE_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail="Cancel the job before deleting it.",
-            )
+        # Remove indexed artifact records, then the job. (Explicit delete rather
+        # than relying on SQLite FK cascade, which is off by default.)
+        await conn.execute(
+            text("DELETE FROM job_artifacts WHERE job_id = :id"), {"id": job_id}
+        )
         await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
 
-    storage = get_storage()
-    if storage.is_local:
-        import shutil
+    # Remove the workspace and its files; datasets are untouched.
+    await asyncio.to_thread(get_artifact_store().delete_job, job_id)
 
-        output_uri, _ = storage.job_output_uri(job_id)
-        job_dir = Path(output_uri).parent
-        if job_dir.exists():
-            await asyncio.to_thread(shutil.rmtree, job_dir)
-    # GCS: let lifecycle rules handle expiry; no immediate deletion needed
+
+async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "UPDATE jobs SET visibility = :v WHERE id = :id RETURNING *"
+                    ),
+                    {"v": visibility, "id": job["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    return _row_to_job_out(dict(row), user.id)
+
+
+@router.post("/{job_id}/share", response_model=JobOut)
+async def share_job(job: ModifiableJob, user: CurrentUser):
+    """Make a job readable by other authenticated users (read-only)."""
+    return await _set_job_visibility(job, "shared", user)
+
+
+@router.post("/{job_id}/unshare", response_model=JobOut)
+async def unshare_job(job: ModifiableJob, user: CurrentUser):
+    """Return a shared job to private (owner/admin only)."""
+    return await _set_job_visibility(job, "private", user)

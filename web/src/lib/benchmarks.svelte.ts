@@ -7,6 +7,8 @@ import {
 	getJobCell,
 	deleteJob,
 	cancelJob,
+	shareJob,
+	unshareJob,
 	submitJob,
 	type Job,
 	type JobParams,
@@ -183,6 +185,15 @@ export class BenchmarkStore {
 			['queued', 'starting', 'running', 'canceling'].includes(job.status)
 		);
 		const updated = await Promise.all(active.map((job) => cancelJob(job.id)));
+		const byId = new Map(updated.map((job) => [job.id, job]));
+		this.jobs = untrack(() => this.jobs.map((job) => byId.get(job.id) ?? job));
+	}
+
+	async shareGroup(key: string, share: boolean) {
+		const group = untrack(() => this.runGroups.find((g) => g.key === key));
+		if (!group) return;
+		const apply = share ? shareJob : unshareJob;
+		const updated = await Promise.all(group.jobs.map((job) => apply(job.id)));
 		const byId = new Map(updated.map((job) => [job.id, job]));
 		this.jobs = untrack(() => this.jobs.map((job) => byId.get(job.id) ?? job));
 	}

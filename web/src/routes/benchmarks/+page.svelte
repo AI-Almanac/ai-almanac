@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { isAuthenticated } from '$lib/auth-store';
+	import { account } from '$lib/account.svelte';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
@@ -233,6 +234,19 @@
 										{activeJobs.some((job) => job.status === 'canceling')
 											? 'Canceling…'
 											: 'Cancel run'}
+									</button>
+								{/if}
+								{#if account.isShared && (account.isAdmin || group.jobs.some((job) => job.is_owner))}
+									{@const shared = group.jobs.every((job) => job.visibility === 'shared')}
+									<button
+										type="button"
+										class="new-analysis"
+										title={shared
+											? 'Visible to other users — click to make private'
+											: 'Let other users view these results read-only'}
+										onclick={() => store.shareGroup(group.key, !shared)}
+									>
+										{shared ? 'Make private' : 'Share results'}
 									</button>
 								{/if}
 								<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>

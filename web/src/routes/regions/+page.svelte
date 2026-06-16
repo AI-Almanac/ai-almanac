@@ -10,6 +10,7 @@
 	} from '$lib/api';
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
+	import { account } from '$lib/account.svelte';
 
 	let regions = $state<Region[]>([]);
 	let loading = $state(true);
@@ -140,6 +141,7 @@
 		<div class="banner">{error}</div>
 	{/if}
 
+	{#if account.isAdmin}
 	<section class="editor">
 		<h2>{editingId ? 'Edit region' : 'Create a region'}</h2>
 		<form onsubmit={submit}>
@@ -198,6 +200,7 @@
 			</div>
 		</form>
 	</section>
+	{/if}
 
 	<section>
 		<div class="section-heading">
@@ -222,17 +225,19 @@
 							{#if region.description}<p>{region.description}</p>{/if}
 							<code>{bounds(region)}</code>
 						</div>
-						<div class="card-actions">
-							<button class="secondary" onclick={() => edit(region)}>Edit</button>
-							<button
-								class="danger"
-								disabled={region.source_count > 0}
-								title={region.source_count > 0
-									? 'Remove attached data sources before deleting this region'
-									: 'Remove region'}
-								onclick={() => remove(region)}>Remove</button
-							>
-						</div>
+						{#if account.isAdmin}
+							<div class="card-actions">
+								<button class="secondary" onclick={() => edit(region)}>Edit</button>
+								<button
+									class="danger"
+									disabled={region.source_count > 0}
+									title={region.source_count > 0
+										? 'Remove attached data sources before deleting this region'
+										: 'Remove region'}
+									onclick={() => remove(region)}>Remove</button
+								>
+							</div>
+						{/if}
 					</article>
 				{/each}
 			</div>
