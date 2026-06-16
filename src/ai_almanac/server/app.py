@@ -128,26 +128,54 @@ async def _seed_regions() -> None:
         logger.warning("region seeding failed: %s", e)
 
 
+# Last failure message per background step, used to record each distinct
+# failure (and the recovery) once in the audit log instead of every 5 seconds.
+_background_failures: dict[str, str] = {}
+
+
+async def _record_background_event(event_type: str, metadata: dict | None = None) -> None:
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.events import audit
+
+    try:
+        async with get_db() as conn:
+            await audit(conn, event_type, metadata=metadata)
+    except Exception:  # noqa: BLE001 — audit is best-effort
+        pass
+
+
+async def _run_background_step(name: str, step) -> None:
+    """Run one maintenance step, surfacing failures where an operator sees them."""
+    try:
+        await step()
+    except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
+        message = str(e)
+        logger.warning("%s failed: %s", name, message)
+        if _background_failures.get(name) != message:
+            _background_failures[name] = message
+            await _record_background_event(
+                f"background.{name}.failed", metadata={"error": message}
+            )
+        return
+    if _background_failures.pop(name, None) is not None:
+        await _record_background_event(f"background.{name}.recovered")
+
+
+async def _cleanup_uploads() -> None:
+    from ai_almanac.server.routers.uploads import cleanup_expired_uploads
+
+    cleaned = await cleanup_expired_uploads()
+    if cleaned:
+        logger.info("expired %d abandoned upload(s)", cleaned)
+
+
 async def _reconcile_jobs() -> None:
     from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
-    try:
-        await reconcile_jobs()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("job reconciliation failed: %s", e)
-    try:
-        await publish_pending()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("artifact publication failed: %s", e)
-    try:
-        from ai_almanac.server.routers.uploads import cleanup_expired_uploads
-
-        cleaned = await cleanup_expired_uploads()
-        if cleaned:
-            logger.info("expired %d abandoned upload(s)", cleaned)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("upload cleanup failed: %s", e)
+    await _run_background_step("job_reconciliation", reconcile_jobs)
+    await _run_background_step("artifact_publication", publish_pending)
+    await _run_background_step("upload_cleanup", _cleanup_uploads)
 
 
 async def _job_reconciler_loop() -> None:

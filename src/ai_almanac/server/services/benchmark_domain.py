@@ -12,6 +12,9 @@ from typing import Any
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
+from ai_almanac.server.services import job_submission
+from ai_almanac.server.tables import jobs as _jobs
+
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
 from .registry import CatalogSnapshot, load_catalog, load_model_registry
 
@@ -88,21 +91,6 @@ def _scope_params(scope: BenchmarkScope) -> dict:
     if scope.job_ids:
         params["job_ids"] = scope.job_ids
     return params
-
-
-# Lightweight table reference for building typed WHERE clauses.
-_jobs = sa.table(
-    "jobs",
-    sa.column("id"),
-    sa.column("user_id"),
-    sa.column("dataset_id"),
-    sa.column("status"),
-    sa.column("run_id"),
-    sa.column("config_json"),
-    sa.column("completed_at"),
-    sa.column("created_at"),
-    sa.column("error"),
-)
 
 
 def _env_key(*parts: str) -> str:
@@ -546,8 +534,6 @@ async def _exec_propose_benchmark_submit(
 async def _exec_submit_benchmark(
     args: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
-    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
-
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
     catalog = await load_catalog()
     validation = _validation_for_config(spec, catalog)
@@ -571,11 +557,11 @@ async def _exec_submit_benchmark(
     }
     for model in models:
         params = {**shared_params, **_clamp_model_params(model, spec)}
-        job = await create_job_for_user(
-            JobCreate(
+        job = await job_submission.create_job_for_user(
+            job_submission.JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
-                params=RompParams(**params),
+                params=job_submission.RompParams(**params),
                 run_id=run_id,
             ),
             user_id,
@@ -767,8 +753,6 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
 async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> dict:
     from ai_almanac.server.db import get_db
 
-    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
-
     job_id = args["job_id"]
     params_override = args.get("params_override")
     if not isinstance(params_override, dict):
@@ -800,13 +784,13 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
     params = {**(cfg.get("romp_params") or {}), **params_override}
-    rerun = await create_job_for_user(
-        JobCreate(
+    rerun = await job_submission.create_job_for_user(
+        job_submission.JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
             or (cfg.get("model_config") or {}).get("id")
             or cfg.get("model_name", ""),
-            params=RompParams(**params),
+            params=job_submission.RompParams(**params),
             run_id=row["run_id"],
         ),
         user_id,

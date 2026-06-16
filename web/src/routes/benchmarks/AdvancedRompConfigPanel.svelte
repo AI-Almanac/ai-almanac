@@ -1,59 +1,38 @@
 <script lang="ts">
-	import type { Dataset, ModelConfig, Region, RompDefaults } from '$lib/api';
 	import PerModelConfig from './PerModelConfig.svelte';
-
-	type SharedParamValue = string | number | null;
-	type ModelOverrideValue = string | boolean | number;
+	import type { BenchmarkSetupForm } from './setup-form.svelte';
 
 	interface Props {
 		open: boolean;
-		regions: Region[];
-		datasets: Dataset[];
-		dataLoaded: boolean;
-		models: ModelConfig[];
-		selectedRegionId: string;
-		selectedDatasetId: string;
-		selectedModelIds: string[];
-		forecastWindowDays: number | null;
-		selectedRegion: Region | null;
-		selectedDataset: Dataset | null;
-		sharedAdvancedParams: Record<string, SharedParamValue>;
-		parameterDefaults: RompDefaults | null;
-		setRegionId: (id: string) => void;
-		setDatasetId: (id: string) => void;
-		setForecastWindowDays: (days: number | null) => void;
-		toggleModel: (id: string) => void;
-		setSharedParam: (key: string, value: SharedParamValue) => void;
-		getOverride: <T>(modelId: string, key: string, fallback: T) => T;
-		setOverride: (modelId: string, key: string, value: ModelOverrideValue) => void;
+		form: BenchmarkSetupForm;
 		onClose: () => void;
 	}
 
-	const {
-		open,
-		regions,
-		datasets,
-		dataLoaded,
-		models,
-		selectedRegionId,
-		selectedDatasetId,
-		selectedModelIds,
-		forecastWindowDays,
-		selectedRegion,
-		selectedDataset,
-		sharedAdvancedParams,
-		parameterDefaults,
-		setRegionId,
-		setDatasetId,
-		setForecastWindowDays,
-		toggleModel,
-		setSharedParam,
-		getOverride,
-		setOverride,
-		onClose
-	}: Props = $props();
+	const { open, form, onClose }: Props = $props();
 
-	const selectedModels = $derived(models.filter((model) => selectedModelIds.includes(model.id)));
+	const regions = $derived(form.regions);
+	const datasets = $derived(form.datasets);
+	const dataLoaded = $derived(form.dataLoaded);
+	const models = $derived(form.models);
+	const selectedRegionId = $derived(form.selectedRegionId);
+	const selectedDatasetId = $derived(form.selectedDatasetId);
+	const selectedModelIds = $derived(form.selectedModelIds);
+	const forecastWindowDays = $derived(form.forecastWindowDays);
+	const selectedRegion = $derived(form.selectedRegion);
+	const selectedDataset = $derived(form.selectedDataset);
+	const selectedModels = $derived(form.selectedModels);
+	const sharedAdvancedParams = $derived(form.sharedAdvancedParams);
+	const parameterDefaults = $derived(form.parameterDefaults);
+
+	const setRegionId = (id: string) => form.setRegionId(id);
+	const setForecastWindowDays = (days: number | null) => form.setForecastWindowDays(days);
+	const toggleModel = (id: string) => form.toggleModel(id);
+	const setSharedParam = (key: string, value: string | number | null) =>
+		form.setSharedParam(key, value);
+	const getOverride = <T,>(modelId: string, key: string, fallback: T): T =>
+		form.getOverride(modelId, key, fallback);
+	const setOverride = (modelId: string, key: string, value: string | boolean | number) =>
+		form.setOverride(modelId, key, value);
 
 	function isSelected(modelId: string) {
 		return selectedModelIds.includes(modelId);
@@ -64,7 +43,7 @@
 	}
 
 	function handleDatasetChange(id: string) {
-		setDatasetId(id);
+		form.setDatasetId(id);
 		const dataset = datasets.find((item) => item.id === id);
 		if (dataset?.obs_file_pattern) setSharedParam('obs_file_pattern', dataset.obs_file_pattern);
 	}

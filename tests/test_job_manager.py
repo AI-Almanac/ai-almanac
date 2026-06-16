@@ -23,9 +23,9 @@ async def _insert_job(user_id: str, status: str, **values) -> str:
             text(
                 "INSERT INTO jobs "
                 "(id, user_id, dataset_id, status, config_json, created_at, "
-                "worker_pid, workload_pid, process_group_id) "
+                "worker_pid, workload_pid, process_group_id, heartbeat_at) "
                 "VALUES (:id, :uid, 'source', :status, :config, :now, :worker_pid, "
-                ":workload_pid, :process_group_id)"
+                ":workload_pid, :process_group_id, :heartbeat_at)"
             ),
             {
                 "id": job_id,
@@ -36,9 +36,26 @@ async def _insert_job(user_id: str, status: str, **values) -> str:
                 "worker_pid": values.get("worker_pid"),
                 "workload_pid": values.get("workload_pid"),
                 "process_group_id": values.get("process_group_id"),
+                "heartbeat_at": values.get("heartbeat_at"),
             },
         )
     return job_id
+
+
+async def _job_row(job_id: str) -> dict:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return dict(row)
 
 
 @pytest.mark.asyncio
@@ -91,6 +108,11 @@ async def test_reconcile_relaunches_queued_jobs(
     assert job_id in launched
 
 
+async def _no_launch(_job_id: str) -> None:
+    """Stub for reconcile tests: leftover queued fixture rows must never spawn
+    real supervisor subprocesses (they outlive the test database and hang)."""
+
+
 @pytest.mark.asyncio
 async def test_reconcile_marks_missing_supervisor_failed(
     user_id: str,
@@ -100,6 +122,7 @@ async def test_reconcile_marks_missing_supervisor_failed(
 
     job_id = await _insert_job(user_id, "running", worker_pid=999_999_999)
     monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
+    monkeypatch.setattr(job_manager, "launch_job", _no_launch)
     await job_manager.reconcile_jobs()
 
     from ai_almanac.server.db import get_db
@@ -117,6 +140,77 @@ async def test_reconcile_marks_missing_supervisor_failed(
         )
     assert row["status"] == "failed"
     assert row["error"] == "Job supervisor exited unexpectedly."
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fails_hung_supervisor_with_stale_heartbeat(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live supervisor pid is not enough — a stale heartbeat means hung."""
+    import os
+    from datetime import timedelta
+
+    from ai_almanac.server.services import job_manager
+
+    monkeypatch.setattr(job_manager, "launch_job", _no_launch)
+    stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+    job_id = await _insert_job(
+        user_id, "running", worker_pid=os.getpid(), heartbeat_at=stale
+    )
+    await job_manager.reconcile_jobs()
+
+    row = await _job_row(job_id)
+    assert row["status"] == "failed"
+    assert row["error"] == "Job supervisor exited unexpectedly."
+
+
+@pytest.mark.asyncio
+async def test_reconcile_finalizes_canceling_job_as_canceled(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _insert_job(user_id, "canceling", worker_pid=999_999_999)
+    monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
+    await job_manager.reconcile_jobs()
+
+    row = await _job_row(job_id)
+    assert row["status"] == "canceled"
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_healthy_jobs_alone(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from ai_almanac.server.services import job_manager
+
+    launched: list[str] = []
+
+    async def fake_launch(candidate: str) -> None:
+        launched.append(candidate)
+
+    monkeypatch.setattr(job_manager, "launch_job", fake_launch)
+    running_id = await _insert_job(
+        user_id, "running", worker_pid=os.getpid(), heartbeat_at=_now()
+    )
+    queued_id = await _insert_job(
+        user_id, "queued", worker_pid=os.getpid(), heartbeat_at=_now()
+    )
+    await job_manager.reconcile_jobs()
+
+    assert (await _job_row(running_id))["status"] == "running"
+    queued = await _job_row(queued_id)
+    assert queued["status"] == "queued"
+    assert queued["worker_pid"] is not None  # not reset for relaunch
+    # Other tests may leave relaunchable rows behind; ours must not be in there.
+    assert queued_id not in launched
+    assert running_id not in launched
 
 
 @pytest.mark.asyncio
