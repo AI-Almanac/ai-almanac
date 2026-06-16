@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ai_almanac.server.auth import AdminUser, CurrentUser
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.settings import get_region
 
@@ -89,13 +90,15 @@ def _parse_region(region: str | None) -> str:
 
 
 @router.get("", response_model=list[DataSourceOut])
-async def list_data_sources(kind: Literal["obs", "model"] | None = None):
+async def list_data_sources(
+    _user: CurrentUser, kind: Literal["obs", "model"] | None = None
+):
     rows = await svc.list_sources(kind=kind)
     return [_to_out(r) for r in rows]
 
 
 @router.post("/validate", response_model=DataSourceValidationOut)
-async def validate_data_source(body: DataSourceIn):
+async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized_path = str(Path(body.path).expanduser().resolve())
     region = _parse_region(body.region)
     status, validation_error, metadata = await svc.validate_source(
@@ -114,7 +117,7 @@ async def validate_data_source(body: DataSourceIn):
 
 
 @router.post("", response_model=DataSourceOut, status_code=201)
-async def create_data_source(body: DataSourceIn):
+async def create_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized = str(Path(body.path).expanduser().resolve())
     region = _parse_region(body.region)
     row = await svc.create_source(
@@ -128,7 +131,9 @@ async def create_data_source(body: DataSourceIn):
 
 
 @router.put("/{source_id}", response_model=DataSourceOut)
-async def update_data_source(source_id: str, body: DataSourceUpdate):
+async def update_data_source(
+    source_id: str, body: DataSourceUpdate, _admin: AdminUser
+):
     existing = await svc.get_source(source_id)
     if not existing:
         raise HTTPException(status_code=404, detail="data source not found")
@@ -144,7 +149,7 @@ async def update_data_source(source_id: str, body: DataSourceUpdate):
 
 
 @router.post("/{source_id}/revalidate", response_model=DataSourceOut)
-async def revalidate_data_source(source_id: str):
+async def revalidate_data_source(source_id: str, _admin: AdminUser):
     row = await svc.revalidate_source(source_id)
     if not row:
         raise HTTPException(status_code=404, detail="data source not found")
@@ -152,7 +157,7 @@ async def revalidate_data_source(source_id: str):
 
 
 @router.delete("/{source_id}", status_code=204)
-async def delete_data_source(source_id: str):
+async def delete_data_source(source_id: str, _admin: AdminUser):
     ok = await svc.delete_source(source_id)
     if not ok:
         raise HTTPException(status_code=404, detail="data source not found")

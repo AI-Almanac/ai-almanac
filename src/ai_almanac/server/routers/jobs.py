@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from ai_almanac.server.attribution import CurrentUser
+from ai_almanac.server.auth import CurrentUser, authenticate_websocket
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.job_manager import (
@@ -328,7 +328,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
                         text(
                             "SELECT * FROM datasets WHERE id = :id AND user_id = :uid"
                         ),
-                        {"id": body.dataset_id, "uid": user["id"]},
+                        {"id": body.dataset_id, "uid": user.id},
                     )
                 )
                 .mappings()
@@ -438,7 +438,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
             ),
             {
                 "id": job_id,
-                "uid": user["id"],
+                "uid": user.id,
                 "did": body.dataset_id,
                 "cfg": json.dumps(config),
                 "run_id": body.run_id,
@@ -448,7 +448,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
         row = dict(result.mappings().fetchone())
 
     await launch_job(job_id)
-    return _row_to_job_out(row, user["id"])
+    return _row_to_job_out(row, user.id)
 
 
 @router.get("", response_model=list[JobOut])
@@ -462,13 +462,13 @@ async def list_jobs(user: CurrentUser):
                         "WHERE user_id = :uid AND run_id IS NOT NULL "
                         "ORDER BY created_at DESC"
                     ),
-                    {"uid": user["id"]},
+                    {"uid": user.id},
                 )
             )
             .mappings()
             .fetchall()
         )
-    return [_row_to_job_out(dict(r), user["id"]) for r in rows]
+    return [_row_to_job_out(dict(r), user.id) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
@@ -478,7 +478,7 @@ async def get_job(job_id: str, user: CurrentUser):
             (
                 await conn.execute(
                     text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -486,13 +486,34 @@ async def get_job(job_id: str, user: CurrentUser):
         )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_out(dict(row), user["id"])
+    return _row_to_job_out(dict(row), user.id)
+
+
+async def _job_owner_id(job_id: str) -> str | None:
+    async with get_db() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT user_id FROM jobs WHERE id = :id"),
+                {"id": job_id},
+            )
+        ).fetchone()
+    return row[0] if row else None
 
 
 @router.websocket("/{job_id}/stream")
 async def stream_job(ws: WebSocket, job_id: str) -> None:
-    """Stream durable log additions and status changes."""
+    """Stream durable log additions and status changes to the job's owner."""
+    user = await authenticate_websocket(ws)
+    if user is None:
+        return  # handshake already closed (missing identity in shared mode)
     await ws.accept()
+
+    owner_id = await _job_owner_id(job_id)
+    if owner_id is None or (owner_id != user.id and not user.is_admin):
+        # Don't leak existence of other users' jobs; reject uniformly.
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     storage = get_storage()
     sent_lines = 0
     previous_status: str | None = None
@@ -543,10 +564,10 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
 
 @router.post("/{job_id}/cancel", response_model=JobOut)
 async def cancel_job(job_id: str, user: CurrentUser):
-    row = await request_cancel(job_id, user["id"])
+    row = await request_cancel(job_id, user.id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_out(row, user["id"])
+    return _row_to_job_out(row, user.id)
 
 
 @router.get("/{job_id}/logs")
@@ -555,7 +576,7 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
         found = (
             await conn.execute(
                 text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user["id"]},
+                {"id": job_id, "uid": user.id},
             )
         ).fetchone()
     if not found:
@@ -573,7 +594,7 @@ async def get_results(job_id: str, user: CurrentUser):
             (
                 await conn.execute(
                     text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -609,7 +630,7 @@ async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUs
             (
                 await conn.execute(
                     text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -656,7 +677,7 @@ async def get_metrics(
                     text(
                         "SELECT status, metrics_cache FROM jobs WHERE id = :id AND user_id = :uid"
                     ),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -707,7 +728,7 @@ async def get_grid(
             (
                 await conn.execute(
                     text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -753,7 +774,7 @@ async def get_cell(
             (
                 await conn.execute(
                     text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                    {"id": job_id, "uid": user["id"]},
+                    {"id": job_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -792,7 +813,7 @@ async def delete_job(job_id: str, user: CurrentUser):
         row = (
             await conn.execute(
                 text("SELECT id, status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user["id"]},
+                {"id": job_id, "uid": user.id},
             )
         ).fetchone()
         if not row:

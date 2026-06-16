@@ -24,7 +24,7 @@ from pydantic_ai import DeferredToolResults, ToolDenied
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import bindparam, text
 
-from ai_almanac.server.attribution import CurrentUser
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
 
 from ..services.benchmark_domain import (
@@ -523,7 +523,7 @@ async def create_session(body: SessionCreate, user: CurrentUser):
             """),
             {
                 "id": session_id,
-                "uid": user["id"],
+                "uid": user.id,
                 "title": body.title,
                 "provider_state": json.dumps(initial_messages),
                 "scope": json.dumps(body.scope.model_dump(mode="json")),
@@ -552,7 +552,7 @@ async def list_sessions(
 ):
     async with get_db() as conn:
         query = "SELECT * FROM chat_sessions WHERE user_id = :uid"
-        params: dict[str, object] = {"uid": user["id"]}
+        params: dict[str, object] = {"uid": user.id}
         if scope_kind:
             query += " AND scope->>'kind' = :scope_kind"
             params["scope_kind"] = scope_kind
@@ -583,7 +583,7 @@ async def get_session(session_id: str, user: CurrentUser):
                     text(
                         "SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"
                     ),
-                    {"id": session_id, "uid": user["id"]},
+                    {"id": session_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -593,7 +593,7 @@ async def get_session(session_id: str, user: CurrentUser):
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return _session_detail(row, user["id"])
+    return _session_detail(row, user.id)
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionOut)
@@ -614,7 +614,7 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
             """),
                     {
                         "id": session_id,
-                        "uid": user["id"],
+                        "uid": user.id,
                         "title": title,
                         "now": _now(),
                     },
@@ -639,7 +639,7 @@ async def submit_session_benchmark(
     if body and body.approval:
         final_provider_state, payload = await _resume_deferred_benchmark_tool(
             session_id,
-            user["id"],
+            user.id,
             body.approval,
             True,
         )
@@ -648,12 +648,12 @@ async def submit_session_benchmark(
                 status_code=400, detail="Benchmark approval did not submit a run"
             )
 
-        await _save_provider_state(session_id, user["id"], final_provider_state)
+        await _save_provider_state(session_id, user.id, final_provider_state)
         return _benchmark_submit_out(payload)
 
-    row = await _get_session_provider_scope(session_id, user["id"])
+    row = await _get_session_provider_scope(session_id, user.id)
     scope = ChatScope.model_validate(_json_dict(row["scope"]))
-    payload = await submit_benchmark_for_session(user["id"], scope, session_id)
+    payload = await submit_benchmark_for_session(user.id, scope, session_id)
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
     if not isinstance(payload.get("run_id"), str) or not isinstance(
@@ -672,11 +672,11 @@ async def deny_session_benchmark_approval(
 ):
     final_provider_state, _ = await _resume_deferred_benchmark_tool(
         session_id,
-        user["id"],
+        user.id,
         body.approval,
         ToolDenied(body.message),
     )
-    await _save_provider_state(session_id, user["id"], final_provider_state)
+    await _save_provider_state(session_id, user.id, final_provider_state)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -693,7 +693,7 @@ async def update_session_benchmark_config(
                     text(
                         "SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
                     ),
-                    {"id": session_id, "uid": user["id"]},
+                    {"id": session_id, "uid": user.id},
                 )
             )
             .mappings()
@@ -706,7 +706,7 @@ async def update_session_benchmark_config(
     scope = ChatScope.model_validate(_json_dict(row["scope"]))
     payload = await update_benchmark_config(
         body.model_dump(exclude_none=True),
-        user["id"],
+        user.id,
         scope,
         session_id,
     )
@@ -731,13 +731,13 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
     requested_scope = None
     if body.scope is not None:
-        requested_scope = await _validate_scope(body.scope, user["id"])
+        requested_scope = await _validate_scope(body.scope, user.id)
 
     async with get_db() as conn:
         row = (
             await conn.execute(
                 text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-                {"id": session_id, "uid": user["id"]},
+                {"id": session_id, "uid": user.id},
             )
         ).fetchone()
 
@@ -756,7 +756,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                     WHERE id = :id AND user_id = :uid
                     FOR UPDATE
                 """),
-                        {"id": session_id, "uid": user["id"]},
+                        {"id": session_id, "uid": user.id},
                     )
                 )
                 .mappings()
@@ -822,7 +822,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
         try:
             async for event in stream_response(
                 provider_state,
-                user["id"],
+                user.id,
                 session_id,
                 scope,
                 latest_user_message=body.content,
@@ -870,7 +870,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                             scope=scope,
                         )
                     hydrated_turn = hydrate_turn_artifact_urls(
-                        completed_turn, user["id"]
+                        completed_turn, user.id
                     )
                     terminal_event = _stream_event(
                         "done", turn=hydrated_turn.model_dump(mode="json")
@@ -900,7 +900,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
             logger.exception(
                 "Chat response stream failed for session %s and user %s",
                 session_id,
-                user["id"],
+                user.id,
             )
             try:
                 async with get_db() as conn:
@@ -974,7 +974,7 @@ async def _serve_chat_figure(figure_id: str, user_id: str):
 
 @router.get("/figures/{figure_id}")
 async def get_chat_figure(figure_id: str, user: CurrentUser):
-    return await _serve_chat_figure(figure_id, user["id"])
+    return await _serve_chat_figure(figure_id, user.id)
 
 
 @router.get("/figures/{figure_id}/public")
@@ -1012,7 +1012,7 @@ async def delete_session(session_id: str, user: CurrentUser):
                 LEFT JOIN chat_artifacts ON chat_artifacts.session_id = chat_sessions.id
                 WHERE chat_sessions.id = :id AND chat_sessions.user_id = :uid
             """),
-                    {"id": session_id, "uid": user["id"]},
+                    {"id": session_id, "uid": user.id},
                 )
             )
             .mappings()
