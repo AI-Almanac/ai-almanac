@@ -137,6 +137,19 @@ def test_enforce_shared_requires_mount_roots(monkeypatch: pytest.MonkeyPatch) ->
         enforce_deployment_invariants()
 
 
+def test_enforce_shared_globus_requires_client_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
+    monkeypatch.setattr(settings, "globus_client_id", "")
+    with pytest.raises(RuntimeError, match="GLOBUS_CLIENT_ID"):
+        enforce_deployment_invariants()
+
+
 def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
@@ -446,6 +459,7 @@ def test_enforce_shared_globus_needs_no_groups_and_keeps_mode(
     monkeypatch.setattr(settings, "credential_encryption_key", "k")
     monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
     monkeypatch.setattr(settings, "dataset_mount_roots", "/data")
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
     enforce_deployment_invariants()  # must not raise
     assert settings.auth_mode == "globus"  # not forced to proxy
 
@@ -461,4 +475,5 @@ def test_enforce_shared_gcs_skips_mount_roots(
     monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
     monkeypatch.setattr(settings, "storage_backend", "gcs")
     monkeypatch.setattr(settings, "dataset_mount_roots", "")  # irrelevant for gcs
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
     enforce_deployment_invariants()  # must not raise

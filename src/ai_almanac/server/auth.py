@@ -287,6 +287,10 @@ def enforce_deployment_invariants() -> None:
     # and authorizes via the admin allow-lists, so it needs no group list.
     if settings.auth_mode == "proxy" and not _split_csv(settings.allowed_groups):
         raise RuntimeError("shared proxy deployment requires ALLOWED_GROUPS")
+    # Without a client id the introspection stub treats the bearer token as its
+    # own subject, so any caller could present an admin subject as their token.
+    if settings.auth_mode == "globus" and not settings.globus_client_id:
+        raise RuntimeError("shared globus deployment requires GLOBUS_CLIENT_ID")
     if not settings.credential_encryption_key:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":
