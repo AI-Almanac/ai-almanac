@@ -51,6 +51,28 @@ resource "google_secret_manager_secret_iam_member" "backend_reads_db_password" {
   member    = "serviceAccount:${google_service_account.backend.email}"
 }
 
+# Encrypts stored user credentials; required in shared mode. Populate after apply:
+#   gcloud secrets versions add credential-encryption-key --data-file=<(echo -n "$KEY")
+resource "google_secret_manager_secret" "credential_encryption_key" {
+  secret_id = "credential-encryption-key"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_reads_credential_encryption_key" {
+  secret_id = google_secret_manager_secret.credential_encryption_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_staging_reads_credential_encryption_key" {
+  secret_id = google_secret_manager_secret.credential_encryption_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend_staging.email}"
+}
+
 resource "google_secret_manager_secret" "llm_api_key" {
   secret_id = "llm-api-key"
 

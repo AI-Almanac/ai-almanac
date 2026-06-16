@@ -145,10 +145,10 @@ async def _reconcile_modal_job(row: dict) -> None:
         return  # submitted but no handle persisted yet; pick it up next tick
 
     from ai_almanac.server.services.execution import RunnerHandle
-    from ai_almanac.server.services.runner_registry import runner_for
+    from ai_almanac.server.services.modal_runner import get_modal_runner
 
     handle = RunnerHandle.from_dict(handle_data)
-    runner = runner_for("modal")
+    runner = get_modal_runner()
 
     if row["status"] == "canceling":
         try:

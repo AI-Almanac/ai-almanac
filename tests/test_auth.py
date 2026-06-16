@@ -137,6 +137,19 @@ def test_enforce_shared_requires_mount_roots(monkeypatch: pytest.MonkeyPatch) ->
         enforce_deployment_invariants()
 
 
+def test_enforce_shared_globus_requires_client_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
+    monkeypatch.setattr(settings, "globus_client_id", "")
+    with pytest.raises(RuntimeError, match="GLOBUS_CLIENT_ID"):
+        enforce_deployment_invariants()
+
+
 def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
@@ -355,3 +368,112 @@ async def test_cors_allows_loopback_origins(
 async def test_cors_rejects_foreign_origin(client: httpx.AsyncClient) -> None:
     resp = await client.get("/health", headers={"Origin": "https://evil.example"})
     assert resp.headers.get("access-control-allow-origin") is None
+
+
+# ---------------------------------------------------------------------------
+# Globus auth mode — bearer-token validation (stub introspection)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auth_me_globus_uses_bearer_subject(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No client id configured -> stub introspection treats the token as the sub.
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    body = (
+        await client.get("/auth/me", headers={"Authorization": "Bearer alice-token"})
+    ).json()
+    assert body["subject"] == "alice-token"
+    assert body["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_auth_me_globus_rejects_missing_bearer(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    assert (await client.get("/auth/me")).status_code == 401
+    # A non-bearer Authorization header is also rejected.
+    resp = await client.get("/auth/me", headers={"Authorization": "Basic abc"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_me_globus_admin_by_subject(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "admin_subjects", "admin-sub")
+    body = (
+        await client.get("/auth/me", headers={"Authorization": "Bearer admin-sub"})
+    ).json()
+    assert body["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_auth_me_globus_admin_by_email_from_introspection(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "admin_emails", "boss@example.com")
+    monkeypatch.setattr(
+        auth_module,
+        "_introspect_globus_token",
+        lambda token: {"active": True, "sub": "u1", "email": "boss@example.com"},
+    )
+    body = (
+        await client.get("/auth/me", headers={"Authorization": "Bearer tok"})
+    ).json()
+    assert body["role"] == "admin"
+    assert body["email"] == "boss@example.com"
+
+
+@pytest.mark.asyncio
+async def test_auth_me_globus_rejects_inactive_token(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(
+        auth_module,
+        "_introspect_globus_token",
+        lambda token: {"active": False},
+    )
+    assert (
+        await client.get("/auth/me", headers={"Authorization": "Bearer dead"})
+    ).status_code == 401
+
+
+def test_enforce_shared_globus_needs_no_groups_and_keeps_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "allowed_groups", "")  # not required for globus
+    monkeypatch.setattr(settings, "credential_encryption_key", "k")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/data")
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
+    enforce_deployment_invariants()  # must not raise
+    assert settings.auth_mode == "globus"  # not forced to proxy
+
+
+def test_enforce_shared_gcs_skips_mount_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "credential_encryption_key", "k")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
+    monkeypatch.setattr(settings, "storage_backend", "gcs")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "")  # irrelevant for gcs
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
+    enforce_deployment_invariants()  # must not raise

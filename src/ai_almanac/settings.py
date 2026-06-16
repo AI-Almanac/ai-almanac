@@ -102,8 +102,16 @@ class Settings(BaseSettings):
 
     # Authentication mode. `none` trusts the local operator (personal installs).
     # `proxy` parses identity from trusted reverse-proxy headers (oauth2-proxy).
-    # Shared mode forces `proxy` at startup.
-    auth_mode: str = "none"  # none | proxy
+    # `globus` validates a Globus bearer token per request (introspection), so
+    # the backend can be public with no proxy in front. Shared mode requires
+    # `proxy` or `globus`.
+    auth_mode: str = "none"  # none | proxy | globus
+
+    # Globus Auth confidential-client credentials, used by `auth_mode=globus` to
+    # introspect bearer tokens. Empty client id = stub mode (the raw token is
+    # treated as the subject) for local development without Globus.
+    globus_client_id: str = ""
+    globus_client_secret: str = ""
 
     # Admin allow-lists for shared mode. Comma-separated OIDC subjects / emails;
     # a request whose identity matches either list is granted the `admin` role.

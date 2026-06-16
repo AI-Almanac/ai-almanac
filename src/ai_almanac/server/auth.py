@@ -17,8 +17,11 @@ Two deployment modes (see `settings.deployment_mode` / `settings.auth_mode`):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from threading import Lock
 from typing import Annotated, Literal
 
 from fastapi import Depends, HTTPException, Request, WebSocket, status
@@ -68,7 +71,88 @@ def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
     )
 
 
+_globus_cache: dict[str, tuple[dict, float]] = {}
+_globus_cache_lock = Lock()
+_GLOBUS_CACHE_TTL = 60.0  # seconds
+
+
+def _bearer_token(headers: Headers) -> str | None:
+    scheme, _, token = (headers.get("authorization") or "").partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    return token.strip() or None
+
+
+def _introspect_globus_token(token: str) -> dict:
+    """Validate a Globus access token via introspection, cached briefly.
+
+    With no client id configured, runs in stub mode (the token is treated as the
+    subject) so local development works without Globus credentials.
+    """
+    now = time.monotonic()
+    with _globus_cache_lock:
+        cached = _globus_cache.get(token)
+        if cached and now < cached[1]:
+            return cached[0]
+
+    if not settings.globus_client_id:
+        result: dict = {"active": True, "sub": token, "email": None}
+    else:
+        import globus_sdk
+
+        client = globus_sdk.ConfidentialAppAuthClient(
+            settings.globus_client_id, settings.globus_client_secret
+        )
+        result = dict(
+            client.oauth2_token_introspect(token, include="identity_set").data
+        )
+
+    with _globus_cache_lock:
+        _globus_cache[token] = (result, time.monotonic() + _GLOBUS_CACHE_TTL)
+    return result
+
+
+async def _resolve_globus_identity(headers: Headers) -> AuthenticatedUser:
+    token = _bearer_token(headers)
+    if not token:
+        raise _MissingIdentity
+
+    introspection = await asyncio.to_thread(_introspect_globus_token, token)
+    subject = introspection.get("sub")
+    if not introspection.get("active") or not subject:
+        raise _MissingIdentity
+
+    email = introspection.get("email")
+    display_name = introspection.get("name") or introspection.get("username")
+    # Globus introspection carries identities, not application groups; admit any
+    # valid identity and authorize via the admin allow-lists.
+    role: Role = "admin" if _is_admin(subject, email, set()) else "user"
+
+    async with get_db() as conn:
+        row = await get_or_create_user(
+            conn,
+            external_id=f"globus\x1f{subject}",
+            issuer="globus",
+            subject=subject,
+            email=email,
+            display_name=display_name,
+            groups=[],
+        )
+    return AuthenticatedUser(
+        id=row["id"],
+        subject=subject,
+        issuer="globus",
+        email=email or row.get("email"),
+        display_name=display_name,
+        groups=(),
+        role=role,
+    )
+
+
 async def _resolve_identity(headers: Headers) -> AuthenticatedUser:
+    if settings.auth_mode == "globus":
+        return await _resolve_globus_identity(headers)
+
     raw_subject = (headers.get(settings.submitted_by_header) or "").strip()
     email = (headers.get(settings.identity_email_header) or "").strip() or None
     display_name = (headers.get(settings.identity_name_header) or "").strip() or None
@@ -178,7 +262,10 @@ def enforce_deployment_invariants() -> None:
     if settings.deployment_mode != "shared":
         return
 
-    settings.auth_mode = "proxy"
+    # Shared mode must authenticate. Keep an explicit `globus`, otherwise default
+    # to proxy-header auth.
+    if settings.auth_mode not in ("proxy", "globus"):
+        settings.auth_mode = "proxy"
 
     if settings.resolve_database_url().startswith("sqlite"):
         raise RuntimeError(
@@ -196,13 +283,21 @@ def enforce_deployment_invariants() -> None:
             "shared deployment requires at least one admin; "
             "set ADMIN_SUBJECTS, ADMIN_EMAILS, or ADMIN_GROUPS"
         )
-    if not _split_csv(settings.allowed_groups):
-        raise RuntimeError("shared deployment requires ALLOWED_GROUPS")
+    # Proxy mode gates admission by group; globus mode admits any valid identity
+    # and authorizes via the admin allow-lists, so it needs no group list.
+    if settings.auth_mode == "proxy" and not _split_csv(settings.allowed_groups):
+        raise RuntimeError("shared proxy deployment requires ALLOWED_GROUPS")
+    # Without a client id the introspection stub treats the bearer token as its
+    # own subject, so any caller could present an admin subject as their token.
+    if settings.auth_mode == "globus" and not settings.globus_client_id:
+        raise RuntimeError("shared globus deployment requires GLOBUS_CLIENT_ID")
     if not settings.credential_encryption_key:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":
         raise RuntimeError("shared deployment rejects the development signing secret")
-    if not settings.dataset_mount_roots.strip():
+    # Mount roots only constrain the local filesystem resolver; GCS sources are
+    # gs:// URIs validated against the bucket, so the list is irrelevant there.
+    if settings.storage_backend == "local" and not settings.dataset_mount_roots.strip():
         raise RuntimeError(
             "shared deployment requires DATASET_MOUNT_ROOTS; without it admins "
             "could register data sources anywhere on the host filesystem"
