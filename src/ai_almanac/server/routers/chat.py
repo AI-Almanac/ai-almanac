@@ -25,7 +25,7 @@ from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import bindparam, text
 
 from ai_almanac.server.auth import CurrentUser
-from ai_almanac.server.db import get_db
+from ai_almanac.server.db import get_db, lock_for_update
 
 from ..services.benchmark_domain import (
     submit_benchmark_for_session,
@@ -747,15 +747,18 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
     async def _generate():
         # --- Transaction 1: read state with row lock, persist user + streaming assistant turn ---
         async with get_db() as conn:
+            lock_clause = await lock_for_update(conn)
             row = (
                 (
                     await conn.execute(
-                        text("""
+                        text(
+                            """
                     SELECT provider_state, transcript, scope
                     FROM chat_sessions
                     WHERE id = :id AND user_id = :uid
-                    FOR UPDATE
-                """),
+                """
+                            + lock_clause
+                        ),
                         {"id": session_id, "uid": user.id},
                     )
                 )

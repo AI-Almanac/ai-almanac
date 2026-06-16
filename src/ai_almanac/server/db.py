@@ -7,6 +7,8 @@ backends (e.g. Postgres for shared public deployments).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,6 +18,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from ai_almanac.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _make_engine():
@@ -48,32 +52,99 @@ async def get_db():
         yield conn
 
 
-async def get_or_create_user(
-    conn: AsyncConnection, external_id: str, email: str | None = None
-) -> dict:
-    row = (
-        (
-            await conn.execute(
-                text("SELECT * FROM users WHERE external_id = :eid"),
-                {"eid": external_id},
+async def wait_for_database(attempts: int = 30, delay: float = 2.0) -> None:
+    """Block until the database accepts connections, or raise.
+
+    Compose restart policies ignore `depends_on` after a host reboot, so the
+    server can start before PostgreSQL. Raising here exits the process nonzero
+    and lets the restart policy retry, instead of serving errors indefinitely.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return
+        except Exception as e:  # noqa: BLE001 — any connection failure is retryable
+            if attempt == attempts:
+                raise RuntimeError(
+                    f"database unreachable after {attempts} attempts: {e}"
+                ) from e
+            logger.warning(
+                "database not ready (attempt %d/%d): %s", attempt, attempts, e
             )
-        )
-        .mappings()
-        .fetchone()
-    )
-    if row:
-        return dict(row)
-    user_id = str(uuid.uuid4())
+            await asyncio.sleep(delay)
+
+
+async def lock_for_update(conn: AsyncConnection) -> str:
+    """Acquire the dialect's write lock and return its SELECT lock clause."""
+    if conn.dialect.name == "sqlite":
+        await conn.exec_driver_sql("BEGIN IMMEDIATE")
+        return ""
+    return " FOR UPDATE"
+
+
+async def get_or_create_user(
+    conn: AsyncConnection,
+    external_id: str,
+    email: str | None = None,
+    *,
+    issuer: str = "",
+    subject: str | None = None,
+    display_name: str | None = None,
+    groups: list[str] | None = None,
+) -> dict:
+    now = datetime.now(UTC).isoformat()
+    params = {
+        "id": str(uuid.uuid4()),
+        "eid": external_id,
+        "issuer": issuer,
+        "subject": subject or external_id,
+        "email": email,
+        "display_name": display_name,
+        "groups": __import__("json").dumps(groups or []),
+        "now": now,
+    }
+    dialect = conn.dialect.name
+    if dialect == "postgresql":
+        statement = """
+            INSERT INTO users (
+                id, external_id, issuer, subject, email, display_name,
+                groups, status, created_at, last_login_at
+            )
+            VALUES (
+                :id, :eid, :issuer, :subject, :email, :display_name,
+                CAST(:groups AS JSON), 'active', :now, :now
+            )
+            ON CONFLICT (external_id) DO UPDATE SET
+                issuer = EXCLUDED.issuer,
+                subject = EXCLUDED.subject,
+                email = EXCLUDED.email,
+                display_name = EXCLUDED.display_name,
+                groups = EXCLUDED.groups,
+                last_login_at = EXCLUDED.last_login_at
+            RETURNING *
+        """
+    else:
+        statement = """
+            INSERT INTO users (
+                id, external_id, issuer, subject, email, display_name,
+                groups, status, created_at, last_login_at
+            )
+            VALUES (
+                :id, :eid, :issuer, :subject, :email, :display_name,
+                :groups, 'active', :now, :now
+            )
+            ON CONFLICT (external_id) DO UPDATE SET
+                issuer = excluded.issuer,
+                subject = excluded.subject,
+                email = excluded.email,
+                display_name = excluded.display_name,
+                groups = excluded.groups,
+                last_login_at = excluded.last_login_at
+            RETURNING *
+        """
     result = await conn.execute(
-        text(
-            "INSERT INTO users (id, external_id, email, created_at) "
-            "VALUES (:id, :eid, :email, :now) RETURNING *"
-        ),
-        {
-            "id": user_id,
-            "eid": external_id,
-            "email": email,
-            "now": datetime.now(UTC).isoformat(),
-        },
+        text(statement),
+        params,
     )
     return dict(result.mappings().fetchone())

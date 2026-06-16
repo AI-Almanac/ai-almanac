@@ -1,0 +1,17 @@
+.git
+.github
+.pixi
+.pytest_cache
+.ruff_cache
+.venv
+**/__pycache__
+*.db
+*.db-shm
+*.db-wal
+*.log
+dist
+testdata
+web/build
+web/node_modules
+web/.svelte-kit
+src/ai_almanac/server/static

@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from asyncio import Lock, Semaphore
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
 
@@ -56,6 +59,9 @@ from .chat_state import (
 _SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
 _SUPPORTED_LLM_PROVIDERS = {"openai-compatible", "pydantic-ai"}
 _TRUNCATED_TOOL_RESULT = "[tool result trimmed from conversation history]"
+_llm_semaphores: dict[str, Semaphore] = {}
+_llm_request_times: dict[str, deque[float]] = defaultdict(deque)
+_llm_limit_lock = Lock()
 
 
 @dataclass
@@ -218,11 +224,7 @@ def _trim_tool_content(value: object) -> object:
     if isinstance(value, list):
         return [_trim_tool_content(item) for item in value]
     if isinstance(value, dict):
-        return {
-            key: _trim_tool_content(item)
-            for key, item in value.items()
-            if key != "artifacts"
-        }
+        return {key: _trim_tool_content(item) for key, item in value.items() if key != "artifacts"}
     return value
 
 
@@ -255,9 +257,7 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
         return await chat_tools.list_regions(ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
-    async def list_datasets(
-        ctx: RunContext[ChatDeps], region: str | None = None
-    ) -> dict:
+    async def list_datasets(ctx: RunContext[ChatDeps], region: str | None = None) -> dict:
         """List available ground-truth observation datasets, optionally filtered by region id."""
         return await chat_tools.list_datasets(region, ctx.deps.user_id, ctx.deps.scope)
 
@@ -313,7 +313,7 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
                 return {
                     "error": "Benchmark config changed after approval; please review and approve the updated plan.",
                     **chat_tools.benchmark_payload(
-                        current, chat_tools.validation_for_config(current)
+                        current, await chat_tools.validation_for_config(current)
                     ),
                 }
 
@@ -343,18 +343,12 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
         return await chat_tools.get_job_info(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
-    async def get_job_logs(
-        ctx: RunContext[ChatDeps], job_id: str, max_chars: int = 12000
-    ) -> dict:
+    async def get_job_logs(ctx: RunContext[ChatDeps], job_id: str, max_chars: int = 12000) -> dict:
         """Fetch logs for a running or failed job so failures can be diagnosed without user copy/paste."""
-        return await chat_tools.get_job_logs(
-            job_id, max_chars, ctx.deps.user_id, ctx.deps.scope
-        )
+        return await chat_tools.get_job_logs(job_id, max_chars, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
-    async def rerun_job(
-        ctx: RunContext[ChatDeps], request: chat_tools.RerunJobRequest
-    ) -> dict:
+    async def rerun_job(ctx: RunContext[ChatDeps], request: chat_tools.RerunJobRequest) -> dict:
         """Clone and rerun an existing job, optionally overriding ROMP params with validated values."""
         return await chat_tools.rerun_job(request, ctx.deps.user_id, ctx.deps.scope)
 
@@ -367,18 +361,14 @@ def _metrics_toolset() -> FunctionToolset[ChatDeps]:
     @toolset.tool
     async def get_job_metrics(ctx: RunContext[ChatDeps], job_id: str) -> dict:
         """Get aggregate spatial statistics for a completed job."""
-        return await chat_tools.get_job_metrics(
-            job_id, ctx.deps.user_id, ctx.deps.scope
-        )
+        return await chat_tools.get_job_metrics(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
     async def get_spatial_summary(
         ctx: RunContext[ChatDeps], request: chat_tools.SpatialMetricRequest
     ) -> dict:
         """Get the spatial distribution of a specific metric for a job."""
-        return await chat_tools.get_spatial_summary(
-            request, ctx.deps.user_id, ctx.deps.scope
-        )
+        return await chat_tools.get_spatial_summary(request, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset
 
@@ -400,9 +390,7 @@ def _analysis_toolset() -> FunctionToolset[ChatDeps]:
     if chat_tools.is_tool_available("run_code"):
 
         @toolset.tool
-        async def run_code(
-            ctx: RunContext[ChatDeps], request: chat_tools.JobCodeRequest
-        ) -> dict:
+        async def run_code(ctx: RunContext[ChatDeps], request: chat_tools.JobCodeRequest) -> dict:
             """Execute custom Python analysis code against the NC output files for a job."""
             return await chat_tools.run_code(
                 request, ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
@@ -411,9 +399,9 @@ def _analysis_toolset() -> FunctionToolset[ChatDeps]:
     return toolset
 
 
-def _build_agent(scope: ChatScope):
+def _build_agent(scope: ChatScope, model=None):
     agent = Agent(
-        _build_model(),
+        model or _build_model(),
         output_type=[str, DeferredToolRequests],
         instructions=_instructions_for_scope(scope),
         deps_type=ChatDeps,
@@ -450,7 +438,68 @@ def _tool_result_content(content: object) -> object:
     return content
 
 
+async def _acquire_llm_slot(user_id: str) -> Semaphore:
+    now = time.monotonic()
+    async with _llm_limit_lock:
+        request_times = _llm_request_times[user_id]
+        while request_times and now - request_times[0] >= 60:
+            request_times.popleft()
+        if len(request_times) >= settings.max_llm_requests_per_minute:
+            raise RuntimeError("LLM request rate limit exceeded")
+        request_times.append(now)
+        semaphore = _llm_semaphores.setdefault(
+            user_id, Semaphore(settings.max_concurrent_llm_requests_per_user)
+        )
+    await semaphore.acquire()
+    return semaphore
+
+
 async def stream_response(
+    message_history: list[ModelMessage],
+    user_id: str,
+    session_id: str,
+    session_scope: ChatScope,
+    *,
+    latest_user_message: str | None = None,
+    deferred_tool_results: DeferredToolResults | None = None,
+) -> AsyncIterator[str]:
+    semaphore = await _acquire_llm_slot(user_id)
+    started = time.perf_counter()
+    failure_category: str | None = None
+    try:
+        async for event in _stream_response_unlimited(
+            message_history,
+            user_id,
+            session_id,
+            session_scope,
+            latest_user_message=latest_user_message,
+            deferred_tool_results=deferred_tool_results,
+        ):
+            yield event
+    except Exception as exc:
+        failure_category = type(exc).__name__
+        raise
+    finally:
+        semaphore.release()
+        from ai_almanac.server.db import get_db
+        from ai_almanac.server.services.events import usage
+
+        async with get_db() as conn:
+            await usage(
+                conn,
+                "llm.request",
+                user_id=user_id,
+                resource_type="chat_session",
+                resource_id=session_id,
+                quantity=1,
+                metadata={
+                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "failure_category": failure_category,
+                },
+            )
+
+
+async def _stream_response_unlimited(
     message_history: list[ModelMessage],
     user_id: str,
     session_id: str,
@@ -472,10 +521,32 @@ async def stream_response(
         session_id=session_id,
         scope=session_scope,
     )
-    agent = _build_agent(session_scope)
-    turn = ChatTurn(
-        id=new_turn_id(), role="assistant", content="", created_at=utc_now()
-    )
+    model = None
+    if settings.deployment_mode == "shared":
+        from .llm_profiles import resolve_default_profile
+
+        profile = await resolve_default_profile(user_id)
+        if profile.provider_type == "pydantic-ai":
+            if ":" not in profile.model_name:
+                raise RuntimeError("Profile model name must include a Pydantic AI provider prefix")
+            model = profile.model_name
+        elif profile.provider_type == "openai-compatible":
+            from openai import AsyncOpenAI
+
+            if not profile.base_url:
+                raise RuntimeError("The selected provider has no base URL")
+            client = AsyncOpenAI(
+                base_url=profile.base_url,
+                api_key=profile.api_key,
+                timeout=settings.llm_timeout_seconds,
+            )
+            model = OpenAIChatModel(
+                profile.model_name, provider=OpenAIProvider(openai_client=client)
+            )
+        else:
+            raise RuntimeError(f"Unsupported provider type: {profile.provider_type}")
+    agent = _build_agent(session_scope, model)
+    turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
     tool_calls_by_id: dict[str, ChatToolCall] = {}
     final_output: str | None = None
     final_messages: list[ModelMessage] = message_history
@@ -491,42 +562,26 @@ async def stream_response(
         if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
             content = event.part.content
             if content:
-                if (
-                    just_finished_tool_call
-                    and turn.content
-                    and not turn.content[-1].isspace()
-                ):
+                if just_finished_tool_call and turn.content and not turn.content[-1].isspace():
                     sep = "\n\n"
                     turn.content += sep
-                    yield json.dumps(
-                        {"type": "text_delta", "turn_id": turn.id, "content": sep}
-                    )
+                    yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": sep})
                 just_finished_tool_call = False
                 turn.content += content
-                yield json.dumps(
-                    {"type": "text_delta", "turn_id": turn.id, "content": content}
-                )
+                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": content})
             continue
 
         if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
             content = event.delta.content_delta
             if not content:
                 continue
-            if (
-                just_finished_tool_call
-                and turn.content
-                and not turn.content[-1].isspace()
-            ):
+            if just_finished_tool_call and turn.content and not turn.content[-1].isspace():
                 sep = "\n\n"
                 turn.content += sep
-                yield json.dumps(
-                    {"type": "text_delta", "turn_id": turn.id, "content": sep}
-                )
+                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": sep})
             just_finished_tool_call = False
             turn.content += content
-            yield json.dumps(
-                {"type": "text_delta", "turn_id": turn.id, "content": content}
-            )
+            yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": content})
             continue
 
         if isinstance(event, FunctionToolCallEvent):
@@ -587,9 +642,7 @@ async def stream_response(
                     "result": parsed_result,
                 }
             )
-            if isinstance(parsed_result, dict) and parsed_result.get(
-                "benchmark_config"
-            ):
+            if isinstance(parsed_result, dict) and parsed_result.get("benchmark_config"):
                 if parsed_result.get("approval_required"):
                     yield json.dumps(
                         {
@@ -649,9 +702,7 @@ async def stream_response(
 
     if final_output is not None and not turn.content:
         turn.content = final_output
-        yield json.dumps(
-            {"type": "text_delta", "turn_id": turn.id, "content": final_output}
-        )
+        yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": final_output})
 
     turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
     yield json.dumps(

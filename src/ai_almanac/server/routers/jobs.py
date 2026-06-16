@@ -20,21 +20,23 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
-from ai_almanac.server.db import get_db
+from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
+from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
     signal_cancel,
 )
 from ai_almanac.server.services.local_runner import get_job_runner
-from ai_almanac.settings import (
-    get_model_registry,
-    get_region,
-    get_regions,
+from ai_almanac.server.services.registry import (
+    CatalogSnapshot,
+    load_catalog,
+    load_model_registry,
 )
+from ai_almanac.settings import settings
 
 from ..services.metrics import (
     JobCellResponse,
@@ -153,19 +155,7 @@ def _parse_metrics_cache(value: object) -> JobMetrics | None:
         return None
 
 
-def _region_from_romp_name(romp_region: str | None) -> dict | None:
-    if not romp_region:
-        return None
-    normalized = romp_region.lower()
-    if normalized == "custom":
-        return None
-    for region in get_regions():
-        if (region.get("romp_name") or "custom").lower() == normalized:
-            return region
-    return None
-
-
-def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
+def _job_region_metadata(cfg: dict, catalog: CatalogSnapshot) -> dict[str, str | None]:
     if cfg.get("region_id") and cfg.get("region_name"):
         return {
             "region_id": cfg["region_id"],
@@ -174,12 +164,14 @@ def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
             or (cfg.get("romp_params") or {}).get("region"),
         }
 
-    region = get_region(cfg.get("region_id") or "")
+    region = catalog.region(cfg.get("region_id"))
     if region is None:
         dataset_config = cfg.get("dataset_config") or {}
-        region = get_region(dataset_config.get("region") or "")
+        region = catalog.region(dataset_config.get("region"))
     if region is None:
-        region = _region_from_romp_name((cfg.get("romp_params") or {}).get("region"))
+        region = catalog.region_by_romp_name(
+            (cfg.get("romp_params") or {}).get("region")
+        )
 
     if region:
         return {
@@ -196,12 +188,14 @@ def _job_region_metadata(cfg: dict) -> dict[str, str | None]:
     }
 
 
-def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
+def _row_to_job_out(
+    row: dict, current_user_id: str | None, catalog: CatalogSnapshot
+) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
     model_config = cfg.get("model_config") or {}
     model_name = cfg.get("model_name", "")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
-    region_metadata = _job_region_metadata(cfg)
+    region_metadata = _job_region_metadata(cfg, catalog)
     return JobOut(
         id=row["id"],
         dataset_id=row["dataset_id"],
@@ -225,13 +219,13 @@ def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     )
 
 
-def _apply_region_params(romp_params: dict) -> dict:
+def _apply_region_params(romp_params: dict, catalog: CatalogSnapshot) -> dict:
     params = dict(romp_params)
     region_id = params.pop("region", None)
     if not region_id:
         return params
 
-    region_def = get_region(region_id)
+    region_def = catalog.region(region_id)
     if not region_def:
         params["region"] = region_id
         return params
@@ -325,18 +319,22 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
 
 @router.get("/models")
 async def list_models(region: str | None = None):
-    registry = get_model_registry()
-    if region:
-        registry = [
-            m for m in registry if m.get("region", "").lower() == region.lower()
-        ]
-    return registry
+    return await load_model_registry(region)
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, user: CurrentUser):
+    return await create_job_for_user(body, user.id)
+
+
+async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if observation_source:
+        if (
+            observation_source.get("owner_id") not in (None, user_id)
+            and observation_source.get("visibility") != "shared"
+        ):
+            raise HTTPException(status_code=404, detail="Dataset not found")
         if observation_source["kind"] != "obs":
             raise HTTPException(status_code=400, detail="Selected source is not observations")
         if observation_source.get("status") != "ready":
@@ -353,7 +351,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
                         text(
                             "SELECT * FROM datasets WHERE id = :id AND user_id = :uid"
                         ),
-                        {"id": body.dataset_id, "uid": user.id},
+                        {"id": body.dataset_id, "uid": user_id},
                     )
                 )
                 .mappings()
@@ -410,9 +408,10 @@ async def create_job(body: JobCreate, user: CurrentUser):
             romp_params[key] = model_cfg[key]
 
     # Pull the app region id from params, or fall back to the model's configured region.
+    catalog = await load_catalog()
     region_id = romp_params.get("region") or model_cfg.get("region", "")
-    region_def = get_region(region_id) if region_id else None
-    romp_params = _apply_region_params({"region": region_id, **romp_params})
+    region_def = catalog.region(region_id)
+    romp_params = _apply_region_params({"region": region_id, **romp_params}, catalog)
 
     source_metadata = observation_source["metadata"] if observation_source else {}
     if region_id == "custom":
@@ -456,21 +455,60 @@ async def create_job(body: JobCreate, user: CurrentUser):
     }
 
     async with get_db() as conn:
+        lock_clause = await lock_for_update(conn)
+        await conn.execute(
+            text(f"SELECT id FROM users WHERE id = :uid{lock_clause}"),
+            {"uid": user_id},
+        )
+        active_count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM jobs WHERE user_id = :uid "
+                    "AND status IN ('queued', 'starting', 'running', 'canceling')"
+                ),
+                {"uid": user_id},
+            )
+        ).scalar_one()
+        if active_count >= settings.max_active_jobs_per_user:
+            raise HTTPException(status_code=429, detail="active job quota exceeded")
+        runner_request = {
+            "job_id": job_id,
+            "resources": {"gpus": 1},
+            "timeout_seconds": None,
+        }
         result = await conn.execute(
             text(
-                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at) "
-                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now) RETURNING *"
+                "INSERT INTO jobs "
+                "(id, user_id, dataset_id, status, config_json, run_id, created_at, runner_request) "
+                "VALUES (:id, :uid, :did, 'queued', :cfg, :run_id, :now, :runner_request) RETURNING *"
             ),
             {
                 "id": job_id,
-                "uid": user.id,
+                "uid": user_id,
                 "did": body.dataset_id,
                 "cfg": json.dumps(config),
                 "run_id": body.run_id,
                 "now": now,
+                "runner_request": json.dumps(runner_request),
             },
         )
         row = dict(result.mappings().fetchone())
+        await audit(
+            conn,
+            "job.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            metadata={"dataset_id": body.dataset_id, "model_source_id": body.model_name},
+        )
+        await usage(
+            conn,
+            "job.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            quantity=1,
+        )
 
     storage = get_storage()
     workspace = storage.job_dir(job_id)
@@ -487,7 +525,7 @@ async def create_job(body: JobCreate, user: CurrentUser):
             text("UPDATE jobs SET runner = :r, runner_handle = :h WHERE id = :id"),
             {"r": handle.runner, "h": json.dumps(handle.as_dict()), "id": job_id},
         )
-    return _row_to_job_out(row, user.id)
+    return _row_to_job_out(row, user_id, catalog)
 
 
 @router.get("", response_model=list[JobOut])
@@ -507,12 +545,13 @@ async def list_jobs(user: CurrentUser):
             .mappings()
             .fetchall()
         )
-    return [_row_to_job_out(dict(r), user.id) for r in rows]
+    catalog = await load_catalog()
+    return [_row_to_job_out(dict(r), user.id, catalog) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
 async def get_job(job: ReadableJob, user: CurrentUser):
-    return _row_to_job_out(job, user.id)
+    return _row_to_job_out(job, user.id, await load_catalog())
 
 
 async def _fetch_job(job_id: str) -> dict | None:
@@ -633,7 +672,7 @@ async def stream_job(ws: WebSocket, job_id: str) -> None:
 @router.post("/{job_id}/cancel", response_model=JobOut)
 async def cancel_job(job: ModifiableJob, user: CurrentUser):
     row = await signal_cancel(job["id"]) or job
-    return _row_to_job_out(row, user.id)
+    return _row_to_job_out(row, user.id, await load_catalog())
 
 
 @router.get("/{job_id}/logs")
@@ -680,7 +719,7 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
     local_path = storage.result_file_path(job_id, kind, filename)
 
     if local_path is not None:
-        if not local_path.exists():
+        if not local_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         from fastapi.responses import FileResponse
 
@@ -800,6 +839,13 @@ async def delete_job(job_id: str, job: ModifiableJob):
             text("DELETE FROM job_artifacts WHERE job_id = :id"), {"id": job_id}
         )
         await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
+        await audit(
+            conn,
+            "job.deleted",
+            user_id=job["user_id"],
+            resource_type="job",
+            resource_id=job_id,
+        )
 
     # Remove the workspace and its files; datasets are untouched.
     await asyncio.to_thread(get_artifact_store().delete_job, job_id)
@@ -819,7 +865,14 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
             .mappings()
             .fetchone()
         )
-    return _row_to_job_out(dict(row), user.id)
+        await audit(
+            conn,
+            f"job.{visibility}",
+            user_id=user.id,
+            resource_type="job",
+            resource_id=job["id"],
+        )
+    return _row_to_job_out(dict(row), user.id, await load_catalog())
 
 
 @router.post("/{job_id}/share", response_model=JobOut)

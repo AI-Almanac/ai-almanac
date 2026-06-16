@@ -2,6 +2,10 @@ version: "0.5"
 is_strict: true
 ordered_shutdown: true
 
+# Mirror every process's stdout/stderr to a file in addition to the TUI, so the
+# backend (FastAPI/uvicorn) logs are always tailable:  tail -f process-compose-dev.log
+log_location: process-compose-dev.log
+
 processes:
   frontend-dependencies:
     description: Install frontend dependencies from package-lock.json

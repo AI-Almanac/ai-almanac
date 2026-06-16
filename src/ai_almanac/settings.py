@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     # a request whose identity matches either list is granted the `admin` role.
     admin_subjects: str = ""
     admin_emails: str = ""
+    allowed_groups: str = ""
+    admin_groups: str = ""
 
     # Allow-list of root directories that mounted data sources may resolve
     # within (comma-separated). Empty = unrestricted (personal installs, where
@@ -139,6 +141,9 @@ class Settings(BaseSettings):
     # read from `submitted_by_header` above.
     identity_email_header: str = "X-Forwarded-Email"
     identity_name_header: str = "X-Forwarded-Preferred-Username"
+    identity_issuer_header: str = "X-Forwarded-Issuer"
+    identity_groups_header: str = "X-Forwarded-Groups"
+    logout_url: str = "/oauth2/sign_out"
 
     # CORS — only relevant for the frontend dev server proxying to the API.
     frontend_url: str = "http://localhost:5173"
@@ -163,11 +168,16 @@ class Settings(BaseSettings):
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
+    credential_encryption_key: str = ""
 
-    # Model directories and demo dataset paths are resolved dynamically from
-    # env vars derived from models.yaml / datasets.yaml.
-    # Pattern: {REGION}_{ID}_MODEL_DIR  /  {ID}_OBS_DIR
-    # See get_model_registry() and get_demo_datasets() below.
+    # Shared-host quotas and upload policy.
+    max_active_jobs_per_user: int = 2
+    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    max_stored_upload_bytes_per_user: int = 10 * 1024 * 1024 * 1024
+    max_concurrent_llm_requests_per_user: int = 2
+    max_llm_requests_per_minute: int = 30
+    upload_grant_ttl_seconds: int = 900
+    allowed_upload_extensions: str = ".nc,.zip,.tar,.gz,.tgz"
 
     def resolve_database_url(self) -> str:
         if self.database_url:
@@ -211,11 +221,16 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "auth_mode",
         "admin_subjects",
         "admin_emails",
+        "allowed_groups",
+        "admin_groups",
         "frontend_url",
         "cors_allow_all",
         "submitted_by_header",
         "identity_email_header",
         "identity_name_header",
+        "identity_issuer_header",
+        "identity_groups_header",
+        "credential_encryption_key",
     }
 )
 
@@ -225,6 +240,26 @@ SENSITIVE_FIELDS: frozenset[str] = frozenset(
     {
         "cdsapi_key",
         "llm_api_key",
+        "chat_figure_signing_secret",
+        "credential_encryption_key",
+    }
+)
+
+SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "database_url",
+        "deployment_mode",
+        "auth_mode",
+        "admin_subjects",
+        "admin_emails",
+        "allowed_groups",
+        "admin_groups",
+        "submitted_by_header",
+        "identity_email_header",
+        "identity_name_header",
+        "identity_issuer_header",
+        "identity_groups_header",
+        "credential_encryption_key",
         "chat_figure_signing_secret",
     }
 )
@@ -251,6 +286,8 @@ def _apply_yaml_overrides() -> None:
             continue
         if key.upper() in os.environ:
             continue  # env wins
+        if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
+            continue
         try:
             setattr(settings, key, value)
         except Exception:
@@ -290,104 +327,13 @@ def write_config_yaml(updates: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Registries — models, datasets, regions, ROMP metric defs.
+# Packaged registries — regions and ROMP metric defs.
 # ---------------------------------------------------------------------------
-
-
-# Cached synchronous engine for the registry read path (see `_sync_db_query`).
-_sync_engine = None
-_sync_engine_url: str | None = None
-
-
-def _sync_read_url(async_url: str) -> str:
-    """Map the app's async DB URL to an equivalent synchronous-driver URL."""
-    from sqlalchemy.engine import make_url
-
-    url = make_url(async_url)
-    if url.drivername.startswith("sqlite"):
-        return str(url.set(drivername="sqlite"))
-    if url.drivername.startswith("postgresql"):
-        return str(url.set(drivername="postgresql+psycopg"))
-    return async_url
-
-
-def _get_sync_engine():
-    """Process-wide read-only engine for the synchronous registry resolvers.
-
-    The async engine in `server/db.py` owns writes; this engine lets sync
-    callers (the YAML-derived registries below) read DB rows the user added via
-    the UI without async-ifying the entire registry surface. It is
-    driver-agnostic so it works on both SQLite (personal installs) and
-    PostgreSQL (shared deployments). `NullPool` opens a fresh connection per
-    query, matching the previous raw-sqlite behavior and keeping the path safe
-    to call from worker threads.
-    """
-    global _sync_engine, _sync_engine_url
-    from sqlalchemy import create_engine
-    from sqlalchemy.pool import NullPool
-
-    url = _sync_read_url(settings.resolve_database_url())
-    if _sync_engine is None or _sync_engine_url != url:
-        if _sync_engine is not None:
-            _sync_engine.dispose()
-        _sync_engine = create_engine(url, poolclass=NullPool)
-        _sync_engine_url = url
-    return _sync_engine
-
-
-def _sync_db_query(sql: str) -> list[dict]:
-    """Run a read-only registry query against the app database (sync path).
-
-    Works on SQLite and PostgreSQL. Returns an empty list if the table does not
-    exist yet (first launch, pre-migration).
-    """
-    from sqlalchemy import text as sql_text
-    from sqlalchemy.exc import OperationalError, ProgrammingError
-
-    try:
-        with _get_sync_engine().connect() as conn:
-            return [dict(row) for row in conn.execute(sql_text(sql)).mappings().all()]
-    except (OperationalError, ProgrammingError):
-        return []
-
-
-def _ds_metadata(row: dict) -> dict:
-    """SQLite stores JSON as text; deserialize on read."""
-    import json as _json
-
-    raw = row.get("metadata")
-    if isinstance(raw, str):
-        try:
-            return _json.loads(raw)
-        except Exception:
-            return {}
-    return raw or {}
-
-
-def get_model_registry() -> list[dict]:
-    """Return the registered model entries.
-
-    Reads from the `data_sources` table (the runtime source of truth, fed by
-    the UI). The YAML registry is used as a one-time seed on first launch via
-    `services.data_sources.seed_from_yaml_if_empty()` — it's not re-read here.
-    """
-    rows = _sync_db_query(
-        "SELECT * FROM data_sources "
-        "WHERE kind = 'model' AND status = 'ready' ORDER BY region, name"
-    )
-    result = []
-    for row in rows:
-        meta = _ds_metadata(row)
-        result.append(
-            {
-                "id": row["id"],
-                "display_name": row["name"],
-                "region": row["region"],
-                "model_dir": row["path"],
-                **meta,
-            }
-        )
-    return result
+#
+# Runtime catalog data (models, datasets, regions added via the UI) lives in
+# the application database and is read through the async
+# `server.services.registry` module. Only the packaged YAML defaults are
+# resolved here.
 
 
 _romp_config_cache: dict | None = None
@@ -412,57 +358,5 @@ def get_metric_definitions() -> list[dict]:
     return romp_metrics + e2s_metrics
 
 
-REMOTE_OBS_PROVIDERS = {"earth2studio", "era5_arco"}
-
-
 def get_packaged_regions() -> list[dict]:
     return yaml.safe_load(_REGIONS_YAML.read_text())
-
-
-def get_regions() -> list[dict]:
-    packaged = get_packaged_regions()
-    packaged_ids = {region["id"] for region in packaged}
-    rows = _sync_db_query(
-        "SELECT * FROM regions ORDER BY is_builtin DESC, display_name"
-    )
-    by_id = {region["id"]: region for region in packaged}
-    by_id.update({region["id"]: region for region in rows})
-    return sorted(
-        by_id.values(),
-        key=lambda region: (
-            not bool(region.get("is_builtin", region["id"] in packaged_ids)),
-            region["display_name"].lower(),
-        ),
-    )
-
-
-def get_region(region_id: str) -> dict | None:
-    for r in get_regions():
-        if r["id"].lower() == region_id.lower():
-            return r
-    return None
-
-
-def get_demo_datasets() -> list[dict]:
-    """Compatibility adapter for registered, executable observation sources."""
-    rows = _sync_db_query(
-        "SELECT * FROM data_sources "
-        "WHERE kind = 'obs' AND status = 'ready' ORDER BY name"
-    )
-    result = []
-    for row in rows:
-        meta = _ds_metadata(row)
-        result.append(
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "region": row.get("region", "") or "",
-                "provider": "local",
-                "obs_dir": row["path"],
-                "obs_file_pattern": meta.get("obs_file_pattern"),
-                "obs_var": meta.get("obs_var", "RAINFALL"),
-                "start_year": meta.get("start_year"),
-                "end_year": meta.get("end_year"),
-            }
-        )
-    return result

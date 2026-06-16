@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ai_almanac.server.auth import AdminUser, CurrentUser
 from ai_almanac.server.services import region_catalog
 from ai_almanac.server.services.regions import list_region_options
-from ai_almanac.settings import get_region
 
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
@@ -110,7 +109,7 @@ async def get_boundary(
     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
     of browser CORS restrictions, so the API fetches and caches it server-side.
     """
-    region_def = get_region(region.strip())
+    region_def = await region_catalog.get_region(region.strip())
     if not region_def or not region_def.get("boundary_iso"):
         raise HTTPException(
             status_code=404, detail=f"No boundary mapping for region {region!r}"

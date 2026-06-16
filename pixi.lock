@@ -69,7 +69,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/5f/9ff93450ba96b09c7c2b3f81c94de31c89f92292f1380261bd7195bea4ea/contourpy-1.3.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/95/38/0d29a6fd7d0d1373f0c0c88a04ba20e359b257753ac497564cd660fc1d55/cryptography-48.0.0-cp311-abi3-manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/d2/bb/cc4b78784f97efc8c5874c2a9743708d172be6663024b34a0467885ae0c8/cryptography-48.0.1-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -276,7 +276,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/71/f93e1e9471d189f79d0ce2497007731c1e6bf9ef6d1d61b911430c3db4e5/contourpy-1.3.3-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
-      - pypi: https://files.pythonhosted.org/packages/14/d5/e9c4ef932c8d800490c34d8bd589d64a31d5890e27ec9e9ad532be893294/cryptography-48.0.0-cp311-abi3-manylinux_2_28_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/79/58/67cbf8cf1ee7c54b439ca07bbecf8362c07afc11a3724fea70f745784add/cryptography-48.0.1-cp311-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -477,7 +477,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/e1/3542a9cb596cadd76fcef413f19c79216e002623158befe6daa03dbfa88c/contourpy-1.3.3-cp314-cp314-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/df/3d/01f6dd9190170a5a241e0e98c2d04be3664a9e6f5b9b872cde63aff1c3dd/cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl
+      - pypi: https://files.pythonhosted.org/packages/1b/bc/ee4137cbbe105652c0ee4252792b78fc8e7afa4b8e61d9d5dc05a7f45731/cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -691,7 +691,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/5f/9ff93450ba96b09c7c2b3f81c94de31c89f92292f1380261bd7195bea4ea/contourpy-1.3.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/95/38/0d29a6fd7d0d1373f0c0c88a04ba20e359b257753ac497564cd660fc1d55/cryptography-48.0.0-cp311-abi3-manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/d2/bb/cc4b78784f97efc8c5874c2a9743708d172be6663024b34a0467885ae0c8/cryptography-48.0.1-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -905,7 +905,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/71/f93e1e9471d189f79d0ce2497007731c1e6bf9ef6d1d61b911430c3db4e5/contourpy-1.3.3-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
-      - pypi: https://files.pythonhosted.org/packages/14/d5/e9c4ef932c8d800490c34d8bd589d64a31d5890e27ec9e9ad532be893294/cryptography-48.0.0-cp311-abi3-manylinux_2_28_aarch64.whl
+      - pypi: https://files.pythonhosted.org/packages/79/58/67cbf8cf1ee7c54b439ca07bbecf8362c07afc11a3724fea70f745784add/cryptography-48.0.1-cp311-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -1113,7 +1113,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a1/0d/f543e349da10761c498e3a773e728c2d6b1aeb47195f2f09c6145452d51c/cohere-7.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/e1/3542a9cb596cadd76fcef413f19c79216e002623158befe6daa03dbfa88c/contourpy-1.3.3-cp314-cp314-macosx_11_0_arm64.whl
-      - pypi: https://files.pythonhosted.org/packages/df/3d/01f6dd9190170a5a241e0e98c2d04be3664a9e6f5b9b872cde63aff1c3dd/cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl
+      - pypi: https://files.pythonhosted.org/packages/1b/bc/ee4137cbbe105652c0ee4252792b78fc8e7afa4b8e61d9d5dc05a7f45731/cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/26/1614f15b8ea89ee201a2484ea5bede7319a2b07c796c321ffdadd705559e/cyclopts-4.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl
@@ -1301,7 +1301,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0
-  sha256: d1897e5a23349b98f8f876f00d0855ce0e628c3f76756d86a7efadac93891110
+  sha256: 15ad148d3a98d388320c2a5b9859d8d184487fe264d140ddbe421a946285297f
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0
@@ -1323,6 +1323,7 @@ packages:
   - httpx>=0.28.1
   - matplotlib>=3.10.9
   - psycopg[binary]>=3.3.4,<4
+  - cryptography>=48.0.1,<49
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/67/cd/0d76dfc5de72bde52f55f53e925c7d152d9c7906634ec1e0cbc7e8d4ad93/aiofile-3.11.1-py3-none-any.whl
   name: aiofile
@@ -1912,28 +1913,28 @@ packages:
   - pytest-xdist ; extra == 'test-no-images'
   - wurlitzer ; extra == 'test-no-images'
   requires_python: '>=3.11'
-- pypi: https://files.pythonhosted.org/packages/14/d5/e9c4ef932c8d800490c34d8bd589d64a31d5890e27ec9e9ad532be893294/cryptography-48.0.0-cp311-abi3-manylinux_2_28_aarch64.whl
+- pypi: https://files.pythonhosted.org/packages/1b/bc/ee4137cbbe105652c0ee4252792b78fc8e7afa4b8e61d9d5dc05a7f45731/cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl
   name: cryptography
-  version: 48.0.0
-  sha256: 40ba1f85eaa6959837b1d51c9767e230e14612eea4ef110ee8854ada22da1bf5
+  version: 48.0.1
+  sha256: 3e4a1a3232eef2e6c732827d5722db29a0cc8b27af2a4d865b094cf954be9ca1
   requires_dist:
   - cffi>=2.0.0 ; platform_python_implementation != 'PyPy'
   - typing-extensions>=4.13.2 ; python_full_version < '3.11'
   - bcrypt>=3.1.5 ; extra == 'ssh'
   requires_python: '>=3.9,!=3.9.0,!=3.9.1'
-- pypi: https://files.pythonhosted.org/packages/95/38/0d29a6fd7d0d1373f0c0c88a04ba20e359b257753ac497564cd660fc1d55/cryptography-48.0.0-cp311-abi3-manylinux_2_28_x86_64.whl
+- pypi: https://files.pythonhosted.org/packages/79/58/67cbf8cf1ee7c54b439ca07bbecf8362c07afc11a3724fea70f745784add/cryptography-48.0.1-cp311-abi3-manylinux_2_28_aarch64.whl
   name: cryptography
-  version: 48.0.0
-  sha256: a0e692c683f4df67815a2d258b324e66f4738bd7a96a218c826dce4f4bd05d8f
+  version: 48.0.1
+  sha256: eb86ce1af36fe65041b6db9a8bb064ee621a7e5fded0f80d475ec243477cd242
   requires_dist:
   - cffi>=2.0.0 ; platform_python_implementation != 'PyPy'
   - typing-extensions>=4.13.2 ; python_full_version < '3.11'
   - bcrypt>=3.1.5 ; extra == 'ssh'
   requires_python: '>=3.9,!=3.9.0,!=3.9.1'
-- pypi: https://files.pythonhosted.org/packages/df/3d/01f6dd9190170a5a241e0e98c2d04be3664a9e6f5b9b872cde63aff1c3dd/cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl
+- pypi: https://files.pythonhosted.org/packages/d2/bb/cc4b78784f97efc8c5874c2a9743708d172be6663024b34a0467885ae0c8/cryptography-48.0.1-cp311-abi3-manylinux_2_28_x86_64.whl
   name: cryptography
-  version: 48.0.0
-  sha256: 0c558d2cdffd8f4bbb30fc7134c74d2ca9a476f830bb053074498fbc86f41ed6
+  version: 48.0.1
+  sha256: 3752f2dbc8f07a30aad2932c986cea495b03bb554887828225da104f732852b6
   requires_dist:
   - cffi>=2.0.0 ; platform_python_implementation != 'PyPy'
   - typing-extensions>=4.13.2 ; python_full_version < '3.11'

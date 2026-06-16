@@ -1,18 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../src/lib/auth', () => ({
-	getManager: () => ({
-		getGlobusAuthToken: () => ({
-			other_tokens: [
-				{
-					resource_server: '50964632-afc7-4d4c-abf4-b288cc18a3af',
-					access_token: 'test-token'
-				}
-			]
-		})
-	})
-}));
-
 import { sendChatMessage, type ChatEvent } from '../src/lib/api';
 
 function streamingResponse(chunks: string[]): Response {

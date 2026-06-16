@@ -3,18 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from '../src/lib/api';
 
 const api = vi.hoisted(() => ({
-	submitJob: vi.fn()
+	submitJob: vi.fn(),
+	getJobMetrics: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
 	const actual = await vi.importActual<typeof import('../src/lib/api')>('../src/lib/api');
 	return {
 		...actual,
-		submitJob: api.submitJob
+		submitJob: api.submitJob,
+		getJobMetrics: api.getJobMetrics
 	};
 });
 
-import { BenchmarkStore } from '../src/lib/benchmarks.svelte';
+import {
+	BenchmarkStore,
+	getCachedJobMetrics,
+	invalidateJobCaches
+} from '../src/lib/benchmarks.svelte';
 
 function queuedJob(): Job {
 	return {
@@ -52,5 +58,24 @@ describe('BenchmarkStore', () => {
 		expect(store.jobs).toEqual([job]);
 		expect(store.runGroups).toHaveLength(1);
 		expect(store.runGroups[0].jobs).toHaveLength(1);
+	});
+});
+
+describe('job result caches', () => {
+	beforeEach(() => {
+		api.getJobMetrics.mockReset();
+	});
+
+	it('refetches metrics after the job cache is invalidated', async () => {
+		api.getJobMetrics.mockResolvedValue({ summary: {} });
+
+		await getCachedJobMetrics('job-cache-1');
+		await getCachedJobMetrics('job-cache-1');
+		expect(api.getJobMetrics).toHaveBeenCalledTimes(1);
+
+		invalidateJobCaches('job-cache-1');
+
+		await getCachedJobMetrics('job-cache-1');
+		expect(api.getJobMetrics).toHaveBeenCalledTimes(2);
 	});
 });

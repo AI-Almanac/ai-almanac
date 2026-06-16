@@ -100,9 +100,6 @@ _SKIP_LEGACY_CHAT_TESTS = {
     "test_run_code_sandbox_preserves_figure_artifacts": (
         "run_code_sandbox is a Modal-backed feature removed in the local-first refactor"
     ),
-    "test_send_message_persists_user_and_assistant_turns": (
-        "depends on chat session ownership semantics that no longer apply locally"
-    ),
     "test_send_message_persists_failed_assistant_turn_on_stream_error": (
         "depends on chat session ownership semantics that no longer apply locally"
     ),

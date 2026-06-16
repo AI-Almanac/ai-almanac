@@ -1,42 +1,29 @@
-# sv
+# AI Almanac web application
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+This directory contains the SvelteKit SPA bundled into the `ai-almanac` Python
+package. It is not deployed as an independent web service in the supported
+production architecture.
 
-## Creating a project
+Run the complete development stack from the repository root:
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
+```bash
+pixi run dev
 ```
 
-To recreate this project with the same configuration:
+This starts Vite at `http://localhost:5173` and FastAPI at
+`http://localhost:8765`. Vite sends API and WebSocket requests to FastAPI
+through `VITE_API_URL`.
 
-```sh
-# recreate this project
-npx sv@0.13.2 create --template minimal --types ts --add prettier tailwindcss="plugins:none" --install npm web
+Useful frontend-only tasks:
+
+```bash
+pixi run frontend
+pixi run check-web
+pixi run test-web
+pixi run build-web
 ```
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+The production build uses SvelteKit's static adapter. `web/build/` is included
+in the Python wheel and served by FastAPI from the same origin as the API. See
+[`../DEVELOPMENT.md`](../DEVELOPMENT.md) for development details and
+[`../docs/deployment.md`](../docs/deployment.md) for hosting instructions.

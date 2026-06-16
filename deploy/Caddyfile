@@ -1,0 +1,50 @@
+{$PUBLIC_HOST} {
+	# Strip client-supplied oauth2-proxy response headers. forward_auth
+	# copy_headers only overwrites a request header when the auth response
+	# contains it, so a spoofed X-Auth-Request-Groups would survive for users
+	# whose token has no groups claim. This must run before forward_auth:
+	# Caddy sorts request_header after forward_auth within a block, so the
+	# strip lives at the site level, ahead of the handle routes.
+	request_header -X-Auth-Request-*
+
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Uri {uri}
+		}
+	}
+
+	handle {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username X-Auth-Request-Groups
+
+			header_up X-Real-IP {remote_host}
+
+			@error status 401
+			handle_response @error {
+				@browser header Accept *text/html*
+				handle @browser {
+					redir * /oauth2/sign_in?rd={scheme}://{host}{uri}
+				}
+				handle {
+					header Content-Type application/json
+					respond `{"detail":"Authentication required"}` 401
+				}
+			}
+		}
+
+		request_header -X-Forwarded-User
+		request_header -X-Forwarded-Email
+		request_header -X-Forwarded-Preferred-Username
+		request_header -X-Forwarded-Groups
+		request_header -X-Forwarded-Issuer
+		request_header X-Forwarded-User {http.request.header.X-Auth-Request-User}
+		request_header X-Forwarded-Email {http.request.header.X-Auth-Request-Email}
+		request_header X-Forwarded-Preferred-Username {http.request.header.X-Auth-Request-Preferred-Username}
+		request_header X-Forwarded-Groups {http.request.header.X-Auth-Request-Groups}
+		request_header X-Forwarded-Issuer {$OAUTH2_PROXY_OIDC_ISSUER_URL}
+
+		reverse_proxy app:8765
+	}
+}

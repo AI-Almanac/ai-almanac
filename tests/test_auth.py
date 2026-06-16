@@ -124,6 +124,19 @@ def test_enforce_shared_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         enforce_deployment_invariants()
 
 
+def test_enforce_shared_requires_mount_roots(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "auth_mode", "none")
+    monkeypatch.setattr(settings, "allowed_groups", "users")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "")
+    with pytest.raises(RuntimeError, match="DATASET_MOUNT_ROOTS"):
+        enforce_deployment_invariants()
+
+
 def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
@@ -131,12 +144,55 @@ def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "auth_mode", "none")
     monkeypatch.setattr(settings, "enable_fs_browser", True)
     monkeypatch.setattr(settings, "enable_run_code", True)
+    monkeypatch.setattr(settings, "allowed_groups", "users")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
 
     enforce_deployment_invariants()
 
     assert settings.auth_mode == "proxy"
     assert settings.enable_fs_browser is False
     assert settings.enable_run_code is False
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejects_user_outside_allowed_groups(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "allowed_groups", "researchers")
+    response = await client.get(
+        "/auth/me",
+        headers={
+            "X-Forwarded-User": "outside",
+            "X-Forwarded-Groups": "other",
+        },
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_proxy_uses_issuer_and_subject_as_stable_identity(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "allowed_groups", "researchers")
+    base = {
+        "X-Forwarded-User": "same-subject",
+        "X-Forwarded-Groups": "researchers",
+    }
+    first = (
+        await client.get(
+            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-a"}
+        )
+    ).json()
+    second = (
+        await client.get(
+            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-b"}
+        )
+    ).json()
+    assert first["id"] != second["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -272,3 +328,30 @@ def test_ws_allows_owner() -> None:
         ) as ws:
             msg = ws.receive_json()
             assert msg["type"] in ("status", "log", "done")
+
+
+# ---------------------------------------------------------------------------
+# CORS — local dev cross-origin (Vite dev server → API)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",  # opened via 127.0.0.1 instead of localhost
+        "http://localhost:5174",  # Vite fell back to another port
+    ],
+)
+@pytest.mark.asyncio
+async def test_cors_allows_loopback_origins(
+    client: httpx.AsyncClient, origin: str
+) -> None:
+    resp = await client.get("/health", headers={"Origin": origin})
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
+@pytest.mark.asyncio
+async def test_cors_rejects_foreign_origin(client: httpx.AsyncClient) -> None:
+    resp = await client.get("/health", headers={"Origin": "https://evil.example"})
+    assert resp.headers.get("access-control-allow-origin") is None

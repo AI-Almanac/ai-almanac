@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from ai_almanac.server.auth import AdminUser, CurrentUser
 from ai_almanac.server.services import data_sources as svc
-from ai_almanac.settings import get_region
+from ai_almanac.server.services import region_catalog
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
@@ -77,11 +77,11 @@ def _to_out(row: dict) -> DataSourceOut:
     )
 
 
-def _parse_region(region: str | None) -> str:
+async def _parse_region(region: str | None) -> str:
     normalized = region.strip().lower() if region else ""
     if not normalized:
         raise HTTPException(status_code=400, detail="region is required")
-    if get_region(normalized) is None:
+    if await region_catalog.get_region(normalized) is None:
         raise HTTPException(
             status_code=400,
             detail=f"region {normalized!r} is not configured",
@@ -91,16 +91,16 @@ def _parse_region(region: str | None) -> str:
 
 @router.get("", response_model=list[DataSourceOut])
 async def list_data_sources(
-    _user: CurrentUser, kind: Literal["obs", "model"] | None = None
+    user: CurrentUser, kind: Literal["obs", "model"] | None = None
 ):
-    rows = await svc.list_sources(kind=kind)
+    rows = await svc.list_sources(kind=kind, user_id=user.id, is_admin=user.is_admin)
     return [_to_out(r) for r in rows]
 
 
 @router.post("/validate", response_model=DataSourceValidationOut)
 async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized_path = str(Path(body.path).expanduser().resolve())
-    region = _parse_region(body.region)
+    region = await _parse_region(body.region)
     status, validation_error, metadata = await svc.validate_source(
         body.kind,
         normalized_path,
@@ -119,7 +119,7 @@ async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
 @router.post("", response_model=DataSourceOut, status_code=201)
 async def create_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized = str(Path(body.path).expanduser().resolve())
-    region = _parse_region(body.region)
+    region = await _parse_region(body.region)
     row = await svc.create_source(
         kind=body.kind,
         name=body.name,
@@ -137,7 +137,7 @@ async def update_data_source(
     existing = await svc.get_source(source_id)
     if not existing:
         raise HTTPException(status_code=404, detail="data source not found")
-    region = _parse_region(body.region)
+    region = await _parse_region(body.region)
     row = await svc.update_source(
         source_id,
         name=body.name.strip(),

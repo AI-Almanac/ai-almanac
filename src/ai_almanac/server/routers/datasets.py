@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -8,6 +7,13 @@ from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
+from ai_almanac.server.routers.uploads import (
+    UploadSessionCreate,
+    create_upload_session,
+)
+from ai_almanac.server.routers.uploads import (
+    confirm_upload as confirm_upload_session,
+)
 from ai_almanac.server.services import data_sources as data_source_service
 
 from ..services.storage import get_storage
@@ -74,79 +80,59 @@ class DatasetFromPathRequest(BaseModel):
 
 
 @router.post("/upload-url", response_model=UploadUrlResponse)
-async def request_upload_url(
-    body: UploadUrlRequest, user: CurrentUser, request: Request
-):
-    dataset_id = str(uuid.uuid4())
-    storage_key = f"{user.id}/{dataset_id}/{body.filename}"
-
-    async with get_db() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO datasets (id, user_id, name, status, storage_key, created_at) "
-                "VALUES (:id, :uid, :name, 'pending', :key, :now)"
-            ),
-            {
-                "id": dataset_id,
-                "uid": user.id,
-                "name": body.name,
-                "key": storage_key,
-                "now": datetime.now(UTC).isoformat(),
-            },
-        )
-
-    storage = get_storage()
-    upload_url = storage.generate_upload_url(storage_key, str(request.base_url))
+async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request: Request):
+    session = await create_upload_session(
+        UploadSessionCreate(name=body.name, filename=body.filename),
+        user,
+        request,
+    )
     return UploadUrlResponse(
-        dataset_id=dataset_id, upload_url=upload_url, storage_key=storage_key
+        dataset_id=session.data_source_id,
+        upload_url=session.upload_url or "",
+        storage_key=session.id,
     )
 
 
 @router.post("/{dataset_id}/confirm", response_model=DatasetOut)
 async def confirm_upload(dataset_id: str, user: CurrentUser):
-    storage = get_storage()
-
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
+                    text(
+                        "SELECT id FROM upload_sessions "
+                        "WHERE data_source_id = :id AND owner_id = :uid"
+                    ),
                     {"id": dataset_id, "uid": user.id},
                 )
             )
             .mappings()
             .fetchone()
         )
-        if not row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
-            )
-        row = dict(row)
-        if row["status"] != "pending":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Dataset is already {row['status']}",
-            )
-
-        exists = await asyncio.to_thread(storage.confirm_upload, row["storage_key"])
-        if not exists:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Upload not found in storage — did the upload complete?",
-            )
-
-        result = await conn.execute(
-            text(
-                "UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"
-            ),
-            {"now": datetime.now(UTC).isoformat(), "id": dataset_id},
-        )
-        return DatasetOut(**dict(result.mappings().fetchone()))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+    await confirm_upload_session(row["id"], user)
+    source = await data_source_service.get_source(dataset_id)
+    if not source:
+        raise HTTPException(status_code=500, detail="Dataset confirmation failed")
+    return DatasetOut(
+        id=source["id"],
+        name=source["name"],
+        status=source["status"],
+        region=source.get("region"),
+        created_at=source["created_at"],
+        ready_at=source.get("updated_at"),
+        error=source.get("validation_error"),
+        provider="local",
+        obs_file_pattern=source["metadata"].get("obs_file_pattern"),
+    )
 
 
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(user: CurrentUser):
-    sources = await data_source_service.list_sources(kind="obs")
+    sources = await data_source_service.list_sources(
+        kind="obs", user_id=user.id, is_admin=user.is_admin
+    )
     return [
         DatasetOut(
             id=source["id"],
@@ -167,9 +153,7 @@ async def list_datasets(user: CurrentUser):
     ]
 
 
-@router.post(
-    "/from-path", response_model=DatasetOut, status_code=status.HTTP_201_CREATED
-)
+@router.post("/from-path", response_model=DatasetOut, status_code=status.HTTP_201_CREATED)
 async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
     """
     Register a local directory as a ready dataset without an upload step.
@@ -185,9 +169,7 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
     from pathlib import Path
 
     if not Path(body.obs_dir).is_dir():
-        raise HTTPException(
-            status_code=400, detail=f"obs_dir does not exist: {body.obs_dir}"
-        )
+        raise HTTPException(status_code=400, detail=f"obs_dir does not exist: {body.obs_dir}")
 
     now = datetime.now(UTC).isoformat()
     dataset_id = str(uuid.uuid4())
@@ -223,7 +205,5 @@ async def get_dataset(dataset_id: str, user: CurrentUser):
             .fetchone()
         )
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
     return DatasetOut(**dict(row))

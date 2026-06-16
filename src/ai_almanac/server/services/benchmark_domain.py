@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
+from .registry import CatalogSnapshot, load_catalog, load_model_registry
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +183,10 @@ def _obs_year_range(obs_dir: str) -> tuple[int | None, int | None]:
     return (min(years), max(years)) if years else (None, None)
 
 
-def _region_by_id(region_id: object) -> dict | None:
+def _region_by_id(catalog: CatalogSnapshot, region_id: object) -> dict | None:
     if not isinstance(region_id, str):
         return None
-    from ai_almanac.settings import get_region
-
-    return get_region(region_id)
+    return catalog.region(region_id)
 
 
 async def _dataset_candidates(user_id: str) -> list[dict]:
@@ -209,17 +208,6 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
     ]
 
 
-def _region_models(region_id: str | None) -> list[dict]:
-    from ai_almanac.settings import get_model_registry
-
-    registry = get_model_registry()
-    if not region_id:
-        return registry
-    return [
-        model
-        for model in registry
-        if model.get("region", "").lower() == region_id.lower()
-    ]
 
 
 def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
@@ -245,14 +233,16 @@ def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
     )
 
 
-def _validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
+def _validation_for_config(
+    spec: BenchmarkRunSpec, catalog: CatalogSnapshot
+) -> BenchmarkValidation:
     errors = []
     warnings = []
     missing = list(spec.missing_fields)
-    region = _region_by_id(spec.region_id)
+    region = _region_by_id(catalog, spec.region_id)
     if spec.region_id and not region:
         errors.append(f"Unknown region_id: {spec.region_id}")
-    models = _region_models(spec.region_id)
+    models = catalog.models_for_region(spec.region_id)
     model_map = {model["id"]: model for model in models}
     valid_model_ids = {model["id"] for model in models}
     bad_models = [
@@ -315,8 +305,8 @@ def _validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
     )
 
 
-def validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
-    return _validation_for_config(spec)
+async def validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
+    return _validation_for_config(spec, await load_catalog())
 
 
 async def _load_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
@@ -403,7 +393,7 @@ async def _exec_list_datasets(args: dict, user_id: str, scope: BenchmarkScope) -
 
 async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     region = args.get("region")
-    models = _region_models(region if isinstance(region, str) else None)
+    models = await load_model_registry(region if isinstance(region, str) else None)
     return json.dumps(
         [
             {
@@ -434,7 +424,7 @@ async def _exec_get_benchmark_config(
     args: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
-    validation = _validation_for_config(spec)
+    validation = _validation_for_config(spec, await load_catalog())
     await _save_benchmark_state(session_id, user_id, spec, validation)
     return benchmark_payload(spec, validation)
 
@@ -444,6 +434,7 @@ async def _exec_update_benchmark_config(
 ) -> dict:
     spec = await _load_benchmark_config(session_id, user_id)
     patch = dict(args)
+    catalog = await load_catalog()
 
     datasets = await _dataset_candidates(user_id)
     dataset = None
@@ -453,11 +444,11 @@ async def _exec_update_benchmark_config(
         dataset = next((d for d in datasets if d["id"] == spec.dataset_id), None)
 
     if "region_id" in patch:
-        region = _region_by_id(patch.get("region_id"))
+        region = _region_by_id(catalog, patch.get("region_id"))
     elif "dataset_id" in patch and dataset:
-        region = _region_by_id(dataset.get("region"))
+        region = _region_by_id(catalog, dataset.get("region"))
     else:
-        region = _region_by_id(spec.region_id)
+        region = _region_by_id(catalog, spec.region_id)
 
     model_ids = (
         patch.get("model_ids")
@@ -466,7 +457,7 @@ async def _exec_update_benchmark_config(
     )
     models = [
         model
-        for model in _region_models(region["id"] if region else None)
+        for model in catalog.models_for_region(region["id"] if region else None)
         if model["id"] in {mid for mid in model_ids if isinstance(mid, str)}
     ]
     advanced_params = dict(spec.advanced_params)
@@ -498,7 +489,7 @@ async def _exec_update_benchmark_config(
         }
     )
     next_spec = _finalize_benchmark_config(next_spec)
-    validation = _validation_for_config(next_spec)
+    validation = _validation_for_config(next_spec, catalog)
     await _save_benchmark_state(session_id, user_id, next_spec, validation)
     return benchmark_payload(next_spec, validation)
 
@@ -507,7 +498,7 @@ async def _exec_validate_benchmark_config(
     args: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
-    validation = _validation_for_config(spec)
+    validation = _validation_for_config(spec, await load_catalog())
     await _save_benchmark_state(session_id, user_id, spec, validation)
     return benchmark_payload(spec, validation)
 
@@ -542,7 +533,7 @@ async def _exec_propose_benchmark_submit(
 ) -> dict:
     """Validate config and request user approval before submitting."""
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
-    validation = _validation_for_config(spec)
+    validation = _validation_for_config(spec, await load_catalog())
     await _save_benchmark_state(session_id, user_id, spec, validation)
     payload = benchmark_payload(spec, validation)
     if not validation.can_run:
@@ -555,10 +546,11 @@ async def _exec_propose_benchmark_submit(
 async def _exec_submit_benchmark(
     args: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
-    from ..routers.jobs import JobCreate, RompParams, create_job
+    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
 
     spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
-    validation = _validation_for_config(spec)
+    catalog = await load_catalog()
+    validation = _validation_for_config(spec, catalog)
     if not validation.can_run:
         await _save_benchmark_state(session_id, user_id, spec, validation)
         return benchmark_payload(
@@ -567,7 +559,7 @@ async def _exec_submit_benchmark(
 
     models = [
         model
-        for model in _region_models(spec.region_id)
+        for model in catalog.models_for_region(spec.region_id)
         if model["id"] in set(spec.model_ids)
     ]
     run_id = str(uuid.uuid4())
@@ -579,14 +571,14 @@ async def _exec_submit_benchmark(
     }
     for model in models:
         params = {**shared_params, **_clamp_model_params(model, spec)}
-        job = await create_job(
+        job = await create_job_for_user(
             JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
                 params=RompParams(**params),
                 run_id=run_id,
             ),
-            {"id": user_id},
+            user_id,
         )
         jobs.append(job.model_dump(mode="json"))
     submitted = spec.model_copy(update={"status": "running"})
@@ -775,7 +767,7 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
 async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> dict:
     from ai_almanac.server.db import get_db
 
-    from ..routers.jobs import JobCreate, RompParams, create_job
+    from ..routers.jobs import JobCreate, RompParams, create_job_for_user
 
     job_id = args["job_id"]
     params_override = args.get("params_override")
@@ -808,7 +800,7 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
     params = {**(cfg.get("romp_params") or {}), **params_override}
-    rerun = await create_job(
+    rerun = await create_job_for_user(
         JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
@@ -817,7 +809,7 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
             params=RompParams(**params),
             run_id=row["run_id"],
         ),
-        {"id": user_id},
+        user_id,
     )
     return {
         "source_job_id": job_id,

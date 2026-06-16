@@ -11,12 +11,13 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
+
+from ai_almanac.server.database_urls import sync_database_url
 
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 
@@ -25,10 +26,7 @@ def _sync_url() -> str:
     """Return a sync SQLAlchemy URL derived from the configured database URL."""
     from ai_almanac.settings import settings
 
-    url = make_url(settings.resolve_database_url())
-    # Strip the async driver suffix (sqlite+aiosqlite -> sqlite, postgresql+asyncpg -> postgresql).
-    driver = url.drivername.split("+", 1)[0]
-    return str(url.set(drivername=driver))
+    return sync_database_url(settings.resolve_database_url())
 
 
 def run_migrations_offline() -> None:

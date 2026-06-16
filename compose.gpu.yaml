@@ -1,0 +1,6 @@
+# Overlay granting the app container GPU access for real benchmark execution:
+#   docker compose -f compose.yaml -f compose.gpu.yaml up --build --detach --wait
+# Requires the NVIDIA Container Toolkit on the host.
+services:
+  app:
+    gpus: all
