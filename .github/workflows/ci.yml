@@ -17,6 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The ai-almanac wheel force-includes web/build, so the editable install
+      # that `pixi install` performs needs the SPA bundle to exist first.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend bundle
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       - uses: prefix-dev/setup-pixi@v0.8.10
         with:
           # Install the environments the check/test tasks resolve to: dev (ruff,
