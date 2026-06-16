@@ -297,6 +297,20 @@ class GCSStorage:
                     results.append((kind, filename))
         return results
 
+    def stat_result_file(self, job_id: str, kind: str, filename: str) -> tuple[int, str]:
+        """Return (size_bytes, content checksum) for a result object.
+
+        The checksum is the object's GCS MD5 hash (no download required); local
+        storage uses SHA-256, so artifact checksums differ by backend.
+        """
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/{kind}/{filename}")
+        blob.reload()
+        return int(blob.size or 0), (blob.md5_hash or "")
+
+    def delete_job(self, job_id: str) -> None:
+        for blob in self._client.list_blobs(self._outputs_bucket, prefix=f"{job_id}/"):
+            blob.delete()
+
     def list_nc_output_files(self, job_id: str) -> list:
         fs = self._fs()
         base = f"{self._outputs_bucket}/{job_id}/output"

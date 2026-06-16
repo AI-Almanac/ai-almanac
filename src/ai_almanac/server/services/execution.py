@@ -33,8 +33,10 @@ class RunnerCapabilities:
 @dataclass(frozen=True)
 class ExecutionRequest:
     job_id: str
-    workspace: Path
-    bundle_path: Path
+    # Local execution writes into a workspace on disk; remote runners (Modal)
+    # have no local workspace and leave these None.
+    workspace: Path | None = None
+    bundle_path: Path | None = None
     inputs: tuple[ResolvedDataset, ...] = ()
     resources: ResourceRequest = ResourceRequest()
 

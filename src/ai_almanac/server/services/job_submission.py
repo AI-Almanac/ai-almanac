@@ -21,8 +21,8 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
-from ai_almanac.server.services.local_runner import get_job_runner
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
+from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import datasets, jobs, users
 from ai_almanac.settings import settings
@@ -432,19 +432,37 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         )
 
     storage = get_storage()
-    workspace = storage.job_dir(job_id)
-    handle = await get_job_runner().submit(
-        ExecutionRequest(
-            job_id=job_id,
-            workspace=workspace,
-            bundle_path=workspace,
-            resources=ResourceRequest(),
+    # Remote runners (Modal) have no local workspace; only the local runner does.
+    workspace = storage.job_dir(job_id) if storage.is_local else None
+    try:
+        handle = await get_job_runner().submit(
+            ExecutionRequest(
+                job_id=job_id,
+                workspace=workspace,
+                bundle_path=workspace,
+                resources=ResourceRequest(),
+            )
         )
-    )
+    except Exception as exc:
+        async with get_db() as conn:
+            await conn.execute(
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(
+                    status="failed",
+                    completed_at=datetime.now(UTC).isoformat(),
+                    error=str(exc),
+                )
+            )
+        raise HTTPException(
+            status_code=400, detail=f"Job submission failed: {exc}"
+        ) from exc
+
+    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
+    # The local runner's supervisor advances status itself; a remote runner is
+    # already executing once spawned, and the reconciler tracks it from here.
+    if handle.runner != "local":
+        values["status"] = "running"
     async with get_db() as conn:
-        await conn.execute(
-            sa.update(jobs)
-            .where(jobs.c.id == job_id)
-            .values(runner=handle.runner, runner_handle=handle.as_dict())
-        )
+        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
     return row_to_job_out(row, user_id, catalog)
