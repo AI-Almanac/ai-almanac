@@ -131,7 +131,7 @@
 	<div class="tables">
 		{#each jobs as job (job.id)}
 			<div class="table-section">
-				<p class="table-model">{modelDisplayName(job.model_name)}</p>
+				<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
 				<MetricsTable jobId={job.id} />
 			</div>
 		{/each}

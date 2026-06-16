@@ -9,6 +9,7 @@ export type MetricWindowAvailabilityByJob = Record<string, MetricWindowAvailabil
 export type RunDef = {
 	jobId: string;
 	modelName: string;
+	displayName?: string;
 	colorIndex: number;
 };
 

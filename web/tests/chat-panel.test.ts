@@ -78,6 +78,7 @@ function jobs(jobIds = ['job-1']): Job[] {
 		status: 'complete',
 		dataset_id: 'dataset-1',
 		model_name: `Model ${id}`,
+		model_display_name: `Model ${id}`,
 		params: {
 			event_type: 'rainfall',
 			region: 'sahel',

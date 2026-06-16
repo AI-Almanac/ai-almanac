@@ -1,0 +1,36 @@
+# Pixi spec for the ai-almanac benchmark environment.
+#
+# This env holds ROMP and its NetCDF/geo stack. It is separate from
+# ai-almanac's web runtime so scientific dependencies cannot break FastAPI.
+#
+# Installed into `$AI_ALMANAC_DATA_DIR/benchmark-env/` on first use via
+# `ai-almanac env prepare`.
+
+[workspace]
+name = "ai-almanac-benchmark"
+description = "Benchmark execution environment for ai-almanac."
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+
+[dependencies]
+python = "3.11.*"
+pip = "*"
+# Geo stack — conda-forge handles the C libs cleanly.
+netcdf4 = "*"
+h5netcdf = "*"
+xarray = "*"
+zarr = "*"
+dask = "*"
+fsspec = "2025.3.2.*"
+cartopy = "*"
+geopandas = "*"
+matplotlib = "*"
+numpy = "1.26.*"
+pandas = "*"
+pyproj = "*"
+regionmask = "0.12.*"
+seaborn = "*"
+scipy = "*"
+
+[pypi-dependencies]
+momp = { git = "https://github.com/hholb/ROMP.git", rev = "f50d4cfa0eb9f111bf028a445c5e572f2d1e6fbc" }

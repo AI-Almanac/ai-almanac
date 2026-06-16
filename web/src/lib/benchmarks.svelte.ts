@@ -6,6 +6,7 @@ import {
 	getJobGrid,
 	getJobCell,
 	deleteJob,
+	cancelJob,
 	submitJob,
 	type Job,
 	type JobParams,
@@ -85,6 +86,11 @@ export type MultiRunFormData = {
 
 function jobRegionLabel(job: Job): string {
 	return job.region_name ?? job.region_id ?? job.params?.region ?? 'Unknown';
+}
+
+function mergeJobs(incoming: Job[], existing: Job[]): Job[] {
+	const incomingIds = new Set(incoming.map((job) => job.id));
+	return [...incoming, ...existing.filter((job) => !incomingIds.has(job.id))];
 }
 
 function buildRunGroups(jobs: Job[]): RunGroup[] {
@@ -170,12 +176,25 @@ export class BenchmarkStore {
 		}
 	}
 
+	async cancelGroup(key: string) {
+		const group = untrack(() => this.runGroups.find((g) => g.key === key));
+		if (!group) return;
+		const active = group.jobs.filter((job) =>
+			['queued', 'starting', 'running', 'canceling'].includes(job.status)
+		);
+		const updated = await Promise.all(active.map((job) => cancelJob(job.id)));
+		const byId = new Map(updated.map((job) => [job.id, job]));
+		this.jobs = untrack(() => this.jobs.map((job) => byId.get(job.id) ?? job));
+	}
+
 	startPolling() {
 		if (this.pollTimer) return;
 		this.pollTimer = setInterval(async () => {
-			const running = untrack(() => this.jobs.filter((j) => j.status === 'running'));
-			if (running.length === 0) return;
-			const updated = await Promise.all(running.map((j) => getJob(j.id)));
+			const active = untrack(() =>
+				this.jobs.filter((j) => ['queued', 'starting', 'running', 'canceling'].includes(j.status))
+			);
+			if (active.length === 0) return;
+			const updated = await Promise.all(active.map((j) => getJob(j.id)));
 			for (const u of updated) {
 				const idx = untrack(() => this.jobs.findIndex((j) => j.id === u.id));
 				if (idx !== -1) this.jobs[idx] = u;
@@ -190,7 +209,7 @@ export class BenchmarkStore {
 		}
 	}
 
-	async submitRuns(data: MultiRunFormData): Promise<void> {
+	async submitRuns(data: MultiRunFormData): Promise<{ runId: string; jobs: Job[] }> {
 		const runId = crypto.randomUUID();
 		const results = await Promise.all(
 			data.modelNames.map((modelName) =>
@@ -205,17 +224,24 @@ export class BenchmarkStore {
 				})
 			)
 		);
-		this.jobs = [...results, ...untrack(() => this.jobs)];
+		this.jobs = mergeJobs(
+			results,
+			untrack(() => this.jobs)
+		);
 		const first = results[0];
 		const key =
 			first.run_id ??
 			`${first.params?.event_type ?? 'monsoon_onset'}||${first.region_id ?? first.params?.region ?? 'unknown'}||${first.params?.start_date ?? 'unknown'}||${first.params?.end_date ?? 'unknown'}`;
 		this.selectedGroupKey = key;
 		this.showForm = false;
+		return { runId, jobs: results };
 	}
 
 	acceptSubmittedJobs(runId: string, jobs: Job[]): void {
-		this.jobs = [...jobs, ...untrack(() => this.jobs)];
+		this.jobs = mergeJobs(
+			jobs,
+			untrack(() => this.jobs)
+		);
 		this.selectedGroupKey = runId;
 		this.showForm = false;
 	}

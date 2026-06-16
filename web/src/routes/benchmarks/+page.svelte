@@ -9,6 +9,7 @@
 	import JobLogs from '$lib/components/JobLogs.svelte';
 	import {
 		getDatasets,
+		getCapabilities,
 		getRegions,
 		getRompDefaults,
 		type Dataset,
@@ -26,6 +27,7 @@
 	let datasets = $state<Dataset[]>([]);
 	let parameterDefaults = $state<RompDefaults | null>(null);
 	let dataLoaded = $state(false);
+	let chatAvailable = $state(false);
 	let resultsSidebarOpen = $state(true);
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
@@ -47,15 +49,15 @@
 			store.showForm = true;
 			store.selectedGroupKey = null;
 		}
-		const [fetchedRegions, fetchedDatasets, fetchedParameterDefaults] = await Promise.allSettled([
-			getRegions(),
-			getDatasets(),
-			getRompDefaults()
-		]);
+		const [fetchedRegions, fetchedDatasets, fetchedParameterDefaults, fetchedCapabilities] =
+			await Promise.allSettled([getRegions(), getDatasets(), getRompDefaults(), getCapabilities()]);
 		if (fetchedRegions.status === 'fulfilled') regions = fetchedRegions.value;
 		if (fetchedDatasets.status === 'fulfilled') datasets = fetchedDatasets.value;
 		if (fetchedParameterDefaults.status === 'fulfilled') {
 			parameterDefaults = fetchedParameterDefaults.value;
+		}
+		if (fetchedCapabilities.status === 'fulfilled') {
+			chatAvailable = fetchedCapabilities.value.chat;
 		}
 		dataLoaded = true;
 	}
@@ -126,8 +128,11 @@
 	}
 
 	function formatRunStatus(jobs: Job[]): string {
-		if (jobs.some((job) => job.status === 'running')) return 'Running';
+		if (jobs.some((job) => job.status === 'canceling')) return 'Canceling';
+		if (jobs.some((job) => ['queued', 'starting', 'running'].includes(job.status)))
+			return 'Running';
 		if (jobs.every((job) => job.status === 'complete')) return 'Complete';
+		if (jobs.every((job) => job.status === 'canceled')) return 'Canceled';
 		if (jobs.every((job) => job.status === 'failed')) return 'Failed';
 		return 'Mixed';
 	}
@@ -177,6 +182,7 @@
 					{dataLoaded}
 					{parameterDefaults}
 					{initialPrompt}
+					{chatAvailable}
 					initialManualOpen={manualSetupRequested}
 					onSubmitted={handleSubmitted}
 				/>
@@ -184,9 +190,15 @@
 				{@const group = store.selectedGroup}
 				{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
 				{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
+				{@const activeJobs = group.jobs.filter((j) =>
+					['queued', 'starting', 'running', 'canceling'].includes(j.status)
+				)}
 				{@const primaryJob = group.jobs[0]}
 
-				<div class="analysis-workspace" class:side-collapsed={!resultsSidebarOpen}>
+				<div
+					class="analysis-workspace"
+					class:side-collapsed={!resultsSidebarOpen || !chatAvailable}
+				>
 					<section class="analysis-main">
 						<header class="analysis-header">
 							<div>
@@ -202,14 +214,27 @@
 								</p>
 							</div>
 							<div class="analysis-actions">
-								<button
-									type="button"
-									class="sidebar-toggle"
-									aria-expanded={resultsSidebarOpen}
-									onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
-								>
-									{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
-								</button>
+								{#if chatAvailable}
+									<button
+										type="button"
+										class="sidebar-toggle"
+										aria-expanded={resultsSidebarOpen}
+										onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
+									>
+										{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
+									</button>
+								{/if}
+								{#if activeJobs.length > 0}
+									<button
+										type="button"
+										class="new-analysis"
+										onclick={() => store.cancelGroup(group.key)}
+									>
+										{activeJobs.some((job) => job.status === 'canceling')
+											? 'Canceling…'
+											: 'Cancel run'}
+									</button>
+								{/if}
 								<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>
 							</div>
 						</header>
@@ -251,11 +276,14 @@
 									<div class="model-run-list">
 										{#each group.jobs as job}
 											<div class="model-run-item">
-												<strong>{modelDisplayName(job.model_name)}</strong>
+												<strong>{job.model_display_name || modelDisplayName(job.model_name)}</strong
+												>
 												<span
 													class:complete={job.status === 'complete'}
 													class:failed={job.status === 'failed'}
-													class:running={job.status === 'running'}
+													class:running={['queued', 'starting', 'running', 'canceling'].includes(
+														job.status
+													)}
 												>
 													{job.status}
 												</span>
@@ -351,11 +379,15 @@
 							</div>
 						</details>
 
-						{#if group.jobs.some((j) => j.status === 'running') && completeJobs.length === 0}
+						{#if activeJobs.length > 0 && completeJobs.length === 0}
 							<div class="running-state">
 								<div class="spinner"></div>
 								<div>
-									<strong>Running benchmark</strong>
+									<strong
+										>{activeJobs.some((job) => job.status === 'canceling')
+											? 'Canceling benchmark'
+											: 'Running benchmark'}</strong
+									>
 									<p>Results will appear here as soon as the first model completes.</p>
 								</div>
 							</div>
@@ -365,7 +397,9 @@
 							<div class="failed-runs">
 								{#each failedJobs as job}
 									<div class="job-error">
-										<p class="job-error-title">{modelDisplayName(job.model_name)} failed</p>
+										<p class="job-error-title">
+											{job.model_display_name || modelDisplayName(job.model_name)} failed
+										</p>
 										{#if job.error}
 											<pre class="job-error-msg">{job.error}</pre>
 										{/if}
@@ -380,7 +414,7 @@
 						{/if}
 					</section>
 
-					{#if resultsSidebarOpen}
+					{#if resultsSidebarOpen && chatAvailable}
 						<aside class="analysis-side">
 							<div class="result-chat">
 								<ChatPanel

@@ -1,36 +1,54 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
-
-import { getManager } from './auth';
-
-function authHeaders(): HeadersInit {
-	const manager = getManager();
-	if (!manager) throw new Error('Not authenticated');
-	const authToken = manager.getGlobusAuthToken();
-	const apiToken = authToken?.other_tokens?.find(
-		(t: any) => t.resource_server === '50964632-afc7-4d4c-abf4-b288cc18a3af'
-	);
-	if (!apiToken) throw new Error('API token not found — re-login may be required');
-	return { Authorization: `Bearer ${apiToken.access_token}` };
+// API base URL — read at runtime from `window.__ALMANAC_CONFIG__` (injected by
+// the backend's `/config.js`) so a single built SPA can target any backend.
+// Falls back to the build-time Vite env (dev), then to same-origin.
+declare global {
+	interface Window {
+		__ALMANAC_CONFIG__?: { apiUrl?: string; submittedByEnabled?: boolean };
+	}
 }
 
-async function request<T>(path: string, init: RequestInit = {}, _retry = false): Promise<T> {
+const BASE_URL =
+	(typeof window !== 'undefined' && window.__ALMANAC_CONFIG__?.apiUrl) ||
+	import.meta.env.VITE_API_URL ||
+	'';
+
+// ---- WebSocket job streaming ------------------------------------------------
+
+export type JobStreamEvent =
+	| { type: 'status'; payload: { status: string } }
+	| { type: 'log'; payload: { line: string } }
+	| { type: 'done'; payload: { status: string; exit_code?: number } }
+	| { type: 'metric'; payload: Record<string, unknown> };
+
+/**
+ * Subscribe to live job events (status, log lines, completion). Replaces HTTP
+ * polling of `/jobs/{id}` and `/jobs/{id}/logs`. Returns a closer that
+ * unsubscribes when called.
+ */
+export function subscribeJob(
+	jobId: string,
+	onEvent: (event: JobStreamEvent) => void,
+	onClose?: (clean: boolean) => void
+): () => void {
+	const wsScheme = BASE_URL.startsWith('https:') ? 'wss:' : 'ws:';
+	const wsBase = BASE_URL ? BASE_URL.replace(/^https?:/, wsScheme) : '';
+	const ws = new WebSocket(`${wsBase}/jobs/${jobId}/stream`);
+	ws.onmessage = (e) => {
+		try {
+			onEvent(JSON.parse(e.data) as JobStreamEvent);
+		} catch {
+			/* ignore non-JSON frames */
+		}
+	};
+	ws.onclose = (e) => onClose?.(e.wasClean);
+	return () => ws.close();
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const res = await fetch(`${BASE_URL}${path}`, {
 		...init,
-		headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init.headers }
+		headers: { 'Content-Type': 'application/json', ...init.headers }
 	});
-
-	if (res.status === 401 && !_retry) {
-		const manager = getManager();
-		if (manager) {
-			try {
-				await manager.refreshTokens();
-				return request<T>(path, init, true);
-			} catch {
-				await manager.revoke();
-				throw new Error('Session expired — please log in again.');
-			}
-		}
-	}
 
 	if (!res.ok) {
 		const body = await res.text();
@@ -44,6 +62,150 @@ async function request<T>(path: string, init: RequestInit = {}, _retry = false):
 
 // ---- Config ------------------------------------------------------------------
 
+// ---- Filesystem browser -----------------------------------------------------
+
+export interface FsEntry {
+	name: string;
+	kind: 'file' | 'dir';
+	size: number | null;
+	is_hidden: boolean;
+}
+
+export interface FsListing {
+	path: string;
+	parent: string | null;
+	entries: FsEntry[];
+}
+
+export interface QuickPath {
+	label: string;
+	path: string;
+}
+
+export async function fsList(path = '', includeHidden = false): Promise<FsListing> {
+	const params = new URLSearchParams();
+	if (path) params.set('path', path);
+	if (includeHidden) params.set('include_hidden', 'true');
+	const q = params.toString();
+	return request<FsListing>(`/fs/list${q ? '?' + q : ''}`);
+}
+
+export async function fsQuickPaths(): Promise<QuickPath[]> {
+	return request<QuickPath[]>('/fs/quick-paths');
+}
+
+// ---- Settings ---------------------------------------------------------------
+
+export interface SettingsField {
+	name: string;
+	label: string;
+	description: string;
+	type: 'string' | 'int' | 'float' | 'bool';
+	default: unknown;
+	sensitive: boolean;
+	restart_required: boolean;
+}
+
+export interface SettingsGroup {
+	name: string;
+	fields: SettingsField[];
+}
+
+export async function getSettingsSchema(): Promise<{ groups: SettingsGroup[] }> {
+	return request<{ groups: SettingsGroup[] }>('/settings/schema');
+}
+
+export async function getSettings(reveal = false): Promise<Record<string, unknown>> {
+	const q = reveal ? '?reveal=true' : '';
+	const res = await request<{ values: Record<string, unknown> }>(`/settings${q}`);
+	return res.values;
+}
+
+export async function patchSettings(
+	values: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+	const res = await request<{ values: Record<string, unknown> }>('/settings', {
+		method: 'PATCH',
+		body: JSON.stringify({ values })
+	});
+	return res.values;
+}
+
+export async function getConfigYamlPath(): Promise<string> {
+	const res = await request<{ path: string }>('/settings/config-yaml-path');
+	return res.path;
+}
+
+// ---- Data sources -----------------------------------------------------------
+
+export interface DataSource {
+	id: string;
+	kind: 'obs' | 'model';
+	name: string;
+	path: string;
+	region: string | null;
+	metadata: Record<string, unknown>;
+	location_type: 'local_directory';
+	status: 'ready' | 'invalid';
+	validation_error: string | null;
+	created_at: string;
+	updated_at: string | null;
+}
+
+export interface DataSourceCreate {
+	kind: 'obs' | 'model';
+	name: string;
+	path: string;
+	region?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface DataSourceValidation {
+	kind: 'obs' | 'model';
+	path: string;
+	region: string;
+	metadata: Record<string, unknown>;
+	status: 'ready' | 'invalid';
+	validation_error: string | null;
+}
+
+export async function listDataSources(kind?: 'obs' | 'model'): Promise<DataSource[]> {
+	const q = kind ? `?kind=${kind}` : '';
+	return request<DataSource[]>(`/data-sources${q}`);
+}
+
+export async function validateDataSource(body: DataSourceCreate): Promise<DataSourceValidation> {
+	return request<DataSourceValidation>('/data-sources/validate', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function createDataSource(body: DataSourceCreate): Promise<DataSource> {
+	return request<DataSource>('/data-sources', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function updateDataSource(
+	id: string,
+	body: Omit<DataSourceCreate, 'kind'>
+): Promise<DataSource> {
+	return request<DataSource>(`/data-sources/${id}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function revalidateDataSource(id: string): Promise<DataSource> {
+	return request<DataSource>(`/data-sources/${id}/revalidate`, { method: 'POST' });
+}
+
+export async function deleteDataSource(id: string): Promise<void> {
+	await request<void>(`/data-sources/${id}`, { method: 'DELETE' });
+}
+
 export async function getMetricDefinitions() {
 	return request<MetricDefinition[]>('/config/metrics');
 }
@@ -52,10 +214,46 @@ export async function getRompDefaults() {
 	return request<RompDefaults>('/config/romp-defaults');
 }
 
+export type AppCapabilities = {
+	chat: boolean;
+};
+
+export async function getCapabilities(): Promise<AppCapabilities> {
+	return request<AppCapabilities>('/config/capabilities');
+}
+
 // ---- Regions -----------------------------------------------------------------
 
 export async function getRegions() {
 	return request<Region[]>('/regions');
+}
+
+export type RegionWrite = {
+	display_name: string;
+	description: string;
+	lat_min: number;
+	lat_max: number;
+	lon_min: number;
+	lon_max: number;
+	land_only: boolean;
+};
+
+export async function createRegion(body: RegionWrite) {
+	return request<Region>('/regions', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function updateRegion(id: string, body: RegionWrite) {
+	return request<Region>(`/regions/${encodeURIComponent(id)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteRegion(id: string): Promise<void> {
+	await request<void>(`/regions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function getRegionBoundary(region: string, level: BoundaryLevel) {
@@ -111,30 +309,29 @@ export async function deleteJob(id: string): Promise<void> {
 	await request<void>(`/jobs/${id}`, { method: 'DELETE' });
 }
 
+export async function cancelJob(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/cancel`, { method: 'POST' });
+}
+
 /**
  * Fetch a result file (figure/output) as an object URL for display.
- * The backend requires auth headers so we can't use a plain <img src=...>.
- * Results are cached in memory by URL so repeated views don't re-fetch.
+ * Cached in memory by URL so repeated views don't re-fetch.
  */
 const blobCache = new Map<string, string>();
 
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
 	if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
 
-	// First, hit the backend with auth to get the file or a signed-URL redirect.
 	const res = await fetch(`${BASE_URL}${resultUrl}`, {
-		headers: authHeaders(),
-		redirect: 'manual' // don't auto-follow so we can strip auth before GCS redirect
+		redirect: 'manual'
 	});
 
 	let blob: Blob;
 	if (res.type === 'opaqueredirect') {
-		// Production: backend returned a 302 to a GCS signed URL.
-		// Fetch the redirect location without the Authorization header — GCS rejects it.
 		const location = res.headers.get('Location');
 		if (!location) throw new Error('Redirect response missing Location header');
 		const gcsRes = await fetch(location);
-		if (!gcsRes.ok) throw new Error(`Failed to fetch result from GCS: ${gcsRes.status}`);
+		if (!gcsRes.ok) throw new Error(`Failed to fetch result: ${gcsRes.status}`);
 		blob = await gcsRes.blob();
 	} else if (res.ok) {
 		// Local dev: backend served the file directly.
@@ -156,6 +353,15 @@ export type Region = {
 	romp_region: string;
 	description: string;
 	has_data: boolean;
+	source_count: number;
+	lat_min: number | null;
+	lat_max: number | null;
+	lon_min: number | null;
+	lon_max: number | null;
+	land_only: boolean;
+	shp_only: boolean;
+	is_builtin: boolean;
+	boundary_iso: string | null;
 };
 
 export type BoundaryLevel = 'adm1' | 'adm2';
@@ -211,13 +417,22 @@ export type BenchmarkSubmitResponse = {
 	benchmark_validation: BenchmarkValidation;
 };
 
-export type JobStatus = 'running' | 'complete' | 'failed';
+export type JobStatus =
+	| 'queued'
+	| 'starting'
+	| 'running'
+	| 'canceling'
+	| 'canceled'
+	| 'complete'
+	| 'failed';
 
 export type Job = {
 	id: string;
 	status: JobStatus;
 	dataset_id: string;
 	model_name: string;
+	model_display_name: string;
+	model_source_id?: string | null;
 	model_dir?: string;
 	obs_dir?: string;
 	params?: JobParams;
@@ -632,7 +847,7 @@ export async function* sendChatMessage(
 ): AsyncGenerator<ChatEvent> {
 	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ content, scope })
 	});
 	if (!res.ok) {

@@ -1,230 +1,179 @@
 # Development Guide
 
+How to hack on ai-almanac. Pixi manages the Python and Node runtimes, project
+dependencies, and development tasks. No Docker or external database is needed.
+
+---
+
 ## Architecture overview
 
-The stack has three main pieces:
+```
+ai-almanac (one Python process)
+├── FastAPI server (uvicorn)
+│   ├── /api/...    JSON API
+│   ├── /config.js  runtime config injected into the SPA
+│   └── /...        bundled SvelteKit SPA (when built)
+└── Durable supervisor → workload process → `pixi run momp-run`
+```
 
-| Component | Local dev | Production |
-|---|---|---|
-| **Frontend** | SvelteKit dev server (`npm run dev`) | Cloud Run |
-| **Backend** | FastAPI + uvicorn | Cloud Run |
-| **Database** | SQLite (file on disk) | Cloud SQL PostgreSQL |
-| **Storage** | Local filesystem | Google Cloud Storage |
-| **Job runner** | Docker (ROMP container) | Cloud Batch |
-
-All switching between local and production behaviour is driven by environment variables — no code changes needed.
+Storage: filesystem under `$AI_ALMANAC_DATA_DIR` (default:
+`~/.local/share/ai-almanac/`).
+Database: SQLite at `<data-dir>/almanac.db`, auto-migrated on startup.
+Auth: none — see [`DEPLOY_PUBLIC.md`](./DEPLOY_PUBLIC.md) for reverse-proxy setup.
 
 ---
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) — Python package manager
-- [Node.js](https://nodejs.org/) 20+
-- [Docker](https://docs.docker.com/get-docker/) — to run ROMP jobs locally
-- The ROMP Docker image built and tagged as `romp:latest` (see ROMP repo)
+- [Pixi](https://pixi.sh/) — environment and task manager
+
+Pixi installs Python, Node.js, npm, Process Compose, and the project
+dependencies from `pixi.lock`.
 
 ---
 
-## Backend setup
+## Quick start
 
 ```bash
-cd backend
+git clone <repo>
+cd ai-almanac
 
-# Copy and configure the env file
-cp .env.example .env
-# Edit .env — set any {ID}_OBS_DIR and {REGION}_{ID}_MODEL_DIR vars you have locally
-
-# Install dependencies
-uv sync
-
-# Run the dev server
-uv run uvicorn app.main:app --reload --port 8000
+pixi run dev
 ```
 
-The API will be available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
+`pixi run dev` uses Process Compose to run both long-lived services:
 
-### Auth in development
+- SvelteKit with Vite hot module replacement at `http://localhost:5173`
+- FastAPI with Uvicorn auto-reload at `http://localhost:8765`
 
-With `GLOBUS_CLIENT_ID` left empty the server runs in **stub mode**: whatever value you pass as the Bearer token is used as the user ID. This means you can test all authenticated endpoints with any token value:
+The frontend receives `VITE_API_URL=http://localhost:8765`, so HTTP and
+WebSocket requests target FastAPI while Vite serves and reloads the UI.
+Process Compose also runs `npm install` before starting the frontend.
+
+To test a single-process production-style serve, build the SPA first so the
+backend can serve it:
 
 ```bash
-curl -H "Authorization: Bearer testuser" http://localhost:8000/datasets
+pixi run serve
 ```
 
-### Running jobs locally
+That builds `web/build/` and serves the API and SPA together at
+`http://localhost:8765`.
 
-Jobs run as local Docker containers. Make sure `ROMP_IMAGE` in `.env` matches the tagged image you have locally (`romp:latest` by default). When you submit a job via the API, the backend fires off a `docker run` in a background thread and polls for completion.
+---
 
-### Adding model data
-
-Set the relevant `{REGION}_{ID}_MODEL_DIR` env vars in `.env` to absolute paths on your machine. Any model without a configured directory is hidden from the UI. Example:
-
-```
-INDIA_AIFS_MODEL_DIR=/data/romp/india/aifs
-INDIA_IFS_MODEL_DIR=/data/romp/india/ifs
-```
-
-### Adding demo datasets
-
-Dataset entries are defined in `backend/app/config/datasets.yaml`. Each entry needs a matching `{ID}_OBS_DIR` env var set to the path of the obs directory. Example:
+## Backend layout
 
 ```
-ETHIOPIA_OBS_DIR=/data/romp/ethiopia/obs
+src/ai_almanac/
+├── __init__.py
+├── __main__.py            python -m ai_almanac
+├── cli.py                 typer CLI: serve, env, reset, version
+├── paths.py               AI_ALMANAC_DATA_DIR resolution via platformdirs
+├── settings.py            pydantic-settings, YAML registries
+├── envs/
+│   ├── manager.py         pixi env lifecycle
+│   └── benchmark.pixi.toml  benchmark env spec
+└── server/
+    ├── app.py             FastAPI app, lifespan, static SPA mount
+    ├── db.py              SQLAlchemy async + auto-migrate
+    ├── attribution.py     reads X-Forwarded-User → CurrentUser shim
+    ├── alembic/           migrations (collapsed to one SQLite-native baseline)
+    ├── config/            YAML registries: models.yaml, datasets.yaml,
+    │                      regions.yaml, romp.yaml
+    ├── routers/           jobs, datasets, config, regions, chat
+    ├── services/
+    │   ├── romp.py        renders per-job ROMP configuration
+    │   ├── job_workload.py invokes ROMP through the managed Pixi environment
+    │   ├── job_events.py  per-job WebSocket pub/sub broker
+    │   ├── e2s.py         earth2studio RMSE/MAE/ACC/bias subprocess script
+    │   ├── storage.py     LocalStorage (only impl)
+    │   ├── metrics.py     ROMP metric domain aggregation
+    │   ├── benchmark_*.py LLM-driven benchmark planning state machine
+    │   └── chat_*.py      LLM chat + figure handling
+    └── static/            bundled SvelteKit SPA (populated at wheel-build time)
 ```
 
 ---
 
-## Frontend setup
-
-```bash
-cd web
-npm install
-npm run dev
-```
-
-The frontend dev server proxies API requests to `http://localhost:8000` by default. Check `vite.config.ts` for proxy configuration.
-
----
-
-## Environment variables reference
-
-See `backend/.env.example` for the full list with descriptions. The key switches:
-
-| Variable | Local default | Production value |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///./almanac.db` | `postgresql+asyncpg://...` (Cloud SQL socket) |
-| `STORAGE_BACKEND` | `local` | `gcs` |
-| `JOB_RUNNER` | `docker` | `batch` |
-
----
-
-## Project structure
+## Frontend layout
 
 ```
-backend/
-  app/
-    main.py              # FastAPI app, lifespan, local upload endpoint
-    config.py            # All settings (reads from .env)
-    auth.py              # Globus token validation
-    database.py          # SQLAlchemy Core — SQLite or PostgreSQL
-    routers/
-      datasets.py        # Dataset registration and upload URLs
-      jobs.py            # Job submission, results, metrics
-    services/
-      storage.py         # LocalStorage / GCSStorage + factory
-      runner.py          # DockerRunner / BatchRunner + factory
-
 web/
-  src/
-    lib/
-      api.ts             # API client
-      components/        # Svelte UI components
+├── svelte.config.js       adapter-static, fallback: index.html
+├── src/
+│   ├── app.html           includes <script src="/config.js">
+│   ├── lib/
+│   │   ├── api.ts         fetch wrappers + subscribeJob() WebSocket helper
+│   │   ├── auth.ts        no-op shim (auth lives at the proxy, not in the app)
+│   │   ├── auth-store.ts  ditto — isAuthenticated always true
+│   │   ├── components/    MetricMap, ResultsViewer, JobLogs, etc.
+│   │   └── almanac/       static reference catalog (model families, datasets)
+│   └── routes/
+│       ├── benchmarks/    job submission + listing
+│       ├── almanac/       reference catalog pages
+│       └── user/          (vestigial — accounts aren't a thing locally)
+└── build/                 npm run build output (bundled into Python wheel)
+```
 
-terraform/               # GCP infrastructure (Cloud Run, SQL, GCS, Batch, Secrets)
+`web/src/lib/api.ts:BASE_URL` reads from `window.__ALMANAC_CONFIG__.apiUrl`
+first (injected by the backend's `/config.js`), then falls back to
+`import.meta.env.VITE_API_URL` (build-time, for the dev server).
+
+---
+
+## Frontend commands
+
+```bash
+pixi run frontend     # Vite dev server only
+pixi run build-web    # production SPA → web/build/
+pixi run check-web    # svelte-check type-check
+pixi run test-web     # vitest
 ```
 
 ---
 
-## Production deployment
+## Adding a model
 
-### First-time setup
+1. Add an entry to `src/ai_almanac/server/config/models.yaml`
+   (`id`, `display_name`, `region`, etc.).
+2. Set `{REGION}_{ID}_MODEL_DIR=/path/to/model/files` in your shell env or
+   a `.env` file at the repo root.
+3. Restart `ai-almanac serve`. Models without a directory get filtered out.
 
-1. Create a GCP project and enable the required APIs:
-   ```bash
-   gcloud services enable \
-     run.googleapis.com \
-     batch.googleapis.com \
-     sqladmin.googleapis.com \
-     storage.googleapis.com \
-     secretmanager.googleapis.com \
-     cloudresourcemanager.googleapis.com
-   ```
-
-2. Create a GCS bucket for Terraform state:
-   ```bash
-   gcloud storage buckets create gs://YOUR_PROJECT-tf-state --location=us-central1
-   ```
-
-3. Initialize Terraform:
-   ```bash
-   cd terraform
-   cp backend.hcl.example backend.hcl   # fill in your state bucket
-   cp terraform.tfvars.example terraform.tfvars  # fill in project ID, images, etc.
-   terraform init -backend-config=backend.hcl
-   terraform apply
-   ```
-
-4. Populate secrets (after first `terraform apply` creates the Secret Manager resources):
-   ```bash
-   echo -n "YOUR_GLOBUS_CLIENT_ID"     | gcloud secrets versions add globus-client-id --data-file=-
-   echo -n "YOUR_GLOBUS_CLIENT_SECRET" | gcloud secrets versions add globus-client-secret --data-file=-
-   echo -n "YOUR_DB_PASSWORD"          | gcloud secrets versions add almanac-db-password --data-file=-
-   ```
-
-5. Upload model and obs data to the data bucket:
-   ```bash
-   gcloud storage cp -r /local/data/obs/    gs://almanac-data-YOUR_PROJECT/obs/
-   gcloud storage cp -r /local/data/models/ gs://almanac-data-YOUR_PROJECT/models/
-   ```
-
-6. **Deploy the backend image first** so its Cloud Run URL is known before building the frontend:
-   ```bash
-   # Build and push backend
-   docker build -t ghcr.io/YOUR_ORG/almanac-backend:latest ./backend
-   docker push ghcr.io/YOUR_ORG/almanac-backend:latest
-
-   # Deploy backend to Cloud Run
-   gcloud run deploy almanac-backend \
-     --image ghcr.io/YOUR_ORG/almanac-backend:latest \
-     --region us-central1
-
-   # Note the backend URL from the output, e.g. https://almanac-backend-abc123-uc.a.run.app
-   ```
-
-7. **Build and deploy the frontend** with the backend URL baked in:
-   ```bash
-   # VITE_API_URL is embedded in the JS bundle at build time
-   docker build \
-     --build-arg VITE_API_URL=https://almanac-backend-abc123-uc.a.run.app \
-     -t ghcr.io/YOUR_ORG/almanac-frontend:latest \
-     ./web
-   docker push ghcr.io/YOUR_ORG/almanac-frontend:latest
-
-   gcloud run deploy almanac-frontend \
-     --image ghcr.io/YOUR_ORG/almanac-frontend:latest \
-     --region us-central1
-   ```
-
-   The backend Cloud Run URL is stable — it won't change on subsequent deploys unless you delete and recreate the service. You only need to rebuild the frontend image if the backend URL changes.
-
-### Subsequent deployments
-
-```bash
-# Backend only
-docker build -t ghcr.io/YOUR_ORG/almanac-backend:latest ./backend
-docker push ghcr.io/YOUR_ORG/almanac-backend:latest
-gcloud run deploy almanac-backend \
-  --image ghcr.io/YOUR_ORG/almanac-backend:latest \
-  --region us-central1
-
-# Frontend (rebuild if VITE_API_URL or frontend code changed)
-docker build \
-  --build-arg VITE_API_URL=https://almanac-backend-abc123-uc.a.run.app \
-  -t ghcr.io/YOUR_ORG/almanac-frontend:latest \
-  ./web
-docker push ghcr.io/YOUR_ORG/almanac-frontend:latest
-gcloud run deploy almanac-frontend \
-  --image ghcr.io/YOUR_ORG/almanac-frontend:latest \
-  --region us-central1
-```
+No code changes required — the registry is YAML-driven and env-resolved.
 
 ---
 
 ## Adding Python dependencies
 
-Always use `uv add` — never edit `pyproject.toml` directly:
+```bash
+pixi add --pypi somepackage
+pixi add --pypi --feature dev somepackage
+```
+
+Use `pixi add` rather than editing dependency declarations manually so
+`pyproject.toml` and `pixi.lock` stay synchronized.
+
+---
+
+## Running tests
 
 ```bash
-cd backend
-uv add some-package
+pixi run test                # Python and frontend tests
+pixi run test-python         # Python tests
+pixi run test-python -k stream
+pixi run test-web            # frontend tests
+pixi run check               # Ruff and svelte-check
 ```
+
+---
+
+## Building a release wheel
+
+```bash
+pixi run build
+```
+
+This builds the SvelteKit SPA first, then creates the wheel and source
+distribution. The wheel includes the SPA under `ai_almanac/server/static/`.

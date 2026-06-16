@@ -54,11 +54,6 @@
 	}: Props = $props();
 
 	const selectedModels = $derived(models.filter((model) => selectedModelIds.includes(model.id)));
-	const regionDatasets = $derived(
-		selectedRegionId
-			? datasets.filter((dataset) => !dataset.region || dataset.region === selectedRegionId)
-			: []
-	);
 
 	function isSelected(modelId: string) {
 		return selectedModelIds.includes(modelId);
@@ -72,6 +67,11 @@
 		setDatasetId(id);
 		const dataset = datasets.find((item) => item.id === id);
 		if (dataset?.obs_file_pattern) setSharedParam('obs_file_pattern', dataset.obs_file_pattern);
+	}
+
+	function regionName(regionId: string | null | undefined): string | null {
+		if (!regionId) return null;
+		return regions.find((region) => region.id === regionId)?.display_name ?? regionId;
 	}
 
 	function defaultValue(value: string | number | null | undefined, fallback = 'None') {
@@ -120,37 +120,54 @@
 								<fieldset>
 									<legend>Benchmark inputs</legend>
 									<label>
-										<span>Region</span>
-										<select
-											value={selectedRegionId}
-											onchange={(e) => setRegionId((e.target as HTMLSelectElement).value)}
-										>
-											<option value="">Choose a region</option>
-											{#each regions.filter((region) => region.has_data) as region}
-												<option value={region.id}>{region.display_name}</option>
-											{/each}
-										</select>
-									</label>
-
-									<label>
 										<span>Ground truth</span>
 										<select
 											value={selectedDatasetId}
-											disabled={!selectedRegionId || !dataLoaded || regionDatasets.length === 0}
+											disabled={!dataLoaded || datasets.length === 0}
 											onchange={(e) => handleDatasetChange((e.target as HTMLSelectElement).value)}
 										>
-											{#if !selectedRegionId}
-												<option value="">Select a region first</option>
-											{:else if regionDatasets.length === 0}
+											{#if datasets.length === 0}
 												<option value=""
-													>{dataLoaded ? 'No datasets available' : 'Loading datasets...'}</option
+													>{dataLoaded
+														? 'No observation datasets available'
+														: 'Loading datasets...'}</option
 												>
 											{:else}
-												{#each regionDatasets as dataset}
-													<option value={dataset.id}>{dataset.name}</option>
+												<option value="">Choose an observation dataset</option>
+												{#each datasets as dataset}
+													<option value={dataset.id}>
+														{dataset.name}{#if regionName(dataset.region)}
+															· {regionName(dataset.region)}{/if}
+													</option>
 												{/each}
 											{/if}
 										</select>
+										<small>
+											Observation data may cover a broader area; ROMP clips it to the benchmark
+											coverage.
+										</small>
+									</label>
+
+									<label>
+										<span>Benchmark coverage</span>
+										<select
+											value={selectedRegionId}
+											disabled={!selectedDatasetId}
+											onchange={(e) => setRegionId((e.target as HTMLSelectElement).value)}
+										>
+											<option value="">
+												{selectedDatasetId
+													? 'Choose benchmark coverage'
+													: 'Select ground truth first'}
+											</option>
+											{#each regions as region}
+												<option value={region.id}>{region.display_name}</option>
+											{/each}
+										</select>
+										<small>
+											Defaults from the selected dataset. Change it when using broader observations
+											for a custom region.
+										</small>
 									</label>
 
 									<label>
@@ -183,7 +200,9 @@
 							</div>
 
 							{#if !selectedRegionId}
-								<p class="empty">Select a region to see available models.</p>
+								<p class="empty">
+									Select ground truth and benchmark coverage to see available models.
+								</p>
 							{:else if models.length === 0}
 								<p class="empty">No models are available for the selected region.</p>
 							{:else}

@@ -20,7 +20,7 @@ export function modelDisplayName(modelName: string) {
 }
 
 export function modelRunLabel(run: RunDef) {
-	return modelDisplayName(run.modelName);
+	return run.displayName || modelDisplayName(run.modelName);
 }
 
 export function viewModeDescription(mode: MapViewMode) {

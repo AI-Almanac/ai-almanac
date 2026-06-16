@@ -26,8 +26,14 @@
 	}
 
 	function groupStatus(group: (typeof store.runGroups)[number]): string {
-		if (group.jobs.some((job) => job.status === 'running')) return 'running';
+		if (
+			group.jobs.some((job) =>
+				['queued', 'starting', 'running', 'canceling'].includes(job.status)
+			)
+		)
+			return 'running';
 		if (group.jobs.every((job) => job.status === 'complete')) return 'complete';
+		if (group.jobs.every((job) => job.status === 'canceled')) return 'canceled';
 		if (group.jobs.every((job) => job.status === 'failed')) return 'failed';
 		return 'mixed';
 	}
@@ -315,6 +321,9 @@
 
 	.status-dot.failed {
 		background: var(--color-status-failed);
+	}
+	.status-dot.canceled {
+		background: var(--color-text-muted);
 	}
 
 	.status-dot.mixed {

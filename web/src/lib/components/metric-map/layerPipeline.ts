@@ -30,6 +30,7 @@ export function buildModelRuns(jobs: Job[]): RunDef[] {
 	return jobs.map((job, i) => ({
 		jobId: job.id,
 		modelName: job.model_name,
+		displayName: job.model_display_name,
 		colorIndex: i
 	}));
 }

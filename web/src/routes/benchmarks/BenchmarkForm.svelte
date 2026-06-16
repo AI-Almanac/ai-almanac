@@ -24,6 +24,7 @@
 		parameterDefaults,
 		initialPrompt = '',
 		initialManualOpen = false,
+		chatAvailable = false,
 		onSubmitted
 	}: {
 		store: BenchmarkStore;
@@ -33,6 +34,7 @@
 		parameterDefaults: RompDefaults | null;
 		initialPrompt?: string;
 		initialManualOpen?: boolean;
+		chatAvailable?: boolean;
 		onSubmitted: (groupKey: string, chatSessionId?: string | null) => void;
 	} = $props();
 
@@ -204,7 +206,6 @@
 
 	function setRegionId(id: string) {
 		selectedRegionId = id;
-		selectedDatasetId = '';
 		selectedModelIds = [];
 		perModelOverrides = {};
 		models = [];
@@ -213,6 +214,13 @@
 
 	function setDatasetId(id: string) {
 		selectedDatasetId = id;
+		const datasetRegion = datasets.find((dataset) => dataset.id === id)?.region;
+		if (datasetRegion && datasetRegion !== selectedRegionId) {
+			selectedRegionId = datasetRegion;
+			selectedModelIds = [];
+			perModelOverrides = {};
+			models = [];
+		}
 		markManualConfigDirty();
 	}
 
@@ -354,13 +362,24 @@
 			error = 'The benchmark plan is missing required fields.';
 			return;
 		}
-		if (!chatSessionId) {
-			error = 'The chat session is still loading.';
-			return;
-		}
 		submitting = true;
 		error = null;
 		try {
+			if (!chatSessionId) {
+				const result = await store.submitRuns({
+					datasetId: selectedDatasetId,
+					modelNames: selectedModelIds,
+					sharedParams: {
+						region: selectedRegionId,
+						event_type: spec?.event_type ?? 'monsoon_onset',
+						...(forecastWindowDays !== null && { max_forecast_day: forecastWindowDays }),
+						...sharedAdvancedPatch()
+					},
+					perModelOverrides: perModelPatch()
+				});
+				handleBenchmarkSubmitted(result.runId, result.jobs, null);
+				return;
+			}
 			const updated = await syncBenchmarkConfig({ showErrors: true });
 			if (!updated) {
 				submitting = false;
@@ -391,24 +410,38 @@
 
 <section class="setup-workspace" class:has-plan={detailsOpen}>
 	<div class="setup-chat">
-		<ChatPanel
-			jobs={[]}
-			scopeKind="benchmark_setup"
-			scopeKey={setupKey}
-			title="Benchmark setup"
-			emptyMessage="Describe the benchmark you want, ask what the options mean, or start from one of the examples."
-			placeholder="Ask for the benchmark you want, or ask a question…"
-			suggestions={[
-				'Compare monsoon onset skill over southern India',
-				'Benchmark Kiremt onset forecasts in Ethiopia',
-				'What does climatology mean in this context?'
-			]}
-			initialMessage={initialPrompt}
-			showArtifacts={false}
-			onSessionReady={handleSessionReady}
-			onBenchmarkConfig={applySpec}
-			onBenchmarkSubmitted={handleBenchmarkSubmitted}
-		/>
+		{#if chatAvailable}
+			<ChatPanel
+				jobs={[]}
+				scopeKind="benchmark_setup"
+				scopeKey={setupKey}
+				title="Benchmark setup"
+				emptyMessage="Describe the benchmark you want, ask what the options mean, or start from one of the examples."
+				placeholder="Ask for the benchmark you want, or ask a question…"
+				suggestions={[
+					'Compare monsoon onset skill over southern India',
+					'Benchmark Kiremt onset forecasts in Ethiopia',
+					'What does climatology mean in this context?'
+				]}
+				initialMessage={initialPrompt}
+				showArtifacts={false}
+				onSessionReady={handleSessionReady}
+				onBenchmarkConfig={applySpec}
+				onBenchmarkSubmitted={handleBenchmarkSubmitted}
+			/>
+		{:else}
+			<div class="manual-setup">
+				<p class="eyebrow">Manual setup</p>
+				<h1>Configure a benchmark</h1>
+				<p>
+					Chat is unavailable because no LLM provider is configured. Use manual configuration to
+					select observations, models, and benchmark parameters.
+				</p>
+				<button type="button" onclick={() => (advancedPanelOpen = true)}>
+					Open benchmark settings
+				</button>
+			</div>
+		{/if}
 	</div>
 
 	{#if detailsOpen}
@@ -516,6 +549,40 @@
 	.setup-chat :global(.chat-panel) {
 		min-height: 100%;
 		box-shadow: var(--shadow-soft);
+	}
+
+	.manual-setup {
+		width: 100%;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		justify-content: center;
+		gap: 1rem;
+		padding: clamp(1.5rem, 5vw, 4rem);
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-surface);
+	}
+
+	.manual-setup h1,
+	.manual-setup p {
+		margin: 0;
+	}
+
+	.manual-setup p:not(.eyebrow) {
+		max-width: 38rem;
+		color: var(--color-text-muted);
+	}
+
+	.manual-setup button {
+		border: 0;
+		border-radius: 0.45rem;
+		background: var(--color-accent);
+		color: white;
+		padding: 0.75rem 1rem;
+		font: inherit;
+		font-weight: 750;
+		cursor: pointer;
 	}
 
 	.review-panel {
