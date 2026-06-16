@@ -1,17 +1,25 @@
-"""Storage service — local filesystem only.
+"""Storage service — local filesystem or Google Cloud Storage.
 
-ai-almanac stores all artifacts (user uploads, job outputs, chat figures, run
-logs) under `$AI_ALMANAC_DATA_DIR/` (resolved by `ai_almanac.paths`). There is
-no cloud storage backend in this build; the `is_local` property is preserved
-for historical callers but always returns True.
+Selected via the `storage_backend` setting (`STORAGE_BACKEND`):
+  local  — artifacts live under `$AI_ALMANAC_DATA_DIR/` (default; resolved by
+           `ai_almanac.paths`). `is_local` is True.
+  gcs    — artifacts live in GCS buckets; result files and chat figures are
+           served to the browser via short-lived signed URLs. `is_local` is
+           False, which the routers use to redirect instead of streaming.
+
+Both backends expose the same method surface so routers stay backend-agnostic.
 """
 
 from __future__ import annotations
 
 import threading
+from datetime import timedelta
 from pathlib import Path
 
 from ai_almanac.paths import uploads_dir
+
+# Probed in priority order when a chat figure's extension is unknown.
+_CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
 
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
@@ -190,25 +198,225 @@ class LocalStorage:
         return p.read_text() if p.exists() else ""
 
 
-# Type alias preserved for callers that still annotate with the old name.
-StorageBackend = LocalStorage
+# ---------------------------------------------------------------------------
+# GCS implementation
+# ---------------------------------------------------------------------------
 
 
-_instance: LocalStorage | None = None
-_instance_outputs_dir: str | None = None
+class GCSStorage:
+    """Storage backed by Google Cloud Storage buckets.
+
+    Job outputs, chat figures, and run logs live in the outputs bucket; user
+    uploads in the uploads bucket. Result files and chat figures are served to
+    the browser via short-lived V4 signed URLs (the routers redirect there when
+    `is_local` is False). Local-workspace methods (`job_dir`, `log_path`) do not
+    apply: GCS deployments run jobs on a remote runner that writes results
+    straight into the bucket.
+    """
+
+    is_local: bool = False
+    _SIGNED_URL_EXPIRY = timedelta(minutes=15)
+
+    def __init__(
+        self,
+        uploads_bucket: str,
+        outputs_bucket: str,
+        data_bucket: str,
+        client=None,
+    ) -> None:
+        if client is None:
+            from google.cloud import storage as gcs
+
+            client = gcs.Client()
+        self._client = client
+        self._uploads_bucket = uploads_bucket
+        self._outputs_bucket = outputs_bucket
+        self._data_bucket = data_bucket
+
+    def _bucket(self, name: str):
+        return self._client.bucket(name)
+
+    @staticmethod
+    def _fs():
+        import gcsfs
+
+        return gcsfs.GCSFileSystem()
+
+    def generate_upload_url(self, storage_key: str, base_url: str) -> str:
+        return (
+            self._bucket(self._uploads_bucket)
+            .blob(storage_key)
+            .generate_signed_url(
+                version="v4",
+                expiration=self._SIGNED_URL_EXPIRY,
+                method="PUT",
+                content_type="application/octet-stream",
+            )
+        )
+
+    def confirm_upload(self, storage_key: str) -> bool:
+        return self._bucket(self._uploads_bucket).blob(storage_key).exists()
+
+    def resolve_obs_path(self, storage_key: str) -> str:
+        if storage_key.startswith("gs://") or Path(storage_key).is_absolute():
+            return storage_key
+        prefix = "/".join(storage_key.split("/")[:-1])
+        return f"gs://{self._uploads_bucket}/{prefix}"
+
+    def job_dir(self, job_id: str) -> Path:
+        raise NotImplementedError(
+            "GCS storage has no local job workspace; jobs run on a remote runner"
+        )
+
+    def job_output_uri(self, job_id: str) -> tuple[str, str]:
+        return (
+            f"gs://{self._outputs_bucket}/{job_id}/output",
+            f"gs://{self._outputs_bucket}/{job_id}/figure",
+        )
+
+    def generate_result_url(self, job_id: str, kind: str, filename: str) -> str:
+        return (
+            self._bucket(self._outputs_bucket)
+            .blob(f"{job_id}/{kind}/{filename}")
+            .generate_signed_url(
+                version="v4", expiration=self._SIGNED_URL_EXPIRY, method="GET"
+            )
+        )
+
+    def result_file_path(self, job_id: str, kind: str, filename: str) -> Path | None:
+        return None  # served via signed-URL redirect, not a local FileResponse
+
+    def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
+        results: list[tuple[str, str]] = []
+        for kind in ("output", "figure"):
+            prefix = f"{job_id}/{kind}/"
+            blobs = self._client.list_blobs(self._outputs_bucket, prefix=prefix)
+            for blob in sorted(blobs, key=lambda b: b.name):
+                filename = blob.name.removeprefix(prefix)
+                if filename:
+                    results.append((kind, filename))
+        return results
+
+    def list_nc_output_files(self, job_id: str) -> list:
+        fs = self._fs()
+        base = f"{self._outputs_bucket}/{job_id}/output"
+        romp = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/spatial_metrics_*.nc"))]
+        e2s = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/e2s_spatial_metrics_*.nc"))]
+        return romp + e2s
+
+    def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
+        fs = self._fs()
+        base = f"{self._outputs_bucket}/{job_id}/output"
+        for prefix in ("spatial_metrics", "e2s_spatial_metrics"):
+            for w in (window, window.replace("-", ",")):
+                matches = fs.glob(f"{base}/{prefix}_{model}_{w}.nc")
+                if matches:
+                    return f"gs://{matches[0]}"
+        return None
+
+    def list_dataset_files(self, path: str, glob: str) -> list[str]:
+        """List object URIs under a `gs://` source path whose name matches `glob`.
+
+        Used to validate a registered GCS data source the same way the local
+        backend globs a directory.
+        """
+        fs = self._fs()
+        base = str(path).removeprefix("gs://").rstrip("/")
+        return [f"gs://{match}" for match in sorted(fs.glob(f"{base}/{glob}"))]
+
+    def open_nc_dataset(self, path):
+        import xarray as xr
+
+        fs = self._fs()
+        with _nc_lock, fs.open(str(path).removeprefix("gs://"), "rb") as handle:
+            return xr.load_dataset(handle, engine="h5netcdf")
+
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        ext, content_type = detect_chat_figure_format(data)
+        self._bucket(self._outputs_bucket).blob(
+            f"chat-figures/{figure_id}{ext}"
+        ).upload_from_string(data, content_type=content_type)
+
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        return None
+
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        for ext in _CHAT_FIGURE_EXTS:
+            blob = self._bucket(self._outputs_bucket).blob(
+                f"chat-figures/{figure_id}{ext}"
+            )
+            if blob.exists():
+                return blob.generate_signed_url(
+                    version="v4", expiration=self._SIGNED_URL_EXPIRY, method="GET"
+                )
+        return None
+
+    def read_chat_figure(self, figure_id: str) -> tuple[bytes, str] | None:
+        for ext in _CHAT_FIGURE_EXTS:
+            blob = self._bucket(self._outputs_bucket).blob(
+                f"chat-figures/{figure_id}{ext}"
+            )
+            if blob.exists():
+                data = blob.download_as_bytes()
+                return data, (blob.content_type or detect_chat_figure_format(data)[1])
+        return None
+
+    def delete_chat_figure(self, storage_key: str) -> None:
+        for candidate_key in _chat_figure_storage_keys(storage_key):
+            try:
+                self._bucket(self._outputs_bucket).blob(candidate_key).delete()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                continue
+
+    def log_path(self, job_id: str) -> Path:
+        raise NotImplementedError(
+            "GCS storage has no local log file; read_log fetches it from the bucket"
+        )
+
+    def read_log(self, job_id: str) -> str:
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")
+        return blob.download_as_text() if blob.exists() else ""
 
 
-def get_storage() -> LocalStorage:
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+StorageBackend = LocalStorage | GCSStorage
+
+_instance: StorageBackend | None = None
+_instance_key: tuple | None = None
+
+
+def get_storage() -> StorageBackend:
     """Return the process-wide storage instance.
 
-    Rebuilds when `settings.output_dir` changes so hot-reloading that setting
-    via the Settings UI takes effect on the next job submission.
+    Rebuilds when the relevant settings change — the local `output_dir`, or the
+    GCS backend/bucket selection — so the Settings UI and env overrides take
+    effect on the next call.
     """
-    global _instance, _instance_outputs_dir
+    global _instance, _instance_key
     from ai_almanac.settings import settings
 
+    if settings.storage_backend.lower() == "gcs":
+        key = (
+            "gcs",
+            settings.gcs_uploads_bucket,
+            settings.gcs_outputs_bucket,
+            settings.gcs_data_bucket,
+        )
+        if _instance is None or _instance_key != key:
+            _instance = GCSStorage(
+                uploads_bucket=settings.gcs_uploads_bucket,
+                outputs_bucket=settings.gcs_outputs_bucket,
+                data_bucket=settings.gcs_data_bucket,
+            )
+            _instance_key = key
+        return _instance
+
     desired = settings.job_outputs_dir  # honors the user-configurable `output_dir`
-    if _instance is None or _instance_outputs_dir != desired:
+    key = ("local", desired)
+    if _instance is None or _instance_key != key:
         _instance = LocalStorage(upload_dir=uploads_dir(), job_outputs_dir=Path(desired))
-        _instance_outputs_dir = desired
+        _instance_key = key
     return _instance

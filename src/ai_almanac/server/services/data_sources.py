@@ -158,6 +158,11 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     return normalized
 
 
+def _source_file_pattern(kind: Kind, metadata: dict) -> str:
+    pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
+    return str(metadata.get(pattern_key) or "{}.nc").strip()
+
+
 def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
     directory = Path(path)
     if not directory.exists():
@@ -169,19 +174,45 @@ def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
     except PermissionError:
         return "invalid", "Directory is not readable.", metadata
 
-    pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
-    pattern = str(metadata.get(pattern_key) or "{}.nc").strip()
+    pattern = _source_file_pattern(kind, metadata)
     files = sorted(file for file in directory.glob(_file_glob(pattern)) if file.is_file())
     if not files:
         return "invalid", f"No files match {pattern!r}.", metadata
 
+    import xarray as xr
+
+    return _finalize_inspection(kind, metadata, files, lambda: xr.open_dataset(files[0]))
+
+
+def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+    from ai_almanac.server.services.storage import get_storage
+
+    storage = get_storage()
+    pattern = _source_file_pattern(kind, metadata)
+    identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+    if not identifiers:
+        return "invalid", f"No files match {pattern!r} under {path}.", metadata
+
+    files = [Path(identifier) for identifier in identifiers]
+    return _finalize_inspection(
+        kind, metadata, files, lambda: storage.open_nc_dataset(identifiers[0])
+    )
+
+
+def _finalize_inspection(
+    kind: Kind, metadata: dict, files: list[Path], open_first
+) -> tuple[Status, str | None, dict]:
+    """Infer and validate metadata from the matched source files.
+
+    `files` supplies basenames for coverage-year inference; `open_first()` opens
+    the first file (a local path or a gs:// URI) as an xarray Dataset. Shared by
+    the local and GCS inspectors so both backends validate sources identically.
+    """
     normalized = _normalized_metadata(kind, metadata, files)
     variable_key = "obs_var" if kind == "obs" else "model_var"
     variable = normalized[variable_key]
     try:
-        import xarray as xr
-
-        with xr.open_dataset(files[0]) as dataset:
+        with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             initialization_days = _initialization_days(dataset) if kind == "model" else None
@@ -235,7 +266,8 @@ def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
 
 
 async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
-    return await asyncio.to_thread(_inspect_local_source, kind, path, metadata)
+    inspect = _inspect_gcs_source if str(path).startswith("gs://") else _inspect_local_source
+    return await asyncio.to_thread(inspect, kind, path, metadata)
 
 
 async def list_sources(

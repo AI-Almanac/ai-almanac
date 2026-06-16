@@ -51,7 +51,7 @@ _STATIC_DIR = _SOURCE_STATIC_DIR if _SOURCE_STATIC_DIR.exists() else _PACKAGED_S
 
 
 def _apply_migrations() -> None:
-    """Run alembic to `head` on startup so users never need to run it manually."""
+    """Run alembic to `head` so a local install never has to run it manually."""
     from alembic import command
     from alembic.config import Config
 
@@ -60,13 +60,21 @@ def _apply_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+def _should_auto_migrate() -> bool:
+    """Local/personal installs migrate on startup for zero-setup launch. Shared
+    and opted-out deployments run migrations as a dedicated step (the `migrate`
+    compose service / the Cloud Run migration job), so request-serving instances
+    never migrate on cold start or race one another."""
+    return settings.deployment_mode == "personal" and settings.auto_migrate
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_layout()
     _reload_user_config()
     _enforce_deployment()
     await _wait_for_database()
-    if settings.deployment_mode == "personal":
+    if _should_auto_migrate():
         _apply_migrations()
     await _seed_regions()
     await _seed_data_sources()
