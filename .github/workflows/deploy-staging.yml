@@ -58,9 +58,17 @@ jobs:
           # web/.env must stay out of the build (it pins VITE_API_URL to
           # localhost); .dockerignore handles that. The SPA reads its API base
           # from runtime /config.js, so VITE_API_URL is intentionally unset.
+          #
+          # These are hardcoded (not repo `vars`) on purpose: they're public,
+          # staging-specific constants, and the redirect URL must EXACTLY match
+          # the Globus client's registered redirect for this origin. A stale
+          # repo var here bakes a wrong redirect, and Globus then fails the
+          # token-exchange CORS check ("NetworkError when attempting to fetch
+          # resource") in an endless login loop. The redirect must equal the
+          # origin the SPA is served from (the staging LB domain).
           build-args: |
-            VITE_GLOBUS_CLIENT_ID=${{ vars.VITE_GLOBUS_CLIENT_ID || 'c0309fe2-a701-45fa-bf28-1e4fed6c5f1a' }}
-            VITE_GLOBUS_REDIRECT_URL=${{ vars.VITE_GLOBUS_REDIRECT_URL || 'https://staging.ai-almanac.org/callback' }}
+            VITE_GLOBUS_CLIENT_ID=c0309fe2-a701-45fa-bf28-1e4fed6c5f1a
+            VITE_GLOBUS_REDIRECT_URL=https://staging.ai-almanac.org/callback
           tags: |
             ${{ env.AR_IMAGE }}:latest
             ${{ env.AR_IMAGE }}:${{ github.sha }}
