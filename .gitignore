@@ -36,3 +36,16 @@ job_outputs/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Terraform — state, provider plugins, plans, and secret-bearing var/backend files.
+# .terraform.lock.hcl is intentionally tracked.
+terraform/.terraform/
+terraform/*.tfplan
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/backend.hcl
+
+# Local tooling / scratch
+.localrag/
+__marimo__/
