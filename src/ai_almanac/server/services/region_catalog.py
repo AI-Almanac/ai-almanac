@@ -40,7 +40,7 @@ async def seed_packaged_regions() -> int:
                     "is_builtin, created_at, updated_at) "
                     "VALUES (:id, :display_name, :description, :romp_name, :boundary_iso, "
                     ":lat_min, :lat_max, :lon_min, :lon_max, :land_only, :shp_only, "
-                    "1, :now, :now) "
+                    "TRUE, :now, :now) "
                     "ON CONFLICT(id) DO NOTHING"
                 ),
                 {
@@ -114,7 +114,7 @@ async def create_region(
                 "(id, display_name, description, lat_min, lat_max, lon_min, lon_max, "
                 "land_only, shp_only, is_builtin, created_at, updated_at) "
                 "VALUES (:id, :display_name, :description, :lat_min, :lat_max, "
-                ":lon_min, :lon_max, :land_only, 0, 0, :now, :now) RETURNING *"
+                ":lon_min, :lon_max, :land_only, FALSE, FALSE, :now, :now) RETURNING *"
             ),
             {
                 "id": region_id,
@@ -148,7 +148,7 @@ async def update_region(
                 "UPDATE regions SET display_name = :display_name, description = :description, "
                 "lat_min = :lat_min, lat_max = :lat_max, lon_min = :lon_min, "
                 "lon_max = :lon_max, land_only = :land_only, updated_at = :now "
-                "WHERE id = :id AND is_builtin = 0 RETURNING *"
+                "WHERE id = :id AND is_builtin = FALSE RETURNING *"
             ),
             {
                 "id": region_id,
@@ -181,7 +181,7 @@ async def count_region_sources(region_id: str) -> int:
 async def delete_region(region_id: str) -> bool:
     async with get_db() as conn:
         result = await conn.execute(
-            text("DELETE FROM regions WHERE id = :id AND is_builtin = 0"),
+            text("DELETE FROM regions WHERE id = :id AND is_builtin = FALSE"),
             {"id": region_id},
         )
         return result.rowcount > 0
