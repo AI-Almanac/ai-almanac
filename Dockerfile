@@ -3,6 +3,10 @@ WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web ./
+ARG VITE_GLOBUS_CLIENT_ID
+ARG VITE_GLOBUS_REDIRECT_URL
+ENV VITE_GLOBUS_CLIENT_ID=$VITE_GLOBUS_CLIENT_ID \
+    VITE_GLOBUS_REDIRECT_URL=$VITE_GLOBUS_REDIRECT_URL
 RUN npm run build
 
 FROM ghcr.io/prefix-dev/pixi:latest AS pixi
