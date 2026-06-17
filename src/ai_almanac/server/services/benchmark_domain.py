@@ -48,12 +48,16 @@ def tool_unavailable_reason(name: str) -> str | None:
     if name == "run_code_sandbox":
         if not settings.enable_run_code_sandbox:
             return "run_code_sandbox is disabled by configuration"
-        return "run_code_sandbox is not available in local builds (requires a remote execution backend)"
+        if settings.job_runner != "modal":
+            return "run_code_sandbox is not available in local builds (requires a remote execution backend)"
+        return None
 
     if name == "run_code":
         if not settings.enable_run_code:
             return "run_code is disabled by configuration"
-        return "run_code is not available in local builds (requires a remote execution backend)"
+        if settings.job_runner != "modal":
+            return "run_code is not available in local builds (requires a remote execution backend)"
+        return None
 
     return None
 

@@ -315,6 +315,10 @@ SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
         "identity_groups_header",
         "credential_encryption_key",
         "chat_figure_signing_secret",
+        # Set from the deployment env (Cloud Run); the UI toggle would be a no-op
+        # since env wins over config.yaml, so surface them read-only instead.
+        "enable_run_code",
+        "enable_run_code_sandbox",
     }
 )
 
