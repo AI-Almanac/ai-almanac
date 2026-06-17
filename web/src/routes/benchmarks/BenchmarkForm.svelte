@@ -112,8 +112,9 @@
 				<p class="eyebrow">Manual setup</p>
 				<h1>Configure a benchmark</h1>
 				<p>
-					Chat is unavailable because no LLM provider is configured. Use manual configuration to
-					select observations, models, and benchmark parameters.
+					The AI assistant is unavailable until an LLM is set up. Use manual configuration to
+					select observations, models, and benchmark parameters, or
+						<a href="/settings/ai">set up your AI provider</a>.
 				</p>
 				<button type="button" onclick={() => (advancedPanelOpen = true)}>
 					Open benchmark settings

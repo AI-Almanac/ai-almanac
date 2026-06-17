@@ -36,6 +36,7 @@
 			{#if account.isAdmin}
 				<span class="role">Admin</span>
 			{/if}
+			<a class="settings-link" href="/settings/ai">AI assistant settings</a>
 			<button type="button" onclick={logout}>Sign out</button>
 		</div>
 	</section>
@@ -91,6 +92,13 @@
 		font-weight: 800;
 		padding: 0.18rem 0.5rem;
 		text-transform: uppercase;
+	}
+
+	.settings-link {
+		width: fit-content;
+		color: var(--color-text);
+		font-weight: 650;
+		text-decoration: underline;
 	}
 
 	button {

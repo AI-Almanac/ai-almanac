@@ -28,6 +28,33 @@ class ProviderOut(BaseModel):
     display_name: str
     base_url: str | None
     enabled: bool
+    allow_shared: bool = False
+    shared_model_name: str | None = None
+    has_shared_key: bool = False
+
+
+def _provider_out(row) -> ProviderOut:
+    data = dict(row)
+    return ProviderOut(
+        id=data["id"],
+        provider_type=data["provider_type"],
+        display_name=data["display_name"],
+        base_url=data.get("base_url"),
+        enabled=bool(data["enabled"]),
+        allow_shared=bool(data.get("allow_shared")),
+        shared_model_name=data.get("shared_model_name"),
+        has_shared_key=data.get("shared_key_ciphertext") is not None,
+    )
+
+
+class ProviderSharedIn(BaseModel):
+    allow_shared: bool
+    shared_model_name: str | None = None
+    api_key: str | None = Field(default=None, min_length=1)
+
+
+class PreferenceIn(BaseModel):
+    preference: str = Field(pattern="^(auto|shared|own)$")
 
 
 class ProfileIn(BaseModel):
@@ -77,7 +104,7 @@ async def list_providers(_user: CurrentUser) -> list[ProviderOut]:
             .mappings()
             .fetchall()
         )
-    return [ProviderOut(**dict(row)) for row in rows]
+    return [_provider_out(row) for row in rows]
 
 
 @router.post("/providers", response_model=ProviderOut, status_code=status.HTTP_201_CREATED)
@@ -113,7 +140,82 @@ async def create_provider(body: ProviderIn, admin: AdminUser) -> ProviderOut:
             resource_type="llm_provider",
             resource_id=provider_id,
         )
-    return ProviderOut(**dict(row))
+    return _provider_out(row)
+
+
+@router.put("/providers/{provider_id}/shared", response_model=ProviderOut)
+async def set_provider_shared(
+    provider_id: str, body: ProviderSharedIn, admin: AdminUser
+) -> ProviderOut:
+    """Set whether a provider offers a shared key to all users, and rotate it.
+
+    The key is encrypted at rest like personal profiles. Omitting `api_key`
+    keeps any existing shared key (so an admin can toggle availability without
+    re-entering the secret)."""
+    now = datetime.now(UTC).isoformat()
+    assignments = [
+        "allow_shared = :allow_shared",
+        "shared_model_name = :model",
+        "updated_at = :now",
+    ]
+    values: dict[str, object] = {
+        "id": provider_id,
+        "allow_shared": body.allow_shared,
+        "model": body.shared_model_name,
+        "now": now,
+    }
+    if body.api_key is not None:
+        version, nonce, ciphertext = encrypt_api_key(body.api_key)
+        assignments += [
+            "shared_key_version = :version",
+            "shared_key_nonce = :nonce",
+            "shared_key_ciphertext = :ciphertext",
+        ]
+        values.update(version=version, nonce=nonce, ciphertext=ciphertext)
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        f"UPDATE llm_providers SET {', '.join(assignments)} "
+                        "WHERE id = :id RETURNING *"
+                    ),
+                    values,
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="LLM provider not found")
+        await audit(
+            conn,
+            "llm_provider.shared_updated",
+            user_id=admin.id,
+            resource_type="llm_provider",
+            resource_id=provider_id,
+            metadata={"allow_shared": body.allow_shared, "key_rotated": body.api_key is not None},
+        )
+    return _provider_out(row)
+
+
+@router.get("/status")
+async def llm_status(user: CurrentUser) -> dict:
+    """The current user's effective LLM source and preference, for the UI."""
+    from ai_almanac.server.services.llm_profiles import describe_user_llm
+
+    return await describe_user_llm(user.id)
+
+
+@router.put("/preference")
+async def set_preference(body: PreferenceIn, user: CurrentUser) -> dict:
+    from ai_almanac.server.services.llm_profiles import (
+        describe_user_llm,
+        set_user_preference,
+    )
+
+    await set_user_preference(user.id, body.preference)
+    return await describe_user_llm(user.id)
 
 
 @router.get("/profiles", response_model=list[ProfileOut])

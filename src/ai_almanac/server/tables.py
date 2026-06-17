@@ -31,6 +31,7 @@ users = sa.Table(
     sa.Column("status", sa.Text(), nullable=False, server_default="active"),
     sa.Column("groups", sa.JSON(), nullable=False, server_default="[]"),
     sa.Column("last_login_at", sa.Text()),
+    sa.Column("llm_preference", sa.Text(), nullable=False, server_default="auto"),
 )
 
 datasets = sa.Table(

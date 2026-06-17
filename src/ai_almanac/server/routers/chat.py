@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
+from ai_almanac.settings import settings
 
 from ..services.benchmark_domain import (
     submit_benchmark_for_session,
@@ -56,10 +57,29 @@ from ..services.chat_turns import (
     validate_scope,
 )
 from ..services.llm import llm_is_configured
+from ..services.llm_profiles import chat_available_for_user
 from ..services.storage import get_storage, guess_chat_figure_media_type
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+async def _require_chat_available(user_id: str) -> None:
+    """Block chat when no LLM can be resolved, with an actionable message.
+
+    Local installs use the env-configured model; shared deployments resolve a
+    per-user (own or shared) profile, so the readiness check differs by mode.
+    """
+    if settings.deployment_mode == "shared":
+        if not await chat_available_for_user(user_id):
+            raise HTTPException(
+                status_code=400,
+                detail="No LLM is available. Enable a shared model or add your own "
+                "in AI settings.",
+            )
+        return
+    if not llm_is_configured():
+        raise HTTPException(status_code=503, detail="LLM is not configured")
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +214,7 @@ def _session_detail(row, user_id: str) -> SessionDetail:
     "/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED
 )
 async def create_session(body: SessionCreate, user: CurrentUser):
-    if not llm_is_configured():
-        raise HTTPException(status_code=503, detail="LLM is not configured")
+    await _require_chat_available(user.id)
 
     session_id = str(uuid.uuid4())
     now = _now()
@@ -412,8 +431,7 @@ async def update_session_benchmark_config(
 
 @router.post("/sessions/{session_id}/message")
 async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
-    if not llm_is_configured():
-        raise HTTPException(status_code=503, detail="LLM is not configured")
+    await _require_chat_available(user.id)
 
     requested_scope = None
     if body.scope is not None:

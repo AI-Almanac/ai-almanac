@@ -523,9 +523,9 @@ async def _stream_response_unlimited(
     )
     model = None
     if settings.deployment_mode == "shared":
-        from .llm_profiles import resolve_default_profile
+        from .llm_profiles import resolve_llm_for_user
 
-        profile = await resolve_default_profile(user_id)
+        profile = await resolve_llm_for_user(user_id)
         if profile.provider_type == "pydantic-ai":
             if ":" not in profile.model_name:
                 raise RuntimeError("Profile model name must include a Pydantic AI provider prefix")

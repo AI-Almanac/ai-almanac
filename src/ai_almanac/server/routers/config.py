@@ -7,6 +7,7 @@ import json
 from fastapi import APIRouter
 from fastapi.responses import Response
 
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.settings import get_metric_definitions, get_romp_defaults, settings
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -23,10 +24,15 @@ def romp_defaults() -> dict:
 
 
 @router.get("/capabilities")
-def capabilities() -> dict[str, bool]:
+async def capabilities(user: CurrentUser) -> dict[str, bool]:
     from ai_almanac.server.services.llm import llm_is_configured
+    from ai_almanac.server.services.llm_profiles import chat_available_for_user
 
-    return {"chat": llm_is_configured()}
+    if settings.deployment_mode == "shared":
+        chat = await chat_available_for_user(user.id)
+    else:
+        chat = llm_is_configured()
+    return {"chat": chat}
 
 
 # Mounted at the root path (not under /config/) so the SPA's `<script
