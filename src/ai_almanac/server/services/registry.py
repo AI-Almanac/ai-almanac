@@ -14,12 +14,16 @@ from ai_almanac.server.services import data_sources, region_catalog
 
 
 def _registry_entry(source: dict) -> dict:
+    # Spread metadata first: the seeder copies the whole YAML entry into
+    # metadata (including its slug `id`), so the canonical data_source id and
+    # the other fields below must win. Otherwise model_name reaching job
+    # submission is the slug, not the row id, and get_source() can't find it.
     return {
+        **source["metadata"],
         "id": source["id"],
         "display_name": source["name"],
         "region": source.get("region") or "",
         "model_dir": source["path"],
-        **source["metadata"],
     }
 
 
