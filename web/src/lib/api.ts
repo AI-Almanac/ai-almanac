@@ -132,6 +132,7 @@ export interface SettingsField {
 	default: unknown;
 	sensitive: boolean;
 	restart_required: boolean;
+	editable: boolean;
 }
 
 export interface SettingsGroup {
@@ -139,8 +140,13 @@ export interface SettingsGroup {
 	fields: SettingsField[];
 }
 
-export async function getSettingsSchema(): Promise<{ groups: SettingsGroup[] }> {
-	return request<{ groups: SettingsGroup[] }>('/settings/schema');
+export interface SettingsSchema {
+	deployment_mode: string;
+	groups: SettingsGroup[];
+}
+
+export async function getSettingsSchema(): Promise<SettingsSchema> {
+	return request<SettingsSchema>('/settings/schema');
 }
 
 export async function getSettings(reveal = false): Promise<Record<string, unknown>> {

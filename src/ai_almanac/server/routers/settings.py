@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from ai_almanac.paths import config_yaml_path
 from ai_almanac.server.auth import AdminUser
 from ai_almanac.settings import (
+    LOCAL_ONLY_FIELDS,
     RESTART_REQUIRED_FIELDS,
     SENSITIVE_FIELDS,
     SHARED_ENV_ONLY_FIELDS,
@@ -33,50 +34,52 @@ _MASK = "***"
 
 # Field grouping + display metadata. Drives the Settings UI's section layout.
 # Order matters — sections render in this order, fields within a section too.
-_FIELD_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+# Tuples are (field_name, label, description); labels use product language, not
+# the underlying setting names.
+_FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
-        "Runner & jobs",
+        "Benchmark runner",
         [
-            ("runner_mode", "Benchmark runner — 'stub' (synthetic outputs) or 'pixi' (real ROMP via the benchmark env)"),
-            ("max_local_jobs", "Maximum number of benchmarks to run concurrently"),
-            ("output_dir", "Where workflow outputs land. Empty = default (<data dir>/jobs/)"),
+            ("runner_mode", "Runner", "'stub' (synthetic outputs) or 'pixi' (real ROMP via the benchmark env)"),
+            ("max_local_jobs", "Concurrent benchmarks", "Maximum number of benchmarks to run at once"),
+            ("output_dir", "Output location", "Where benchmark outputs land. Empty = default (<data dir>/jobs/)"),
         ],
     ),
     (
-        "Remote data sources",
+        "Weather data access",
         [
-            ("cdsapi_url", "Copernicus CDS API endpoint"),
-            ("cdsapi_key", "Copernicus CDS API key (used by ARCO/CDS obs fetchers)"),
+            ("cdsapi_url", "Copernicus CDS endpoint", "Copernicus CDS API endpoint"),
+            ("cdsapi_key", "Copernicus CDS key", "Copernicus CDS API key (used by ARCO/CDS obs fetchers)"),
         ],
     ),
     (
-        "LLM",
+        "AI assistant",
         [
-            ("llm_provider", "'openai-compatible' (vLLM, Ollama, OpenAI) or 'pydantic-ai' (provider-prefixed model strings)"),
-            ("llm_base_url", "Base URL for OpenAI-compatible providers"),
-            ("llm_model", "Model identifier"),
-            ("llm_api_key", "API key (use 'placeholder' for local servers that don't check)"),
-            ("llm_timeout_seconds", "Per-request timeout"),
-            ("llm_history_max_messages", "Max messages kept in chat history sent to the LLM"),
-            ("llm_tool_result_max_chars", "Max characters of tool output forwarded to the LLM"),
-            ("llm_code_context_max_chars", "Max characters of code context included per request"),
+            ("llm_provider", "Provider type", "'openai-compatible' (vLLM, Ollama, OpenAI) or 'pydantic-ai' (provider-prefixed model strings)"),
+            ("llm_base_url", "Provider URL", "Base URL for OpenAI-compatible providers"),
+            ("llm_model", "Model", "Model identifier"),
+            ("llm_api_key", "API key", "API key (use 'placeholder' for local servers that don't check)"),
+            ("llm_timeout_seconds", "Request timeout (seconds)", "Per-request timeout"),
+            ("llm_history_max_messages", "Chat history limit", "Max messages kept in chat history sent to the assistant"),
+            ("llm_tool_result_max_chars", "Tool output limit", "Max characters of tool output forwarded to the assistant"),
+            ("llm_code_context_max_chars", "Code context limit", "Max characters of code context included per request"),
         ],
     ),
     (
-        "Feature flags",
+        "Assistant capabilities",
         [
-            ("enable_run_code", "Allow the LLM to run code"),
-            ("enable_run_code_sandbox", "Allow the LLM to run code in a remote sandbox (requires a sandbox runner; off in local builds)"),
+            ("enable_run_code", "Allow code execution", "Let the assistant run code"),
+            ("enable_run_code_sandbox", "Allow sandboxed code execution", "Let the assistant run code in a remote sandbox (requires a sandbox runner; off in local builds)"),
         ],
     ),
     (
         "Advanced",
         [
-            ("submitted_by_header", "Reverse-proxy header to read for job attribution (default X-Forwarded-User)"),
-            ("frontend_url", "Allowed origin for CORS (only relevant in Vite-dev workflow)"),
-            ("cors_allow_all", "Allow any CORS origin (dev only)"),
-            ("chat_figure_signing_secret", "HMAC secret for chat figure URLs"),
-            ("database_url", "SQLAlchemy URL. Empty = SQLite under the data dir."),
+            ("submitted_by_header", "Job attribution header", "Reverse-proxy header to read for job attribution (default X-Forwarded-User)"),
+            ("frontend_url", "Allowed web origin", "Allowed origin for CORS (only relevant in Vite-dev workflow)"),
+            ("cors_allow_all", "Allow all origins", "Allow any CORS origin (dev only)"),
+            ("chat_figure_signing_secret", "Chat figure signing secret", "HMAC secret for chat figure URLs"),
+            ("database_url", "Database URL", "SQLAlchemy URL. Empty = SQLite under the data dir."),
         ],
     ),
 ]
@@ -90,9 +93,11 @@ class FieldSchema(BaseModel):
     default: Any
     sensitive: bool
     restart_required: bool
+    editable: bool
 
 
 class SettingsSchema(BaseModel):
+    deployment_mode: str
     groups: list[dict[str, Any]]
 
 
@@ -118,31 +123,37 @@ def _present_value(field_name: str, value: Any, reveal: bool) -> Any:
 
 @router.get("/schema", response_model=SettingsSchema)
 def get_schema(_admin: AdminUser) -> SettingsSchema:
-    """Return field metadata grouped into UI sections."""
+    """Return field metadata grouped into UI sections.
+
+    In shared deployments, local-only fields (runner, storage, database) are
+    omitted entirely, and environment-managed fields are returned read-only.
+    """
+    shared = settings.deployment_mode == "shared"
     model_fields = type(settings).model_fields
     groups: list[dict[str, Any]] = []
-    seen: set[str] = set()
     for group_name, fields in _FIELD_GROUPS:
         rendered: list[FieldSchema] = []
-        for field_name, description in fields:
+        for field_name, label, description in fields:
             if field_name not in model_fields:
                 continue
-            seen.add(field_name)
+            if shared and field_name in LOCAL_ONLY_FIELDS:
+                continue
             info = model_fields[field_name]
             rendered.append(
                 FieldSchema(
                     name=field_name,
-                    label=field_name.replace("_", " "),
+                    label=label,
                     description=description,
                     type=_python_type_name(info.annotation),
                     default=info.default,
                     sensitive=field_name in SENSITIVE_FIELDS,
                     restart_required=field_name in RESTART_REQUIRED_FIELDS,
+                    editable=not (shared and field_name in SHARED_ENV_ONLY_FIELDS),
                 )
             )
         if rendered:
             groups.append({"name": group_name, "fields": [f.model_dump() for f in rendered]})
-    return SettingsSchema(groups=groups)
+    return SettingsSchema(deployment_mode=settings.deployment_mode, groups=groups)
 
 
 @router.get("", response_model=SettingsValues)

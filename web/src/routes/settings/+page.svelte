@@ -11,9 +11,12 @@
 	} from '$lib/api';
 
 	let groups = $state<SettingsGroup[]>([]);
+	let deploymentMode = $state<string>('personal');
 	let values = $state<Record<string, unknown>>({});
 	let original = $state<Record<string, unknown>>({});
 	let configPath = $state<string>('');
+
+	const isShared = $derived(deploymentMode === 'shared');
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let savingGroup = $state<string | null>(null);
@@ -31,6 +34,7 @@
 				getConfigYamlPath()
 			]);
 			groups = s.groups;
+			deploymentMode = s.deployment_mode;
 			values = { ...v };
 			original = { ...v };
 			configPath = p;
@@ -139,11 +143,19 @@
 	<main class="wrap">
 		<header>
 			<h1>Settings</h1>
-			<p class="lede">
-				Application configuration. Changes are persisted to
-				<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings. Environment
-				variables still override values set here.
-			</p>
+			{#if isShared}
+				<p class="lede">
+					Application configuration. Deployment-level settings (database, identity, storage) are
+					managed by the environment and shown read-only. The AI assistant has its own
+					<a href="/settings/ai">settings page</a>.
+				</p>
+			{:else}
+				<p class="lede">
+					Application configuration. Changes are persisted to
+					<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings.
+					Environment variables still override values set here.
+				</p>
+			{/if}
 		</header>
 
 		{#if error}
@@ -175,7 +187,7 @@
 							These changes require a server restart to fully take effect:
 							<strong
 								>{restartFieldsEdited(group)
-									.map((f) => f.name)
+									.map((f) => f.label)
 									.join(', ')}</strong
 							>
 						</div>
@@ -185,8 +197,9 @@
 						{#each group.fields as field (field.name)}
 							<div class="field" class:restart={field.restart_required}>
 								<label for={`f-${field.name}`}>
-									<span class="fieldname">{field.name}</span>
-									{#if field.restart_required}<span class="badge">restart</span>{/if}
+									<span class="fieldname">{field.label}</span>
+									{#if !field.editable}<span class="badge">managed by environment</span>{/if}
+									{#if field.restart_required && field.editable}<span class="badge">restart</span>{/if}
 									{#if field.sensitive}<span class="badge">secret</span>{/if}
 								</label>
 								<p class="desc">{field.description}</p>
@@ -197,6 +210,7 @@
 												type="checkbox"
 												id={`f-${field.name}`}
 												checked={Boolean(values[field.name])}
+												disabled={!field.editable}
 												onchange={(e) => onValueChange(field, e.currentTarget.checked)}
 											/>
 											<span>{Boolean(values[field.name]) ? 'enabled' : 'disabled'}</span>
@@ -206,10 +220,11 @@
 											id={`f-${field.name}`}
 											type={inputType(field)}
 											value={String(values[field.name] ?? '')}
+											disabled={!field.editable}
 											oninput={(e) => onValueChange(field, e.currentTarget.value)}
 											placeholder={String(field.default ?? '')}
 										/>
-										{#if field.sensitive}
+										{#if field.sensitive && field.editable}
 											<button
 												type="button"
 												class="reveal"
@@ -324,8 +339,7 @@
 		gap: 0.5rem;
 		align-items: center;
 		font-weight: 600;
-		font-size: 0.9rem;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.95rem;
 	}
 	.fieldname {
 		color: var(--color-text);
@@ -362,6 +376,10 @@
 		font: inherit;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.85rem;
+	}
+	input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 	.reveal {
 		background: transparent;

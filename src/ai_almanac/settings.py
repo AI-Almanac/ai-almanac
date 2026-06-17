@@ -287,6 +287,18 @@ SENSITIVE_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+# Fields that only make sense for a single-operator install (local filesystem,
+# direct process runner, SQLite). They're hidden from the Settings UI in shared
+# deployments, where the runner, storage, and database are environment-managed.
+LOCAL_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "runner_mode",
+        "max_local_jobs",
+        "output_dir",
+        "database_url",
+    }
+)
+
 SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
     {
         "database_url",
