@@ -112,8 +112,7 @@ def _introspect_globus_token(token: str) -> dict:
     return result
 
 
-async def _resolve_globus_identity(headers: Headers) -> AuthenticatedUser:
-    token = _bearer_token(headers)
+async def _resolve_globus_token(token: str | None) -> AuthenticatedUser:
     if not token:
         raise _MissingIdentity
 
@@ -147,6 +146,10 @@ async def _resolve_globus_identity(headers: Headers) -> AuthenticatedUser:
         groups=(),
         role=role,
     )
+
+
+async def _resolve_globus_identity(headers: Headers) -> AuthenticatedUser:
+    return await _resolve_globus_token(_bearer_token(headers))
 
 
 async def _resolve_identity(headers: Headers) -> AuthenticatedUser:
@@ -247,6 +250,11 @@ async def authenticate_websocket(websocket: WebSocket) -> AuthenticatedUser | No
             if not origin or origin not in allowed:
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return None
+        if settings.auth_mode == "globus":
+            return await _resolve_globus_token(
+                _bearer_token(websocket.headers)
+                or websocket.query_params.get("access_token")
+            )
         return await _resolve_identity(websocket.headers)
     except _MissingIdentity:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

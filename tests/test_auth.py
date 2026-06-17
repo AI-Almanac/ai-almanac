@@ -477,3 +477,25 @@ def test_enforce_shared_gcs_skips_mount_roots(
     monkeypatch.setattr(settings, "dataset_mount_roots", "")  # irrelevant for gcs
     monkeypatch.setattr(settings, "globus_client_id", "configured")
     enforce_deployment_invariants()  # must not raise
+
+
+def test_ready_auth_accepts_globus_shared_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.server.app import _auth_ready
+
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
+
+    assert _auth_ready() is True
+
+
+def test_ready_storage_accepts_gcs_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.server.app import _storage_ready
+
+    monkeypatch.setattr(settings, "storage_backend", "gcs")
+    monkeypatch.setattr(settings, "gcs_data_bucket", "data")
+    monkeypatch.setattr(settings, "gcs_uploads_bucket", "uploads")
+    monkeypatch.setattr(settings, "gcs_outputs_bucket", "outputs")
+
+    assert _storage_ready() is True

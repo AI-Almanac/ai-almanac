@@ -242,6 +242,31 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in settings.frontend_url.split(",") if origin.strip()]
 
 
+def _storage_ready() -> bool:
+    if settings.storage_backend.lower() == "gcs":
+        return all(
+            (
+                settings.gcs_data_bucket.strip(),
+                settings.gcs_uploads_bucket.strip(),
+                settings.gcs_outputs_bucket.strip(),
+            )
+        )
+    data_dir = Path(settings.upload_dir)
+    return data_dir.exists() and os.access(data_dir, os.W_OK)
+
+
+def _auth_ready() -> bool:
+    if settings.deployment_mode != "shared":
+        return True
+    if not settings.credential_encryption_key:
+        return False
+    if settings.auth_mode == "proxy":
+        return bool(settings.allowed_groups)
+    if settings.auth_mode == "globus":
+        return bool(settings.globus_client_id)
+    return False
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.cors_allow_all else _cors_origins(),
@@ -284,14 +309,9 @@ async def ready():
         checks["database"] = True
     except Exception:
         checks["database"] = False
-    data_dir = Path(settings.upload_dir)
-    checks["storage"] = data_dir.exists() and os.access(data_dir, os.W_OK)
+    checks["storage"] = _storage_ready()
     checks["runner"] = bool(get_job_runner().name)
-    checks["auth"] = settings.deployment_mode != "shared" or (
-        settings.auth_mode == "proxy"
-        and bool(settings.allowed_groups)
-        and bool(settings.credential_encryption_key)
-    )
+    checks["auth"] = _auth_ready()
     return JSONResponse(
         {"status": "ready" if all(checks.values()) else "not_ready", "checks": checks},
         status_code=200 if all(checks.values()) else 503,
