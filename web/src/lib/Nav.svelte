@@ -21,16 +21,19 @@
 				Data
 			</a>
 			{#if account.isAdmin}
-				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
-					Settings
-				</a>
+				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
 			{/if}
+			<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
 		</div>
 		{#if account.loaded && account.isShared}
-			<span class="account" title={account.account?.email ?? account.account?.subject ?? ''}>
+			<a
+				class="account"
+				href="/user"
+				title={account.account?.email ?? account.account?.subject ?? ''}
+			>
 				<span class="account-name">{account.label}</span>
 				{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
-			</span>
+			</a>
 		{/if}
 	</div>
 </nav>
@@ -92,7 +95,12 @@
 		color: var(--color-text-muted);
 		font-size: 0.85rem;
 		font-weight: 650;
+		text-decoration: none;
 		white-space: nowrap;
+	}
+
+	.account:hover {
+		color: var(--color-text);
 	}
 
 	.account-name {

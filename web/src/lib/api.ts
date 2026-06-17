@@ -1,16 +1,25 @@
 // API base URL — read at runtime from `window.__ALMANAC_CONFIG__` (injected by
 // the backend's `/config.js`) so a single built SPA can target any backend.
 // Falls back to the build-time Vite env (dev), then to same-origin.
+import { authHeaders, getApiAccessToken, login, refreshAuthTokens } from './auth';
+
 declare global {
 	interface Window {
 		__ALMANAC_CONFIG__?: { apiUrl?: string; submittedByEnabled?: boolean };
 	}
 }
 
+// The backend's `/config.js` is authoritative for deployments: when it is
+// present, its `apiUrl` wins even when empty ("" means same-origin). Only fall
+// back to the build-time Vite env (dev, where `/config.js` 404s) otherwise. A
+// truthy `||` chain here would discard a same-origin "" in favour of a leaked
+// build-time VITE_API_URL — which is exactly how a stray web/.env once pointed
+// production at localhost.
+const runtimeConfig = typeof window !== 'undefined' ? window.__ALMANAC_CONFIG__ : undefined;
 const BASE_URL =
-	(typeof window !== 'undefined' && window.__ALMANAC_CONFIG__?.apiUrl) ||
-	import.meta.env.VITE_API_URL ||
-	'';
+	typeof runtimeConfig?.apiUrl === 'string'
+		? runtimeConfig.apiUrl
+		: import.meta.env.VITE_API_URL || '';
 
 // ---- WebSocket job streaming ------------------------------------------------
 
@@ -30,9 +39,13 @@ export function subscribeJob(
 	onEvent: (event: JobStreamEvent) => void,
 	onClose?: (clean: boolean) => void
 ): () => void {
-	const wsScheme = BASE_URL.startsWith('https:') ? 'wss:' : 'ws:';
-	const wsBase = BASE_URL ? BASE_URL.replace(/^https?:/, wsScheme) : '';
-	const ws = new WebSocket(`${wsBase}/jobs/${jobId}/stream`);
+	const wsBase = BASE_URL
+		? BASE_URL.replace(/^https?:/, BASE_URL.startsWith('https:') ? 'wss:' : 'ws:')
+		: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+	const url = new URL(`/jobs/${jobId}/stream`, wsBase);
+	const accessToken = getApiAccessToken();
+	if (accessToken) url.searchParams.set('access_token', accessToken);
+	const ws = new WebSocket(url);
 	ws.onmessage = (e) => {
 		try {
 			onEvent(JSON.parse(e.data) as JobStreamEvent);
@@ -44,11 +57,26 @@ export function subscribeJob(
 	return () => ws.close();
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+	path: string,
+	init: RequestInit = {},
+	retry = false,
+	requireAuth = true
+): Promise<T> {
+	const headers = authHeaders();
+	if (requireAuth && !('Authorization' in headers)) {
+		login(window.location.pathname + window.location.search);
+		throw new Error('Authentication required');
+	}
+
 	const res = await fetch(`${BASE_URL}${path}`, {
 		...init,
-		headers: { 'Content-Type': 'application/json', ...init.headers }
+		headers: { 'Content-Type': 'application/json', ...headers, ...init.headers }
 	});
+
+	if (res.status === 401 && !retry && (await refreshAuthTokens())) {
+		return request<T>(path, init, true);
+	}
 
 	if (!res.ok) {
 		const body = await res.text();
@@ -239,7 +267,7 @@ export type Account = {
 };
 
 export async function getAccount(): Promise<Account> {
-	return request<Account>('/auth/me');
+	return request<Account>('/auth/me', {}, false, false);
 }
 
 // ---- Regions -----------------------------------------------------------------
@@ -384,6 +412,7 @@ export async function fetchResultBlob(resultUrl: string): Promise<string> {
 	}
 
 	const res = await fetch(`${BASE_URL}${resultUrl}`, {
+		headers: authHeaders(),
 		redirect: 'manual'
 	});
 
@@ -909,7 +938,7 @@ export async function* sendChatMessage(
 ): AsyncGenerator<ChatEvent> {
 	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
 		body: JSON.stringify({ content, scope })
 	});
 	if (!res.ok) {

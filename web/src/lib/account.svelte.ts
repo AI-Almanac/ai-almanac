@@ -7,6 +7,7 @@ import { getAccount, type Account } from './api';
 class AccountState {
 	account = $state<Account | null>(null);
 	loaded = $state(false);
+	loading = $state(false);
 
 	get isAdmin(): boolean {
 		return this.account?.capabilities.can_admin ?? false;
@@ -27,13 +28,26 @@ class AccountState {
 	}
 
 	async load(): Promise<void> {
+		if (this.loading) return;
+		this.loading = true;
 		try {
 			this.account = await getAccount();
 		} catch {
 			this.account = null;
 		} finally {
 			this.loaded = true;
+			this.loading = false;
 		}
+	}
+
+	async reload(): Promise<void> {
+		this.loaded = false;
+		await this.load();
+	}
+
+	clear(): void {
+		this.account = null;
+		this.loaded = true;
 	}
 }
 
