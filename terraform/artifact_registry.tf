@@ -79,5 +79,6 @@ locals {
 
   frontend_image = var.frontend_image != "" ? var.frontend_image : "${local.ar_prefix}/almanac-frontend:latest"
   backend_image  = var.backend_image != "" ? var.backend_image : "${local.ar_prefix}/almanac-backend:latest"
+  app_image      = var.app_image != "" ? var.app_image : "${local.ar_prefix}/ai-almanac-web:latest"
   romp_image     = var.romp_image != "" ? var.romp_image : "${local.ar_prefix}/romp:latest"
 }

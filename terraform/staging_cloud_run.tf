@@ -36,33 +36,8 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_staging_public" {
   member   = "allUsers"
 }
 
-resource "google_cloud_run_domain_mapping" "frontend_staging" {
-  count    = var.staging_custom_domain != "" ? 1 : 0
-  location = var.region
-  name     = var.staging_custom_domain
-
-  metadata {
-    namespace = var.project_id
-  }
-
-  spec {
-    route_name = google_cloud_run_v2_service.frontend_staging.name
-  }
-}
-
-resource "google_cloud_run_domain_mapping" "backend_staging" {
-  count    = var.staging_api_domain != "" ? 1 : 0
-  location = var.region
-  name     = var.staging_api_domain
-
-  metadata {
-    namespace = var.project_id
-  }
-
-  spec {
-    route_name = google_cloud_run_v2_service.backend_staging.name
-  }
-}
+# Staging custom domains are served via the HTTPS load balancer in
+# staging_load_balancer.tf — domain mappings strip the Authorization header.
 
 resource "google_cloud_run_v2_service" "backend_staging" {
   name                = "almanac-backend-staging"
@@ -93,7 +68,7 @@ resource "google_cloud_run_v2_service" "backend_staging" {
     }
 
     containers {
-      image = local.backend_image
+      image = local.app_image
 
       resources {
         limits = {
@@ -104,7 +79,7 @@ resource "google_cloud_run_v2_service" "backend_staging" {
       }
 
       ports {
-        container_port = 8000
+        container_port = 8765
       }
 
       volume_mounts {

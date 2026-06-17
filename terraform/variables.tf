@@ -28,6 +28,12 @@ variable "backend_image" {
   default     = ""
 }
 
+variable "app_image" {
+  description = "Container image for the single-process AI Almanac app (API + bundled SPA)"
+  type        = string
+  default     = ""
+}
+
 variable "romp_image" {
   description = "ROMP worker image (used directly by Cloud Batch, not Cloud Run)"
   type        = string

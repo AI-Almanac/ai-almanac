@@ -92,7 +92,7 @@ resource "google_cloud_run_v2_job" "migrate_staging" {
       }
 
       containers {
-        image   = local.backend_image
+        image   = local.app_image
         command = ["ai-almanac", "db", "upgrade"]
 
         volume_mounts {

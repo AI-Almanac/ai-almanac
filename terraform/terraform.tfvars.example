@@ -5,6 +5,7 @@ ghcr_owner  = "your-github-username-or-org"
 # Image overrides — leave unset to use the AR proxy paths derived from ghcr_owner.
 # frontend_image = "..."
 # backend_image  = "..."
+# app_image      = "..." # single-process app image for staging (API + bundled SPA)
 # romp_image     = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
 
 # Cloud SQL
