@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { Job, JobMetrics, MetricDefinition } from '$lib/api';
 	import { getCachedJobMetrics } from '$lib/benchmarks.svelte';
 	import {
@@ -16,12 +17,22 @@
 	let metricsByJob = $state<Record<string, JobMetrics>>({});
 	let metricDefinitions = $state<MetricDefinition[]>([]);
 	const definitionsById = $derived(metricMap(metricDefinitions));
-	const currentMetrics = $derived(
-		jobs.flatMap((job) => {
+	// Depend on the job-id set (stable across polls) and loaded metrics, not the jobs
+	// array identity — the polling loop hands us a fresh array every tick even when the
+	// completed jobs are unchanged, which would otherwise churn every downstream derived.
+	const jobsKey = $derived(
+		jobs
+			.map((job) => job.id)
+			.sort()
+			.join(',')
+	);
+	const currentMetrics = $derived.by(() => {
+		jobsKey;
+		return untrack(() => jobs).flatMap((job) => {
 			const metrics = metricsByJob[job.id];
 			return metrics ? [metrics] : [];
-		})
-	);
+		});
+	});
 
 	function modelDisplayName(modelName: string): string {
 		const labels: Record<string, string> = {
