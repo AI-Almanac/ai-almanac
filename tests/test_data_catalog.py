@@ -194,3 +194,13 @@ def test_staging_uris_are_year_filtered(monkeypatch) -> None:
         "gs://data/datasets/forecasts/india/fuxi/2019.nc",
         "gs://data/datasets/forecasts/india/fuxi/2021.nc",
     ]
+
+
+def test_year_uris_appends_year_files_to_a_resolved_dir() -> None:
+    # Dir-based variant: a caller holding a backend path (not a DatasetRef)
+    # reuses the per-year convention. Trailing slashes are tolerated.
+    assert data_catalog.year_uris("gs://b/models/aifs", [2019, 2020]) == [
+        "gs://b/models/aifs/2019.nc",
+        "gs://b/models/aifs/2020.nc",
+    ]
+    assert data_catalog.year_uris("/data/x/", [2021]) == ["/data/x/2021.nc"]

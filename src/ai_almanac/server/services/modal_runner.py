@@ -37,6 +37,16 @@ class ModalPreflightError(Exception):
     """The job config cannot run on Modal (e.g. local input paths)."""
 
 
+def _is_stageable(uri: object) -> bool:
+    """Whether a Modal run can fetch this input URI.
+
+    gs:// is the cloud-storage backend; an absolute path covers a mounted Modal
+    volume (the local-mode backend). A relative or empty ref is unstageable.
+    """
+    text = str(uri)
+    return text.startswith("gs://") or text.startswith("/")
+
+
 def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
     """Return why this config can't run on Modal, or None if it can.
 
@@ -52,14 +62,21 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
         if not str(obs_dir).startswith("gs://"):
             return f"job_runner=modal requires obs_dir to be a gs:// URI; got {obs_dir!r}."
 
-    # Blend jobs stage several forecast model dirs; benchmark jobs stage one.
-    if "model_dirs" in config:
-        model_dirs = config.get("model_dirs") or []
-        if not model_dirs:
-            return "job_runner=modal requires at least one model dir."
-        for model_dir in model_dirs:
-            if not str(model_dir).startswith("gs://"):
-                return f"job_runner=modal requires model dirs to be gs:// URIs; got {model_dir!r}."
+    # Blend jobs carry per-model {year}.nc staging URIs the server pre-resolved
+    # on the active backend; benchmark jobs stage a single model dir.
+    if "model_files" in config:
+        model_files = config.get("model_files") or {}
+        if not model_files:
+            return "job_runner=modal blend requires at least one model."
+        for name, uris in model_files.items():
+            if not uris:
+                return f"job_runner=modal blend has no files to stage for model {name!r}."
+            for uri in uris:
+                if not _is_stageable(uri):
+                    return (
+                        "job_runner=modal requires blend inputs to be gs:// URIs "
+                        f"or absolute mount paths; got {uri!r}."
+                    )
         return None
 
     model_dir = config.get("model_dir", "")

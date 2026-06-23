@@ -146,31 +146,25 @@ def _stage_gcs_prefix(client, uri: str, local_dir: Path, label: str) -> int:
     return len(names)
 
 
-def _stage_gcs_years(client, uri: str, local_dir: Path, years, label: str) -> int:
-    """Download only the {year}.nc files in `years` from a GCS prefix.
+def _stage_uris(client, uris, local_dir: Path, label: str) -> int:
+    """Download an explicit list of gs:// file URIs into local_dir.
 
-    Forecast archives are multi-GB per year, so a blend stages exactly the years
-    it trains/evaluates on rather than the whole prefix.
+    The server pre-resolves the exact per-year files to stage (see
+    ``data_catalog.year_uris``), so the run just fetches the URIs it is handed —
+    no prefix listing or year filtering here. A URI missing its object on the
+    bucket raises, so a partial year set fails loudly instead of training short.
     """
-    from google.cloud.storage import transfer_manager
-
-    bucket_name, prefix = _split_gcs_uri(uri, label)
-    prefix = prefix.rstrip("/") + "/"
-    wanted = {f"{int(year)}.nc" for year in years}
-    bucket = client.bucket(bucket_name)
-    names = [
-        blob.name[len(prefix):]
-        for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] in wanted
-    ]
-    if names:
-        results = transfer_manager.download_many_to_path(
-            bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
-        )
-        for name, result in zip(names, results):
-            if isinstance(result, Exception):
-                print(f"  {label} FAILED: {name}: {result}")
-    return len(names)
+    count = 0
+    for uri in uris:
+        bucket_name, blob_path = _split_gcs_uri(uri, label)
+        if not blob_path:
+            raise ValueError(f"{label} URI has no object path: {uri!r}")
+        blob = client.bucket(bucket_name).blob(blob_path)
+        if not blob.exists():
+            raise FileNotFoundError(f"{label} file not found: {uri}")
+        blob.download_to_filename(str(local_dir / Path(blob_path).name))
+        count += 1
+    return count
 
 
 def _upload_output_dir_to_gcs(client, outputs_bucket: str, job_id: str, local_dir: Path) -> None:
@@ -246,24 +240,12 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
 
             params = config.get("blend_params") or {}
             model_names = config["model_names"]
-            model_dirs = config["model_dirs"]
-            if len(model_names) != len(model_dirs):
-                raise ValueError("model_names and model_dirs length mismatch")
-
-            # Forecast archives are large; stage only the years the blend uses.
-            # Default to the union of the training/CV/holdout years when an
-            # explicit forecast_years isn't given.
-            forecast_years = _parse_years(params.get("forecast_years") or "") or sorted(
-                set(
-                    (_parse_years(params.get("training_years") or "") or [])
-                    + (_parse_years(params.get("cv_holdout_years") or "") or [])
-                    + (_parse_years(params.get("true_holdout_years") or "") or [])
-                )
-            )
-            if not forecast_years:
-                raise ValueError(
-                    "No forecast years to stage; set forecast_years or training years."
-                )
+            # Per-model {year}.nc URIs, year-filtered and backend-resolved by the
+            # server (data_catalog.year_uris). The run stages exactly these.
+            model_files = config["model_files"]
+            missing = [name for name in model_names if not model_files.get(name)]
+            if missing:
+                raise ValueError(f"No staging files provided for models: {missing}")
 
             stage_root = Path(tempfile.mkdtemp(prefix="blend-prod-"))
             obs_local = stage_root / "obs"
@@ -275,17 +257,12 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             obs_bundle = _bundle_files(sorted(obs_local.glob("*.nc")))
 
             forecast_bundles: dict[str, bytes] = {}
-            for key, uri in zip(model_names, model_dirs):
+            for key in model_names:
                 model_local = stage_root / f"fc_{key}"
                 model_local.mkdir()
-                print(f"==> Staging forecast {key} years {forecast_years} from {uri}")
-                staged = _stage_gcs_years(
-                    client, uri, model_local, forecast_years, f"forecast {key}"
-                )
-                if staged == 0:
-                    raise FileNotFoundError(
-                        f"No forecast files for {key} in years {forecast_years} under {uri}"
-                    )
+                uris = model_files[key]
+                print(f"==> Staging forecast {key}: {len(uris)} files")
+                _stage_uris(client, uris, model_local, f"forecast {key}")
                 forecast_bundles[key] = _bundle_files(sorted(model_local.glob("*.nc")))
 
             prep_kwargs = {

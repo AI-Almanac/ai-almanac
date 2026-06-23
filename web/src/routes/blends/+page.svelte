@@ -253,7 +253,7 @@
 				<div class="field-row">
 					<label class="field">
 						<span>Training years</span>
-						<input type="text" bind:value={trainingYears} placeholder="2015-2020" />
+						<input type="text" bind:value={trainingYears} placeholder="2015:2020" />
 					</label>
 					<label class="field">
 						<span>CV holdout years</span>

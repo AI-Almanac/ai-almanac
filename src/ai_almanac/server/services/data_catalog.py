@@ -223,11 +223,18 @@ def resolve_dataset_uri(ref: DatasetRef) -> str:
     return get_storage().dataset_uri(ref.prefix)
 
 
-def staging_uris(ref: DatasetRef, years: Iterable[int]) -> list[str]:
-    """Per-year file URIs to stage for a dataset — the year-filtered set only.
+def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
+    """Per-year ``{year}.nc`` file URIs under a resolved dataset dir.
 
     The unit of staging is one ``{year}.nc`` file, so a job pulls exactly the
-    years it uses instead of a whole (potentially GB-scale) dataset dir.
+    years it uses instead of a whole (potentially GB-scale) dataset dir. Takes an
+    already-resolved dir URI (path or ``gs://``) so callers that hold a backend
+    path can reuse the per-year convention without a ``DatasetRef``.
     """
-    base = resolve_dataset_uri(ref).rstrip("/")
+    base = base_uri.rstrip("/")
     return [f"{base}/{year}.nc" for year in years]
+
+
+def staging_uris(ref: DatasetRef, years: Iterable[int]) -> list[str]:
+    """Per-year file URIs to stage for a dataset on the active backend."""
+    return year_uris(resolve_dataset_uri(ref), years)

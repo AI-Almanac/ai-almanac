@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services.data_catalog import year_uris
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
@@ -290,6 +291,51 @@ def _blend_model_key(name: str) -> str:
     return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
 
 
+def _parse_year_spec(value: str | None) -> list[int]:
+    """Parse a year spec ('2019:2024', '2021,2022') into sorted unique years.
+
+    Mirrors the Modal app's ``_parse_years`` so the staging years computed here
+    match what the training step expects. Raises ValueError on a malformed token.
+    """
+    if not value:
+        return []
+    years: list[int] = []
+    for part in value.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if ":" in token:
+            start_text, end_text = token.split(":", 1)
+            years.extend(range(int(start_text), int(end_text) + 1))
+        else:
+            years.append(int(token))
+    return sorted(dict.fromkeys(years))
+
+
+def _blend_forecast_years(params: BlendParams) -> list[int]:
+    """Years to stage per forecast model: explicit ``forecast_years`` if given,
+    else the union of the training / CV / true-holdout years.
+
+    Resolved on the server so each forecast model stages exactly these years
+    (one ``{year}.nc`` file each) instead of a whole multi-GB dataset dir, and so
+    ``run_blend`` receives concrete file URIs rather than scanning a prefix.
+    """
+    explicit = _parse_year_spec(params.forecast_years)
+    if explicit:
+        return explicit
+    return _parse_year_spec(
+        ",".join(
+            spec
+            for spec in (
+                params.training_years,
+                params.cv_holdout_years,
+                params.true_holdout_years,
+            )
+            if spec
+        )
+    )
+
+
 def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
     cfg = json.loads(row.get("config_json") or "{}")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
@@ -334,17 +380,32 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
 
+    try:
+        forecast_years = _blend_forecast_years(body.params)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid year specification: {exc}"
+        ) from exc
+    if not forecast_years:
+        raise HTTPException(
+            status_code=400,
+            detail="Blend requires training years or explicit forecast years",
+        )
+
     model_names: list[str] = []
-    model_dirs: list[str] = []
+    # Per-model list of {year}.nc URIs to stage — resolved here so the staging
+    # year filter and backend resolution live on the server, and run_blend just
+    # downloads the files it is given.
+    model_files: dict[str, list[str]] = {}
     for model_id in body.model_ids:
         source = await _resolve_model_source(model_id, user_id)
         key = _blend_model_key(source["name"])
-        if key in model_names:
+        if key in model_files:
             raise HTTPException(
                 status_code=400, detail=f"Duplicate model in blend: {source['name']!r}"
             )
         model_names.append(key)
-        model_dirs.append(source["path"])
+        model_files[key] = year_uris(source["path"], forecast_years)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
@@ -355,9 +416,10 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "modal_function": "run_blend",
         "blend_name": body.name,
         "obs_dir": obs_dir,
-        "model_dirs": model_dirs,
+        "model_files": model_files,
         "model_names": model_names,
         "model_source_ids": list(body.model_ids),
+        "forecast_years": forecast_years,
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": body.params.model_dump(exclude_none=True),

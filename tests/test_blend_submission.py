@@ -103,11 +103,15 @@ async def test_create_blend_persists_blend_routing_config(
     config = json.loads(row["config_json"])
     assert config["modal_function"] == "run_blend"
     assert config["modal_app"]  # blend app name travels on the job
-    assert config["model_dirs"] == [
-        "gs://data/models/gencast",
-        "gs://data/models/aifs",
-    ]
     assert config["model_names"] == ["gencast", "aifs"]
+    # training 2019:2024 ∪ cv 2024 → the staging years, resolved server-side.
+    assert config["forecast_years"] == [2019, 2020, 2021, 2022, 2023, 2024]
+    assert config["model_files"]["gencast"] == [
+        f"gs://data/models/gencast/{year}.nc" for year in range(2019, 2025)
+    ]
+    assert config["model_files"]["aifs"] == [
+        f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
+    ]
     assert config["blend_params"]["training_years"] == "2019:2024"
 
 
