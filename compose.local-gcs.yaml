@@ -1,0 +1,10 @@
+services:
+  app:
+    environment:
+      STORAGE_BACKEND: gcs
+      GCS_DATA_BUCKET: ${GCS_DATA_BUCKET:?set GCS_DATA_BUCKET}
+      GCS_UPLOADS_BUCKET: ${GCS_UPLOADS_BUCKET:?set GCS_UPLOADS_BUCKET}
+      GCS_OUTPUTS_BUCKET: ${GCS_OUTPUTS_BUCKET:?set GCS_OUTPUTS_BUCKET}
+      GOOGLE_APPLICATION_CREDENTIALS: /var/run/secrets/google/application-default.json
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS:?set GOOGLE_APPLICATION_CREDENTIALS to a service-account or ADC JSON file}:/var/run/secrets/google/application-default.json:ro

@@ -150,6 +150,33 @@ pixi run self-host-local-gpu
 That overlay prepares the Pixi benchmark environment in the persistent
 application volume and grants the app container GPU access.
 
+Storage and execution can also be tested against the cloud adapters while the
+web application, authentication proxy, and PostgreSQL remain local. Configure
+GCS credentials and buckets first:
+
+```bash
+export GCS_DATA_BUCKET=my-data-bucket
+export GCS_UPLOADS_BUCKET=my-uploads-bucket
+export GCS_OUTPUTS_BUCKET=my-outputs-bucket
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+
+pixi run self-host-local-gcs
+```
+
+This keeps the synthetic local job runner and writes durable artifacts to GCS.
+For remote execution, deploy `modal/app.py`, export `MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET`, and use:
+
+```bash
+pixi run self-host-local-modal
+```
+
+The supported combinations are local storage with a local runner, GCS with a
+local runner, and GCS with Modal. Modal with local storage is invalid because a
+remote worker cannot access the Compose volume. Optional
+`MODAL_APP_NAME`, `MODAL_FUNCTION_NAME`, and `MODAL_BLENDING_APP_NAME`
+variables select non-default deployed app names.
+
 Operational commands:
 
 ```bash

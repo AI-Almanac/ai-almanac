@@ -1,0 +1,9 @@
+services:
+  app:
+    environment:
+      JOB_RUNNER: modal
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:?set MODAL_TOKEN_ID}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:?set MODAL_TOKEN_SECRET}
+      MODAL_APP_NAME: ${MODAL_APP_NAME:-almanac-romp}
+      MODAL_FUNCTION_NAME: ${MODAL_FUNCTION_NAME:-run_benchmark}
+      MODAL_BLENDING_APP_NAME: ${MODAL_BLENDING_APP_NAME:-almanac-blending}

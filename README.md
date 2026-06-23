@@ -107,6 +107,29 @@ On a host with NVIDIA Container Toolkit, run real benchmarks instead:
 pixi run self-host-local-gpu
 ```
 
+The same shared stack can exercise GCS artifact storage or the deployed Modal
+runner. GCS requires three bucket names and a service-account or Application
+Default Credentials JSON file:
+
+```bash
+export GCS_DATA_BUCKET=my-data-bucket
+export GCS_UPLOADS_BUCKET=my-uploads-bucket
+export GCS_OUTPUTS_BUCKET=my-outputs-bucket
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+
+pixi run self-host-local-gcs
+```
+
+To submit jobs to Modal, also export `MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET`, deploy the Modal app, then run:
+
+```bash
+pixi run self-host-local-modal
+```
+
+Modal mode uses GCS because remote workers cannot access the local Compose
+volume. The local runner supports either local storage or GCS.
+
 Stop the stack with `pixi run self-host-local-down`. Use
 `pixi run self-host-local-reset` to also delete its PostgreSQL and application
 data volumes.
