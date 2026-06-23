@@ -22,7 +22,9 @@ from ai_almanac.settings import settings
 
 def _store(tmp_path: Path) -> FilesystemArtifactStore:
     storage = LocalStorage(
-        upload_dir=tmp_path / "uploads", job_outputs_dir=tmp_path / "jobs"
+        upload_dir=tmp_path / "uploads",
+        job_outputs_dir=tmp_path / "jobs",
+        datasets_dir=tmp_path / "datasets",
     )
     return FilesystemArtifactStore(storage)
 

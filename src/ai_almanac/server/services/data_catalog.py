@@ -26,11 +26,11 @@ service; the walker here takes the listing a backend already produces.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # Bump when the manifest's required shape changes so old blobs can be migrated
 # instead of silently misparsed.
@@ -151,3 +151,66 @@ def build_catalog(relpaths: Iterable[str]) -> list[DatasetEntry]:
         DatasetEntry(ref=ref, years=tuple(sorted(years[ref])))
         for ref in sorted(years)
     ]
+
+
+@dataclass(frozen=True)
+class Dataset:
+    """A discovered dataset: its identity, available years, and parsed manifest.
+
+    ``manifest`` is None when a dataset has data files but no (or an unparseable)
+    ``manifest.json``. The dataset still lists — discovery degrades to years-only
+    rather than dropping data the user can see on disk.
+    """
+
+    ref: DatasetRef
+    years: tuple[int, ...]
+    manifest: Manifest | None
+
+
+def discover(
+    list_paths: Callable[[], Iterable[str]],
+    read_manifest: Callable[[DatasetRef], str | bytes | None],
+) -> list[Dataset]:
+    """Walk a backend into a manifest-enriched catalog.
+
+    I/O is injected so the same composition serves every backend (local, GCS,
+    Modal volume) and is testable with in-memory fakes: ``list_paths`` yields
+    relpaths under ``{root}``; ``read_manifest`` returns a dataset's manifest
+    blob or None.
+    """
+    datasets: list[Dataset] = []
+    for entry in build_catalog(list_paths()):
+        datasets.append(
+            Dataset(entry.ref, entry.years, _read_manifest(read_manifest, entry.ref))
+        )
+    return datasets
+
+
+def _read_manifest(
+    read_manifest: Callable[[DatasetRef], str | bytes | None], ref: DatasetRef
+) -> Manifest | None:
+    blob = read_manifest(ref)
+    if not blob:
+        return None
+    try:
+        return Manifest.parse(blob)
+    except ValidationError:
+        # ponytail: a malformed manifest degrades that dataset to years-only.
+        # Surface per-dataset manifest errors to the caller if operators need to
+        # know which file is broken.
+        return None
+
+
+def discover_datasets() -> list[Dataset]:
+    """Discover datasets on the active storage backend (local / GCS / volume).
+
+    Thin adapter wiring ``get_storage()`` into the pure ``discover``; imported
+    lazily so this module's core stays free of the storage dependency.
+    """
+    from ai_almanac.server.services.storage import get_storage
+
+    storage = get_storage()
+    return discover(
+        storage.list_dataset_tree,
+        lambda ref: storage.read_dataset_text(ref.manifest_key),
+    )

@@ -10,8 +10,10 @@ from ai_almanac.server.services.data_catalog import (
     DatasetRef,
     Manifest,
     build_catalog,
+    discover,
     parse_year_file,
 )
+from ai_almanac.server.services.storage import LocalStorage
 
 
 @pytest.mark.parametrize(
@@ -82,3 +84,76 @@ def test_dataset_ref_keys_are_layout_paths() -> None:
     ref = DatasetRef(FORECASTS, "india", "fuxi")
     assert ref.year_key(2019) == "forecasts/india/fuxi/2019.nc"
     assert ref.manifest_key == "forecasts/india/fuxi/manifest.json"
+
+
+# --- discovery (pure, injected I/O) -----------------------------------------
+
+_FUXI = DatasetRef(FORECASTS, "india", "fuxi")
+_GENCAST = DatasetRef(FORECASTS, "india", "gencast")
+
+
+def _manifest_blob(ref: DatasetRef, **over) -> str:
+    return Manifest(kind=ref.kind, region=ref.region, id=ref.id, var="tp", **over).dumps()
+
+
+def test_discover_attaches_manifests_and_tolerates_gaps() -> None:
+    listing = [
+        "forecasts/india/fuxi/2019.nc",
+        "forecasts/india/fuxi/manifest.json",
+        "forecasts/india/gencast/2020.nc",  # no manifest
+    ]
+    manifests = {_FUXI: _manifest_blob(_FUXI, ensemble=True)}
+
+    datasets = discover(lambda: listing, lambda ref: manifests.get(ref))
+
+    by_ref = {d.ref: d for d in datasets}
+    assert by_ref[_FUXI].manifest is not None
+    assert by_ref[_FUXI].manifest.ensemble is True
+    assert by_ref[_GENCAST].years == (2020,)
+    assert by_ref[_GENCAST].manifest is None  # missing manifest → years-only
+
+
+def test_discover_degrades_on_malformed_manifest() -> None:
+    listing = ["forecasts/india/fuxi/2019.nc"]
+    datasets = discover(lambda: listing, lambda ref: "{not valid json")
+    assert datasets[0].manifest is None
+    assert datasets[0].years == (2019,)
+
+
+def test_local_storage_walks_dataset_tree(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    fuxi = root / "forecasts" / "india" / "fuxi"
+    fuxi.mkdir(parents=True)
+    (fuxi / "2018.nc").write_bytes(b"")
+    (fuxi / "2019.nc").write_bytes(b"")
+    (fuxi / "manifest.json").write_text(_manifest_blob(_FUXI, unit_cvt=1000.0))
+
+    storage = LocalStorage(
+        upload_dir=tmp_path / "uploads",
+        job_outputs_dir=tmp_path / "jobs",
+        datasets_dir=root,
+    )
+
+    assert storage.list_dataset_tree() == [
+        "forecasts/india/fuxi/2018.nc",
+        "forecasts/india/fuxi/2019.nc",
+        "forecasts/india/fuxi/manifest.json",
+    ]
+
+    datasets = discover(
+        storage.list_dataset_tree,
+        lambda ref: storage.read_dataset_text(ref.manifest_key),
+    )
+    assert len(datasets) == 1
+    assert datasets[0].ref == _FUXI
+    assert datasets[0].years == (2018, 2019)
+    assert datasets[0].manifest.unit_cvt == 1000.0
+
+
+def test_local_storage_read_rejects_escaping_key(tmp_path) -> None:
+    storage = LocalStorage(
+        upload_dir=tmp_path / "uploads",
+        job_outputs_dir=tmp_path / "jobs",
+        datasets_dir=tmp_path / "datasets",
+    )
+    assert storage.read_dataset_text("../../etc/passwd") is None
