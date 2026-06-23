@@ -50,6 +50,7 @@ def runtime_spa_config() -> Response:
     """
     payload = {
         "apiUrl": "",  # same-origin by default
+        "authMode": settings.auth_mode,
         "submittedByEnabled": bool(settings.submitted_by_header),
         "submittedByHeader": settings.submitted_by_header,
     }

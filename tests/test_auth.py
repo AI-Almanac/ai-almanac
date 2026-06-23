@@ -16,6 +16,20 @@ from ai_almanac.settings import settings
 
 # ---------------------------------------------------------------------------
 # /auth/me — identity and capabilities
+
+
+@pytest.mark.asyncio
+async def test_runtime_config_exposes_auth_mode(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+
+    response = await client.get("/config.js")
+
+    assert response.status_code == 200
+    assert '"authMode": "proxy"' in response.text
+
+
 # ---------------------------------------------------------------------------
 
 

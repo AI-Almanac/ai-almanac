@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { sendChatMessage, type ChatEvent } from '../src/lib/api';
+import { sendChatMessage, usesBearerAuth, type ChatEvent } from '../src/lib/api';
+
+describe('usesBearerAuth', () => {
+	it('uses proxy-provided identity without requiring a browser token', () => {
+		expect(usesBearerAuth({ authMode: 'proxy' }, 'globus-client')).toBe(false);
+	});
+
+	it('requires a browser token for Globus auth', () => {
+		expect(usesBearerAuth({ authMode: 'globus' }, undefined)).toBe(true);
+	});
+
+	it('falls back to the build-time Globus client for the Vite dev server', () => {
+		expect(usesBearerAuth(undefined, 'globus-client')).toBe(true);
+	});
+});
 
 function streamingResponse(chunks: string[]): Response {
 	const encoder = new TextEncoder();

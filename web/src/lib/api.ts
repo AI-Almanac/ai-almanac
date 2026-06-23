@@ -5,7 +5,11 @@ import { authHeaders, getApiAccessToken, login, refreshAuthTokens } from './auth
 
 declare global {
 	interface Window {
-		__ALMANAC_CONFIG__?: { apiUrl?: string; submittedByEnabled?: boolean };
+		__ALMANAC_CONFIG__?: {
+			apiUrl?: string;
+			authMode?: 'none' | 'proxy' | 'globus';
+			submittedByEnabled?: boolean;
+		};
 	}
 }
 
@@ -20,6 +24,16 @@ const BASE_URL =
 	typeof runtimeConfig?.apiUrl === 'string'
 		? runtimeConfig.apiUrl
 		: import.meta.env.VITE_API_URL || '';
+
+export function usesBearerAuth(
+	config: Window['__ALMANAC_CONFIG__'],
+	globusClientId: string | undefined
+): boolean {
+	if (config) return config.authMode === 'globus';
+	return Boolean(globusClientId);
+}
+
+const USE_BEARER_AUTH = usesBearerAuth(runtimeConfig, import.meta.env.VITE_GLOBUS_CLIENT_ID);
 
 // ---- WebSocket job streaming ------------------------------------------------
 
@@ -64,7 +78,7 @@ async function request<T>(
 	requireAuth = true
 ): Promise<T> {
 	const headers = authHeaders();
-	if (requireAuth && !('Authorization' in headers)) {
+	if (requireAuth && USE_BEARER_AUTH && !('Authorization' in headers)) {
 		login(window.location.pathname + window.location.search);
 		throw new Error('Authentication required');
 	}
