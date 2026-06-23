@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from ai_almanac.server.services import data_catalog
 from ai_almanac.server.services.data_catalog import (
     FORECASTS,
     OBS,
@@ -12,8 +13,9 @@ from ai_almanac.server.services.data_catalog import (
     build_catalog,
     discover,
     parse_year_file,
+    staging_uris,
 )
-from ai_almanac.server.services.storage import LocalStorage
+from ai_almanac.server.services.storage import GCSStorage, LocalStorage
 
 
 @pytest.mark.parametrize(
@@ -157,3 +159,38 @@ def test_local_storage_read_rejects_escaping_key(tmp_path) -> None:
         datasets_dir=tmp_path / "datasets",
     )
     assert storage.read_dataset_text("../../etc/passwd") is None
+
+
+# --- resolver / staging -----------------------------------------------------
+
+
+def test_local_storage_dataset_uri_joins_under_root(tmp_path) -> None:
+    storage = LocalStorage(
+        upload_dir=tmp_path / "uploads",
+        job_outputs_dir=tmp_path / "jobs",
+        datasets_dir=tmp_path / "datasets",
+    )
+    uri = storage.dataset_uri(_FUXI.prefix)
+    assert uri == str((tmp_path / "datasets" / "forecasts" / "india" / "fuxi").resolve())
+
+
+def test_gcs_storage_dataset_uri_is_bucket_prefix() -> None:
+    # A dummy client avoids the google.cloud import; dataset_uri never touches it.
+    storage = GCSStorage(
+        uploads_bucket="up",
+        outputs_bucket="out",
+        data_bucket="data",
+        client=object(),
+    )
+    assert storage.dataset_uri(_FUXI.prefix) == "gs://data/datasets/forecasts/india/fuxi"
+
+
+def test_staging_uris_are_year_filtered(monkeypatch) -> None:
+    monkeypatch.setattr(
+        data_catalog, "resolve_dataset_uri", lambda ref: "gs://data/datasets/" + ref.prefix
+    )
+    uris = staging_uris(_FUXI, [2019, 2021])
+    assert uris == [
+        "gs://data/datasets/forecasts/india/fuxi/2019.nc",
+        "gs://data/datasets/forecasts/india/fuxi/2021.nc",
+    ]

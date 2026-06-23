@@ -102,6 +102,10 @@ class LocalStorage:
             return None
         return path.read_text() if path.is_file() else None
 
+    def dataset_uri(self, prefix: str) -> str:
+        """Absolute path of a dataset dir (``{kind}/{region}/{id}``) for staging."""
+        return str(self._contained(self._datasets_dir, prefix))
+
     def generate_upload_url(self, storage_key: str, base_url: str) -> str:
         return base_url.rstrip("/") + f"/upload/{storage_key}"
 
@@ -378,6 +382,10 @@ class GCSStorage:
             return None
         with fs.open(key, "rt") as handle:
             return handle.read()
+
+    def dataset_uri(self, prefix: str) -> str:
+        """``gs://`` URI of a dataset dir (``{kind}/{region}/{id}``) for staging."""
+        return f"gs://{self._datasets_base()}/{prefix}"
 
     def open_nc_dataset(self, path):
         import xarray as xr

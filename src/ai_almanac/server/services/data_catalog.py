@@ -214,3 +214,20 @@ def discover_datasets() -> list[Dataset]:
         storage.list_dataset_tree,
         lambda ref: storage.read_dataset_text(ref.manifest_key),
     )
+
+
+def resolve_dataset_uri(ref: DatasetRef) -> str:
+    """Concrete URI of a dataset dir on the active backend (path or ``gs://``)."""
+    from ai_almanac.server.services.storage import get_storage
+
+    return get_storage().dataset_uri(ref.prefix)
+
+
+def staging_uris(ref: DatasetRef, years: Iterable[int]) -> list[str]:
+    """Per-year file URIs to stage for a dataset — the year-filtered set only.
+
+    The unit of staging is one ``{year}.nc`` file, so a job pulls exactly the
+    years it uses instead of a whole (potentially GB-scale) dataset dir.
+    """
+    base = resolve_dataset_uri(ref).rstrip("/")
+    return [f"{base}/{year}.nc" for year in years]
