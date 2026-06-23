@@ -52,6 +52,16 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
         if not str(obs_dir).startswith("gs://"):
             return f"job_runner=modal requires obs_dir to be a gs:// URI; got {obs_dir!r}."
 
+    # Blend jobs stage several forecast model dirs; benchmark jobs stage one.
+    if "model_dirs" in config:
+        model_dirs = config.get("model_dirs") or []
+        if not model_dirs:
+            return "job_runner=modal requires at least one model dir."
+        for model_dir in model_dirs:
+            if not str(model_dir).startswith("gs://"):
+                return f"job_runner=modal requires model dirs to be gs:// URIs; got {model_dir!r}."
+        return None
+
     model_dir = config.get("model_dir", "")
     if not str(model_dir).startswith("gs://"):
         return f"job_runner=modal requires model_dir to be a gs:// URI; got {model_dir!r}."
@@ -98,7 +108,12 @@ class ModalRunner:
     def _spawn(self, job_id: str, config: dict) -> str:
         import modal
 
-        function = modal.Function.from_name(self._app_name, self._function_name)
+        # Job config selects the Modal app + function (e.g. blend jobs run
+        # "run_blend" in a separate app); all share the (job_id, config,
+        # outputs_bucket) signature.
+        app_name = config.get("modal_app") or self._app_name
+        function_name = config.get("modal_function") or self._function_name
+        function = modal.Function.from_name(app_name, function_name)
         call = function.spawn(job_id, config, self._outputs_bucket)
         return call.object_id
 

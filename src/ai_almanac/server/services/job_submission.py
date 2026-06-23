@@ -9,6 +9,7 @@ surface the errors to an HTTP client.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -246,6 +247,195 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
     if not row or not row["storage_key"]:
         raise HTTPException(status_code=400, detail="Dataset has no storage_key")
     return get_storage().resolve_obs_path(row["storage_key"])
+
+
+class BlendParams(BaseModel):
+    """Blend prep + training hyperparameters; Modal applies defaults for omitted."""
+
+    forecast_years: str | None = None
+    obs_years: str | None = None
+    training_years: str
+    cv_holdout_years: str
+    true_holdout_years: str | None = None
+    formula_text: str | None = None
+    threshold_mm: float | None = None
+    cutoff_month_day: str | None = None
+    mok_month_day: str | None = None
+
+
+class BlendCreate(BaseModel):
+    name: str
+    obs_dataset_id: str
+    model_ids: list[str]
+    params: BlendParams
+    run_id: str | None = None
+
+
+class BlendOut(BaseModel):
+    id: str
+    name: str
+    status: str
+    model_names: list[str]
+    region_id: str | None = None
+    created_at: str
+    completed_at: str | None = None
+    error: str | None = None
+    is_owner: bool = True
+    visibility: str = "private"
+    run_id: str | None = None
+
+
+def _blend_model_key(name: str) -> str:
+    """Filesystem/column-safe key used for a forecast model inside the blend."""
+    return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
+    cfg = json.loads(row.get("config_json") or "{}")
+    is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
+    return BlendOut(
+        id=row["id"],
+        name=cfg.get("blend_name") or "",
+        status=row["status"],
+        model_names=cfg.get("model_names") or [],
+        region_id=cfg.get("region_id"),
+        created_at=row["created_at"],
+        completed_at=row.get("completed_at"),
+        error=row.get("error"),
+        is_owner=is_owner,
+        visibility=row.get("visibility") or "private",
+        run_id=row.get("run_id"),
+    )
+
+
+async def _resolve_model_source(model_id: str, user_id: str) -> dict:
+    source = await data_source_service.get_source(model_id)
+    if not source or source["kind"] != "model":
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_id!r}")
+    if (
+        source.get("owner_id") not in (None, user_id)
+        and source.get("visibility") != "shared"
+    ):
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id!r}")
+    if source.get("status") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=source.get("validation_error")
+            or f"Model source is not ready: {source['name']!r}",
+        )
+    return source
+
+
+async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
+    """Submit a blend-training job: prep intermediates + train weights on Modal."""
+    if not body.model_ids:
+        raise HTTPException(status_code=400, detail="At least one model is required")
+
+    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None)
+    obs_source = await data_source_service.get_source(body.obs_dataset_id)
+
+    model_names: list[str] = []
+    model_dirs: list[str] = []
+    for model_id in body.model_ids:
+        source = await _resolve_model_source(model_id, user_id)
+        key = _blend_model_key(source["name"])
+        if key in model_names:
+            raise HTTPException(
+                status_code=400, detail=f"Duplicate model in blend: {source['name']!r}"
+            )
+        model_names.append(key)
+        model_dirs.append(source["path"])
+
+    job_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    region_id = obs_source.get("region") if obs_source else None
+    config = {
+        "job_type": "blend",
+        "modal_app": settings.modal_blending_app_name,
+        "modal_function": "run_blend",
+        "blend_name": body.name,
+        "obs_dir": obs_dir,
+        "model_dirs": model_dirs,
+        "model_names": model_names,
+        "model_source_ids": list(body.model_ids),
+        "region_id": region_id,
+        "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
+        "blend_params": body.params.model_dump(exclude_none=True),
+    }
+
+    async with get_db() as conn:
+        await lock_for_update(conn)
+        await conn.execute(
+            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
+        )
+        active_count = (
+            await conn.execute(
+                sa.select(sa.func.count())
+                .select_from(jobs)
+                .where(
+                    jobs.c.user_id == user_id,
+                    jobs.c.status.in_(ACTIVE_STATUSES),
+                )
+            )
+        ).scalar_one()
+        if active_count >= settings.max_active_jobs_per_user:
+            raise HTTPException(status_code=429, detail="active job quota exceeded")
+        result = await conn.execute(
+            sa.insert(jobs)
+            .values(
+                id=job_id,
+                user_id=user_id,
+                dataset_id=body.obs_dataset_id,
+                job_type="blend",
+                status="queued",
+                config_json=json.dumps(config),
+                run_id=body.run_id,
+                created_at=now,
+                runner_request={"job_id": job_id, "resources": {"gpus": 0}},
+            )
+            .returning(jobs)
+        )
+        row = dict(result.mappings().fetchone())
+        await audit(
+            conn,
+            "blend.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            metadata={"model_source_ids": list(body.model_ids)},
+        )
+        await usage(
+            conn,
+            "blend.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            quantity=1,
+        )
+
+    try:
+        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+    except Exception as exc:
+        async with get_db() as conn:
+            await conn.execute(
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(
+                    status="failed",
+                    completed_at=datetime.now(UTC).isoformat(),
+                    error=str(exc),
+                )
+            )
+        raise HTTPException(
+            status_code=400, detail=f"Blend submission failed: {exc}"
+        ) from exc
+
+    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
+    if handle.runner != "local":
+        values["status"] = "running"
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    return blend_row_to_out(row, user_id)
 
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:

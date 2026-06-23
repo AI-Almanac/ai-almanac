@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     job_runner: str = "local"
     modal_app_name: str = "almanac-romp"
     modal_function_name: str = "run_benchmark"
+    # Blend training runs in a separate Modal app (different image/dependencies);
+    # the job config carries this app name so the shared runner can target it.
+    modal_blending_app_name: str = "almanac-blending"
 
     # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.

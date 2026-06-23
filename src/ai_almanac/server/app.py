@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ai_almanac.paths import ensure_layout
 from ai_almanac.server.routers import (
     auth,
+    blends,
     chat,
     config,
     data_sources,
@@ -277,6 +278,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(blends.router)
 app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(config.root_router)

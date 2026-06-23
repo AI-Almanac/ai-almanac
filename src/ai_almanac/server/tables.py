@@ -54,6 +54,7 @@ jobs = sa.Table(
     sa.Column("user_id", sa.Text(), sa.ForeignKey("users.id"), nullable=False),
     # No FK: demo datasets are config-driven and absent from `datasets`.
     sa.Column("dataset_id", sa.Text(), nullable=False),
+    sa.Column("job_type", sa.Text(), nullable=False, server_default="benchmark"),
     sa.Column("status", sa.Text(), nullable=False, server_default="queued"),
     sa.Column("config_json", sa.Text()),
     sa.Column("run_id", sa.Text()),

@@ -21,6 +21,14 @@ _GCS_CONFIG = {
     "dataset_config": {"provider": "local"},
 }
 
+_BLEND_CONFIG = {
+    "obs_dir": "gs://data/obs",
+    "model_dirs": ["gs://data/models/gencast", "gs://data/models/aifs"],
+    "modal_app": "almanac-blending",
+    "modal_function": "run_blend",
+    "dataset_config": {"provider": "local"},
+}
+
 
 def _request(job_id: str = "job1") -> ExecutionRequest:
     return ExecutionRequest(job_id=job_id, workspace=Path("."), bundle_path=Path("."))
@@ -100,6 +108,22 @@ def test_preflight_passes_for_all_gcs_paths() -> None:
     assert mr._preflight_error(_GCS_CONFIG, "out-bucket") is None
 
 
+def test_preflight_passes_for_blend_model_dirs() -> None:
+    assert mr._preflight_error(_BLEND_CONFIG, "out-bucket") is None
+
+
+def test_preflight_rejects_local_blend_model_dir() -> None:
+    config = {**_BLEND_CONFIG, "model_dirs": ["gs://data/ok", "/mnt/local"]}
+    error = mr._preflight_error(config, "out-bucket")
+    assert error and "/mnt/local" in error
+
+
+def test_preflight_rejects_empty_blend_model_dirs() -> None:
+    config = {**_BLEND_CONFIG, "model_dirs": []}
+    error = mr._preflight_error(config, "out-bucket")
+    assert error and "model dir" in error
+
+
 # --- submit / inspect / cancel ----------------------------------------------
 
 
@@ -119,6 +143,26 @@ async def test_submit_spawns_and_records_call_id(monkeypatch: pytest.MonkeyPatch
     assert handle.external_id == "fc-123"
     assert record["lookup"] == ("almanac-romp", "run_benchmark")
     assert record["spawn_args"] == ("job-xyz", _GCS_CONFIG, "out-bucket")
+
+
+@pytest.mark.asyncio
+async def test_submit_routes_blend_app_and_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record: dict = {}
+    _install_fake_modal(monkeypatch, record=record)
+
+    async def fake_config(job_id):
+        return _BLEND_CONFIG
+
+    monkeypatch.setattr(mr, "_job_config", fake_config)
+
+    handle = await _runner().submit(_request("blend-1"))
+
+    assert handle.external_id == "fc-123"
+    # Config selects a different app + function than the runner's benchmark default.
+    assert record["lookup"] == ("almanac-blending", "run_blend")
+    assert record["spawn_args"] == ("blend-1", _BLEND_CONFIG, "out-bucket")
 
 
 @pytest.mark.asyncio
