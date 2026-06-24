@@ -47,6 +47,7 @@ from ai_almanac.settings import settings
 
 from . import chat_tools
 from .benchmark_state import BenchmarkRunSpec
+from .blend_state import BlendRunSpec
 from .chat_state import (
     ChatArtifact,
     ChatScope,
@@ -188,12 +189,28 @@ and get to the insight.
 - When uncertain about what a metric value means in context, say so explicitly."""
 
 
+BLEND_GUIDANCE = """
+
+This session is set up to configure a forecast blend. A blend combines several \
+forecast models into one blended forecast and trains the combining weights \
+against an observation dataset. Use `get_blend_config` / `update_blend_config` \
+to build the configuration, `validate_blend_config` to check readiness, and \
+`submit_blend` to train it once the user approves. Forecast models for a blend \
+come from `list_blend_models` (data sources), not the benchmark model registry, \
+and are scoped to the observation dataset's region. If the user has already run \
+benchmarks in this session, read those results first (job metrics/summaries) and \
+let the relative skill inform which models to include in the blend."""
+
+
 def _instructions_for_scope(scope: ChatScope) -> str:
+    prompt = SYSTEM_PROMPT
+    if scope.kind == "blend_setup":
+        prompt += BLEND_GUIDANCE
     if not scope.job_ids:
-        return SYSTEM_PROMPT
+        return prompt
     ids_str = ", ".join(scope.job_ids)
     return (
-        f"{SYSTEM_PROMPT}\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
+        f"{prompt}\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
         f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
     )
 
@@ -360,6 +377,72 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
     return toolset
 
 
+def _blend_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="blend")
+
+    @toolset.tool
+    async def list_blend_models(ctx: RunContext[ChatDeps], region: str | None = None) -> dict:
+        """List forecast model data sources available to blend, optionally filtered by region id."""
+        return await chat_tools.list_blend_models(region, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def get_blend_config(ctx: RunContext[ChatDeps]) -> dict:
+        """Read the canonical blend configuration attached to this chat session."""
+        return await chat_tools.get_blend_config(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    @toolset.tool
+    async def update_blend_config(
+        ctx: RunContext[ChatDeps], patch: chat_tools.BlendConfigPatch
+    ) -> dict:
+        """Patch and validate the canonical blend configuration for this chat session."""
+        return await chat_tools.update_blend_config(
+            patch.model_dump(exclude_none=True),
+            ctx.deps.user_id,
+            ctx.deps.scope,
+            ctx.deps.session_id,
+        )
+
+    @toolset.tool
+    async def validate_blend_config(ctx: RunContext[ChatDeps]) -> dict:
+        """Validate the current blend configuration and report run readiness."""
+        return await chat_tools.validate_blend_config(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    @toolset.tool
+    async def submit_blend(ctx: RunContext[ChatDeps]) -> dict:
+        """Submit the current blend for training after pydantic-ai human approval."""
+        if not ctx.tool_call_approved:
+            payload = await chat_tools.propose_blend_submit(
+                ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            )
+            if payload.get("error") or not payload.get("approval_required"):
+                return payload
+            raise ApprovalRequired(metadata=payload)
+
+        approved_config_payload = (ctx.tool_call_metadata or {}).get("approved_config")
+        if approved_config_payload:
+            current = await chat_tools.get_current_blend_config(
+                ctx.deps.session_id, ctx.deps.user_id
+            )
+            approved = BlendRunSpec.model_validate(approved_config_payload)
+            if current.model_dump(mode="json") != approved.model_dump(mode="json"):
+                return {
+                    "error": "Blend config changed after approval; please review and approve the updated plan.",
+                    **chat_tools.blend_payload(
+                        current, await chat_tools.blend_validation_for_config(current)
+                    ),
+                }
+
+        return await chat_tools.submit_blend_for_session(
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    return toolset
+
+
 def _job_toolset() -> FunctionToolset[ChatDeps]:
     toolset = FunctionToolset[ChatDeps](id="jobs")
 
@@ -443,6 +526,7 @@ def _build_agent(scope: ChatScope, model=None):
         deps_type=ChatDeps,
         toolsets=[
             _benchmark_toolset(),
+            _blend_toolset(),
             _job_toolset(),
             _metrics_toolset(),
             _analysis_toolset(),

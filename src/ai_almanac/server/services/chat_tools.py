@@ -8,8 +8,9 @@ from typing import Annotated
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
-from . import benchmark_domain
+from . import benchmark_domain, blend_domain
 from .benchmark_state import BenchmarkRunSpec
+from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
 from .chat_state import ChatScope
 
@@ -63,6 +64,23 @@ RerunJobRequest = benchmark_domain.RerunJobRequest
 class SubmitBenchmarkApproval(BaseModel):
     tool_call_id: str
     approved_config: BenchmarkRunSpec | None = None
+
+
+class BlendConfigPatch(BaseModel):
+    intent: str | None = None
+    name: str | None = None
+    obs_dataset_id: str | None = None
+    model_ids: list[str] | None = None
+    training_years: str | None = None
+    cv_holdout_years: str | None = None
+    forecast_years: str | None = None
+    true_holdout_years: str | None = None
+    formula_text: str | None = None
+
+
+class SubmitBlendApproval(BaseModel):
+    tool_call_id: str
+    approved_config: BlendRunSpec | None = None
 
 
 async def tool_payload(raw_result: object, session_id: str, user_id: str) -> dict:
@@ -259,3 +277,65 @@ async def get_current_benchmark_config(
 benchmark_payload = benchmark_domain.benchmark_payload
 validation_for_config = benchmark_domain.validation_for_config
 is_tool_available = benchmark_domain.is_tool_available
+
+
+# --- Blend setup wrappers -------------------------------------------------
+
+
+async def list_blend_models(region: str | None, user_id: str, scope: ChatScope) -> dict:
+    payload = await tool_payload(
+        await blend_domain.list_blend_models(region, user_id, scope), "", user_id
+    )
+    return _named_list_payload(payload, "models")
+
+
+async def get_blend_config(user_id: str, scope: ChatScope, session_id: str) -> dict:
+    return await tool_payload(
+        await blend_domain.get_blend_config(user_id, scope, session_id),
+        session_id,
+        user_id,
+    )
+
+
+async def update_blend_config(
+    patch: dict, user_id: str, scope: ChatScope, session_id: str
+) -> dict:
+    return await tool_payload(
+        await blend_domain.update_blend_config(patch, user_id, scope, session_id),
+        session_id,
+        user_id,
+    )
+
+
+async def validate_blend_config(user_id: str, scope: ChatScope, session_id: str) -> dict:
+    return await tool_payload(
+        await blend_domain.validate_blend_config(user_id, scope, session_id),
+        session_id,
+        user_id,
+    )
+
+
+async def propose_blend_submit(user_id: str, scope: ChatScope, session_id: str) -> dict:
+    return await tool_payload(
+        await blend_domain.propose_blend_submit(user_id, scope, session_id),
+        session_id,
+        user_id,
+    )
+
+
+async def submit_blend_for_session(
+    user_id: str, scope: ChatScope, session_id: str
+) -> dict:
+    return await tool_payload(
+        await blend_domain.submit_blend_for_session(user_id, scope, session_id),
+        session_id,
+        user_id,
+    )
+
+
+async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpec:
+    return await blend_domain.get_current_blend_config(session_id, user_id)
+
+
+blend_payload = blend_domain.blend_payload
+blend_validation_for_config = blend_domain.validation_for_config
