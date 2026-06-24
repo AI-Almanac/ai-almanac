@@ -266,6 +266,31 @@ class GCSStorage:
     def _bucket(self, name: str):
         return self._client.bucket(name)
 
+    def _signing_kwargs(self) -> dict:
+        """Extra ``generate_signed_url`` args needed when the ambient credentials
+        can't sign locally.
+
+        On Cloud Run the credentials are compute-engine tokens with no private
+        key, so V4 signing must go through the IAM ``signBlob`` API — which
+        ``generate_signed_url`` does when handed the SA email and an access
+        token. With a real SA key (local/dev) the credentials sign locally and
+        these stay empty. Requires the runtime SA to hold
+        ``roles/iam.serviceAccountTokenCreator`` on itself and the IAM Service
+        Account Credentials API enabled.
+        """
+        from google.auth import credentials as ga_credentials
+        from google.auth.transport import requests as ga_requests
+
+        creds = self._client._credentials
+        if isinstance(creds, ga_credentials.Signing):
+            return {}
+        if not creds.valid:
+            creds.refresh(ga_requests.Request())
+        return {
+            "service_account_email": creds.service_account_email,
+            "access_token": creds.token,
+        }
+
     @staticmethod
     def _fs():
         import gcsfs
@@ -281,6 +306,7 @@ class GCSStorage:
                 expiration=self._SIGNED_URL_EXPIRY,
                 method="PUT",
                 content_type="application/octet-stream",
+                **self._signing_kwargs(),
             )
         )
 
@@ -309,7 +335,10 @@ class GCSStorage:
             self._bucket(self._outputs_bucket)
             .blob(f"{job_id}/{kind}/{filename}")
             .generate_signed_url(
-                version="v4", expiration=self._SIGNED_URL_EXPIRY, method="GET"
+                version="v4",
+                expiration=self._SIGNED_URL_EXPIRY,
+                method="GET",
+                **self._signing_kwargs(),
             )
         )
 
@@ -424,7 +453,10 @@ class GCSStorage:
             )
             if blob.exists():
                 return blob.generate_signed_url(
-                    version="v4", expiration=self._SIGNED_URL_EXPIRY, method="GET"
+                    version="v4",
+                    expiration=self._SIGNED_URL_EXPIRY,
+                    method="GET",
+                    **self._signing_kwargs(),
                 )
         return None
 
