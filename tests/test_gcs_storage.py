@@ -9,6 +9,7 @@ left to integration testing.
 from __future__ import annotations
 
 import pytest
+from google.auth import credentials as ga_credentials
 
 from ai_almanac.server.services.storage import GCSStorage
 
@@ -50,6 +51,11 @@ class _FakeBlob:
     def download_as_bytes(self) -> bytes:
         return self._bucket.store[self.name][0]
 
+    def open(self, mode: str = "rb"):
+        import io
+
+        return io.BytesIO(self._bucket.store[self.name][0])
+
     def download_as_text(self) -> str:
         return self._bucket.store[self.name][0].decode()
 
@@ -71,9 +77,22 @@ class _FakeBucket:
         return _FakeBlob(self, name)
 
 
+class _FakeSigningCredentials(ga_credentials.Credentials, ga_credentials.Signing):
+    """A credential that can sign locally, so `_signing_kwargs` stays empty and
+    URL signing doesn't reach for the IAM signBlob API."""
+
+    def refresh(self, request) -> None: ...
+    def sign_bytes(self, message): return b""
+    @property
+    def signer_email(self): return "fake@local"
+    @property
+    def signer(self): return None
+
+
 class _FakeClient:
     def __init__(self) -> None:
         self.buckets: dict[str, _FakeBucket] = {}
+        self._credentials = _FakeSigningCredentials()
 
     def bucket(self, name: str) -> _FakeBucket:
         return self.buckets.setdefault(name, _FakeBucket(name))
@@ -115,12 +134,28 @@ def test_resolve_obs_path(store: GCSStorage) -> None:
 def test_signed_urls_route_to_the_right_bucket(store: GCSStorage) -> None:
     upload = store.generate_upload_url("user/ds/f.nc", "https://api")
     assert upload == "https://signed/up/user/ds/f.nc?method=PUT"
-    result = store.generate_result_url("job1", "figure", "p.png")
-    assert result == "https://signed/out/job1/figure/p.png?method=GET"
 
 
-def test_result_file_path_is_none_so_routers_redirect(store: GCSStorage) -> None:
+def test_result_url_points_at_the_backend_proxy(store: GCSStorage) -> None:
+    # Result files are streamed through the backend, not the bucket directly, so
+    # the browser fetches them same-origin (no signed URL, no bucket CORS).
+    assert store.generate_result_url("job1", "figure", "p.png") == (
+        "/jobs/job1/results/figure/p.png"
+    )
+
+
+def test_result_file_path_is_none_so_routers_stream(store: GCSStorage) -> None:
     assert store.result_file_path("job1", "output", "m.nc") is None
+
+
+def test_open_result_stream_yields_bytes(store: GCSStorage) -> None:
+    store._bucket("out").blob("job1/output/m.nc").upload_from_string(b"hello")
+    stream = store.open_result_stream("job1", "output", "m.nc")
+    assert stream is not None
+    body, _media_type, size = stream
+    assert b"".join(body) == b"hello"
+    assert size == 5
+    assert store.open_result_stream("job1", "output", "missing.nc") is None
 
 
 def test_confirm_upload(store: GCSStorage) -> None:

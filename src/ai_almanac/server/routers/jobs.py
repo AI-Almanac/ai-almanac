@@ -13,7 +13,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ai_almanac.server.auth import CurrentUser, authenticate_websocket
@@ -43,7 +43,7 @@ from ..services.metrics import (
     compute_job_grid,
     compute_job_metrics,
 )
-from ..services.storage import get_storage
+from ..services.storage import GCSStorage, get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
@@ -254,9 +254,33 @@ async def list_artifacts(job_id: str, job: ReadableJob):
     ]
 
 
+@router.get("/{job_id}/blend-summary")
+async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
+    """Return the blend's pooled summary CSV, read server-side.
+
+    The browser parses this for the skill chart; serving it here keeps the
+    outputs bucket off the client (mirroring how metrics read outputs).
+    """
+    _require_complete(job)
+    summary = next(
+        (
+            a
+            for a in await list_job_artifacts(job_id)
+            if a["filename"].startswith("summary_models_pooled")
+        ),
+        None,
+    )
+    if summary is None:
+        return {"csv": ""}
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
+    )
+    return {"csv": text or ""}
+
+
 @router.get("/{job_id}/results/{kind}/{filename}")
 async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJob):
-    """Serve a result file — FileResponse locally, signed URL redirect in production."""
+    """Serve a result file from this origin — a local file or a proxied GCS stream."""
     if kind not in ("output", "figure"):
         raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
     _require_complete(job)
@@ -269,11 +293,18 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
         from fastapi.responses import FileResponse
 
         return FileResponse(local_path)
-    else:
-        signed_url = await asyncio.to_thread(
-            storage.generate_result_url, job_id, kind, filename
-        )
-        return RedirectResponse(url=signed_url, status_code=302)
+
+    # Remote (GCS): proxy the bytes so the browser never reads the bucket
+    # cross-origin, which has no CORS policy for the frontend origin.
+    assert isinstance(storage, GCSStorage)
+    stream = await asyncio.to_thread(
+        storage.open_result_stream, job_id, kind, filename
+    )
+    if stream is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    body, media_type, size = stream
+    headers = {"Content-Length": str(size)} if size else {}
+    return StreamingResponse(body, media_type=media_type, headers=headers)
 
 
 @router.get("/{job_id}/metrics", response_model=JobMetrics)

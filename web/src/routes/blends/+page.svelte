@@ -6,6 +6,7 @@
 		listDataSources,
 		getCapabilities,
 		getJobArtifacts,
+		getBlendSummary,
 		cancelJob,
 		fetchResultBlob,
 		type Blend,
@@ -192,18 +193,20 @@
 		};
 	});
 
-	// Parse the small pooled per-model summary into the skill chart series.
+	// Parse the small pooled per-model summary into the skill chart series. The
+	// CSV is read by the backend (never fetched from the bucket by the browser);
+	// keyed on artifacts so it re-runs once publication indexes the summary.
 	$effect(() => {
-		const summary = artifacts.find((a) => a.filename.startsWith('summary_models_pooled'));
-		if (!summary) {
+		const job = selected;
+		const hasSummary = artifacts.some((a) => a.filename.startsWith('summary_models_pooled'));
+		if (job?.status !== 'complete' || !hasSummary) {
 			skill = [];
 			return;
 		}
 		let cancelled = false;
 		void (async () => {
 			try {
-				const objectUrl = await fetchResultBlob(summary.url);
-				const text = await (await fetch(objectUrl)).text();
+				const text = await getBlendSummary(job.id);
 				if (!cancelled) skill = parsePooledSummary(text);
 			} catch {
 				if (!cancelled) skill = [];

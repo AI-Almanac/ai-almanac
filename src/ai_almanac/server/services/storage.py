@@ -13,6 +13,7 @@ Both backends expose the same method surface so routers stay backend-agnostic.
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
@@ -343,19 +344,12 @@ class GCSStorage:
         )
 
     def generate_result_url(self, job_id: str, kind: str, filename: str) -> str:
-        return (
-            self._bucket(self._outputs_bucket)
-            .blob(f"{job_id}/{kind}/{filename}")
-            .generate_signed_url(
-                version="v4",
-                expiration=self._SIGNED_URL_EXPIRY,
-                method="GET",
-                **self._signing_kwargs(),
-            )
-        )
+        # Same backend path as local storage: the result-file route proxies the
+        # bytes so the browser never reads the outputs bucket cross-origin.
+        return f"/jobs/{job_id}/results/{kind}/{filename}"
 
     def result_file_path(self, job_id: str, kind: str, filename: str) -> Path | None:
-        return None  # served via signed-URL redirect, not a local FileResponse
+        return None  # streamed via open_result_stream, not a local FileResponse
 
     def read_result_text(self, job_id: str, kind: str, filename: str) -> str | None:
         """Download a small text result object (e.g. a summary CSV), or None."""
@@ -363,6 +357,27 @@ class GCSStorage:
         if not blob.exists():
             return None
         return blob.download_as_text()
+
+    def open_result_stream(
+        self, job_id: str, kind: str, filename: str
+    ) -> tuple[Iterator[bytes], str, int] | None:
+        """Stream a result object's bytes for the backend download proxy.
+
+        Returns ``(chunk iterator, media type, size)`` or ``None`` if the object
+        is absent, so the browser fetches result files from this origin instead
+        of the outputs bucket directly.
+        """
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/{kind}/{filename}")
+        if not blob.exists():
+            return None
+        blob.reload()
+
+        def chunks() -> Iterator[bytes]:
+            with blob.open("rb") as handle:
+                while data := handle.read(1 << 20):
+                    yield data
+
+        return chunks(), (blob.content_type or "application/octet-stream"), int(blob.size or 0)
 
     def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
         results: list[tuple[str, str]] = []
