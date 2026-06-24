@@ -337,5 +337,11 @@ async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpe
     return await blend_domain.get_current_blend_config(session_id, user_id)
 
 
+async def get_blend_results(job_id: str, user_id: str, scope: ChatScope) -> dict:
+    return await tool_payload(
+        await blend_domain.get_blend_results(job_id, user_id, scope), "", user_id
+    )
+
+
 blend_payload = blend_domain.blend_payload
 blend_validation_for_config = blend_domain.validation_for_config

@@ -199,7 +199,9 @@ to build the configuration, `validate_blend_config` to check readiness, and \
 come from `list_blend_models` (data sources), not the benchmark model registry, \
 and are scoped to the observation dataset's region. If the user has already run \
 benchmarks in this session, read those results first (job metrics/summaries) and \
-let the relative skill inform which models to include in the blend."""
+let the relative skill inform which models to include in the blend. After a blend \
+finishes training, use `get_blend_results` to read its pooled per-model skill \
+summary and explain how the blend compares to the individual models."""
 
 
 def _instructions_for_scope(scope: ChatScope) -> str:
@@ -438,6 +440,14 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
 
         return await chat_tools.submit_blend_for_session(
             ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+        )
+
+    @toolset.tool
+    async def get_blend_results(ctx: RunContext[ChatDeps], job_id: str) -> dict:
+        """Read a completed blend's pooled per-model skill summary (AUC, Brier skill
+        per lead time) and the list of weight/output artifacts, to explain results."""
+        return await chat_tools.get_blend_results(
+            job_id, ctx.deps.user_id, ctx.deps.scope
         )
 
     return toolset

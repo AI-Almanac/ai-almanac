@@ -8,6 +8,7 @@ models are ``data_sources`` rows (not the benchmark model registry), so blend
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -17,6 +18,12 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
+from ai_almanac.server.tables import jobs as _jobs
+
+# Per-lead AUC columns in the blend's pooled summary CSV, ordered week 1 → later.
+# Mirrors AUC_COLUMNS in web/src/routes/blends/blend-summary.ts.
+_SKILL_LEAD_COLUMNS = ["auc_week1", "auc_week2", "auc_week3", "auc_week4", "auc_later"]
+_BLEND_MODEL = "blended_model"
 
 # Climatology needs this many observation years before the first forecast year.
 # Mirrors ``min_onset_years`` in modal/blending_app.py and the frontend
@@ -401,3 +408,114 @@ async def submit_blend_for_session(
 
 async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpec:
     return _finalize_blend_config(await _load_blend_config(session_id, user_id))
+
+
+# --------------------------------------------------------------------------
+# Results analysis
+# --------------------------------------------------------------------------
+
+
+def _parse_pooled_summary(csv_text: str) -> list[dict]:
+    """Parse the blend's pooled per-model summary CSV into skill rows.
+
+    Mirrors ``parsePooledSummary`` in web/.../blend-summary.ts: one row per model
+    with its overall AUC, Brier skill score, and per-lead AUC series.
+    """
+    lines = [line for line in csv_text.strip().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return []
+    header = lines[0].split(",")
+    index = {name: position for position, name in enumerate(header)}
+    if "model" not in index:
+        return []
+
+    def cell(cells: list[str], name: str) -> float | None:
+        position = index.get(name)
+        if position is None or position >= len(cells):
+            return None
+        try:
+            return float(cells[position])
+        except ValueError:
+            return None
+
+    rows: list[dict] = []
+    for line in lines[1:]:
+        cells = line.split(",")
+        model = cells[index["model"]] if index["model"] < len(cells) else ""
+        if not model:
+            continue
+        rows.append(
+            {
+                "model": model,
+                "is_blend": model == _BLEND_MODEL,
+                "auc": cell(cells, "auc"),
+                "brier_skill": cell(cells, "brier_skill"),
+                "auc_by_lead": [cell(cells, col) for col in _SKILL_LEAD_COLUMNS],
+            }
+        )
+    # Blend first so the model's own row leads any rendered comparison.
+    rows.sort(key=lambda row: not row["is_blend"])
+    return rows
+
+
+async def _blend_job_status(job_id: str, user_id: str, scope: BenchmarkScope):
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services import benchmark_domain
+
+    query = (
+        sa.select(_jobs.c.status, _jobs.c.job_type)
+        .where(_jobs.c.id == sa.bindparam("id"))
+        .where(_jobs.c.user_id == sa.bindparam("uid"))
+    )
+    for cond in benchmark_domain._scope_conditions(scope, _jobs):
+        query = query.where(cond)
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    query,
+                    {"id": job_id, "uid": user_id, **benchmark_domain._scope_params(scope)},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    return dict(row) if row else None
+
+
+async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
+    """Read a completed blend's pooled per-model skill summary and artifact list."""
+    from ai_almanac.server.services.artifacts import list_job_artifacts
+    from ai_almanac.server.services.storage import get_storage
+
+    row = await _blend_job_status(job_id, user_id, scope)
+    if not row:
+        return {"error": f"Blend {job_id} not found"}
+    if row["job_type"] != "blend":
+        return {"error": f"Job {job_id} is not a blend"}
+    if row["status"] != "complete":
+        return {"error": f"Blend {job_id} is not complete (status: {row['status']})"}
+
+    artifacts = await list_job_artifacts(job_id)
+    summary = next(
+        (a for a in artifacts if a["filename"].startswith("summary_models_pooled")),
+        None,
+    )
+    artifact_list = [
+        {"filename": a["filename"], "kind": a["kind"], "size_bytes": a["size_bytes"]}
+        for a in artifacts
+    ]
+    if summary is None:
+        return {
+            "job_id": job_id,
+            "skill": [],
+            "artifacts": artifact_list,
+            "note": "No pooled summary artifact found for this blend.",
+        }
+
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
+    )
+    if text is None:
+        return {"error": f"Could not read the summary file for blend {job_id}"}
+    return {"job_id": job_id, "skill": _parse_pooled_summary(text), "artifacts": artifact_list}

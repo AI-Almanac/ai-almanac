@@ -137,6 +137,13 @@ class LocalStorage:
             return None
         return self._contained(self._outputs_dir, f"{job_id}/{kind}/{filename}")
 
+    def read_result_text(self, job_id: str, kind: str, filename: str) -> str | None:
+        """Read a small text result file (e.g. a summary CSV), or None if absent."""
+        path = self.result_file_path(job_id, kind, filename)
+        if path is None or not path.is_file():
+            return None
+        return path.read_text()
+
     @staticmethod
     def _contained(root: Path, relative: str) -> Path:
         path = (root / relative).resolve()
@@ -308,6 +315,13 @@ class GCSStorage:
 
     def result_file_path(self, job_id: str, kind: str, filename: str) -> Path | None:
         return None  # served via signed-URL redirect, not a local FileResponse
+
+    def read_result_text(self, job_id: str, kind: str, filename: str) -> str | None:
+        """Download a small text result object (e.g. a summary CSV), or None."""
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/{kind}/{filename}")
+        if not blob.exists():
+            return None
+        return blob.download_as_text()
 
     def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
         results: list[tuple[str, str]] = []
