@@ -49,9 +49,25 @@
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
 
+	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
+
+	// Models are region-specific: only offer ones matching the chosen observation
+	// dataset's region, mirroring the benchmark setup flow.
+	const availableModels = $derived(
+		selectedObs ? modelSources.filter((s) => s.region === selectedObs.region) : []
+	);
+
+	// Drop any selected model that no longer matches the chosen region.
+	$effect(() => {
+		const ids = new Set(availableModels.map((s) => s.id));
+		if (modelIds.some((id) => !ids.has(id))) {
+			modelIds = modelIds.filter((id) => ids.has(id));
+		}
+	});
+
 	const coverage = $derived(
 		computeCoverage(
-			obsSources.find((s) => s.id === obsDatasetId),
+			selectedObs ?? undefined,
 			modelSources.filter((s) => modelIds.includes(s.id))
 		)
 	);
@@ -326,11 +342,13 @@
 							>ⓘ</span
 						>
 					</legend>
-					{#if modelSources.length === 0}
-						<p class="muted">No ready model sources. Add forecast models under Data first.</p>
+					{#if !selectedObs}
+						<p class="muted">Select an observation source first to see matching models.</p>
+					{:else if availableModels.length === 0}
+						<p class="muted">No ready forecast models for this region. Add some under Data first.</p>
 					{:else}
 						<div class="model-grid">
-							{#each modelSources as source (source.id)}
+							{#each availableModels as source (source.id)}
 								<label class="checkbox">
 									<input
 										type="checkbox"
