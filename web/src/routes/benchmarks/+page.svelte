@@ -6,6 +6,7 @@
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
+	import { goToBlend } from '$lib/blend-nav';
 	import {
 		getDatasets,
 		getCapabilities,
@@ -427,6 +428,11 @@
 								scopeKey={group.key}
 								preferredSessionId={preferredChatSessionId}
 								onJobsCreated={handleJobsCreated}
+								onBlendSubmitted={(_runId, jobs, sessionId) =>
+									goToBlend(jobs[0]?.id, sessionId, {
+										kind: 'benchmark_run_group',
+										key: group.key
+									})}
 							/>
 						</div>
 					</aside>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { type BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import { goToBlend } from '$lib/blend-nav';
 	import type { Dataset, Region, RompDefaults } from '$lib/api';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
@@ -106,15 +107,17 @@
 				onSessionReady={form.handleSessionReady}
 				onBenchmarkConfig={form.applySpec}
 				onBenchmarkSubmitted={form.handleBenchmarkSubmitted}
+				onBlendSubmitted={(_runId, jobs, sessionId) =>
+					goToBlend(jobs[0]?.id, sessionId, { kind: 'benchmark_setup', key: setupKey })}
 			/>
 		{:else}
 			<div class="manual-setup">
 				<p class="eyebrow">Manual setup</p>
 				<h1>Configure a benchmark</h1>
 				<p>
-					The AI assistant is unavailable until an LLM is set up. Use manual configuration to
-					select observations, models, and benchmark parameters, or
-						<a href="/settings/ai">set up your AI provider</a>.
+					The AI assistant is unavailable until an LLM is set up. Use manual configuration to select
+					observations, models, and benchmark parameters, or
+					<a href="/settings/ai">set up your AI provider</a>.
 				</p>
 				<button type="button" onclick={() => (advancedPanelOpen = true)}>
 					Open benchmark settings

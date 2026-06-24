@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import { page } from '$app/stores';
 	import {
 		listBlends,
 		createBlend,
@@ -12,16 +13,12 @@
 		type Blend,
 		type BlendCreate,
 		type BlendRunSpec,
+		type ChatScope,
 		type DataSource,
 		type JobArtifact
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
-	import {
-		MIN_ONSET_YEARS,
-		computeCoverage,
-		defaultSplit,
-		yearSpecError
-	} from './year-coverage';
+	import { MIN_ONSET_YEARS, computeCoverage, defaultSplit, yearSpecError } from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillChart from './BlendSkillChart.svelte';
 
@@ -36,11 +33,54 @@
 	let chatAvailable = $state(false);
 	const blendSetupKey = crypto.randomUUID();
 
+	// A chat session that follows the user into a blend: either started here in
+	// setup, or carried over from the benchmark flow that launched the blend.
+	// Keeping the originating scope lets follow-up messages match the session.
+	let continuedSessionId = $state<string | null>(null);
+	let continuedScope = $state<{ kind: ChatScope['kind']; key: string } | null>(null);
+	let continuedBlendId = $state<string | null>(null);
+	let initialized = $state(false);
+
+	const SCOPE_KINDS: ChatScope['kind'][] = [
+		'benchmark_setup',
+		'benchmark_run_group',
+		'blend_setup',
+		'job_set'
+	];
+	function asScopeKind(value: string | null): ChatScope['kind'] | null {
+		return value && SCOPE_KINDS.includes(value as ChatScope['kind'])
+			? (value as ChatScope['kind'])
+			: null;
+	}
+
+	$effect(() => {
+		if (initialized) return;
+		initialized = true;
+		const params = $page.url.searchParams;
+		const blendId = params.get('blend');
+		const chatId = params.get('chat');
+		const scopeKind = asScopeKind(params.get('scopeKind'));
+		const scopeKey = params.get('scopeKey');
+		if (blendId) selectedId = blendId;
+		if (chatId && scopeKind && scopeKey) {
+			continuedSessionId = chatId;
+			continuedScope = { kind: scopeKind, key: scopeKey };
+			continuedBlendId = blendId;
+		}
+	});
+
 	let artifacts = $state<JobArtifact[]>([]);
 	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
 	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
+	const showDetailChat = $derived(
+		chatAvailable &&
+			!!continuedSessionId &&
+			!!continuedScope &&
+			!!selected &&
+			selected.id === continuedBlendId
+	);
 
 	// --- Form state ---
 	let name = $state('');
@@ -77,9 +117,7 @@
 			modelSources.filter((s) => modelIds.includes(s.id))
 		)
 	);
-	const insufficientData = $derived(
-		coverage != null && coverage.earliestForecast > coverage.end
-	);
+	const insufficientData = $derived(coverage != null && coverage.earliestForecast > coverage.end);
 
 	const yearError = $derived(
 		coverage
@@ -136,11 +174,14 @@
 		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
 	}
 
-	function handleBlendSubmitted(_runId: string, jobs: Blend[]) {
+	function handleBlendSubmitted(_runId: string, jobs: Blend[], sessionId: string | null) {
 		if (jobs.length === 0) return;
 		blends = [...jobs, ...blends];
 		selectedId = jobs[0].id;
 		creating = false;
+		continuedSessionId = sessionId;
+		continuedScope = { kind: 'blend_setup', key: blendSetupKey };
+		continuedBlendId = jobs[0].id;
 	}
 
 	let polling: ReturnType<typeof setInterval> | null = null;
@@ -359,239 +400,262 @@
 					</div>
 				{/if}
 				<section class="card form">
-				<h1>Train a blend</h1>
-				<p class="muted">
-					Combine multiple forecast models into a single blended forecast. Training learns the
-					weights and saves them as a downloadable artifact.
-				</p>
+					<h1>Train a blend</h1>
+					<p class="muted">
+						Combine multiple forecast models into a single blended forecast. Training learns the
+						weights and saves them as a downloadable artifact.
+					</p>
 
-				<label class="field">
-					{@render fieldLabel('Blend name', 'A label to identify this blend in your list. Does not affect training.')}
-					<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
-				</label>
+					<label class="field">
+						{@render fieldLabel(
+							'Blend name',
+							'A label to identify this blend in your list. Does not affect training.'
+						)}
+						<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
+					</label>
 
-				<label class="field">
-					{@render fieldLabel(
-						'Observations',
-						'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
-					)}
-					<select bind:value={obsDatasetId}>
-						<option value="" disabled>Select an observation source…</option>
-						{#each obsSources as source (source.id)}
-							<option value={source.id}
-								>{source.name}{source.region ? ` (${source.region})` : ''}</option
-							>
-						{/each}
-					</select>
-				</label>
-
-				<fieldset class="field">
-					<legend class="label-with-help">
-						Forecast models
-						<span
-							class="tip"
-							title="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
-							>ⓘ</span
-						>
-					</legend>
-					{#if !selectedObs}
-						<p class="muted">Select an observation source first to see matching models.</p>
-					{:else if availableModels.length === 0}
-						<p class="muted">No ready forecast models for this region. Add some under Data first.</p>
-					{:else}
-						<div class="model-grid">
-							{#each availableModels as source (source.id)}
-								<label class="checkbox">
-									<input
-										type="checkbox"
-										checked={modelIds.includes(source.id)}
-										onchange={() => toggleModel(source.id)}
-									/>
-									<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
-								</label>
+					<label class="field">
+						{@render fieldLabel(
+							'Observations',
+							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
+						)}
+						<select bind:value={obsDatasetId}>
+							<option value="" disabled>Select an observation source…</option>
+							{#each obsSources as source (source.id)}
+								<option value={source.id}
+									>{source.name}{source.region ? ` (${source.region})` : ''}</option
+								>
 							{/each}
-						</div>
+						</select>
+					</label>
+
+					<fieldset class="field">
+						<legend class="label-with-help">
+							Forecast models
+							<span
+								class="tip"
+								title="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
+								>ⓘ</span
+							>
+						</legend>
+						{#if !selectedObs}
+							<p class="muted">Select an observation source first to see matching models.</p>
+						{:else if availableModels.length === 0}
+							<p class="muted">
+								No ready forecast models for this region. Add some under Data first.
+							</p>
+						{:else}
+							<div class="model-grid">
+								{#each availableModels as source (source.id)}
+									<label class="checkbox">
+										<input
+											type="checkbox"
+											checked={modelIds.includes(source.id)}
+											onchange={() => toggleModel(source.id)}
+										/>
+										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+									</label>
+								{/each}
+							</div>
+						{/if}
+					</fieldset>
+
+					{#if coverage}
+						<p class="muted coverage-hint">
+							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
+							(leaves {MIN_ONSET_YEARS} years for climatology).
+						</p>
 					{/if}
-				</fieldset>
 
-				{#if coverage}
-					<p class="muted coverage-hint">
-						Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
-						(leaves {MIN_ONSET_YEARS} years for climatology).
-					</p>
-				{/if}
-
-				<div class="field-row">
-					<label class="field">
-						{@render fieldLabel(
-							'Training years',
-							`Years used to fit the blending weights, e.g. "2008:2010". Requires at least ${MIN_ONSET_YEARS} years of observations before the first forecast year for the climatology baseline.`
-						)}
-						<input
-							type="text"
-							bind:value={trainingYears}
-							oninput={() => (yearsDirty = true)}
-							placeholder="2015:2020"
-						/>
-					</label>
-					<label class="field">
-						{@render fieldLabel(
-							'CV holdout years',
-							'Years held out of training to cross-validate the weights, e.g. "2011,2012". Usually the most recent 1–2 years of the shared range.'
-						)}
-						<input
-							type="text"
-							bind:value={cvHoldoutYears}
-							oninput={() => (yearsDirty = true)}
-							placeholder="2021,2022"
-						/>
-					</label>
-				</div>
-
-				{#if insufficientData}
-					<p class="error">
-						These sources don't have {MIN_ONSET_YEARS} years of observations before any shared forecast
-						year. Pick an observation source with earlier coverage.
-					</p>
-				{:else if yearError}
-					<p class="error">{yearError}</p>
-				{/if}
-
-				<details class="advanced">
-					<summary>Advanced</summary>
 					<div class="field-row">
 						<label class="field">
 							{@render fieldLabel(
-								'Forecast years',
-								'Years to stage and score, if different from training + holdout. Defaults to the union of training and holdout years.'
+								'Training years',
+								`Years used to fit the blending weights, e.g. "2008:2010". Requires at least ${MIN_ONSET_YEARS} years of observations before the first forecast year for the climatology baseline.`
 							)}
 							<input
 								type="text"
-								bind:value={forecastYears}
-								placeholder="defaults to training + holdout"
+								bind:value={trainingYears}
+								oninput={() => (yearsDirty = true)}
+								placeholder="2015:2020"
 							/>
 						</label>
 						<label class="field">
 							{@render fieldLabel(
-								'True holdout years',
-								'Years never shown during training or cross-validation, reserved for a final unbiased evaluation. Optional.'
+								'CV holdout years',
+								'Years held out of training to cross-validate the weights, e.g. "2011,2012". Usually the most recent 1–2 years of the shared range.'
 							)}
-							<input type="text" bind:value={trueHoldoutYears} placeholder="optional" />
+							<input
+								type="text"
+								bind:value={cvHoldoutYears}
+								oninput={() => (yearsDirty = true)}
+								placeholder="2021,2022"
+							/>
 						</label>
 					</div>
-					<label class="field">
-						{@render fieldLabel(
-							'Formula',
-							'Advanced override for the statistical formula combining the models. Leave blank to use the default blend formula.'
-						)}
-						<input
-							type="text"
-							bind:value={formulaText}
-							placeholder="optional — model formula override"
-						/>
-					</label>
-				</details>
 
-				{#if submitError}
-					<p class="error">{submitError}</p>
-				{/if}
+					{#if insufficientData}
+						<p class="error">
+							These sources don't have {MIN_ONSET_YEARS} years of observations before any shared forecast
+							year. Pick an observation source with earlier coverage.
+						</p>
+					{:else if yearError}
+						<p class="error">{yearError}</p>
+					{/if}
 
-				<div class="form-actions">
-					<button type="button" class="ghost" onclick={() => (creating = false)}>Cancel</button>
-					<button
-						type="button"
-						class="primary"
-						disabled={!formValid || submitting}
-						onclick={submit}
-					>
-						{submitting ? 'Submitting…' : 'Train blend'}
-					</button>
-				</div>
+					<details class="advanced">
+						<summary>Advanced</summary>
+						<div class="field-row">
+							<label class="field">
+								{@render fieldLabel(
+									'Forecast years',
+									'Years to stage and score, if different from training + holdout. Defaults to the union of training and holdout years.'
+								)}
+								<input
+									type="text"
+									bind:value={forecastYears}
+									placeholder="defaults to training + holdout"
+								/>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'True holdout years',
+									'Years never shown during training or cross-validation, reserved for a final unbiased evaluation. Optional.'
+								)}
+								<input type="text" bind:value={trueHoldoutYears} placeholder="optional" />
+							</label>
+						</div>
+						<label class="field">
+							{@render fieldLabel(
+								'Formula',
+								'Advanced override for the statistical formula combining the models. Leave blank to use the default blend formula.'
+							)}
+							<input
+								type="text"
+								bind:value={formulaText}
+								placeholder="optional — model formula override"
+							/>
+						</label>
+					</details>
+
+					{#if submitError}
+						<p class="error">{submitError}</p>
+					{/if}
+
+					<div class="form-actions">
+						<button type="button" class="ghost" onclick={() => (creating = false)}>Cancel</button>
+						<button
+							type="button"
+							class="primary"
+							disabled={!formValid || submitting}
+							onclick={submit}
+						>
+							{submitting ? 'Submitting…' : 'Train blend'}
+						</button>
+					</div>
 				</section>
 			</div>
 		{:else if selected}
-			<section class="card detail">
-				<header class="detail-header">
-					<div>
-						<p class="eyebrow">Blend</p>
-						<h1>{selected.name || 'Untitled blend'}</h1>
-						<p class="muted">
-							{selected.model_names.join(', ')}
-							{#if selected.region_id}· {selected.region_id}{/if}
-						</p>
-					</div>
-					<div class="detail-actions">
-						<span class="status-badge {statusClass(selected.status)}"
-							>{statusLabel(selected.status)}</span
-						>
-						{#if ACTIVE_STATUSES.includes(selected.status) && selected.status !== 'canceling'}
-							<button type="button" class="ghost" onclick={() => cancelJob(selected!.id)}
-								>Cancel</button
-							>
-						{/if}
-					</div>
-				</header>
-
-				<dl class="facts">
-					<div>
-						<dt>Submitted</dt>
-						<dd>{formatDate(selected.created_at)}</dd>
-					</div>
-					<div>
-						<dt>Completed</dt>
-						<dd>{formatDate(selected.completed_at)}</dd>
-					</div>
-					<div>
-						<dt>Models</dt>
-						<dd>{selected.model_names.length}</dd>
-					</div>
-				</dl>
-
-				{#if ACTIVE_STATUSES.includes(selected.status)}
-					<div class="running-state">
-						<div class="spinner"></div>
+			<div class="detail-layout" class:with-chat={showDetailChat}>
+				<section class="card detail">
+					<header class="detail-header">
 						<div>
-							<strong>Training blend</strong>
-							<p class="muted">Weights will appear here when training completes.</p>
+							<p class="eyebrow">Blend</p>
+							<h1>{selected.name || 'Untitled blend'}</h1>
+							<p class="muted">
+								{selected.model_names.join(', ')}
+								{#if selected.region_id}· {selected.region_id}{/if}
+							</p>
 						</div>
-					</div>
-				{/if}
+						<div class="detail-actions">
+							<span class="status-badge {statusClass(selected.status)}"
+								>{statusLabel(selected.status)}</span
+							>
+							{#if ACTIVE_STATUSES.includes(selected.status) && selected.status !== 'canceling'}
+								<button type="button" class="ghost" onclick={() => cancelJob(selected!.id)}
+									>Cancel</button
+								>
+							{/if}
+						</div>
+					</header>
 
-				{#if selected.status === 'failed' && selected.error}
-					<pre class="error-block">{selected.error}</pre>
-				{/if}
+					<dl class="facts">
+						<div>
+							<dt>Submitted</dt>
+							<dd>{formatDate(selected.created_at)}</dd>
+						</div>
+						<div>
+							<dt>Completed</dt>
+							<dd>{formatDate(selected.completed_at)}</dd>
+						</div>
+						<div>
+							<dt>Models</dt>
+							<dd>{selected.model_names.length}</dd>
+						</div>
+					</dl>
 
-				{#if selected.status === 'complete'}
-					{#if skill.length > 0}
-						<div class="skill">
-							<h2>Forecast skill</h2>
-							<BlendSkillChart series={skill} />
+					{#if ACTIVE_STATUSES.includes(selected.status)}
+						<div class="running-state">
+							<div class="spinner"></div>
+							<div>
+								<strong>Training blend</strong>
+								<p class="muted">Weights will appear here when training completes.</p>
+							</div>
 						</div>
 					{/if}
 
-					<div class="artifacts">
-						<h2>Weights & outputs</h2>
-						{#if artifacts.length === 0}
-							<p class="muted">No artifacts found.</p>
-						{:else}
-							<ul>
-								{#each artifacts as artifact (artifact.id)}
-									<li>
-										<button
-											type="button"
-											class="artifact"
-											onclick={() => downloadArtifact(artifact)}
-										>
-											<span class="artifact-name">{artifact.filename}</span>
-											<span class="muted">{(artifact.size_bytes / 1024).toFixed(0)} KB</span>
-										</button>
-									</li>
-								{/each}
-							</ul>
+					{#if selected.status === 'failed' && selected.error}
+						<pre class="error-block">{selected.error}</pre>
+					{/if}
+
+					{#if selected.status === 'complete'}
+						{#if skill.length > 0}
+							<div class="skill">
+								<h2>Forecast skill</h2>
+								<BlendSkillChart series={skill} />
+							</div>
 						{/if}
+
+						<div class="artifacts">
+							<h2>Weights & outputs</h2>
+							{#if artifacts.length === 0}
+								<p class="muted">No artifacts found.</p>
+							{:else}
+								<ul>
+									{#each artifacts as artifact (artifact.id)}
+										<li>
+											<button
+												type="button"
+												class="artifact"
+												onclick={() => downloadArtifact(artifact)}
+											>
+												<span class="artifact-name">{artifact.filename}</span>
+												<span class="muted">{(artifact.size_bytes / 1024).toFixed(0)} KB</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+					{/if}
+				</section>
+				{#if showDetailChat && continuedScope}
+					<div class="detail-chat">
+						<ChatPanel
+							jobs={[]}
+							scopeKind={continuedScope.kind}
+							scopeKey={continuedScope.key}
+							preferredSessionId={continuedSessionId}
+							title={selected.name || 'Blend'}
+							emptyMessage="Ask about this blend or its training results."
+							placeholder="Ask about this blend…"
+							showArtifacts={false}
+							onBlendConfig={applyBlendConfig}
+							onBlendSubmitted={handleBlendSubmitted}
+						/>
 					</div>
 				{/if}
-			</section>
+			</div>
 		{:else}
 			<div class="card empty-state">
 				<p class="empty-title">No blend selected</p>
@@ -629,6 +693,42 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
+	}
+
+	.detail-layout {
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
+		align-items: stretch;
+	}
+
+	.detail-layout.with-chat {
+		flex-direction: row;
+	}
+
+	.detail-layout.with-chat .detail {
+		flex: 1 1 55%;
+		min-width: 0;
+		align-self: flex-start;
+	}
+
+	.detail-chat {
+		flex: 1 1 45%;
+		min-width: 0;
+		display: flex;
+		min-height: 32rem;
+	}
+
+	.detail-chat :global(.chat-panel) {
+		width: 100%;
+		min-height: 100%;
+		box-shadow: var(--shadow-soft);
+	}
+
+	@media (max-width: 60rem) {
+		.detail-layout.with-chat {
+			flex-direction: column;
+		}
 	}
 
 	.setup-layout.with-chat {
