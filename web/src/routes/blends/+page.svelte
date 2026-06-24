@@ -23,6 +23,7 @@
 		type JobStreamEvent
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import { MIN_ONSET_YEARS, computeCoverage, defaultSplit, yearSpecError } from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillChart from './BlendSkillChart.svelte';
@@ -212,7 +213,9 @@
 		}
 	}
 
-	async function deleteBlend(blend: Blend) {
+	async function deleteBlend(id: string) {
+		const blend = blends.find((b) => b.id === id);
+		if (!blend) return;
 		const label = blend.name || 'this blend';
 		if (
 			!confirm(
@@ -223,10 +226,10 @@
 		}
 		actionError = null;
 		try {
-			await deleteJob(blend.id);
-			blends = blends.filter((b) => b.id !== blend.id);
-			if (selectedId === blend.id) selectedId = null;
-			if (continuedBlendId === blend.id) {
+			await deleteJob(id);
+			blends = blends.filter((b) => b.id !== id);
+			if (selectedId === id) selectedId = null;
+			if (continuedBlendId === id) {
 				continuedSessionId = null;
 				continuedScope = null;
 				continuedBlendId = null;
@@ -235,6 +238,30 @@
 			actionError = err instanceof Error ? err.message : 'Delete failed';
 		}
 	}
+
+	function sidebarStatus(status: string): RunStatus {
+		if (status === 'complete') return 'complete';
+		if (status === 'failed') return 'failed';
+		if (status === 'canceled') return 'canceled';
+		if (ACTIVE_STATUSES.includes(status)) return 'running';
+		return 'mixed';
+	}
+
+	const sidebarSections = $derived<RunSection[]>([
+		{
+			title: 'My Blends',
+			open: true,
+			emptyLabel: loaded ? 'No blends yet.' : 'Loading…',
+			items: blends.map((b) => ({
+				id: b.id,
+				title: b.name || 'Untitled blend',
+				meta: `${b.model_names.length} model${b.model_names.length === 1 ? '' : 's'} · ${formatDate(b.created_at)}`,
+				count: b.model_names.length,
+				status: sidebarStatus(b.status),
+				canDelete: !ACTIVE_STATUSES.includes(b.status)
+			}))
+		}
+	]);
 
 	// Stream status changes per running blend instead of re-fetching the whole
 	// list on a timer. Replacing the array on every poll reassigned every blend
@@ -431,36 +458,20 @@
 	</span>
 {/snippet}
 
-<div class="page-layout">
-	<aside class="sidebar">
-		<button type="button" class="primary" onclick={startNew}>New blend</button>
-		<ul class="blend-list">
-			{#each blends as blend (blend.id)}
-				<li>
-					<button
-						type="button"
-						class="blend-item"
-						class:selected={blend.id === selectedId}
-						onclick={() => selectBlend(blend.id)}
-					>
-						<span class="blend-name">{blend.name || 'Untitled blend'}</span>
-						<span class="status-badge {statusClass(blend.status)}">{statusLabel(blend.status)}</span
-						>
-						<span class="blend-meta"
-							>{blend.model_names.length} model{blend.model_names.length === 1 ? '' : 's'} · {formatDate(
-								blend.created_at
-							)}</span
-						>
-					</button>
-				</li>
-			{/each}
-			{#if loaded && blends.length === 0}
-				<li class="muted">No blends yet</li>
-			{/if}
-		</ul>
-	</aside>
+<div class="workspace-page" class:is-setup={creating}>
+	{#if !creating}
+		<RunSidebar
+			newLabel="New blend"
+			{selectedId}
+			sections={sidebarSections}
+			onNew={startNew}
+			onSelect={selectBlend}
+			onDelete={deleteBlend}
+			deleteTitle="Delete blend"
+		/>
+	{/if}
 
-	<div class="main-content">
+	<div class="workspace-main">
 		{#if creating}
 			<div class="setup-layout" class:with-chat={chatAvailable}>
 				{#if chatAvailable}
@@ -640,7 +651,7 @@
 				</section>
 			</div>
 		{:else if selected}
-			<div class="detail-layout" class:with-chat={chatAvailable && detailChat}>
+			<div class="workspace-split" class:is-solo={!(chatAvailable && detailChat)}>
 				<section class="card detail">
 					<header class="detail-header">
 						<div>
@@ -664,10 +675,6 @@
 								>
 									{selected.status === 'canceling' ? 'Canceling…' : 'Cancel'}
 								</button>
-							{:else}
-								<button type="button" class="danger" onclick={() => deleteBlend(selected!)}
-									>Delete</button
-								>
 							{/if}
 						</div>
 					</header>
@@ -737,25 +744,27 @@
 					{/if}
 				</section>
 				{#if chatAvailable && detailChat}
-					<div class="detail-chat">
-						<ChatPanel
-							jobs={detailChatJobs}
-							scopeKind={detailChat.scopeKind}
-							scopeKey={detailChat.scopeKey}
-							preferredSessionId={detailChat.sessionId}
-							title={selected.name || 'Blend'}
-							emptyMessage="Ask about this blend or its training results."
-							placeholder="Ask about this blend…"
-							suggestions={[
-								'How does the blend compare to the individual models?',
-								'Which model contributes most to the blend?',
-								'Summarise the forecast skill of this blend.'
-							]}
-							showArtifacts={false}
-							onBlendConfig={applyBlendConfig}
-							onBlendSubmitted={handleBlendSubmitted}
-						/>
-					</div>
+					<aside class="workspace-aside">
+						<div class="result-chat">
+							<ChatPanel
+								jobs={detailChatJobs}
+								scopeKind={detailChat.scopeKind}
+								scopeKey={detailChat.scopeKey}
+								preferredSessionId={detailChat.sessionId}
+								title={selected.name || 'Blend'}
+								emptyMessage="Ask about this blend or its training results."
+								placeholder="Ask about this blend…"
+								suggestions={[
+									'How does the blend compare to the individual models?',
+									'Which model contributes most to the blend?',
+									'Summarise the forecast skill of this blend.'
+								]}
+								showArtifacts={false}
+								onBlendConfig={applyBlendConfig}
+								onBlendSubmitted={handleBlendSubmitted}
+							/>
+						</div>
+					</aside>
 				{/if}
 			</div>
 		{:else}
@@ -770,67 +779,29 @@
 </div>
 
 <style>
-	.page-layout {
-		width: min(100% - 2rem, 76rem);
-		margin: 0 auto;
-		padding: 1.25rem 0 2rem;
-		display: flex;
-		gap: 1.25rem;
-		align-items: flex-start;
-	}
-
-	.sidebar {
-		flex: 0 0 18rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-
-	.main-content {
-		flex: 1;
-		min-width: 0;
-	}
-
 	.setup-layout {
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
 	}
 
-	.detail-layout {
+	/* Sticky assistant column, matching the benchmarks analysis view. */
+	.result-chat {
 		display: flex;
 		flex-direction: column;
-		gap: 1.25rem;
-		align-items: stretch;
-	}
-
-	.detail-layout.with-chat {
-		flex-direction: row;
-	}
-
-	.detail-layout.with-chat .detail {
-		flex: 1 1 55%;
-		min-width: 0;
-		align-self: flex-start;
-	}
-
-	.detail-chat {
-		flex: 1 1 45%;
-		min-width: 0;
-		display: flex;
-		min-height: 32rem;
-	}
-
-	.detail-chat :global(.chat-panel) {
-		width: 100%;
-		min-height: 100%;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-surface);
 		box-shadow: var(--shadow-soft);
 	}
 
-	@media (max-width: 60rem) {
-		.detail-layout.with-chat {
-			flex-direction: column;
-		}
+	.result-chat > :global(.chat-panel) {
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
 	}
 
 	.setup-layout.with-chat {
@@ -869,47 +840,6 @@
 		background: var(--color-surface);
 		box-shadow: var(--shadow-soft);
 		padding: clamp(1rem, 2vw, 1.5rem);
-	}
-
-	.blend-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-
-	.blend-item {
-		display: grid;
-		grid-template-columns: 1fr auto;
-		gap: 0.25rem 0.5rem;
-		width: 100%;
-		text-align: left;
-		padding: 0.6rem 0.7rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.45rem;
-		background: var(--color-surface);
-		cursor: pointer;
-	}
-
-	.blend-item:hover,
-	.blend-item.selected {
-		border-color: var(--color-accent-border);
-	}
-
-	.blend-name {
-		font-weight: 700;
-		color: var(--color-text);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.blend-meta {
-		grid-column: 1 / -1;
-		color: var(--color-text-muted);
-		font-size: 0.78rem;
 	}
 
 	.status-badge {
@@ -1057,8 +987,7 @@
 	}
 
 	button.primary,
-	button.ghost,
-	button.danger {
+	button.ghost {
 		border-radius: 0.4rem;
 		padding: 0.55rem 0.9rem;
 		font-weight: 750;
@@ -1069,16 +998,6 @@
 	button.ghost:disabled {
 		opacity: 0.55;
 		cursor: not-allowed;
-	}
-
-	button.danger {
-		background: var(--color-surface);
-		border-color: var(--color-danger-border);
-		color: var(--color-danger);
-	}
-
-	button.danger:hover {
-		background: var(--color-danger-bg);
 	}
 
 	button.primary {
@@ -1238,14 +1157,9 @@
 		margin: 0 0 0.5rem;
 	}
 
-	@media (max-width: 820px) {
-		.page-layout {
+	@media (max-width: 1050px) {
+		.workspace-page {
 			flex-direction: column;
-		}
-
-		.sidebar {
-			flex-basis: auto;
-			width: 100%;
 		}
 	}
 </style>

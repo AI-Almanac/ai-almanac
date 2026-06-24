@@ -166,11 +166,11 @@
 	}
 </script>
 
-<div class="page-layout" class:setup-mode={inSetupMode}>
+<div class="workspace-page" class:is-setup={inSetupMode}>
 	{#if !inSetupMode}
 		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
 	{/if}
-	<div class="main-content">
+	<div class="workspace-main">
 		{#if inSetupMode}
 			<BenchmarkForm
 				{store}
@@ -192,7 +192,7 @@
 			)}
 			{@const primaryJob = group.jobs[0]}
 
-			<div class="analysis-workspace" class:side-collapsed={!resultsSidebarOpen || !chatAvailable}>
+			<div class="workspace-split" class:is-solo={!resultsSidebarOpen || !chatAvailable}>
 				<section class="analysis-main">
 					<header class="analysis-header">
 						<div>
@@ -421,7 +421,7 @@
 				</section>
 
 				{#if resultsSidebarOpen && chatAvailable}
-					<aside class="analysis-side">
+					<aside class="workspace-aside">
 						<div class="result-chat">
 							<ChatPanel
 								jobs={group.jobs}
@@ -450,39 +450,6 @@
 </div>
 
 <style>
-	.page-layout {
-		min-height: calc(100vh - 3.5rem);
-		width: min(100% - 2rem, 92rem);
-		margin: 0 auto;
-		padding: 1.25rem 0 2rem;
-		display: flex;
-		gap: 1.25rem;
-		align-items: flex-start;
-	}
-
-	.page-layout.setup-mode {
-		width: min(100% - 2rem, 76rem);
-		min-height: calc(100vh - 4rem);
-		padding-top: clamp(1rem, 4vw, 3rem);
-		display: block;
-	}
-
-	.main-content {
-		flex: 1;
-		min-width: 0;
-	}
-
-	.analysis-workspace {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
-		gap: 1rem;
-		align-items: start;
-	}
-
-	.analysis-workspace.side-collapsed {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
 	.analysis-main,
 	.benchmark-summary,
 	.result-chat {
@@ -495,16 +462,6 @@
 	.analysis-main {
 		padding: clamp(1rem, 2vw, 1.5rem);
 		min-width: 0;
-	}
-
-	.analysis-side {
-		position: sticky;
-		top: 5rem;
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		height: calc(100vh - 6rem);
-		min-height: 36rem;
 	}
 
 	.analysis-header {
@@ -872,22 +829,12 @@
 	}
 
 	@media (max-width: 1050px) {
-		.analysis-workspace {
-			grid-template-columns: 1fr;
-		}
-
 		.analysis-header {
 			flex-direction: column;
 		}
 
 		.analysis-actions {
 			justify-content: flex-start;
-		}
-
-		.analysis-side {
-			position: static;
-			height: auto;
-			min-height: 0;
 		}
 
 		.summary-detail-grid {

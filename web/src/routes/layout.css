@@ -70,3 +70,64 @@ textarea {
 	position: relative;
 	z-index: 1;
 }
+
+/* ---- Workspace pages -------------------------------------------------------
+   Shared shell for the benchmarks and blends pages so both keep the same width,
+   spacing, and run-list + main + assistant layout. Page-specific cards style
+   their own contents; only the structure lives here. */
+
+.workspace-page {
+	min-height: calc(100vh - 3.5rem);
+	width: min(100% - 2rem, 92rem);
+	margin: 0 auto;
+	padding: 1.25rem 0 2rem;
+	display: flex;
+	gap: 1.25rem;
+	align-items: flex-start;
+}
+
+/* Setup/creation has no run list and reads as a focused, narrower form. */
+.workspace-page.is-setup {
+	width: min(100% - 2rem, 76rem);
+	min-height: calc(100vh - 4rem);
+	padding-top: clamp(1rem, 4vw, 3rem);
+	display: block;
+}
+
+.workspace-main {
+	flex: 1;
+	min-width: 0;
+}
+
+.workspace-split {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
+	gap: 1rem;
+	align-items: start;
+}
+
+.workspace-split.is-solo {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-aside {
+	position: sticky;
+	top: 5rem;
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	height: calc(100vh - 6rem);
+	min-height: 36rem;
+}
+
+@media (max-width: 1050px) {
+	.workspace-split {
+		grid-template-columns: 1fr;
+	}
+
+	.workspace-aside {
+		position: static;
+		height: auto;
+		min-height: 0;
+	}
+}
