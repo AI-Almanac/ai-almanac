@@ -95,17 +95,31 @@
 	{/each}
 
 	{#if chat.pendingApproval && !chat.sending}
+		{@const approval = chat.pendingApproval}
 		<div class="approval-card">
-			<p class="approval-title">Ready to run benchmark</p>
-			<p class="approval-subtitle">
-				{chat.pendingApproval.config.model_names?.join(', ') ?? 'Selected models'} ·
-				{chat.pendingApproval.config.region_name ?? 'Selected region'} · Days 1–{chat
-					.pendingApproval.config.forecast_window_days ?? 30}
-			</p>
-			<div class="approval-actions">
-				<button class="approval-run" onclick={chat.approveSubmit}>Run benchmark</button>
-				<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
-			</div>
+			{#if approval.kind === 'benchmark'}
+				<p class="approval-title">Ready to run benchmark</p>
+				<p class="approval-subtitle">
+					{approval.config.model_names?.join(', ') ?? 'Selected models'} ·
+					{approval.config.region_name ?? 'Selected region'} · Days 1–{approval.config
+						.forecast_window_days ?? 30}
+				</p>
+				<div class="approval-actions">
+					<button class="approval-run" onclick={chat.approveSubmit}>Run benchmark</button>
+					<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
+				</div>
+			{:else}
+				<p class="approval-title">Ready to train blend</p>
+				<p class="approval-subtitle">
+					{approval.config.model_names?.join(', ') ?? 'Selected models'} ·
+					{approval.config.obs_dataset_name ?? 'Selected observations'} · Train {approval.config
+						.training_years || '—'}
+				</p>
+				<div class="approval-actions">
+					<button class="approval-run" onclick={chat.approveSubmit}>Train blend</button>
+					<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 

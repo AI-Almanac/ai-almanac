@@ -4,14 +4,17 @@
 		listBlends,
 		createBlend,
 		listDataSources,
+		getCapabilities,
 		getJobArtifacts,
 		cancelJob,
 		fetchResultBlob,
 		type Blend,
 		type BlendCreate,
+		type BlendRunSpec,
 		type DataSource,
 		type JobArtifact
 	} from '$lib/api';
+	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import {
 		MIN_ONSET_YEARS,
 		computeCoverage,
@@ -29,6 +32,8 @@
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
+	let chatAvailable = $state(false);
+	const blendSetupKey = crypto.randomUUID();
 
 	let artifacts = $state<JobArtifact[]>([]);
 	let skill = $state<SkillRow[]>([]);
@@ -102,16 +107,39 @@
 	);
 
 	async function load() {
-		const [b, obs, models] = await Promise.allSettled([
+		const [b, obs, models, caps] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
-			listDataSources('model')
+			listDataSources('model'),
+			getCapabilities()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
+		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
 		loaded = true;
+	}
+
+	// Mirror an LLM-produced blend config into the manual form so the two stay in
+	// sync — the user can hand off to chat and keep editing fields directly.
+	function applyBlendConfig(config: BlendRunSpec) {
+		name = config.name ?? '';
+		obsDatasetId = config.obs_dataset_id ?? '';
+		modelIds = config.model_ids ?? [];
+		trainingYears = config.training_years ?? '';
+		cvHoldoutYears = config.cv_holdout_years ?? '';
+		forecastYears = config.forecast_years ?? '';
+		trueHoldoutYears = config.true_holdout_years ?? '';
+		formulaText = config.formula_text ?? '';
+		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
+	}
+
+	function handleBlendSubmitted(_runId: string, jobs: Blend[]) {
+		if (jobs.length === 0) return;
+		blends = [...jobs, ...blends];
+		selectedId = jobs[0].id;
+		creating = false;
 	}
 
 	let polling: ReturnType<typeof setInterval> | null = null;
@@ -306,7 +334,28 @@
 
 	<div class="main-content">
 		{#if creating}
-			<section class="card form">
+			<div class="setup-layout" class:with-chat={chatAvailable}>
+				{#if chatAvailable}
+					<div class="setup-chat">
+						<ChatPanel
+							jobs={[]}
+							scopeKind="blend_setup"
+							scopeKey={blendSetupKey}
+							title="Blend setup"
+							emptyMessage="Describe the blend you want, or ask which models to combine based on your benchmark results."
+							placeholder="Ask for the blend you want, or a question…"
+							suggestions={[
+								'Blend the best monsoon-onset models for India',
+								'Which models should I combine based on my benchmarks?',
+								'What do the training and CV holdout years mean?'
+							]}
+							showArtifacts={false}
+							onBlendConfig={applyBlendConfig}
+							onBlendSubmitted={handleBlendSubmitted}
+						/>
+					</div>
+				{/if}
+				<section class="card form">
 				<h1>Train a blend</h1>
 				<p class="muted">
 					Combine multiple forecast models into a single blended forecast. Training learns the
@@ -455,7 +504,8 @@
 						{submitting ? 'Submitting…' : 'Train blend'}
 					</button>
 				</div>
-			</section>
+				</section>
+			</div>
 		{:else if selected}
 			<section class="card detail">
 				<header class="detail-header">
@@ -570,6 +620,42 @@
 	.main-content {
 		flex: 1;
 		min-width: 0;
+	}
+
+	.setup-layout {
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
+	}
+
+	.setup-layout.with-chat {
+		flex-direction: row;
+		align-items: stretch;
+	}
+
+	.setup-chat {
+		flex: 1 1 50%;
+		min-width: 0;
+		display: flex;
+		min-height: 32rem;
+	}
+
+	.setup-chat :global(.chat-panel) {
+		width: 100%;
+		min-height: 100%;
+		box-shadow: var(--shadow-soft);
+	}
+
+	.setup-layout.with-chat .form {
+		flex: 1 1 50%;
+		min-width: 0;
+		align-self: flex-start;
+	}
+
+	@media (max-width: 60rem) {
+		.setup-layout.with-chat {
+			flex-direction: column;
+		}
 	}
 
 	.card {

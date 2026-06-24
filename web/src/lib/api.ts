@@ -671,6 +671,39 @@ export type BenchmarkSubmitResponse = {
 	benchmark_validation: BenchmarkValidation;
 };
 
+export type BlendRunSpec = {
+	intent: string;
+	name: string;
+	obs_dataset_id?: string | null;
+	obs_dataset_name?: string | null;
+	region_id?: string | null;
+	model_ids: string[];
+	model_names: string[];
+	training_years: string;
+	cv_holdout_years: string;
+	forecast_years: string;
+	true_holdout_years: string;
+	formula_text: string;
+	status: 'collecting' | 'runnable' | 'running';
+	missing_fields: string[];
+	assumptions: string[];
+};
+
+export type BlendValidation = {
+	can_run: boolean;
+	status: BlendRunSpec['status'];
+	missing_fields: string[];
+	errors: string[];
+	warnings: string[];
+};
+
+export type BlendSubmitResponse = {
+	run_id: string;
+	jobs: Blend[];
+	blend_config: BlendRunSpec;
+	blend_validation: BlendValidation;
+};
+
 export type JobStatus =
 	| 'queued'
 	| 'starting'
@@ -928,6 +961,8 @@ export type ChatSession = {
 	scope: ChatScope;
 	benchmark_config?: BenchmarkRunSpec | null;
 	benchmark_validation?: BenchmarkValidation | null;
+	blend_config?: BlendRunSpec | null;
+	blend_validation?: BlendValidation | null;
 	run_id?: string | null;
 };
 
@@ -941,7 +976,7 @@ export type ChatMessage = {
 };
 
 export type ChatScope = {
-	kind: 'benchmark_setup' | 'benchmark_run_group' | 'job_set';
+	kind: 'benchmark_setup' | 'benchmark_run_group' | 'blend_setup' | 'job_set';
 	key: string;
 	title?: string | null;
 	job_ids: string[];
@@ -1010,6 +1045,21 @@ export type ChatEvent =
 			tool_call_id: string;
 			config: BenchmarkRunSpec;
 			validation?: BenchmarkValidation | null;
+	  }
+	| {
+			type: 'blend_config';
+			turn_id: string;
+			config: BlendRunSpec;
+			validation?: BlendValidation | null;
+			run_id?: string | null;
+			jobs?: Blend[] | null;
+	  }
+	| {
+			type: 'blend_approval_request';
+			turn_id: string;
+			tool_call_id: string;
+			config: BlendRunSpec;
+			validation?: BlendValidation | null;
 	  }
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
@@ -1085,6 +1135,52 @@ export async function updateChatBenchmarkConfig(
 ): Promise<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }> {
 	return request<{ benchmark_config: BenchmarkRunSpec; benchmark_validation: BenchmarkValidation }>(
 		`/chat/sessions/${sessionId}/benchmark/config`,
+		{
+			method: 'PATCH',
+			body: JSON.stringify(patch)
+		}
+	);
+}
+
+export async function submitChatBlend(
+	sessionId: string,
+	approval?: { tool_call_id: string; approved_config?: BlendRunSpec | null }
+): Promise<BlendSubmitResponse> {
+	return request<BlendSubmitResponse>(`/chat/sessions/${sessionId}/blend/submit`, {
+		method: 'POST',
+		body: approval
+			? JSON.stringify({
+					approval: {
+						tool_call_id: approval.tool_call_id,
+						approved_config: approval.approved_config ?? null
+					}
+				})
+			: undefined
+	});
+}
+
+export async function denyChatBlendApproval(
+	sessionId: string,
+	approval: { tool_call_id: string; approved_config?: BlendRunSpec | null; message?: string }
+): Promise<void> {
+	return request<void>(`/chat/sessions/${sessionId}/blend/approval`, {
+		method: 'POST',
+		body: JSON.stringify({
+			approval: {
+				tool_call_id: approval.tool_call_id,
+				approved_config: approval.approved_config ?? null
+			},
+			message: approval.message ?? 'The user declined to train the blend.'
+		})
+	});
+}
+
+export async function updateChatBlendConfig(
+	sessionId: string,
+	patch: Partial<BlendRunSpec>
+): Promise<{ blend_config: BlendRunSpec; blend_validation: BlendValidation }> {
+	return request<{ blend_config: BlendRunSpec; blend_validation: BlendValidation }>(
+		`/chat/sessions/${sessionId}/blend/config`,
 		{
 			method: 'PATCH',
 			body: JSON.stringify(patch)

@@ -5,7 +5,15 @@
 	import ChatArtifactGallery from '$lib/components/ChatArtifactGallery.svelte';
 	import { ChatSessionState } from '$lib/chat/session.svelte';
 	import { sessionFigures } from '$lib/chat/format';
-	import type { BenchmarkRunSpec, BenchmarkValidation, ChatScope, Job } from '$lib/api';
+	import type {
+		BenchmarkRunSpec,
+		BenchmarkValidation,
+		Blend,
+		BlendRunSpec,
+		BlendValidation,
+		ChatScope,
+		Job
+	} from '$lib/api';
 
 	interface Props {
 		jobs?: Job[];
@@ -24,6 +32,8 @@
 		onJobsCreated?: (jobs: Job[]) => void;
 		onBenchmarkConfig?: (config: BenchmarkRunSpec, validation?: BenchmarkValidation | null) => void;
 		onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
+		onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
+		onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
 	}
 
 	let {
@@ -46,7 +56,9 @@
 		onSessionReady,
 		onJobsCreated,
 		onBenchmarkConfig,
-		onBenchmarkSubmitted
+		onBenchmarkSubmitted,
+		onBlendConfig,
+		onBlendSubmitted
 	}: Props = $props();
 
 	function titleCase(value: string): string {
@@ -96,7 +108,9 @@
 		onJobsCreated: (created) => onJobsCreated?.(created),
 		onBenchmarkConfig: (config, validation) => onBenchmarkConfig?.(config, validation),
 		onBenchmarkSubmitted: (runId, created, sessionId) =>
-			onBenchmarkSubmitted?.(runId, created, sessionId)
+			onBenchmarkSubmitted?.(runId, created, sessionId),
+		onBlendConfig: (config, validation) => onBlendConfig?.(config, validation),
+		onBlendSubmitted: (runId, created, sessionId) => onBlendSubmitted?.(runId, created, sessionId)
 	});
 
 	let input = $state('');

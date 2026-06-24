@@ -7,8 +7,13 @@ import {
 	sendChatMessage,
 	submitChatBenchmark,
 	denyChatBenchmarkApproval,
+	submitChatBlend,
+	denyChatBlendApproval,
 	type BenchmarkRunSpec,
 	type BenchmarkValidation,
+	type Blend,
+	type BlendRunSpec,
+	type BlendValidation,
 	type ChatEvent,
 	type ChatMessage,
 	type ChatScope,
@@ -21,6 +26,8 @@ export interface ChatSessionCallbacks {
 	onJobsCreated?: (jobs: Job[]) => void;
 	onBenchmarkConfig?: (config: BenchmarkRunSpec, validation?: BenchmarkValidation | null) => void;
 	onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
+	onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
+	onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
 }
 
 function scopeToken(scope: ChatScope): string {
@@ -68,12 +75,16 @@ export class ChatSessionState {
 	sending = $state(false);
 	error = $state<string | null>(null);
 	loadingSession = $state(false);
-	pendingSubmission = $state<{ runId: string; jobs: Job[] } | null>(null);
-	pendingApproval = $state<{
-		toolCallId: string;
-		config: BenchmarkRunSpec;
-		validation: BenchmarkValidation | null;
-	} | null>(null);
+	pendingSubmission = $state<
+		| { kind: 'benchmark'; runId: string; jobs: Job[] }
+		| { kind: 'blend'; runId: string; jobs: Blend[] }
+		| null
+	>(null);
+	pendingApproval = $state<
+		| { kind: 'benchmark'; toolCallId: string; config: BenchmarkRunSpec; validation: BenchmarkValidation | null }
+		| { kind: 'blend'; toolCallId: string; config: BlendRunSpec; validation: BlendValidation | null }
+		| null
+	>(null);
 
 	readonly visibleTurns = $derived(
 		this.streamingTurn ? [...this.messages, this.streamingTurn] : this.messages
@@ -146,6 +157,9 @@ export class ChatSessionState {
 					detail.benchmark_validation ?? null
 				);
 			}
+			if (detail.blend_config) {
+				this.callbacks.onBlendConfig?.(detail.blend_config, detail.blend_validation ?? null);
+			}
 			this.sessions = this.sessions.map((session) =>
 				session.id === id ? { ...session, scope: detail.scope } : session
 			);
@@ -166,6 +180,9 @@ export class ChatSessionState {
 					session.benchmark_config,
 					session.benchmark_validation ?? null
 				);
+			}
+			if (session.blend_config) {
+				this.callbacks.onBlendConfig?.(session.blend_config, session.blend_validation ?? null);
 			}
 			this.sessions = [session, ...this.sessions].sort(byUpdatedAt);
 			this.sessionId = session.id;
@@ -304,6 +321,7 @@ export class ChatSessionState {
 		} else if (event.type === 'benchmark_approval_request') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
 			this.pendingApproval = {
+				kind: 'benchmark',
 				toolCallId: event.tool_call_id,
 				config: event.config,
 				validation: event.validation ?? null
@@ -311,17 +329,38 @@ export class ChatSessionState {
 		} else if (event.type === 'benchmark_config') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
 			if (event.run_id && event.jobs?.length) {
-				this.pendingSubmission = { runId: event.run_id, jobs: event.jobs };
+				this.pendingSubmission = { kind: 'benchmark', runId: event.run_id, jobs: event.jobs };
+			}
+		} else if (event.type === 'blend_approval_request') {
+			this.callbacks.onBlendConfig?.(event.config, event.validation ?? null);
+			this.pendingApproval = {
+				kind: 'blend',
+				toolCallId: event.tool_call_id,
+				config: event.config,
+				validation: event.validation ?? null
+			};
+		} else if (event.type === 'blend_config') {
+			this.callbacks.onBlendConfig?.(event.config, event.validation ?? null);
+			if (event.run_id && event.jobs?.length) {
+				this.pendingSubmission = { kind: 'blend', runId: event.run_id, jobs: event.jobs };
 			}
 		} else if (event.type === 'done') {
 			this.messages = [...this.messages, mergeArtifacts(this.streamingTurn, event.turn)];
 			this.streamingTurn = null;
 			if (this.pendingSubmission) {
-				this.callbacks.onBenchmarkSubmitted?.(
-					this.pendingSubmission.runId,
-					this.pendingSubmission.jobs,
-					activeSessionId
-				);
+				if (this.pendingSubmission.kind === 'benchmark') {
+					this.callbacks.onBenchmarkSubmitted?.(
+						this.pendingSubmission.runId,
+						this.pendingSubmission.jobs,
+						activeSessionId
+					);
+				} else {
+					this.callbacks.onBlendSubmitted?.(
+						this.pendingSubmission.runId,
+						this.pendingSubmission.jobs,
+						activeSessionId
+					);
+				}
 				this.pendingSubmission = null;
 			}
 			this.sessions = this.sessions
@@ -344,14 +383,26 @@ export class ChatSessionState {
 		const approval = this.pendingApproval;
 		this.pendingApproval = null;
 		try {
-			const response = await submitChatBenchmark(this.sessionId, {
-				tool_call_id: approval.toolCallId,
-				approved_config: approval.config
-			});
-			this.callbacks.onBenchmarkConfig?.(response.benchmark_config, response.benchmark_validation);
-			this.callbacks.onBenchmarkSubmitted?.(response.run_id, response.jobs, this.sessionId);
+			if (approval.kind === 'benchmark') {
+				const response = await submitChatBenchmark(this.sessionId, {
+					tool_call_id: approval.toolCallId,
+					approved_config: approval.config
+				});
+				this.callbacks.onBenchmarkConfig?.(
+					response.benchmark_config,
+					response.benchmark_validation
+				);
+				this.callbacks.onBenchmarkSubmitted?.(response.run_id, response.jobs, this.sessionId);
+			} else {
+				const response = await submitChatBlend(this.sessionId, {
+					tool_call_id: approval.toolCallId,
+					approved_config: approval.config
+				});
+				this.callbacks.onBlendConfig?.(response.blend_config, response.blend_validation);
+				this.callbacks.onBlendSubmitted?.(response.run_id, response.jobs, this.sessionId);
+			}
 		} catch (e) {
-			this.error = (e as Error).message ?? 'Benchmark submit failed.';
+			this.error = (e as Error).message ?? 'Submit failed.';
 		}
 	};
 
@@ -360,13 +411,21 @@ export class ChatSessionState {
 		const approval = this.pendingApproval;
 		this.pendingApproval = null;
 		try {
-			await denyChatBenchmarkApproval(this.sessionId, {
-				tool_call_id: approval.toolCallId,
-				approved_config: approval.config,
-				message: 'The user wants to revise the benchmark before running it.'
-			});
+			if (approval.kind === 'benchmark') {
+				await denyChatBenchmarkApproval(this.sessionId, {
+					tool_call_id: approval.toolCallId,
+					approved_config: approval.config,
+					message: 'The user wants to revise the benchmark before running it.'
+				});
+			} else {
+				await denyChatBlendApproval(this.sessionId, {
+					tool_call_id: approval.toolCallId,
+					approved_config: approval.config,
+					message: 'The user wants to revise the blend before training it.'
+				});
+			}
 		} catch (e) {
-			this.error = (e as Error).message ?? 'Benchmark approval update failed.';
+			this.error = (e as Error).message ?? 'Approval update failed.';
 		}
 	};
 }
