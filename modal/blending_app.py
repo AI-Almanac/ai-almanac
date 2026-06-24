@@ -211,7 +211,7 @@ def _read_tar_member_bytes(tar_bytes: bytes, member_name: str) -> bytes:
     image=blending_image,
     cpu=(4, 8),
     memory=(16384, 32768),
-    timeout=7200,
+    timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
 )
 def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -222,6 +222,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
     the platform's ModalRunner dispatches it the same way.
     """
     import sys
+    import time
     import traceback
     from contextlib import redirect_stderr, redirect_stdout
 
@@ -271,9 +272,11 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 if params.get(k) is not None
             }
             print("==> Building blending intermediates")
+            t0 = time.perf_counter()
             intermediates = build_lat_lon_intermediates_bundle.local(
                 obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
             )
+            print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             combined = _read_tar_member_bytes(
                 intermediates["outputs_tar"], "combined_wide.pkl"
             )
@@ -282,6 +285,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             if params.get("formula_text"):
                 train_kwargs["formula_text"] = params["formula_text"]
             print("==> Training blend weights")
+            t0 = time.perf_counter()
             training = train_blending_model_bundle.local(
                 combined,
                 model_names=model_names,
@@ -291,6 +295,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 return_outputs=True,
                 **train_kwargs,
             )
+            print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
             if not training["manifest"].get("ok"):
                 raise RuntimeError(
                     "Blend training pipeline failed; see manifest stderr_tail in run.log"
