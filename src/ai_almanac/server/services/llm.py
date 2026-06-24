@@ -744,7 +744,7 @@ async def _stream_response_unlimited(
             continue
 
         if isinstance(event, FunctionToolResultEvent):
-            result_part = event.result
+            result_part = event.part  # pydantic-ai 2.0 renamed `.result` to `.part`
             tool_call_id = getattr(result_part, "tool_call_id", "")
             parsed_result = _tool_result_content(getattr(result_part, "content", None))
             status = (

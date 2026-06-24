@@ -432,6 +432,34 @@ async def test_stream_response_runs_with_pydantic_ai_test_model(
     assert events[-1]["provider_state"]
 
 
+@pytest.mark.asyncio
+async def test_stream_response_emits_tool_call_and_result_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TestModel(call_tools='all') exercises the FunctionToolResultEvent branch,
+    which a tool-free run skips — guarding the pydantic-ai event-field renames."""
+    from ai_almanac.server.services import llm
+    from ai_almanac.server.services.chat_state import ChatScope
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: TestModel(call_tools="all"),
+    )
+    scope = ChatScope(kind="benchmark_run_group", key="group-1", title="Group 1", job_ids=[])
+
+    events = [
+        json.loads(event)
+        async for event in llm.stream_response(
+            [], "user-1", "session-1", scope, latest_user_message="run a tool"
+        )
+    ]
+
+    types = [event["type"] for event in events]
+    assert "tool_call" in types
+    assert "tool_result" in types
+    assert types[-1] == "done"
+
+
 async def _create_session(
     client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
 ) -> dict:
