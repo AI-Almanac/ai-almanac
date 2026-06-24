@@ -784,6 +784,28 @@ async def _stream_response_unlimited(
                             "jobs": parsed_result.get("jobs"),
                         }
                     )
+            if isinstance(parsed_result, dict) and parsed_result.get("blend_config"):
+                if parsed_result.get("approval_required"):
+                    yield json.dumps(
+                        {
+                            "type": "blend_approval_request",
+                            "turn_id": turn.id,
+                            "tool_call_id": tool_call_id,
+                            "config": parsed_result["blend_config"],
+                            "validation": parsed_result.get("blend_validation"),
+                        }
+                    )
+                else:
+                    yield json.dumps(
+                        {
+                            "type": "blend_config",
+                            "turn_id": turn.id,
+                            "config": parsed_result["blend_config"],
+                            "validation": parsed_result.get("blend_validation"),
+                            "run_id": parsed_result.get("run_id"),
+                            "jobs": parsed_result.get("jobs"),
+                        }
+                    )
             just_finished_tool_call = True
             continue
 
@@ -803,6 +825,16 @@ async def _stream_response_unlimited(
                                 "tool_call_id": call.tool_call_id,
                                 "config": metadata.get("benchmark_config"),
                                 "validation": metadata.get("benchmark_validation"),
+                            }
+                        )
+                    elif call.tool_name == "submit_blend":
+                        yield json.dumps(
+                            {
+                                "type": "blend_approval_request",
+                                "turn_id": turn.id,
+                                "tool_call_id": call.tool_call_id,
+                                "config": metadata.get("blend_config"),
+                                "validation": metadata.get("blend_validation"),
                             }
                         )
                     else:

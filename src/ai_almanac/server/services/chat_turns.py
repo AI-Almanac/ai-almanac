@@ -30,7 +30,10 @@ from ai_almanac.server.services.chat_state import (
     ChatToolCall,
     ChatTurn,
 )
-from ai_almanac.server.services.chat_tools import SubmitBenchmarkApproval
+from ai_almanac.server.services.chat_tools import (
+    SubmitBenchmarkApproval,
+    SubmitBlendApproval,
+)
 from ai_almanac.server.services.llm import (
     deserialize_model_messages,
     serialize_model_messages,
@@ -282,7 +285,9 @@ async def get_session_provider_scope(session_id: str, user_id: str):
     return row
 
 
-def _approval_metadata(approval: SubmitBenchmarkApproval) -> dict:
+def _approval_metadata(
+    approval: SubmitBenchmarkApproval | SubmitBlendApproval,
+) -> dict:
     return {
         "approved_config": approval.approved_config.model_dump(mode="json")
         if approval.approved_config
@@ -309,12 +314,19 @@ async def save_provider_state(
         )
 
 
-async def resume_deferred_benchmark_tool(
+async def resume_deferred_setup_tool(
     session_id: str,
     user_id: str,
-    approval: SubmitBenchmarkApproval,
+    approval: SubmitBenchmarkApproval | SubmitBlendApproval,
     approval_result: bool | ToolDenied,
+    *,
+    config_event: str = "benchmark_config",
 ) -> tuple[list[dict], dict | None]:
+    """Resume a human-approved deferred setup tool (benchmark or blend submit).
+
+    ``config_event`` selects which terminal config event carries the submitted
+    run; the returned payload uses generic ``config`` / ``validation`` keys.
+    """
     row = await get_session_provider_scope(session_id, user_id)
     scope = ChatScope.model_validate(json_dict(row["scope"]))
     provider_state = deserialize_model_messages(row["provider_state"])
@@ -333,12 +345,12 @@ async def resume_deferred_benchmark_tool(
         deferred_tool_results=deferred_results,
     ):
         data = parse_llm_event(event)
-        if data and data.get("type") == "benchmark_config" and data.get("run_id"):
+        if data and data.get("type") == config_event and data.get("run_id"):
             payload = {
                 "run_id": data["run_id"],
                 "jobs": data.get("jobs"),
-                "benchmark_config": data.get("config"),
-                "benchmark_validation": data.get("validation"),
+                "config": data.get("config"),
+                "validation": data.get("validation"),
             }
         if data and data.get("type") == "done":
             final_provider_state = data.get("provider_state", final_provider_state)
@@ -442,12 +454,14 @@ async def stream_chat_turn(
             if data is None:
                 continue
             if (
-                data.get("type") == "benchmark_config"
+                data.get("type") in ("benchmark_config", "blend_config")
                 and isinstance(data.get("run_id"), str)
                 and isinstance(data.get("jobs"), list)
             ):
                 scope = ChatScope(
-                    kind="benchmark_run_group",
+                    kind="benchmark_run_group"
+                    if data["type"] == "benchmark_config"
+                    else "job_set",
                     key=data["run_id"],
                     title=scope.title,
                     job_ids=[

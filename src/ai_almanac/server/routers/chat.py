@@ -35,6 +35,14 @@ from ..services.benchmark_state import (
     BenchmarkRunSpec,
     BenchmarkValidation,
 )
+from ..services.blend_domain import (
+    submit_blend_for_session,
+    update_blend_config,
+)
+from ..services.blend_state import (
+    BlendRunSpec,
+    BlendValidation,
+)
 from ..services.chat_artifacts import (
     delete_chat_figure_artifact,
     hydrate_turn_artifact_urls,
@@ -46,12 +54,13 @@ from ..services.chat_state import (
 )
 from ..services.chat_tools import (
     SubmitBenchmarkApproval,
+    SubmitBlendApproval,
 )
 from ..services.chat_turns import (
     get_session_provider_scope,
     json_dict,
     json_list,
-    resume_deferred_benchmark_tool,
+    resume_deferred_setup_tool,
     save_provider_state,
     stream_chat_turn,
     validate_scope,
@@ -103,6 +112,8 @@ class SessionOut(BaseModel):
     scope: ChatScope
     benchmark_config: BenchmarkRunSpec | None = None
     benchmark_validation: BenchmarkValidation | None = None
+    blend_config: BlendRunSpec | None = None
+    blend_validation: BlendValidation | None = None
     run_id: str | None = None
 
 
@@ -150,6 +161,39 @@ class BenchmarkConfigOut(BaseModel):
     benchmark_validation: BenchmarkValidation
 
 
+class BlendSubmitOut(BaseModel):
+    run_id: str
+    jobs: list[dict]
+    blend_config: BlendRunSpec
+    blend_validation: BlendValidation
+
+
+class BlendConfigPatchIn(BaseModel):
+    intent: str | None = None
+    name: str | None = None
+    obs_dataset_id: str | None = None
+    model_ids: list[str] | None = None
+    training_years: str | None = None
+    cv_holdout_years: str | None = None
+    forecast_years: str | None = None
+    true_holdout_years: str | None = None
+    formula_text: str | None = None
+
+
+class BlendSubmitIn(BaseModel):
+    approval: SubmitBlendApproval | None = None
+
+
+class BlendApprovalIn(BaseModel):
+    approval: SubmitBlendApproval
+    message: str = "The user declined to train the blend."
+
+
+class BlendConfigOut(BaseModel):
+    blend_config: BlendRunSpec
+    blend_validation: BlendValidation
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -169,14 +213,41 @@ def _benchmark_validation(value: object) -> BenchmarkValidation | None:
 
 
 def _benchmark_submit_out(payload: dict) -> BenchmarkSubmitOut:
+    # ``submit`` returns benchmark_config/benchmark_validation; the resumed
+    # approval path returns the generic config/validation keys.
     return BenchmarkSubmitOut(
         run_id=payload["run_id"],
         jobs=payload["jobs"],
-        benchmark_config=BenchmarkRunSpec.model_validate(payload["benchmark_config"]),
+        benchmark_config=BenchmarkRunSpec.model_validate(
+            payload.get("benchmark_config") or payload["config"]
+        ),
         benchmark_validation=BenchmarkValidation.model_validate(
-            payload["benchmark_validation"]
+            payload.get("benchmark_validation") or payload["validation"]
         ),
     )
+
+
+def _blend_submit_out(payload: dict) -> BlendSubmitOut:
+    return BlendSubmitOut(
+        run_id=payload["run_id"],
+        jobs=payload["jobs"],
+        blend_config=BlendRunSpec.model_validate(
+            payload.get("blend_config") or payload["config"]
+        ),
+        blend_validation=BlendValidation.model_validate(
+            payload.get("blend_validation") or payload["validation"]
+        ),
+    )
+
+
+def _blend_config(value: object) -> BlendRunSpec | None:
+    parsed = json_dict(value)
+    return BlendRunSpec.model_validate(parsed) if parsed else None
+
+
+def _blend_validation(value: object) -> BlendValidation | None:
+    parsed = json_dict(value)
+    return BlendValidation.model_validate(parsed) if parsed else None
 
 
 def _session_out(row) -> SessionOut:
@@ -190,6 +261,8 @@ def _session_out(row) -> SessionOut:
         scope=ChatScope.model_validate(json_dict(row["scope"])),
         benchmark_config=_benchmark_config(row.get("benchmark_config")),
         benchmark_validation=_benchmark_validation(row.get("benchmark_validation")),
+        blend_config=_blend_config(row.get("blend_config")),
+        blend_validation=_blend_validation(row.get("blend_validation")),
         run_id=row.get("run_id"),
     )
 
@@ -342,7 +415,7 @@ async def submit_session_benchmark(
     session_id: str, user: CurrentUser, body: BenchmarkSubmitIn | None = None
 ):
     if body and body.approval:
-        final_provider_state, payload = await resume_deferred_benchmark_tool(
+        final_provider_state, payload = await resume_deferred_setup_tool(
             session_id,
             user.id,
             body.approval,
@@ -375,7 +448,7 @@ async def submit_session_benchmark(
 async def deny_session_benchmark_approval(
     session_id: str, body: BenchmarkApprovalIn, user: CurrentUser
 ):
-    final_provider_state, _ = await resume_deferred_benchmark_tool(
+    final_provider_state, _ = await resume_deferred_setup_tool(
         session_id,
         user.id,
         body.approval,
@@ -426,6 +499,91 @@ async def update_session_benchmark_config(
         benchmark_validation=BenchmarkValidation.model_validate(
             payload["benchmark_validation"]
         ),
+    )
+
+
+@router.post("/sessions/{session_id}/blend/submit", response_model=BlendSubmitOut)
+async def submit_session_blend(
+    session_id: str, user: CurrentUser, body: BlendSubmitIn | None = None
+):
+    if body and body.approval:
+        final_provider_state, payload = await resume_deferred_setup_tool(
+            session_id,
+            user.id,
+            body.approval,
+            True,
+            config_event="blend_config",
+        )
+        if payload is None:
+            raise HTTPException(
+                status_code=400, detail="Blend approval did not submit a run"
+            )
+        await save_provider_state(session_id, user.id, final_provider_state)
+        return _blend_submit_out(payload)
+
+    row = await get_session_provider_scope(session_id, user.id)
+    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    payload = await submit_blend_for_session(user.id, scope, session_id)
+    if payload.get("error"):
+        raise HTTPException(status_code=400, detail=payload["error"])
+    if not isinstance(payload.get("run_id"), str) or not isinstance(
+        payload.get("jobs"), list
+    ):
+        raise HTTPException(status_code=400, detail="Blend config is not runnable")
+    return _blend_submit_out(payload)
+
+
+@router.post(
+    "/sessions/{session_id}/blend/approval", status_code=status.HTTP_204_NO_CONTENT
+)
+async def deny_session_blend_approval(
+    session_id: str, body: BlendApprovalIn, user: CurrentUser
+):
+    final_provider_state, _ = await resume_deferred_setup_tool(
+        session_id,
+        user.id,
+        body.approval,
+        ToolDenied(body.message),
+        config_event="blend_config",
+    )
+    await save_provider_state(session_id, user.id, final_provider_state)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/sessions/{session_id}/blend/config", response_model=BlendConfigOut)
+async def update_session_blend_config(
+    session_id: str, body: BlendConfigPatchIn, user: CurrentUser
+):
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user.id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    payload = await update_blend_config(
+        body.model_dump(exclude_none=True),
+        user.id,
+        scope,
+        session_id,
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("blend_config"), dict):
+        raise HTTPException(
+            status_code=500, detail="Blend config update returned invalid payload"
+        )
+    return BlendConfigOut(
+        blend_config=BlendRunSpec.model_validate(payload["blend_config"]),
+        blend_validation=BlendValidation.model_validate(payload["blend_validation"]),
     )
 
 
