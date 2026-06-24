@@ -29,6 +29,7 @@ from pydantic_ai import (
     ModelMessagesTypeAdapter,
     RunContext,
 )
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -541,7 +542,7 @@ def _build_agent(scope: ChatScope, model=None):
             _metrics_toolset(),
             _analysis_toolset(),
         ],
-        history_processors=[trim_chat_history],
+        capabilities=[ProcessHistory(trim_chat_history)],
     )
 
     return agent
@@ -682,13 +683,21 @@ async def _stream_response_unlimited(
     final_messages: list[ModelMessage] = message_history
     just_finished_tool_call = False
 
-    async for event in agent.run_stream_events(
-        latest_user_message,
-        message_history=message_history,
-        deps=deps,
-        deferred_tool_results=deferred_tool_results,
-        conversation_id=session_id,
-    ):
+    # pydantic-ai 2.0: run_stream_events is an async context manager (it owns a
+    # background run task). Wrap it in a generator so the event-handling body
+    # below stays unchanged while the stream is still closed deterministically.
+    async def _events() -> AsyncIterator[object]:
+        async with agent.run_stream_events(
+            latest_user_message,
+            message_history=message_history,
+            deps=deps,
+            deferred_tool_results=deferred_tool_results,
+            conversation_id=session_id,
+        ) as event_stream:
+            async for event in event_stream:
+                yield event
+
+    async for event in _events():
         if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
             content = event.part.content
             if content:

@@ -37,10 +37,18 @@ def _per_session_data_dir() -> Iterator[Path]:
     # Chat routers refuse to operate without an LLM URL. Tests that exercise
     # the chat flow further mock the LLM client; this just gets past the
     # availability check.
+    from ai_almanac.paths import ensure_layout
+    from ai_almanac.server.app import _apply_migrations
     from ai_almanac.settings import settings
 
     old_llm = settings.llm_base_url
     settings.llm_base_url = "http://test-llm.local"
+
+    # Apply migrations once up front so tests that touch the DB without the
+    # `client` fixture (e.g. calling a service directly) don't depend on a
+    # client-using test having run first to create the schema.
+    ensure_layout()
+    _apply_migrations()
 
     yield _TEST_DATA_DIR
 

@@ -23,7 +23,7 @@ dependencies = [
     "xarray>=2026.2.0",
     "greenlet>=3.4.0",
     # LLM/chat — kept for the LLM-centric UI surface.
-    "pydantic-ai>=1.89.1",
+    "pydantic-ai>=2,<3",
     "openai>=2.32.0",
     "httpx>=0.28.1",
     "matplotlib>=3.10.9",
