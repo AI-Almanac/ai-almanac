@@ -10,12 +10,16 @@
 		getBlendSummary,
 		cancelJob,
 		fetchResultBlob,
+		subscribeJob,
 		type Blend,
 		type BlendCreate,
 		type BlendRunSpec,
 		type ChatScope,
 		type DataSource,
-		type JobArtifact
+		type Job,
+		type JobArtifact,
+		type JobStatus,
+		type JobStreamEvent
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { MIN_ONSET_YEARS, computeCoverage, defaultSplit, yearSpecError } from './year-coverage';
@@ -74,13 +78,24 @@
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
 	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
-	const showDetailChat = $derived(
-		chatAvailable &&
-			!!continuedSessionId &&
-			!!continuedScope &&
-			!!selected &&
-			selected.id === continuedBlendId
-	);
+
+	// The chat panel beside a selected blend. A session carried over from the
+	// benchmark flow keeps its original scope for continuity; any other blend gets
+	// a stable blend-scoped session so the assistant can read its results.
+	const detailChat = $derived.by(() => {
+		if (!selected) return null;
+		if (continuedSessionId && continuedScope && selected.id === continuedBlendId) {
+			return {
+				scopeKind: continuedScope.kind,
+				scopeKey: continuedScope.key,
+				sessionId: continuedSessionId
+			};
+		}
+		return { scopeKind: 'blend_setup' as const, scopeKey: selected.id, sessionId: null };
+	});
+	// ChatPanel scopes on job ids; the blend is itself a job, so hand it through so
+	// the assistant can call get_blend_results on it.
+	const detailChatJobs = $derived(selected ? [{ id: selected.id } as Job] : []);
 
 	// --- Form state ---
 	let name = $state('');
@@ -184,22 +199,54 @@
 		continuedBlendId = jobs[0].id;
 	}
 
-	let polling: ReturnType<typeof setInterval> | null = null;
+	// Stream status changes per running blend instead of re-fetching the whole
+	// list on a timer. Replacing the array on every poll reassigned every blend
+	// object, which remounted the detail view and made the page jump. Here only
+	// the blend whose status actually changed is rewritten.
+	const streams = new Map<string, () => void>();
 	$effect(() => {
-		if (hasActive && !polling) {
-			polling = setInterval(refreshBlends, 5000);
-		} else if (!hasActive && polling) {
-			clearInterval(polling);
-			polling = null;
+		const active = new Set(
+			blends.filter((b) => ACTIVE_STATUSES.includes(b.status)).map((b) => b.id)
+		);
+		for (const id of active) {
+			if (!streams.has(id))
+				streams.set(
+					id,
+					subscribeJob(id, (event) => onBlendEvent(id, event))
+				);
+		}
+		for (const [id, close] of streams) {
+			if (!active.has(id)) {
+				close();
+				streams.delete(id);
+			}
 		}
 	});
-	onDestroy(() => polling && clearInterval(polling));
+	onDestroy(() => {
+		for (const close of streams.values()) close();
+		streams.clear();
+	});
 
-	async function refreshBlends() {
+	function onBlendEvent(id: string, event: JobStreamEvent) {
+		if (event.type !== 'status' && event.type !== 'done') return;
+		patchBlendStatus(id, event.payload.status as JobStatus);
+		// The stream only carries status; pull completed_at/error once on finish.
+		if (event.type === 'done') void refreshBlend(id);
+	}
+
+	function patchBlendStatus(id: string, status: JobStatus) {
+		const idx = blends.findIndex((b) => b.id === id);
+		if (idx === -1 || blends[idx].status === status) return;
+		blends[idx] = { ...blends[idx], status };
+	}
+
+	async function refreshBlend(id: string) {
 		try {
-			blends = await listBlends();
+			const fresh = (await listBlends()).find((b) => b.id === id);
+			const idx = blends.findIndex((b) => b.id === id);
+			if (fresh && idx !== -1) blends[idx] = fresh;
 		} catch {
-			/* transient — next tick retries */
+			/* transient — the status patch already reflects the terminal state */
 		}
 	}
 
@@ -556,7 +603,7 @@
 				</section>
 			</div>
 		{:else if selected}
-			<div class="detail-layout" class:with-chat={showDetailChat}>
+			<div class="detail-layout" class:with-chat={chatAvailable && detailChat}>
 				<section class="card detail">
 					<header class="detail-header">
 						<div>
@@ -639,16 +686,21 @@
 						</div>
 					{/if}
 				</section>
-				{#if showDetailChat && continuedScope}
+				{#if chatAvailable && detailChat}
 					<div class="detail-chat">
 						<ChatPanel
-							jobs={[]}
-							scopeKind={continuedScope.kind}
-							scopeKey={continuedScope.key}
-							preferredSessionId={continuedSessionId}
+							jobs={detailChatJobs}
+							scopeKind={detailChat.scopeKind}
+							scopeKey={detailChat.scopeKey}
+							preferredSessionId={detailChat.sessionId}
 							title={selected.name || 'Blend'}
 							emptyMessage="Ask about this blend or its training results."
 							placeholder="Ask about this blend…"
+							suggestions={[
+								'How does the blend compare to the individual models?',
+								'Which model contributes most to the blend?',
+								'Summarise the forecast skill of this blend.'
+							]}
 							showArtifacts={false}
 							onBlendConfig={applyBlendConfig}
 							onBlendSubmitted={handleBlendSubmitted}
