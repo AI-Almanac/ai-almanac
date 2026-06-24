@@ -251,7 +251,7 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
 
 
 class BlendParams(BaseModel):
-    """Blend prep + training hyperparameters; Modal applies defaults for omitted."""
+    """Blend preparation and training hyperparameters."""
 
     forecast_years: str | None = None
     obs_years: str | None = None
@@ -373,7 +373,7 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
 
 
 async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
-    """Submit a blend-training job: prep intermediates + train weights on Modal."""
+    """Submit a blend-training job: prepare intermediates and train weights."""
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
 

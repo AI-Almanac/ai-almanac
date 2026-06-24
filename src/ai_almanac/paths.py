@@ -49,6 +49,10 @@ def benchmark_env_dir() -> Path:
     return data_root() / "benchmark-env"
 
 
+def blending_env_dir() -> Path:
+    return data_root() / "blending-env"
+
+
 def cache_dir() -> Path:
     return data_root() / "cache"
 

@@ -10,6 +10,8 @@ from pathlib import Path
 import sqlalchemy as sa
 
 from ai_almanac.envs.manager import run as pixi_run
+from ai_almanac.envs.manager import run_blending as blending_pixi_run
+from ai_almanac.paths import blending_env_dir
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
 from ai_almanac.server.services.romp import write_romp_config
@@ -21,13 +23,13 @@ from ai_almanac.settings import settings
 
 def run_job_workload(job_id: str) -> None:
     with sync_engine().connect() as conn:
-        row = conn.execute(
-            sa.select(jobs.c.config_json).where(jobs.c.id == job_id)
-        ).fetchone()
+        row = conn.execute(sa.select(jobs.c.config_json).where(jobs.c.id == job_id)).fetchone()
     if not row:
         raise RuntimeError(f"job not found: {job_id}")
     config = json.loads(row[0] or "{}")
-    if settings.runner_mode == "pixi":
+    if config.get("job_type") == "blend":
+        _run_blend(job_id, config)
+    elif settings.runner_mode == "pixi":
         _run_pixi(job_id, config)
     else:
         _run_stub(job_id, config)
@@ -60,6 +62,34 @@ def _run_pixi(job_id: str, config: dict) -> None:
                 "ROMP outputs are still available.",
                 flush=True,
             )
+
+
+def _run_blend(job_id: str, config: dict) -> None:
+    storage = get_storage()
+    if not storage.is_local:
+        raise RuntimeError("Local blend execution requires local storage")
+    output_dir_raw, _ = storage.job_output_uri(job_id)
+    output_dir = Path(output_dir_raw)
+    config_path = output_dir.parent / "blend-config.json"
+    config_path.write_text(json.dumps(config))
+    entrypoint = Path(__file__).parents[2] / "envs" / "blend_entrypoint.py"
+    process_env = os.environ.copy()
+    process_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
+
+    print(f"==> Blend config: {config_path}", flush=True)
+    print("==> Starting model blending...", flush=True)
+    process = blending_pixi_run(
+        [
+            "python",
+            str(entrypoint),
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+        ],
+        env=process_env,
+    )
+    _stream_process(process)
 
 
 def _stream_process(process: subprocess.Popen) -> None:

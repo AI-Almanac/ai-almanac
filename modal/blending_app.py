@@ -46,7 +46,7 @@ import modal
 
 
 APP_NAME = "almanac-blending"
-BLENDING_ROOT = Path("/opt/onset_blending")
+BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
 DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 DEFAULT_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"

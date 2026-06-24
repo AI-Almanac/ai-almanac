@@ -54,22 +54,23 @@ Once a homebrew tap / .deb is published, `brew install ai-almanac` and
 `apt install ai-almanac` will be available too. The PyPI package is the
 source of truth — those channels are thin wrappers.
 
-### Prerequisites for running real benchmarks
+### Prerequisites for running real benchmarks and blends
 
-Actual benchmark execution needs ROMP and its scientific Python stack. Those
-dependencies live in a separate Pixi-managed environment to keep the core
-install small:
+Actual benchmark and model-blending execution need separate scientific Python
+stacks. Those dependencies live in isolated Pixi-managed environments to keep
+the core install small:
 
 ```bash
 # Install pixi (one-time): https://pixi.sh
 curl -fsSL https://pixi.sh/install.sh | bash
 
-# Materialize the benchmark env (takes a few minutes the first time)
+# Materialize both workload environments (takes a few minutes the first time)
 ai-almanac env prepare
 ```
 
-Subsequent `ai-almanac serve` runs reuse the cached env. `ai-almanac env info`
-prints the installed versions.
+This also checks out the blending workflow at the version pinned by AI Almanac.
+Subsequent `ai-almanac serve` runs reuse both environments. `ai-almanac env
+info` prints the installed benchmark package versions.
 
 ---
 
@@ -80,7 +81,7 @@ ai-almanac serve                       # default: 127.0.0.1:8765, opens browser
 ai-almanac serve --port 9000           # alternate port
 ai-almanac serve --no-open             # don't auto-launch a browser tab
 ai-almanac serve --reload              # dev mode (uvicorn auto-reload)
-ai-almanac env prepare                 # install / update the benchmark env
+ai-almanac env prepare                 # install / update workload environments
 ai-almanac env info                    # show installed package versions
 
 ai-almanac reset --confirm             # wipe ~/.local/share/ai-almanac/
@@ -152,6 +153,7 @@ $AI_ALMANAC_DATA_DIR/
 ├── uploads/            ← user-uploaded obs datasets
 ├── jobs/<job_id>/      ← run logs, NetCDF outputs, figures
 ├── benchmark-env/      ← Pixi environment (ROMP + scientific/geo dependencies)
+├── blending-env/       ← Pixi environment and pinned blending workflow
 └── cache/              ← weight cache (HuggingFace), ARCO chunks
 ```
 

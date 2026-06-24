@@ -93,3 +93,53 @@ def test_pixi_workload_writes_config_and_invokes_momp(
     config_path = tmp_path / "job" / "romp-config.in"
     assert config_path.exists()
     assert commands == [["momp-run", "-p", str(config_path)]]
+
+
+def test_blend_workload_invokes_managed_blending_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "job" / "output"
+    figure_dir = tmp_path / "job" / "figure"
+    commands: list[list[str]] = []
+    environments: list[dict[str, str]] = []
+
+    class Storage:
+        is_local = True
+
+        def job_output_uri(self, job_id: str) -> tuple[str, str]:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            figure_dir.mkdir(parents=True, exist_ok=True)
+            return str(output_dir), str(figure_dir)
+
+    class Process:
+        stdout = iter(["blend output\n"])
+        args = ["pixi", "run"]
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_blending_run(command: list[str], env=None) -> subprocess.Popen:
+        commands.append(command)
+        environments.append(env)
+        return Process()
+
+    monkeypatch.setattr(job_workload, "get_storage", lambda: Storage())
+    monkeypatch.setattr(job_workload, "blending_pixi_run", fake_blending_run)
+    monkeypatch.setattr(job_workload, "blending_env_dir", lambda: tmp_path / "blend-env")
+
+    config = {"job_type": "blend", "model_names": ["aifs"]}
+    job_workload._run_blend("job-1", config)
+
+    config_path = tmp_path / "job" / "blend-config.json"
+    assert config_path.exists()
+    assert commands[0][0] == "python"
+    assert commands[0][2:] == [
+        "--config",
+        str(config_path),
+        "--output-dir",
+        str(output_dir),
+    ]
+    assert environments[0]["ALMANAC_BLENDING_ROOT"] == str(
+        tmp_path / "blend-env" / "onset-blending"
+    )

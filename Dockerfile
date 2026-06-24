@@ -16,6 +16,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY modal ./modal
 COPY --from=frontend /build/web/build ./web/build
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 

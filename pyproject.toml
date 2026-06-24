@@ -53,11 +53,12 @@ packages = ["src/ai_almanac"]
 # The SvelteKit SPA is built into web/build by `npm run build` and bundled
 # into the wheel so `pip install ai-almanac` ships the UI.
 "web/build" = "ai_almanac/server/static"
+"modal/blending_app.py" = "ai_almanac/envs/blending_app.py"
 
 [tool.hatch.build.targets.sdist]
 # The wheel is built from the sdist by standard Python build frontends.
 # Include the generated SPA even though web/build is ignored by Git.
-artifacts = ["web/build"]
+artifacts = ["web/build", "modal/blending_app.py"]
 
 [tool.ruff]
 line-length = 100

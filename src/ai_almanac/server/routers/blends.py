@@ -1,7 +1,7 @@
 """Blend training jobs.
 
-A blend is a `job_type='blend'` job that trains forecast blending weights on
-Modal. Status, logs, and the weight artifacts are served by the shared
+A blend is a `job_type='blend'` job that trains forecast blending weights.
+Status, logs, and the weight artifacts are served by the shared
 `/jobs/{id}` endpoints; this router only handles submission and listing in the
 user's "blends" mental model.
 """

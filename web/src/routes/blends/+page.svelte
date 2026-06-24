@@ -12,6 +12,14 @@
 		type DataSource,
 		type JobArtifact
 	} from '$lib/api';
+	import {
+		MIN_ONSET_YEARS,
+		computeCoverage,
+		defaultSplit,
+		yearSpecError
+	} from './year-coverage';
+	import { parsePooledSummary, type SkillRow } from './blend-summary';
+	import BlendSkillChart from './BlendSkillChart.svelte';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
@@ -23,7 +31,7 @@
 	let loaded = $state(false);
 
 	let artifacts = $state<JobArtifact[]>([]);
-	let artifactsForId = $state<string | null>(null);
+	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
 	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
@@ -37,15 +45,44 @@
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
+	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
+
+	const coverage = $derived(
+		computeCoverage(
+			obsSources.find((s) => s.id === obsDatasetId),
+			modelSources.filter((s) => modelIds.includes(s.id))
+		)
+	);
+	const insufficientData = $derived(
+		coverage != null && coverage.earliestForecast > coverage.end
+	);
+
+	const yearError = $derived(
+		coverage
+			? yearSpecError(coverage, trainingYears, cvHoldoutYears, forecastYears, trueHoldoutYears)
+			: null
+	);
+
+	// Prefill a working training/holdout split once obs + models are chosen, until
+	// the user edits the year fields themselves.
+	$effect(() => {
+		if (!coverage || yearsDirty) return;
+		const split = defaultSplit(coverage);
+		if (!split) return;
+		trainingYears = split.training;
+		cvHoldoutYears = split.cv;
+	});
 
 	const formValid = $derived(
 		name.trim() !== '' &&
 			obsDatasetId !== '' &&
 			modelIds.length > 0 &&
 			trainingYears.trim() !== '' &&
-			cvHoldoutYears.trim() !== ''
+			cvHoldoutYears.trim() !== '' &&
+			!yearError &&
+			!insufficientData
 	);
 
 	async function load() {
@@ -84,21 +121,60 @@
 		if (!loaded) void load();
 	});
 
-	// Load artifacts when a completed blend is selected.
+	// Load a completed blend's artifacts. Publication is a background step that
+	// lags completion by a few seconds, so an empty result is retried until the
+	// artifacts land rather than cached as "none".
 	$effect(() => {
-		if (selected?.status === 'complete' && selected.id !== artifactsForId) {
-			const id = selected.id;
-			artifactsForId = id;
-			void getJobArtifacts(id)
-				.then((a) => (artifacts = a))
-				.catch(() => (artifacts = []));
+		const job = selected;
+		if (job?.status !== 'complete') return;
+		const id = job.id;
+		let cancelled = false;
+		let attempts = 0;
+		const load = async () => {
+			if (cancelled) return;
+			try {
+				const found = await getJobArtifacts(id);
+				if (cancelled) return;
+				artifacts = found;
+				if (found.length === 0 && attempts++ < 6) setTimeout(load, 2000);
+			} catch {
+				if (!cancelled) artifacts = [];
+			}
+		};
+		artifacts = [];
+		void load();
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	// Parse the small pooled per-model summary into the skill chart series.
+	$effect(() => {
+		const summary = artifacts.find((a) => a.filename.startsWith('summary_models_pooled'));
+		if (!summary) {
+			skill = [];
+			return;
 		}
+		let cancelled = false;
+		void (async () => {
+			try {
+				const objectUrl = await fetchResultBlob(summary.url);
+				const text = await (await fetch(objectUrl)).text();
+				if (!cancelled) skill = parsePooledSummary(text);
+			} catch {
+				if (!cancelled) skill = [];
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	function startNew() {
 		creating = true;
 		selectedId = null;
 		submitError = null;
+		yearsDirty = false;
 	}
 
 	function selectBlend(id: string) {
@@ -134,6 +210,7 @@
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
 			modelIds = [];
+			yearsDirty = false;
 		} catch (err) {
 			submitError = err instanceof Error ? err.message : 'Submission failed';
 		} finally {
@@ -175,6 +252,13 @@
 	}
 </script>
 
+{#snippet fieldLabel(text: string, tip: string)}
+	<span class="label-with-help">
+		{text}
+		<span class="tip" title={tip}>ⓘ</span>
+	</span>
+{/snippet}
+
 <div class="page-layout">
 	<aside class="sidebar">
 		<button type="button" class="primary" onclick={startNew}>New blend</button>
@@ -214,12 +298,15 @@
 				</p>
 
 				<label class="field">
-					<span>Blend name</span>
+					{@render fieldLabel('Blend name', 'A label to identify this blend in your list. Does not affect training.')}
 					<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
 				</label>
 
 				<label class="field">
-					<span>Observations</span>
+					{@render fieldLabel(
+						'Observations',
+						'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
+					)}
 					<select bind:value={obsDatasetId}>
 						<option value="" disabled>Select an observation source…</option>
 						{#each obsSources as source (source.id)}
@@ -231,7 +318,14 @@
 				</label>
 
 				<fieldset class="field">
-					<legend>Forecast models</legend>
+					<legend class="label-with-help">
+						Forecast models
+						<span
+							class="tip"
+							title="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
+							>ⓘ</span
+						>
+					</legend>
 					{#if modelSources.length === 0}
 						<p class="muted">No ready model sources. Add forecast models under Data first.</p>
 					{:else}
@@ -250,22 +344,57 @@
 					{/if}
 				</fieldset>
 
+				{#if coverage}
+					<p class="muted coverage-hint">
+						Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
+						(leaves {MIN_ONSET_YEARS} years for climatology).
+					</p>
+				{/if}
+
 				<div class="field-row">
 					<label class="field">
-						<span>Training years</span>
-						<input type="text" bind:value={trainingYears} placeholder="2015:2020" />
+						{@render fieldLabel(
+							'Training years',
+							`Years used to fit the blending weights, e.g. "2008:2010". Requires at least ${MIN_ONSET_YEARS} years of observations before the first forecast year for the climatology baseline.`
+						)}
+						<input
+							type="text"
+							bind:value={trainingYears}
+							oninput={() => (yearsDirty = true)}
+							placeholder="2015:2020"
+						/>
 					</label>
 					<label class="field">
-						<span>CV holdout years</span>
-						<input type="text" bind:value={cvHoldoutYears} placeholder="2021,2022" />
+						{@render fieldLabel(
+							'CV holdout years',
+							'Years held out of training to cross-validate the weights, e.g. "2011,2012". Usually the most recent 1–2 years of the shared range.'
+						)}
+						<input
+							type="text"
+							bind:value={cvHoldoutYears}
+							oninput={() => (yearsDirty = true)}
+							placeholder="2021,2022"
+						/>
 					</label>
 				</div>
+
+				{#if insufficientData}
+					<p class="error">
+						These sources don't have {MIN_ONSET_YEARS} years of observations before any shared forecast
+						year. Pick an observation source with earlier coverage.
+					</p>
+				{:else if yearError}
+					<p class="error">{yearError}</p>
+				{/if}
 
 				<details class="advanced">
 					<summary>Advanced</summary>
 					<div class="field-row">
 						<label class="field">
-							<span>Forecast years</span>
+							{@render fieldLabel(
+								'Forecast years',
+								'Years to stage and score, if different from training + holdout. Defaults to the union of training and holdout years.'
+							)}
 							<input
 								type="text"
 								bind:value={forecastYears}
@@ -273,12 +402,18 @@
 							/>
 						</label>
 						<label class="field">
-							<span>True holdout years</span>
+							{@render fieldLabel(
+								'True holdout years',
+								'Years never shown during training or cross-validation, reserved for a final unbiased evaluation. Optional.'
+							)}
 							<input type="text" bind:value={trueHoldoutYears} placeholder="optional" />
 						</label>
 					</div>
 					<label class="field">
-						<span>Formula</span>
+						{@render fieldLabel(
+							'Formula',
+							'Advanced override for the statistical formula combining the models. Leave blank to use the default blend formula.'
+						)}
 						<input
 							type="text"
 							bind:value={formulaText}
@@ -356,6 +491,13 @@
 				{/if}
 
 				{#if selected.status === 'complete'}
+					{#if skill.length > 0}
+						<div class="skill">
+							<h2>Forecast skill</h2>
+							<BlendSkillChart series={skill} />
+						</div>
+					{/if}
+
 					<div class="artifacts">
 						<h2>Weights & outputs</h2>
 						{#if artifacts.length === 0}
@@ -524,6 +666,25 @@
 		font-size: 0.8rem;
 		font-weight: 700;
 		color: var(--color-text);
+	}
+
+	.label-with-help {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+
+	.tip {
+		display: inline-grid;
+		place-items: center;
+		width: 1rem;
+		height: 1rem;
+		border-radius: 999px;
+		background: var(--color-accent-light);
+		color: var(--color-accent);
+		font-size: 0.7rem;
+		font-weight: 900;
+		cursor: help;
 	}
 
 	.field input,
