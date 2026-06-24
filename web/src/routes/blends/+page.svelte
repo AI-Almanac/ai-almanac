@@ -9,6 +9,7 @@
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
+		deleteJob,
 		fetchResultBlob,
 		subscribeJob,
 		type Blend,
@@ -197,6 +198,42 @@
 		continuedSessionId = sessionId;
 		continuedScope = { kind: 'blend_setup', key: blendSetupKey };
 		continuedBlendId = jobs[0].id;
+	}
+
+	let actionError = $state<string | null>(null);
+
+	async function cancelBlend(id: string) {
+		actionError = null;
+		try {
+			const updated = await cancelJob(id);
+			patchBlendStatus(id, updated.status);
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Cancel failed';
+		}
+	}
+
+	async function deleteBlend(blend: Blend) {
+		const label = blend.name || 'this blend';
+		if (
+			!confirm(
+				`Delete "${label}"? This permanently removes its trained weights and outputs from storage and cannot be undone.`
+			)
+		) {
+			return;
+		}
+		actionError = null;
+		try {
+			await deleteJob(blend.id);
+			blends = blends.filter((b) => b.id !== blend.id);
+			if (selectedId === blend.id) selectedId = null;
+			if (continuedBlendId === blend.id) {
+				continuedSessionId = null;
+				continuedScope = null;
+				continuedBlendId = null;
+			}
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Delete failed';
+		}
 	}
 
 	// Stream status changes per running blend instead of re-fetching the whole
@@ -618,13 +655,26 @@
 							<span class="status-badge {statusClass(selected.status)}"
 								>{statusLabel(selected.status)}</span
 							>
-							{#if ACTIVE_STATUSES.includes(selected.status) && selected.status !== 'canceling'}
-								<button type="button" class="ghost" onclick={() => cancelJob(selected!.id)}
-									>Cancel</button
+							{#if ACTIVE_STATUSES.includes(selected.status)}
+								<button
+									type="button"
+									class="ghost"
+									disabled={selected.status === 'canceling'}
+									onclick={() => cancelBlend(selected!.id)}
+								>
+									{selected.status === 'canceling' ? 'Canceling…' : 'Cancel'}
+								</button>
+							{:else}
+								<button type="button" class="danger" onclick={() => deleteBlend(selected!)}
+									>Delete</button
 								>
 							{/if}
 						</div>
 					</header>
+
+					{#if actionError}
+						<p class="error">{actionError}</p>
+					{/if}
 
 					<dl class="facts">
 						<div>
@@ -1007,12 +1057,28 @@
 	}
 
 	button.primary,
-	button.ghost {
+	button.ghost,
+	button.danger {
 		border-radius: 0.4rem;
 		padding: 0.55rem 0.9rem;
 		font-weight: 750;
 		cursor: pointer;
 		border: 1px solid var(--color-border);
+	}
+
+	button.ghost:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	button.danger {
+		background: var(--color-surface);
+		border-color: var(--color-danger-border);
+		color: var(--color-danger);
+	}
+
+	button.danger:hover {
+		background: var(--color-danger-bg);
 	}
 
 	button.primary {
