@@ -262,6 +262,7 @@ class GCSStorage:
         self._uploads_bucket = uploads_bucket
         self._outputs_bucket = outputs_bucket
         self._data_bucket = data_bucket
+        self._signer_creds = None  # cloud-platform-scoped creds for IAM signing
 
     def _bucket(self, name: str):
         return self._client.bucket(name)
@@ -279,17 +280,28 @@ class GCSStorage:
         Account Credentials API enabled.
         """
         from google.auth import credentials as ga_credentials
-        from google.auth.transport import requests as ga_requests
 
-        creds = self._client._credentials
-        if isinstance(creds, ga_credentials.Signing):
+        if isinstance(self._client._credentials, ga_credentials.Signing):
             return {}
-        if not creds.valid:
-            creds.refresh(ga_requests.Request())
+        # The storage client's token is devstorage-scoped; signBlob needs a
+        # cloud-platform-scoped token, so sign with a separately-scoped cred.
+        creds = self._signer_credentials()
         return {
             "service_account_email": creds.service_account_email,
             "access_token": creds.token,
         }
+
+    def _signer_credentials(self):
+        import google.auth
+        from google.auth.transport import requests as ga_requests
+
+        if self._signer_creds is None:
+            self._signer_creds, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+        if not self._signer_creds.valid:
+            self._signer_creds.refresh(ga_requests.Request())
+        return self._signer_creds
 
     @staticmethod
     def _fs():
