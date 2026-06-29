@@ -3,10 +3,10 @@ import logging
 from typing import Any
 
 import aiohttp
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ai_almanac.server.auth import AdminUser, CurrentUser
+from ai_almanac.server.auth import AdminUser, CurrentUser, require_data_management
 from ai_almanac.server.services import region_catalog
 from ai_almanac.server.services.regions import list_region_options
 
@@ -47,7 +47,7 @@ async def list_regions(_user: CurrentUser) -> list[dict]:
     return await list_region_options()
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_data_management)])
 async def create_region(body: RegionWrite, _admin: AdminUser) -> dict:
     await region_catalog.seed_packaged_regions()
     region = await region_catalog.create_region(**body.model_dump())
@@ -59,7 +59,7 @@ async def create_region(body: RegionWrite, _admin: AdminUser) -> dict:
     }
 
 
-@router.put("/{region_id}")
+@router.put("/{region_id}", dependencies=[Depends(require_data_management)])
 async def update_region(
     region_id: str, body: RegionWrite, _admin: AdminUser
 ) -> dict:
@@ -81,7 +81,9 @@ async def update_region(
     }
 
 
-@router.delete("/{region_id}", status_code=204)
+@router.delete(
+    "/{region_id}", status_code=204, dependencies=[Depends(require_data_management)]
+)
 async def delete_region(region_id: str, _admin: AdminUser) -> None:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)

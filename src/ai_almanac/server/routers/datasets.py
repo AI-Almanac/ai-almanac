@@ -1,11 +1,11 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from ai_almanac.server.auth import CurrentUser
+from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.db import get_db
 from ai_almanac.server.routers.uploads import (
     UploadSessionCreate,
@@ -79,7 +79,11 @@ class DatasetFromPathRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/upload-url", response_model=UploadUrlResponse)
+@router.post(
+    "/upload-url",
+    response_model=UploadUrlResponse,
+    dependencies=[Depends(require_data_management)],
+)
 async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request: Request):
     session = await create_upload_session(
         UploadSessionCreate(name=body.name, filename=body.filename),
@@ -93,7 +97,11 @@ async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request:
     )
 
 
-@router.post("/{dataset_id}/confirm", response_model=DatasetOut)
+@router.post(
+    "/{dataset_id}/confirm",
+    response_model=DatasetOut,
+    dependencies=[Depends(require_data_management)],
+)
 async def confirm_upload(dataset_id: str, user: CurrentUser):
     async with get_db() as conn:
         row = (
@@ -153,7 +161,12 @@ async def list_datasets(user: CurrentUser):
     ]
 
 
-@router.post("/from-path", response_model=DatasetOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/from-path",
+    response_model=DatasetOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_data_management)],
+)
 async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
     """
     Register a local directory as a ready dataset without an upload step.

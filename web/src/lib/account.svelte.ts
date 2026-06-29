@@ -21,6 +21,10 @@ class AccountState {
 		return this.account?.capabilities.can_browse_fs ?? false;
 	}
 
+	get canManageData(): boolean {
+		return this.account?.capabilities.can_manage_data ?? false;
+	}
+
 	get label(): string {
 		const a = this.account;
 		if (!a) return '';

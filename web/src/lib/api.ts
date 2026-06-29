@@ -382,6 +382,7 @@ export type Account = {
 	capabilities: {
 		can_admin: boolean;
 		can_browse_fs: boolean;
+		can_manage_data: boolean;
 		can_run_code: boolean;
 	};
 };

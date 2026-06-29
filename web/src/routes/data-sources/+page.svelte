@@ -13,10 +13,15 @@
 		type DataSourceValidation,
 		type Region
 	} from '$lib/api';
+	import { goto } from '$app/navigation';
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
 	import { account } from '$lib/account.svelte';
+
+	$effect(() => {
+		if (account.loaded && !account.canManageData) goto('/');
+	});
 
 	let sources = $state<DataSource[]>([]);
 	let regions = $state<Region[]>([]);

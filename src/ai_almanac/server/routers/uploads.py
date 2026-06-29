@@ -8,17 +8,21 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from ai_almanac.paths import uploads_dir
-from ai_almanac.server.auth import CurrentUser
+from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.settings import settings
 
-router = APIRouter(prefix="/uploads", tags=["uploads"])
+router = APIRouter(
+    prefix="/uploads",
+    tags=["uploads"],
+    dependencies=[Depends(require_data_management)],
+)
 _CHUNK_SIZE = 1024 * 1024
 
 

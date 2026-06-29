@@ -206,6 +206,13 @@ class Settings(BaseSettings):
     llm_code_context_max_chars: int = 6000
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
+
+    # Feature flags. Boolean gates for features still in development. Default True
+    # for zero-setup local installs; managed deployments set them False in
+    # config.yaml/env until the feature is ready, then flip them at runtime from
+    # the admin Settings page. Name new flags `enable_<feature>` and surface them
+    # in the "Features" group of routers/settings.py.
+    enable_data_management: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 

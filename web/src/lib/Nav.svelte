@@ -14,13 +14,15 @@
 			<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
 			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
 			<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
-			<a
-				href="/data-sources"
-				class:active={$page.url.pathname.startsWith('/data-sources') ||
-					$page.url.pathname.startsWith('/regions')}
-			>
-				Data
-			</a>
+			{#if account.canManageData}
+				<a
+					href="/data-sources"
+					class:active={$page.url.pathname.startsWith('/data-sources') ||
+						$page.url.pathname.startsWith('/regions')}
+				>
+					Data
+				</a>
+			{/if}
 			{#if account.isAdmin}
 				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
 			{/if}

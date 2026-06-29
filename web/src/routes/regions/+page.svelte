@@ -8,9 +8,14 @@
 		type Region,
 		type RegionWrite
 	} from '$lib/api';
+	import { goto } from '$app/navigation';
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import { account } from '$lib/account.svelte';
+
+	$effect(() => {
+		if (account.loaded && !account.canManageData) goto('/');
+	});
 
 	let regions = $state<Region[]>([]);
 	let loading = $state(true);

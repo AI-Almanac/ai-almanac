@@ -6,10 +6,10 @@ import asyncio
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.auth import AdminUser, CurrentUser
+from ai_almanac.server.auth import AdminUser, CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
 from ai_almanac.server.services.data_catalog import discover_datasets
@@ -135,7 +135,11 @@ async def discover_catalog(
     ]
 
 
-@router.post("/validate", response_model=DataSourceValidationOut)
+@router.post(
+    "/validate",
+    response_model=DataSourceValidationOut,
+    dependencies=[Depends(require_data_management)],
+)
 async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized_path = str(Path(body.path).expanduser().resolve())
     region = await _parse_region(body.region)
@@ -154,7 +158,12 @@ async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
     )
 
 
-@router.post("", response_model=DataSourceOut, status_code=201)
+@router.post(
+    "",
+    response_model=DataSourceOut,
+    status_code=201,
+    dependencies=[Depends(require_data_management)],
+)
 async def create_data_source(body: DataSourceIn, _admin: AdminUser):
     normalized = str(Path(body.path).expanduser().resolve())
     region = await _parse_region(body.region)
@@ -168,7 +177,11 @@ async def create_data_source(body: DataSourceIn, _admin: AdminUser):
     return _to_out(row)
 
 
-@router.put("/{source_id}", response_model=DataSourceOut)
+@router.put(
+    "/{source_id}",
+    response_model=DataSourceOut,
+    dependencies=[Depends(require_data_management)],
+)
 async def update_data_source(
     source_id: str, body: DataSourceUpdate, _admin: AdminUser
 ):
@@ -186,7 +199,11 @@ async def update_data_source(
     return _to_out(row)
 
 
-@router.post("/{source_id}/revalidate", response_model=DataSourceOut)
+@router.post(
+    "/{source_id}/revalidate",
+    response_model=DataSourceOut,
+    dependencies=[Depends(require_data_management)],
+)
 async def revalidate_data_source(source_id: str, _admin: AdminUser):
     row = await svc.revalidate_source(source_id)
     if not row:
@@ -194,7 +211,11 @@ async def revalidate_data_source(source_id: str, _admin: AdminUser):
     return _to_out(row)
 
 
-@router.delete("/{source_id}", status_code=204)
+@router.delete(
+    "/{source_id}",
+    status_code=204,
+    dependencies=[Depends(require_data_management)],
+)
 async def delete_data_source(source_id: str, _admin: AdminUser):
     ok = await svc.delete_source(source_id)
     if not ok:
