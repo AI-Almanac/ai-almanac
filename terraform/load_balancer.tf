@@ -7,24 +7,26 @@
 # bearer tokens never reached the backend and every authed route 401'd. A
 # serverless NEG per Cloud Run service forwards Authorization intact.
 #
+# This started as the staging-only LB and was extended in place to also serve
+# prod, so the front-end resources (address, url map, proxies, forwarding
+# rules, staging cert) keep their original `almanac-staging-*` names to avoid
+# destroying/recreating live infra. The IP is shared; staging A records already
+# point at it.
+#
 # Routing (single-image services serve SPA + API same-origin):
-#   default                 -> prod backend
-#   staging_custom_domain   -> staging backend
+#   default                 -> staging backend
+#   custom_domain (prod)    -> prod backend
 #
 # Cost: a single LB keeps both envs inside GCP's first-5-forwarding-rules
 # bundle and shares one global IP, so moving prod off domain mappings adds
 # effectively nothing to the LB line item.
 #
-# DNS is managed outside Terraform. The global IP below is the existing staging
-# address (staging A records already point at it — leave them). To cut prod
-# over, after `apply` point the prod domain's A record at this same IP (see the
-# `lb_ip` output). Each managed cert provisions only once its domain resolves
-# here (typically 15-60 min); during that window the freshly pointed domain is
-# unavailable, so cut over in a maintenance window.
+# DNS is managed outside Terraform. To cut prod over, point the prod domain's A
+# record at the LB IP (see the `lb_ip` output). The prod managed cert provisions
+# only once its domain resolves here (15-60 min); during that window the domain
+# is unavailable, so cut over in a maintenance window.
 # ---------------------------------------------------------------------------
 
-# Existing staging IP, now shared. Keep the resource name to avoid recreating
-# the address (which would orphan staging's live A records).
 resource "google_compute_global_address" "staging_lb" {
   name = "almanac-staging-lb-ip"
 }
@@ -72,20 +74,26 @@ resource "google_compute_backend_service" "staging" {
 }
 
 # --- Routing --------------------------------------------------------------
-# Prod is the default service; staging is reached by Host header. Both backend
-# services always exist, so the default is valid even before prod DNS is set.
-resource "google_compute_url_map" "shared" {
-  name            = "almanac-urlmap"
-  default_service = google_compute_backend_service.prod.id
+# Staging stays the default; prod is reached by Host header. The prod host_rule
+# only appears once custom_domain is set, so a domainless install still routes.
+resource "google_compute_url_map" "staging" {
+  name            = "almanac-staging-urlmap"
+  default_service = google_compute_backend_service.staging.id
 
-  host_rule {
-    hosts        = [var.staging_custom_domain]
-    path_matcher = "staging"
+  dynamic "host_rule" {
+    for_each = var.custom_domain != "" ? [var.custom_domain] : []
+    content {
+      hosts        = [host_rule.value]
+      path_matcher = "prod"
+    }
   }
 
-  path_matcher {
-    name            = "staging"
-    default_service = google_compute_backend_service.staging.id
+  dynamic "path_matcher" {
+    for_each = var.custom_domain != "" ? [1] : []
+    content {
+      name            = "prod"
+      default_service = google_compute_backend_service.prod.id
+    }
   }
 }
 
@@ -97,7 +105,10 @@ resource "google_compute_managed_ssl_certificate" "staging" {
   name = "almanac-staging-cert"
 
   managed {
-    domains = [var.staging_custom_domain]
+    # api-staging is a harmless SAN that resolves to the LB (served by the
+    # default staging backend); kept here only so this cert isn't replaced —
+    # changing a managed cert's domains forces a 15-60 min reprovision.
+    domains = [var.staging_custom_domain, "api-staging.ai-almanac.org"]
   }
 }
 
@@ -110,26 +121,26 @@ resource "google_compute_managed_ssl_certificate" "prod" {
   }
 }
 
-resource "google_compute_target_https_proxy" "shared" {
-  name    = "almanac-https-proxy"
-  url_map = google_compute_url_map.shared.id
+resource "google_compute_target_https_proxy" "staging" {
+  name    = "almanac-staging-https-proxy"
+  url_map = google_compute_url_map.staging.id
   ssl_certificates = concat(
     [google_compute_managed_ssl_certificate.staging.id],
     google_compute_managed_ssl_certificate.prod[*].id,
   )
 }
 
-resource "google_compute_global_forwarding_rule" "https" {
-  name                  = "almanac-https"
+resource "google_compute_global_forwarding_rule" "staging_https" {
+  name                  = "almanac-staging-https"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   ip_address            = google_compute_global_address.staging_lb.id
   port_range            = "443"
-  target                = google_compute_target_https_proxy.shared.id
+  target                = google_compute_target_https_proxy.staging.id
 }
 
 # Redirect plain HTTP to HTTPS so bare domains still work.
-resource "google_compute_url_map" "redirect" {
-  name = "almanac-redirect"
+resource "google_compute_url_map" "staging_redirect" {
+  name = "almanac-staging-redirect"
 
   default_url_redirect {
     https_redirect = true
@@ -137,17 +148,17 @@ resource "google_compute_url_map" "redirect" {
   }
 }
 
-resource "google_compute_target_http_proxy" "redirect" {
-  name    = "almanac-http-proxy"
-  url_map = google_compute_url_map.redirect.id
+resource "google_compute_target_http_proxy" "staging" {
+  name    = "almanac-staging-http-proxy"
+  url_map = google_compute_url_map.staging_redirect.id
 }
 
-resource "google_compute_global_forwarding_rule" "http" {
-  name                  = "almanac-http"
+resource "google_compute_global_forwarding_rule" "staging_http" {
+  name                  = "almanac-staging-http"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   ip_address            = google_compute_global_address.staging_lb.id
   port_range            = "80"
-  target                = google_compute_target_http_proxy.redirect.id
+  target                = google_compute_target_http_proxy.staging.id
 }
 
 output "lb_ip" {

@@ -40,7 +40,7 @@ resource "google_cloud_run_v2_service" "backend" {
       resources {
         limits = {
           cpu    = "2"
-          memory = "2Gi"
+          memory = "4Gi"
         }
         # Faster warm-up on scale-up and revision rollouts.
         startup_cpu_boost = true
