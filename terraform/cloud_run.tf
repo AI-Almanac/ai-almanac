@@ -1,82 +1,13 @@
-resource "google_cloud_run_v2_service" "frontend" {
-  name                = "almanac-frontend"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = false
-
-  lifecycle {
-    ignore_changes = [
-      template[0].containers[0].image,
-    ]
-  }
-
-  template {
-    service_account = google_service_account.frontend.email
-
-    containers {
-      image = local.frontend_image
-
-      ports {
-        container_port = 3000
-      }
-
-      env {
-        name  = "BACKEND_URL"
-        value = google_cloud_run_v2_service.backend.uri
-      }
-    }
-  }
-}
-
-resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.frontend.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
-# ---------------------------------------------------------------------------
-# Custom domain mapping for the frontend
-# Uses the v1 API domain mapping which works with v2 services.
-# GCP provisions a Google-managed SSL certificate automatically.
-#
-# After terraform apply, GCP will show the IPs/CNAME to add to your DNS:
-#   gcloud beta run domain-mappings describe --domain=YOUR_DOMAIN --region=REGION
-# ---------------------------------------------------------------------------
-resource "google_cloud_run_domain_mapping" "frontend" {
-  count    = var.custom_domain != "" ? 1 : 0
-  location = var.region
-  name     = var.custom_domain
-
-  metadata {
-    namespace = var.project_id
-  }
-
-  spec {
-    route_name = google_cloud_run_v2_service.frontend.name
-  }
-}
-
-resource "google_cloud_run_domain_mapping" "backend" {
-  count    = var.api_domain != "" ? 1 : 0
-  location = var.region
-  name     = var.api_domain
-
-  metadata {
-    namespace = var.project_id
-  }
-
-  spec {
-    route_name = google_cloud_run_v2_service.backend.name
-  }
-}
+# The prod frontend is served by the single-image backend below (FastAPI +
+# bundled SPA), reached through the shared load balancer in load_balancer.tf.
+# Custom domains are served via that LB — Cloud Run domain mappings strip the
+# Authorization header and break Globus auth.
 
 resource "google_cloud_run_v2_service" "backend" {
   name     = "almanac-backend"
   location = var.region
-  # Frontend calls the backend directly from the browser (CORS), so it must be public.
-  # App-level auth (Globus token validation) protects all non-health endpoints.
+  # The SPA calls the API same-origin; app-level Globus token validation
+  # protects all non-health endpoints, so the service stays public.
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
 
@@ -104,7 +35,7 @@ resource "google_cloud_run_v2_service" "backend" {
     }
 
     containers {
-      image = local.backend_image
+      image = local.app_image
 
       resources {
         limits = {
@@ -116,7 +47,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       ports {
-        container_port = 8000
+        container_port = 8765
       }
 
       volume_mounts {
@@ -377,10 +308,5 @@ resource "google_cloud_run_v2_service_iam_member" "backend_public" {
 
 output "backend_url" {
   value       = google_cloud_run_v2_service.backend.uri
-  description = "Backend Cloud Run URL — use as VITE_API_URL when building the frontend"
-}
-
-output "frontend_url_output" {
-  value       = google_cloud_run_v2_service.frontend.uri
-  description = "Frontend Cloud Run URL — set as var.frontend_url to lock down CORS"
+  description = "Prod Cloud Run URL (serves SPA + API). Public traffic enters via the shared LB."
 }

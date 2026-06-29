@@ -58,12 +58,6 @@ resource "google_project_iam_member" "ci_run_developer" {
 }
 
 # CI needs to act as the service accounts it deploys
-resource "google_service_account_iam_member" "ci_acts_as_frontend" {
-  service_account_id = google_service_account.frontend.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.ci.email}"
-}
-
 resource "google_service_account_iam_member" "ci_acts_as_backend" {
   service_account_id = google_service_account.backend.name
   role               = "roles/iam.serviceAccountUser"

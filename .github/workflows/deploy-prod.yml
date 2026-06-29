@@ -1,0 +1,92 @@
+name: deploy-prod
+
+# Builds the single ai-almanac-web image (FastAPI + bundled SPA), runs DB
+# migrations, then rolls the prod backend to the new revision. Mirror of
+# deploy-staging.yml; the only differences are the trigger branch, the target
+# service/job names, and the Globus redirect origin.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  REGION: us-central1
+  AR_IMAGE: us-central1-docker.pkg.dev/ai-almanac/almanac/ai-almanac-web
+  SERVICE: almanac-backend
+  MIGRATE_JOB: almanac-migrate
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          token_format: access_token
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          # web/.env must stay out of the build (it pins VITE_API_URL to
+          # localhost); .dockerignore handles that. The SPA reads its API base
+          # from runtime /config.js, so VITE_API_URL is intentionally unset.
+          #
+          # Hardcoded public constants. The Globus client is shared across
+          # origins (local/staging/prod) and already has this redirect
+          # registered. VITE_GLOBUS_REDIRECT_URL must EXACTLY match the redirect
+          # registered on the client for this origin, or Globus fails the
+          # token-exchange CORS check ("NetworkError when attempting to fetch
+          # resource") in an endless login loop. It must equal the origin the
+          # SPA is served from (the LB prod domain).
+          build-args: |
+            VITE_GLOBUS_CLIENT_ID=c0309fe2-a701-45fa-bf28-1e4fed6c5f1a
+            VITE_GLOBUS_REDIRECT_URL=https://ai-almanac.org/callback
+          tags: |
+            ${{ env.AR_IMAGE }}:latest
+            ${{ env.AR_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Migrate before routing traffic: new code may need new schema. The job's
+      # image is pinned in Terraform with ignore_changes, so point it at this
+      # build, then run it to completion.
+      - name: Run database migrations
+        run: |
+          gcloud run jobs update "$MIGRATE_JOB" \
+            --region "$REGION" \
+            --image "$AR_IMAGE:${{ github.sha }}"
+          gcloud run jobs execute "$MIGRATE_JOB" --region "$REGION" --wait
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: us-central1
+          image: ${{ env.AR_IMAGE }}:${{ github.sha }}

@@ -1,8 +1,3 @@
-resource "google_service_account" "frontend_staging" {
-  account_id   = "almanac-frontend-staging"
-  display_name = "Almanac Web Frontend (Staging)"
-}
-
 resource "google_service_account" "backend_staging" {
   account_id   = "almanac-backend-staging"
   display_name = "Almanac Web Backend (Staging)"
@@ -60,12 +55,6 @@ resource "google_service_account_iam_member" "backend_staging_acts_as_batch_work
   service_account_id = google_service_account.batch_worker.name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.backend_staging.email}"
-}
-
-resource "google_service_account_iam_member" "ci_acts_as_frontend_staging" {
-  service_account_id = google_service_account.frontend_staging.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.ci.email}"
 }
 
 resource "google_service_account_iam_member" "ci_acts_as_backend_staging" {

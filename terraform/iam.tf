@@ -2,11 +2,6 @@
 # Service accounts
 # ---------------------------------------------------------------------------
 
-resource "google_service_account" "frontend" {
-  account_id   = "almanac-frontend"
-  display_name = "Almanac Web Frontend"
-}
-
 resource "google_service_account" "backend" {
   account_id   = "almanac-backend"
   display_name = "Almanac Web Backend"

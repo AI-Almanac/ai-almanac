@@ -16,18 +16,6 @@ variable "ghcr_owner" {
 
 # Derived image paths — resolved at plan time via locals in artifact_registry.tf
 # Override these only if you push images to a different registry.
-variable "frontend_image" {
-  description = "Container image for the SvelteKit frontend"
-  type        = string
-  default     = ""
-}
-
-variable "backend_image" {
-  description = "Container image for the FastAPI backend"
-  type        = string
-  default     = ""
-}
-
 variable "app_image" {
   description = "Container image for the single-process AI Almanac app (API + bundled SPA)"
   type        = string
@@ -84,13 +72,7 @@ variable "db_password" {
 }
 
 variable "custom_domain" {
-  description = "Custom domain for the frontend (e.g. app.example.com or example.com). Leave empty to skip."
-  type        = string
-  default     = ""
-}
-
-variable "api_domain" {
-  description = "Custom domain for the backend API (e.g. api.example.com). Leave empty to skip."
+  description = "Prod domain served by the shared LB (SPA + API, same origin). Leave empty to skip the prod cert/routing."
   type        = string
   default     = ""
 }
@@ -124,12 +106,6 @@ variable "staging_custom_domain" {
   description = "Custom domain for the staging frontend. Leave empty to skip."
   type        = string
   default     = "staging.ai-almanac.org"
-}
-
-variable "staging_api_domain" {
-  description = "Custom domain for the staging backend API. Leave empty to skip."
-  type        = string
-  default     = "api-staging.ai-almanac.org"
 }
 
 variable "staging_frontend_url" {

@@ -3,10 +3,8 @@ region      = "us-central1"
 ghcr_owner  = "your-github-username-or-org"
 
 # Image overrides — leave unset to use the AR proxy paths derived from ghcr_owner.
-# frontend_image = "..."
-# backend_image  = "..."
-# app_image      = "..." # single-process app image for staging (API + bundled SPA)
-# romp_image     = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
+# app_image  = "..." # single-process app image (API + bundled SPA), used by prod + staging
+# romp_image = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
 
 # Cloud SQL
 db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
@@ -15,18 +13,16 @@ db_password = "changeme"      # also stored in Secret Manager after first apply
 # staging credentials from production.
 # staging_db_password = "changeme-staging"
 
-# Custom domain for the frontend — requires domain ownership verification (see below)
-# custom_domain = "app.example.com"
-# api_domain    = "api.example.com"
-
-# Staging custom domains. Leave empty to skip staging domain mappings.
+# Domains served by the shared load balancer (SPA + API, same origin). Point
+# each domain's A record at the LB IP (see the `lb_ip` output) to provision its
+# managed cert.
+custom_domain         = "ai-almanac.org"
 staging_custom_domain = "staging.ai-almanac.org"
-staging_api_domain    = "api-staging.ai-almanac.org"
-staging_frontend_url  = "https://staging.ai-almanac.org"
 
-# Frontend Cloud Run URL — leave empty on first deploy (cycle), set after
-# frontend service is created to lock down CORS on the backend.
-# frontend_url = "https://almanac-frontend-abc123-uc.a.run.app"
+# Frontend origins for the backend CORS allowlist. With the single-image,
+# same-origin setup these are effectively informational.
+frontend_url         = "https://ai-almanac.org"
+staging_frontend_url = "https://staging.ai-almanac.org"
 
 # Auth — the backend runs shared mode with app-level Globus token validation
 # (AUTH_MODE=globus, set in cloud_run.tf). Set at least one admin or the backend

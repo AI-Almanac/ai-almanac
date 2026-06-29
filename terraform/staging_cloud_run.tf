@@ -1,43 +1,6 @@
-resource "google_cloud_run_v2_service" "frontend_staging" {
-  name                = "almanac-frontend-staging"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = false
-
-  lifecycle {
-    ignore_changes = [
-      template[0].containers[0].image,
-    ]
-  }
-
-  template {
-    service_account = google_service_account.frontend_staging.email
-
-    containers {
-      image = local.frontend_image
-
-      ports {
-        container_port = 3000
-      }
-
-      env {
-        name  = "BACKEND_URL"
-        value = google_cloud_run_v2_service.backend_staging.uri
-      }
-    }
-  }
-}
-
-resource "google_cloud_run_v2_service_iam_member" "frontend_staging_public" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.frontend_staging.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
-# Staging custom domains are served via the HTTPS load balancer in
-# staging_load_balancer.tf — domain mappings strip the Authorization header.
+# Staging is a single-image service (FastAPI + bundled SPA) reached through the
+# shared load balancer in load_balancer.tf — domain mappings strip the
+# Authorization header and break Globus auth.
 
 resource "google_cloud_run_v2_service" "backend_staging" {
   name                = "almanac-backend-staging"
@@ -329,10 +292,5 @@ resource "google_cloud_run_v2_service_iam_member" "backend_staging_public" {
 
 output "staging_backend_url" {
   value       = google_cloud_run_v2_service.backend_staging.uri
-  description = "Staging backend Cloud Run URL"
-}
-
-output "staging_frontend_url_output" {
-  value       = google_cloud_run_v2_service.frontend_staging.uri
-  description = "Staging frontend Cloud Run URL"
+  description = "Staging Cloud Run URL (serves SPA + API). Public traffic enters via the shared LB."
 }
