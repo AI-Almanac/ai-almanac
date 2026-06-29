@@ -7,6 +7,7 @@ via environment variables or `.env` files for development / public deployment.
 
 from __future__ import annotations
 
+import base64
 import os
 from importlib.resources import files
 from pathlib import Path
@@ -357,12 +358,44 @@ def _load_config_yaml() -> dict:
         return {}
 
 
+# Sensitive overlay values are encrypted at rest in `app_config` with the same
+# AES-GCM master key used for stored LLM credentials. On disk they are an opaque
+# envelope, never plaintext. `credential_encryption_key` is the one secret we
+# can't seal (it would need itself); it is environment/config-managed and never
+# written through the UI, so it is left as-is.
+_SEALED_TAG = "__sealed__"
+
+
+def _seal_secret(value: str) -> dict:
+    from ai_almanac.server.services.llm_profiles import encrypt_api_key
+
+    version, nonce, ciphertext = encrypt_api_key(value)
+    return {
+        _SEALED_TAG: version,
+        "n": base64.b64encode(nonce).decode(),
+        "c": base64.b64encode(ciphertext).decode(),
+    }
+
+
+def _unseal_secret(value):
+    if not (isinstance(value, dict) and _SEALED_TAG in value):
+        return value  # plaintext legacy value or a normal setting
+    from ai_almanac.server.services.llm_profiles import decrypt_api_key
+
+    return decrypt_api_key(
+        value[_SEALED_TAG],
+        base64.b64decode(value["n"]),
+        base64.b64decode(value["c"]),
+    )
+
+
 def _load_db_overlay() -> dict:
     """Read the persistent settings overlay from the `app_config` table.
 
     Returns ``{}`` if the database is unreachable or the table is absent (e.g.
     before migrations on first launch), so settings resolution never hard-
-    depends on the database being ready.
+    depends on the database being ready. Sealed secret values are decrypted back
+    to plaintext for the in-memory settings singleton.
     """
     try:
         from sqlalchemy import select
@@ -374,7 +407,7 @@ def _load_db_overlay() -> dict:
             rows = conn.execute(
                 select(app_config.c.key, app_config.c.value)
             ).all()
-        return {key: value for key, value in rows}
+        return {key: _unseal_secret(value) for key, value in rows}
     except Exception:
         return {}
 
@@ -430,8 +463,16 @@ def write_settings_overlay(updates: dict) -> dict:
     with sync_engine().begin() as conn:
         for key, value in updates.items():
             conn.execute(delete(app_config).where(app_config.c.key == key))
-            if value is not None:
-                conn.execute(insert(app_config).values(key=key, value=value))
+            if value is None:
+                continue
+            if (
+                key in SENSITIVE_FIELDS
+                and key != "credential_encryption_key"
+                and isinstance(value, str)
+                and value != ""
+            ):
+                value = _seal_secret(value)
+            conn.execute(insert(app_config).values(key=key, value=value))
     return _load_db_overlay()
 
 

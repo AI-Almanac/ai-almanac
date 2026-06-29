@@ -6,9 +6,11 @@ schema so the UI can render an opinionated form. Patches are persisted to the
 live `settings` singleton via `reload_settings()` without restarting the
 server.
 
-Sensitive fields (API keys, signing secrets) are always masked in responses
-and can never be revealed through the API. To change a secret, overwrite it
-with a new value or clear it.
+Sensitive fields (API keys, signing secrets) are reported only as a
+configured/not flag and can never be revealed through the API. Their plaintext
+is encrypted at rest in the `app_config` overlay (AES-GCM, keyed by
+`credential_encryption_key`). To change a secret, overwrite it with a new value
+or clear it.
 """
 
 from __future__ import annotations
@@ -214,7 +216,17 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
             )
         cleaned[key] = value
 
-    write_settings_overlay(cleaned)
+    try:
+        write_settings_overlay(cleaned)
+    except RuntimeError as exc:
+        # Sealing a secret requires a configured credential_encryption_key.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot store a secret: set credential_encryption_key "
+                f"(via environment or config.yaml) first. ({exc})"
+            ),
+        ) from exc
     reload_settings()
     return _read_settings()
 

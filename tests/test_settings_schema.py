@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import os
+
 import pytest
 
 from ai_almanac.server.routers.settings import _SCHEMA_FIELDS, get_schema, get_settings
@@ -7,6 +10,8 @@ from ai_almanac.settings import (
     LOCAL_ONLY_FIELDS,
     SENSITIVE_FIELDS,
     SHARED_ENV_ONLY_FIELDS,
+    _seal_secret,
+    _unseal_secret,
     settings,
 )
 
@@ -61,3 +66,20 @@ def test_get_settings_never_exposes_undeclared_fields(
     assert "host/db" not in payload
     # database_url is declared but sensitive: present only as a configured flag.
     assert "database_url" not in get_settings(_admin=None).values
+
+
+def test_secret_overlay_value_is_sealed_at_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "credential_encryption_key",
+        base64.urlsafe_b64encode(os.urandom(32)).decode(),
+    )
+    sealed = _seal_secret("sk-super-secret")
+    # The on-disk envelope is opaque: plaintext appears nowhere in it.
+    assert "sk-super-secret" not in str(sealed)
+    # And it round-trips back for the in-memory settings singleton.
+    assert _unseal_secret(sealed) == "sk-super-secret"
+    # Plaintext/legacy values pass through unchanged.
+    assert _unseal_secret("plain") == "plain"
