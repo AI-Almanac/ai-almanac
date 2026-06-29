@@ -6,8 +6,9 @@ schema so the UI can render an opinionated form. Patches are persisted to the
 live `settings` singleton via `reload_settings()` without restarting the
 server.
 
-Sensitive fields (API keys, signing secrets) are masked in GET responses
-unless `?reveal=true` is passed.
+Sensitive fields (API keys, signing secrets) are always masked in responses
+and can never be revealed through the API. To change a secret, overwrite it
+with a new value or clear it.
 """
 
 from __future__ import annotations
@@ -30,8 +31,6 @@ from ai_almanac.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-_MASK = "***"
 
 # Field grouping + display metadata. Drives the Settings UI's section layout.
 # Order matters — sections render in this order, fields within a section too.
@@ -91,6 +90,13 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ),
 ]
 
+# The only fields GET/PATCH /settings will ever read or write. Derived from the
+# UI's declared groups so the endpoint can never expose a model field the UI
+# doesn't surface (e.g. db_password, globus_client_secret, admin_emails).
+_SCHEMA_FIELDS: frozenset[str] = frozenset(
+    field_name for _, fields in _FIELD_GROUPS for field_name, _, _ in fields
+)
+
 
 class FieldSchema(BaseModel):
     name: str
@@ -109,7 +115,11 @@ class SettingsSchema(BaseModel):
 
 
 class SettingsValues(BaseModel):
+    # Non-sensitive declared fields, by name -> value.
     values: dict[str, Any]
+    # Sensitive declared fields, by name -> whether a value is configured. The
+    # plaintext is never included.
+    secrets: dict[str, bool]
 
 
 def _python_type_name(annotation) -> str:
@@ -122,10 +132,22 @@ def _python_type_name(annotation) -> str:
     return "string"
 
 
-def _present_value(field_name: str, value: Any, reveal: bool) -> Any:
-    if not reveal and field_name in SENSITIVE_FIELDS and value:
-        return _MASK
-    return value
+def _read_settings() -> SettingsValues:
+    """Project the live settings into the client payload: declared fields only,
+    with sensitive ones reduced to a configured/not flag so no secret value can
+    leave the server."""
+    model_fields = type(settings).model_fields
+    values: dict[str, Any] = {}
+    secrets: dict[str, bool] = {}
+    for name in _SCHEMA_FIELDS:
+        if name not in model_fields:
+            continue
+        value = getattr(settings, name)
+        if name in SENSITIVE_FIELDS:
+            secrets[name] = bool(value)
+        else:
+            values[name] = value
+    return SettingsValues(values=values, secrets=secrets)
 
 
 @router.get("/schema", response_model=SettingsSchema)
@@ -164,14 +186,11 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
 
 
 @router.get("", response_model=SettingsValues)
-def get_settings(_admin: AdminUser, reveal: bool = False) -> SettingsValues:
-    """Return current effective settings. Sensitive fields are masked unless
-    `?reveal=true` is passed (which the UI sends after the user explicitly
-    clicks 'show' on a secret input)."""
-    values: dict[str, Any] = {}
-    for name in type(settings).model_fields:
-        values[name] = _present_value(name, getattr(settings, name), reveal)
-    return SettingsValues(values=values)
+def get_settings(_admin: AdminUser) -> SettingsValues:
+    """Return current effective settings for the UI's declared fields. Secret
+    fields report only whether they are configured; plaintext never leaves the
+    server, and undeclared model fields are not exposed at all."""
+    return _read_settings()
 
 
 class SettingsPatch(BaseModel):
@@ -181,30 +200,23 @@ class SettingsPatch(BaseModel):
 @router.patch("", response_model=SettingsValues)
 def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
     """Persist a partial update to the database overlay and hot-reload the
-    settings singleton. Returns the new effective settings (with secrets
-    masked)."""
+    settings singleton. Only declared fields may be written; sending an empty
+    string clears a secret. Returns the new effective settings, with secrets
+    reduced to configured/not flags."""
     cleaned: dict[str, Any] = {}
     for key, value in body.values.items():
-        if key not in type(settings).model_fields:
+        if key not in _SCHEMA_FIELDS:
             raise HTTPException(status_code=400, detail=f"unknown setting: {key}")
         if settings.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
             raise HTTPException(
                 status_code=400,
                 detail=f"{key} is environment-only in shared deployments",
             )
-        # Treat masked-value submissions as no-ops so the UI can round-trip
-        # the whole GET payload without accidentally writing "***" to a secret.
-        if key in SENSITIVE_FIELDS and value == _MASK:
-            continue
         cleaned[key] = value
 
     write_settings_overlay(cleaned)
     reload_settings()
-
-    values: dict[str, Any] = {}
-    for name in type(settings).model_fields:
-        values[name] = _present_value(name, getattr(settings, name), reveal=False)
-    return SettingsValues(values=values)
+    return _read_settings()
 
 
 @router.get("/config-yaml-path")

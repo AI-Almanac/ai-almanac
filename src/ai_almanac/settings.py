@@ -293,14 +293,20 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# Fields whose values must not be returned in plaintext from GET /settings
-# (they're masked with "***" unless an explicit `?reveal=true` is requested).
+# Fields whose plaintext must never leave the server. GET /settings reports only
+# whether one of these is configured (a boolean), never its value. Membership
+# here is a backstop: the endpoint already restricts its payload to the fields
+# the UI declares, but any sensitive field that ever reaches the UI must be
+# listed so it is reported as a status flag rather than a value.
 SENSITIVE_FIELDS: frozenset[str] = frozenset(
     {
         "cdsapi_key",
         "llm_api_key",
         "chat_figure_signing_secret",
         "credential_encryption_key",
+        "database_url",
+        "db_password",
+        "globus_client_secret",
     }
 )
 

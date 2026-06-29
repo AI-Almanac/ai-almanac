@@ -21,8 +21,9 @@
 	let error = $state<string | null>(null);
 	let savingGroup = $state<string | null>(null);
 	let savedFlash = $state<string | null>(null);
-	let revealed = $state<Record<string, boolean>>({});
-	let revealedValues = $state<Record<string, unknown>>({});
+	// Whether a secret field currently has a value stored on the server. The
+	// plaintext is never sent to the client; we only know if one is set.
+	let configured = $state<Record<string, boolean>>({});
 
 	async function load() {
 		loading = true;
@@ -35,8 +36,15 @@
 			]);
 			groups = s.groups;
 			deploymentMode = s.deployment_mode;
-			values = { ...v };
-			original = { ...v };
+			values = { ...v.values };
+			original = { ...v.values };
+			// The server sends only configured/not flags for secrets — never a
+			// value. Inputs start blank and only ever hold a typed replacement.
+			configured = { ...v.secrets };
+			for (const name of Object.keys(configured)) {
+				values[name] = '';
+				original[name] = '';
+			}
 			configPath = p;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -66,19 +74,18 @@
 				return;
 			}
 			const updated = await patchSettings(patch);
-			// Merge updated back into both values and original so unchanged-detection resets.
 			for (const k of Object.keys(patch)) {
-				values[k] = updated[k];
-				original[k] = updated[k];
+				if (k in updated.secrets) {
+					// A secret we just set/cleared: keep the input blank and only
+					// remember whether a value is now stored.
+					configured[k] = updated.secrets[k];
+					values[k] = '';
+					original[k] = '';
+				} else {
+					values[k] = updated.values[k];
+					original[k] = updated.values[k];
+				}
 			}
-			// Drop revealed view for any secret we just edited so the masked
-			// state reasserts on next render.
-			for (const k of Object.keys(patch)) {
-				delete revealed[k];
-				delete revealedValues[k];
-			}
-			revealed = { ...revealed };
-			revealedValues = { ...revealedValues };
 			savedFlash = `${group.name} saved`;
 			setTimeout(() => {
 				if (savedFlash === `${group.name} saved`) savedFlash = null;
@@ -90,21 +97,13 @@
 		}
 	}
 
-	async function toggleReveal(field: SettingsField) {
-		if (revealed[field.name]) {
-			delete revealed[field.name];
-			delete revealedValues[field.name];
-			revealed = { ...revealed };
-			revealedValues = { ...revealedValues };
-			return;
-		}
+	async function removeKey(field: SettingsField) {
+		error = null;
 		try {
-			const all = await getSettings(true);
-			revealedValues[field.name] = all[field.name] ?? '';
-			revealed[field.name] = true;
-			values[field.name] = revealedValues[field.name];
-			revealed = { ...revealed };
-			revealedValues = { ...revealedValues };
+			const updated = await patchSettings({ [field.name]: '' });
+			configured[field.name] = updated.secrets[field.name] ?? false;
+			values[field.name] = '';
+			original[field.name] = '';
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		}
@@ -112,7 +111,7 @@
 
 	function inputType(field: SettingsField): string {
 		if (field.type === 'int' || field.type === 'float') return 'number';
-		if (field.sensitive && !revealed[field.name]) return 'password';
+		if (field.sensitive) return 'password';
 		return 'text';
 	}
 
@@ -222,20 +221,31 @@
 											value={String(values[field.name] ?? '')}
 											disabled={!field.editable}
 											oninput={(e) => onValueChange(field, e.currentTarget.value)}
-											placeholder={String(field.default ?? '')}
+											placeholder={field.sensitive
+												? configured[field.name]
+													? 'Enter a new key to replace'
+													: 'Not set — enter a key'
+												: String(field.default ?? '')}
 										/>
-										{#if field.sensitive && field.editable}
+										{#if field.sensitive && field.editable && configured[field.name]}
 											<button
 												type="button"
-												class="reveal"
-												onclick={() => toggleReveal(field)}
-												title={revealed[field.name] ? 'Hide' : 'Reveal'}
+												class="secretbtn"
+												onclick={() => removeKey(field)}
+												title="Remove the stored key"
 											>
-												{revealed[field.name] ? 'Hide' : 'Reveal'}
+												Remove
 											</button>
 										{/if}
 									{/if}
 								</div>
+								{#if field.sensitive}
+									<p class="desc secretstatus">
+										{configured[field.name]
+											? '✓ A key is configured. Its value is never shown — to change it, enter a new key or remove it.'
+											: 'No key configured.'}
+									</p>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -381,7 +391,7 @@
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
-	.reveal {
+	.secretbtn {
 		background: transparent;
 		color: var(--color-text-muted);
 		border-color: var(--color-border);
