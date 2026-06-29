@@ -157,12 +157,6 @@ variable "enable_run_code_sandbox" {
   default     = true
 }
 
-variable "job_output_retention_days" {
-  description = "Days before job output files are automatically deleted from GCS"
-  type        = number
-  default     = 30
-}
-
 # ---------------------------------------------------------------------------
 # Job runner / data config
 # ---------------------------------------------------------------------------

@@ -52,7 +52,8 @@ resource "google_storage_bucket" "uploads" {
 # ---------------------------------------------------------------------------
 # ROMP job outputs (NetCDF metrics + PNG figures)
 # Structured as: {job_id}/output/  and  {job_id}/figure/
-# Outputs are reproducible — expire after retention window.
+# Prod keeps outputs indefinitely until a user deletes them — no auto-expiry.
+# Revisit with an explicit retention policy if storage cost becomes an issue.
 # ---------------------------------------------------------------------------
 resource "google_storage_bucket" "job_outputs" {
   name          = local.outputs_bucket
@@ -60,15 +61,6 @@ resource "google_storage_bucket" "job_outputs" {
   storage_class = "STANDARD"
 
   uniform_bucket_level_access = true
-
-  lifecycle_rule {
-    condition {
-      age = var.job_output_retention_days
-    }
-    action {
-      type = "Delete"
-    }
-  }
 }
 
 # ---------------------------------------------------------------------------

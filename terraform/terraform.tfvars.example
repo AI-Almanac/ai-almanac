@@ -37,6 +37,3 @@ admin_emails = "you@example.com"
 # llm_model               = "claude-sonnet-4-6"
 # enable_run_code         = false
 # enable_run_code_sandbox = false
-
-# Job output retention (days before GCS auto-deletes outputs)
-job_output_retention_days = 30
