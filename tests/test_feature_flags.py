@@ -5,7 +5,28 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from ai_almanac.settings import settings
+from ai_almanac.settings import (
+    reload_settings,
+    settings,
+    write_settings_overlay,
+)
+
+
+def test_overlay_persists_across_reload() -> None:
+    """An admin's setting change survives a settings reload (i.e. a redeploy),
+    because it lives in the database overlay, not the ephemeral config.yaml."""
+    original = settings.enable_data_management
+    try:
+        write_settings_overlay({"enable_data_management": False})
+        # Simulate a fresh process / redeploy: drop the in-memory value, then
+        # re-resolve settings from scratch.
+        settings.enable_data_management = True
+        reload_settings()
+        assert settings.enable_data_management is False
+    finally:
+        write_settings_overlay({"enable_data_management": None})
+        reload_settings()
+        assert settings.enable_data_management == original
 
 
 @pytest.mark.asyncio

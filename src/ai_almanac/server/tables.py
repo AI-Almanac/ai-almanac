@@ -98,3 +98,13 @@ job_artifacts = sa.Table(
     sa.Column("storage_key", sa.Text(), nullable=False),
     sa.Column("created_at", sa.Text(), nullable=False),
 )
+
+# Persistent settings overlay written by the admin Settings UI. Lives in the
+# database (not the container's ephemeral config.yaml) so admin changes survive
+# redeploys. One row per overridden setting; `value` round-trips scalars as JSON.
+app_config = sa.Table(
+    "app_config",
+    metadata,
+    sa.Column("key", sa.Text(), primary_key=True),
+    sa.Column("value", sa.JSON(), nullable=False),
+)

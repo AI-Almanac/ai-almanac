@@ -1,9 +1,10 @@
 """Settings API.
 
 Surfaces the application settings as a typed JSON document plus a per-field
-schema so the UI can render an opinionated form. Patches are persisted to
-`$AI_ALMANAC_DATA_DIR/config.yaml` and applied to the live `settings`
-singleton via `reload_settings()` without restarting the server.
+schema so the UI can render an opinionated form. Patches are persisted to the
+`app_config` database overlay (so they survive redeploys) and applied to the
+live `settings` singleton via `reload_settings()` without restarting the
+server.
 
 Sensitive fields (API keys, signing secrets) are masked in GET responses
 unless `?reveal=true` is passed.
@@ -25,7 +26,7 @@ from ai_almanac.settings import (
     SHARED_ENV_ONLY_FIELDS,
     reload_settings,
     settings,
-    write_config_yaml,
+    write_settings_overlay,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -179,8 +180,9 @@ class SettingsPatch(BaseModel):
 
 @router.patch("", response_model=SettingsValues)
 def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
-    """Persist a partial update to config.yaml and hot-reload the settings
-    singleton. Returns the new effective settings (with secrets masked)."""
+    """Persist a partial update to the database overlay and hot-reload the
+    settings singleton. Returns the new effective settings (with secrets
+    masked)."""
     cleaned: dict[str, Any] = {}
     for key, value in body.values.items():
         if key not in type(settings).model_fields:
@@ -196,7 +198,7 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
             continue
         cleaned[key] = value
 
-    write_config_yaml(cleaned)
+    write_settings_overlay(cleaned)
     reload_settings()
 
     values: dict[str, Any] = {}

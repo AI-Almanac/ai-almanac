@@ -250,16 +250,23 @@ settings = Settings()
 
 
 # ---------------------------------------------------------------------------
-# config.yaml layering + hot reload.
+# settings overlay layering + hot reload.
 # ---------------------------------------------------------------------------
 #
 # Resolution order, lowest to highest precedence:
 #   1. Code defaults (the Settings field defaults above)
-#   2. config.yaml at $AI_ALMANAC_DATA_DIR/config.yaml (edited via the UI)
-#   3. Environment variables / .env files
+#   2. config.yaml at $AI_ALMANAC_DATA_DIR/config.yaml (hand-editable seed)
+#   3. The `app_config` database overlay (written by the admin Settings UI)
+#   4. Environment variables / .env files
 #
-# config.yaml is the user-editable surface. Env vars still win so headless /
-# CI deployments can override anything via env without touching the file.
+# The database overlay is where UI edits land. It lives in the application
+# database, which is the persistent store in every deployment (the SQLite file
+# in the data dir for personal installs, PostgreSQL for shared deployments), so
+# admin changes survive redeploys — unlike config.yaml, which sits on the
+# container's ephemeral filesystem in managed deployments.
+#
+# config.yaml remains a hand-editable seed/override for local installs. Env vars
+# still win so headless / CI deployments can override anything via env.
 
 
 # Fields that need a server restart to fully take effect (e.g. baked into the
@@ -344,11 +351,31 @@ def _load_config_yaml() -> dict:
         return {}
 
 
-def _apply_yaml_overrides(target: Settings) -> None:
-    """Overlay config.yaml values onto `target`, but never overwrite a field
-    whose corresponding environment variable is set.
+def _load_db_overlay() -> dict:
+    """Read the persistent settings overlay from the `app_config` table.
+
+    Returns ``{}`` if the database is unreachable or the table is absent (e.g.
+    before migrations on first launch), so settings resolution never hard-
+    depends on the database being ready.
     """
-    data = _load_config_yaml()
+    try:
+        from sqlalchemy import select
+
+        from ai_almanac.server.sync_db import sync_engine
+        from ai_almanac.server.tables import app_config
+
+        with sync_engine().connect() as conn:
+            rows = conn.execute(
+                select(app_config.c.key, app_config.c.value)
+            ).all()
+        return {key: value for key, value in rows}
+    except Exception:
+        return {}
+
+
+def _apply_overlay(target: Settings, data: dict) -> None:
+    """Overlay `data` onto `target`, but never overwrite a field whose
+    corresponding environment variable is set."""
     for key, value in data.items():
         if key not in type(target).model_fields:
             continue
@@ -365,36 +392,41 @@ def _apply_yaml_overrides(target: Settings) -> None:
 
 
 def reload_settings() -> Settings:
-    """Re-read code defaults + env + config.yaml; mutate the singleton in place.
+    """Re-resolve defaults + env + config.yaml + DB overlay; mutate the
+    singleton in place.
 
-    Called by the Settings PATCH endpoint after writing changes, and once on
-    server startup. Mutates `settings` so existing imports stay valid. The new
-    values are fully resolved on a scratch instance first, so the in-place
-    update is a plain field copy with no window where config.yaml overrides
-    have been reverted to env/defaults.
+    Called by the Settings PATCH endpoint after writing changes, and on server
+    startup. Mutates `settings` so existing imports stay valid. The new values
+    are fully resolved on a scratch instance first, so the in-place update is a
+    plain field copy with no window where overlays have been reverted to
+    env/defaults.
     """
-    fresh = Settings()  # defaults + env (no YAML)
-    _apply_yaml_overrides(fresh)
+    fresh = Settings()  # defaults + env (no overlay)
+    _apply_overlay(fresh, _load_config_yaml())  # config.yaml seed
+    _apply_overlay(fresh, _load_db_overlay())  # DB overlay wins over the seed
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
     return settings
 
 
-def write_config_yaml(updates: dict) -> dict:
-    """Persist a partial settings update to config.yaml.
+def write_settings_overlay(updates: dict) -> dict:
+    """Persist a partial settings update to the `app_config` database overlay.
 
-    Merges into the existing file (does not clobber unrelated keys). Returns
-    the full new config.yaml contents as a dict.
+    Upserts each key (does not clobber unrelated keys). A value of `None` clears
+    the override so the field reverts to its config.yaml/env/default. Returns
+    the full merged overlay. Lives in the database so it survives redeploys.
     """
-    path = config_yaml_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current = _load_config_yaml()
-    merged = {**current, **updates}
-    # Drop keys whose value is `None` so users can revert to default by
-    # clearing a field in the UI.
-    merged = {k: v for k, v in merged.items() if v is not None}
-    path.write_text(yaml.safe_dump(merged, sort_keys=True, default_flow_style=False))
-    return merged
+    from sqlalchemy import delete, insert
+
+    from ai_almanac.server.sync_db import sync_engine
+    from ai_almanac.server.tables import app_config
+
+    with sync_engine().begin() as conn:
+        for key, value in updates.items():
+            conn.execute(delete(app_config).where(app_config.c.key == key))
+            if value is not None:
+                conn.execute(insert(app_config).values(key=key, value=value))
+    return _load_db_overlay()
 
 
 # ---------------------------------------------------------------------------

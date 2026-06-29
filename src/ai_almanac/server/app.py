@@ -77,6 +77,9 @@ async def lifespan(app: FastAPI):
     await _wait_for_database()
     if _should_auto_migrate():
         _apply_migrations()
+    # Re-layer settings now that the database (the persistent `app_config`
+    # overlay) is reachable; the call at line ~75 only saw config.yaml + env.
+    _reload_user_config()
     await _seed_regions()
     await _seed_data_sources()
     await _reconcile_jobs()
@@ -90,7 +93,7 @@ async def lifespan(app: FastAPI):
 
 
 def _reload_user_config() -> None:
-    """Layer `$AI_ALMANAC_DATA_DIR/config.yaml` onto the settings singleton."""
+    """Layer config.yaml + the database overlay onto the settings singleton."""
     from ai_almanac.settings import reload_settings
 
     reload_settings()
