@@ -10,6 +10,7 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 from importlib.resources import files
@@ -20,6 +21,24 @@ from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_d
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
 BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
+
+# Platforms forecast.pixi.toml declares — earth2studio's GPU extras (e.g.
+# fuxi's onnxruntime-gpu) ship no macOS/Windows wheels at all, and
+# forecast_pipeline.load_model() hard-requires CUDA regardless, so there's no
+# point solving (or running) this env anywhere else.
+_FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
+
+
+def _current_pixi_platform() -> str:
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == "Linux":
+        return "linux-aarch64" if machine in ("aarch64", "arm64") else "linux-64"
+    if system == "Darwin":
+        return "osx-arm64" if machine == "arm64" else "osx-64"
+    if system == "Windows":
+        return "win-64"
+    return f"{system.lower()}-{machine}"
 
 
 def _pixi_spec() -> Path:
@@ -115,26 +134,43 @@ def ensure_blending_env() -> Path:
     return env_dir
 
 
-def ensure_forecast_env() -> Path:
+def ensure_forecast_env() -> Path | None:
     """Install the live-forecast dependencies (earth2studio + torch + geo stack).
 
     By far the heaviest of the three environments (CUDA/PyTorch + AI model
     checkpoints, downloaded lazily by earth2studio on first real run) — still
     chained from ensure_env() for consistency with benchmark/blending, but
     expect `ai-almanac env prepare` to take noticeably longer as a result.
+
+    Skipped (not an error) on platforms forecast.pixi.toml doesn't support —
+    a developer running `env prepare` on a Mac still gets benchmark/blending
+    installed; only a Linux GPU host (see `self-host-local-gpu`) or Modal can
+    actually run live forecasts.
     """
+    current = _current_pixi_platform()
+    if current not in _FORECAST_PLATFORMS:
+        print(
+            f"Skipping forecast env: unsupported on {current}. Live forecast generation "
+            "needs a Linux GPU host (see the `self-host-local-gpu` deployment profile) "
+            "or the Modal job runner."
+        )
+        return None
     env_dir = forecast_env_dir()
     _install(_forecast_pixi_spec(), env_dir)
     return env_dir
 
 
-def ensure_env() -> Path:
-    """Idempotently prepare all local workload environments."""
+def ensure_env() -> tuple[Path, Path, Path | None]:
+    """Idempotently prepare all local workload environments.
+
+    Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
+    None when skipped on an unsupported platform (see ensure_forecast_env).
+    """
     env_dir = benchmark_env_dir()
     _install(_pixi_spec(), env_dir)
-    ensure_blending_env()
-    ensure_forecast_env()
-    return env_dir
+    blending_dir = ensure_blending_env()
+    forecast_dir = ensure_forecast_env()
+    return env_dir, blending_dir, forecast_dir
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:

@@ -113,12 +113,12 @@ def env_prepare() -> None:
         raise typer.Exit(code=1)
 
     from ai_almanac.envs.manager import ensure_env
-    from ai_almanac.paths import blending_env_dir, forecast_env_dir
 
-    env_path = ensure_env()
-    typer.echo(f"benchmark env ready at {env_path}")
-    typer.echo(f"blending env ready at {blending_env_dir()}")
-    typer.echo(f"forecast env ready at {forecast_env_dir()}")
+    benchmark_dir, blending_dir, forecast_dir = ensure_env()
+    typer.echo(f"benchmark env ready at {benchmark_dir}")
+    typer.echo(f"blending env ready at {blending_dir}")
+    if forecast_dir is not None:
+        typer.echo(f"forecast env ready at {forecast_dir}")
 
 
 @env_app.command("info")

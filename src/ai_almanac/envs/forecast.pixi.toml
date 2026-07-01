@@ -14,7 +14,11 @@
 name = "ai-almanac-forecast"
 description = "Live forecast execution environment for ai-almanac."
 channels = ["conda-forge"]
-platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+# Linux only: earth2studio's GPU extras (e.g. fuxi's onnxruntime-gpu) ship no
+# macOS wheels at all, and forecast_pipeline.load_model() hard-requires CUDA
+# regardless — there's no CPU/Mac fallback to support. Real local execution
+# needs a Linux GPU host (see the `self-host-local-gpu` deployment profile).
+platforms = ["linux-64", "linux-aarch64"]
 
 [dependencies]
 python = "3.11.*"
@@ -24,12 +28,16 @@ pytorch = "*"
 gdal = "*"
 proj = "*"
 rasterio = "*"
-netcdf4 = "*"
+netcdf4 = "<1.7.3"
 h5netcdf = "*"
 xarray = "*"
 zarr = "*"
 numpy = "*"
 pyyaml = "*"
+# earth2studio 0.14.0 pins pandas<3; without this the conda solver picks
+# whatever pandas its other conda deps allow (currently 3.x), which then
+# fails pypi resolution against earth2studio's pin.
+pandas = "<3"
 
 [pypi-dependencies]
 earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.14.0", extras = ["aifs", "data", "fuxi", "graphcast"] }
