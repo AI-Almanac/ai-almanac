@@ -34,6 +34,7 @@ _MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("models.yaml")))
 _DATASETS_YAML = Path(str(_CONFIG_PKG.joinpath("datasets.yaml")))
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
+_FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +144,10 @@ class Settings(BaseSettings):
     # Blend training runs in a separate Modal app (different image/dependencies);
     # the job config carries this app name so the shared runner can target it.
     modal_blending_app_name: str = "almanac-blending"
+    # Live forecast generation (GPU earth2studio inference) runs in its own
+    # Modal app; same targeting mechanism as modal_blending_app_name.
+    modal_forecast_app_name: str = "almanac-forecasts"
+    modal_forecast_function_name: str = "run_forecast"
 
     # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.
@@ -510,3 +515,19 @@ def get_metric_definitions() -> list[dict]:
 
 def get_packaged_regions() -> list[dict]:
     return yaml.safe_load(_REGIONS_YAML.read_text())
+
+
+_forecast_models_cache: list[dict] | None = None
+
+
+def get_packaged_forecast_models() -> list[dict]:
+    """Load the AI weather model registry used for live forecast generation.
+
+    Single source of truth for model id/variables/lead-hour defaults, shared
+    by the API's model list endpoint and the Modal forecast app (bundled into
+    its image), so the two never drift out of sync.
+    """
+    global _forecast_models_cache
+    if _forecast_models_cache is None:
+        _forecast_models_cache = yaml.safe_load(_FORECAST_MODELS_YAML.read_text())
+    return _forecast_models_cache

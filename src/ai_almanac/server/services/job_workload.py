@@ -11,6 +11,7 @@ import sqlalchemy as sa
 
 from ai_almanac.envs.manager import run as pixi_run
 from ai_almanac.envs.manager import run_blending as blending_pixi_run
+from ai_almanac.envs.manager import run_forecast as forecast_pixi_run
 from ai_almanac.paths import blending_env_dir
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
@@ -29,6 +30,8 @@ def run_job_workload(job_id: str) -> None:
     config = json.loads(row[0] or "{}")
     if config.get("job_type") == "blend":
         _run_blend(job_id, config)
+    elif config.get("job_type") == "forecast":
+        _run_forecast(job_id, config)
     elif settings.runner_mode == "pixi":
         _run_pixi(job_id, config)
     else:
@@ -79,6 +82,33 @@ def _run_blend(job_id: str, config: dict) -> None:
     print(f"==> Blend config: {config_path}", flush=True)
     print("==> Starting model blending...", flush=True)
     process = blending_pixi_run(
+        [
+            "python",
+            str(entrypoint),
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+        ],
+        env=process_env,
+    )
+    _stream_process(process)
+
+
+def _run_forecast(job_id: str, config: dict) -> None:
+    storage = get_storage()
+    if not storage.is_local:
+        raise RuntimeError("Local forecast execution requires local storage")
+    output_dir_raw, _ = storage.job_output_uri(job_id)
+    output_dir = Path(output_dir_raw)
+    config_path = output_dir.parent / "forecast-config.json"
+    config_path.write_text(json.dumps(config))
+    entrypoint = Path(__file__).parents[2] / "envs" / "forecast_entrypoint.py"
+    process_env = os.environ.copy()
+
+    print(f"==> Forecast config: {config_path}", flush=True)
+    print("==> Starting live forecast generation...", flush=True)
+    process = forecast_pixi_run(
         [
             "python",
             str(entrypoint),

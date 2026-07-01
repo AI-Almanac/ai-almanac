@@ -27,7 +27,7 @@ from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import datasets, jobs, users
-from ai_almanac.settings import settings
+from ai_almanac.settings import get_packaged_forecast_models, settings
 
 
 class RompParams(BaseModel):
@@ -498,6 +498,236 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
     return blend_row_to_out(row, user_id)
+
+
+class ForecastParams(BaseModel):
+    """Live forecast generation options. Unset fields fall back to the AI
+    weather model registry's defaults (see server/config/forecast_models.yaml)."""
+
+    init_time: str | None = None
+    lead_hours: list[int] | None = None
+    variables: list[str] | None = None
+
+
+class ForecastCreate(BaseModel):
+    blend_id: str
+    forecast_model_ids: list[str] | None = None
+    params: ForecastParams = ForecastParams()
+    run_id: str | None = None
+
+
+class ForecastOut(BaseModel):
+    id: str
+    blend_id: str
+    status: str
+    forecast_model_ids: list[str]
+    init_time: str | None = None
+    region_id: str | None = None
+    created_at: str
+    completed_at: str | None = None
+    error: str | None = None
+    is_owner: bool = True
+    visibility: str = "private"
+    run_id: str | None = None
+
+
+def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
+    cfg = json.loads(row.get("config_json") or "{}")
+    is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
+    return ForecastOut(
+        id=row["id"],
+        blend_id=cfg.get("blend_id") or "",
+        status=row["status"],
+        forecast_model_ids=cfg.get("forecast_model_ids") or [],
+        init_time=cfg.get("init_time"),
+        region_id=cfg.get("region_id"),
+        created_at=row["created_at"],
+        completed_at=row.get("completed_at"),
+        error=row.get("error"),
+        is_owner=is_owner,
+        visibility=row.get("visibility") or "private",
+        run_id=row.get("run_id"),
+    )
+
+
+async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
+    async with get_db() as conn:
+        row = (
+            (await conn.execute(sa.select(jobs).where(jobs.c.id == blend_id)))
+            .mappings()
+            .fetchone()
+        )
+    if not row or row["job_type"] != "blend":
+        raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
+    if row["user_id"] != user_id and (row.get("visibility") or "private") != "shared":
+        raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
+    if row["status"] != "complete":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Blend is not complete (status: {row['status']})",
+        )
+    return dict(row)
+
+
+async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
+    """Submit a live-forecast job: run the blend's models forward and score them.
+
+    Works with either job runner: locally via the `forecast` pixi environment
+    (envs/forecast_entrypoint.py, requires a GPU host — see the
+    `self-host-local-gpu` deployment profile) or via the Modal app, exactly
+    like blend/benchmark submission already does.
+    """
+    blend_row = await _resolve_parent_blend(body.blend_id, user_id)
+    blend_config = json.loads(blend_row.get("config_json") or "{}")
+
+    model_names: list[str] = blend_config.get("model_names") or []
+    # Live inference runs against the forecast_models.yaml registry (earth2studio
+    # model ids), not the archived data-source ids the blend was trained from
+    # (blend_config["model_source_ids"]). We require the blend's own model
+    # names to double as registry ids, since score_live_forecast_bundle joins
+    # the live model's output back into the blend's formula by that same name
+    # (the `diff_<model>_qx` terms) — a live model with no matching name can't
+    # be scored against this blend's trained weights.
+    registry = get_packaged_forecast_models()
+    registry_ids = {m["id"] for m in registry.get("models") or []}
+    requested = set(body.forecast_model_ids) if body.forecast_model_ids else set(model_names)
+    unknown = sorted(requested - set(model_names))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
+        )
+    unsupported = sorted(requested - registry_ids)
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Blend model(s) have no live forecast model to run: "
+                f"{', '.join(unsupported)}"
+            ),
+        )
+    forecast_model_ids = sorted(requested)
+    if not forecast_model_ids:
+        raise HTTPException(status_code=400, detail="Blend has no models to forecast")
+
+    known_variables = set(registry.get("variables") or [])
+    variables = body.params.variables or list(registry.get("variables") or [])
+    unknown_variables = sorted(set(variables) - known_variables)
+    if unknown_variables:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported forecast variables: {', '.join(unknown_variables)}",
+        )
+    lead_hours = body.params.lead_hours or list(registry.get("default_lead_hours") or [])
+
+    # The season-long scoring loop (run_season_forecast) needs each model's
+    # archived issue-day cadence, unit conversion, and spatial extent so its
+    # output matches the shape/units the blend was trained against — these
+    # live on the original archived data source, not the live registry.
+    model_source_ids: list[str] = blend_config.get("model_source_ids") or []
+    source_id_by_name = dict(zip(model_names, model_source_ids, strict=True))
+    season_model_params: dict[str, dict] = {}
+    for name in forecast_model_ids:
+        source_id = source_id_by_name.get(name)
+        source = await data_source_service.get_source(source_id) if source_id else None
+        metadata = (source or {}).get("metadata") or {}
+        season_model_params[name] = {
+            "init_days": metadata.get("init_days") or "0,3",
+            "unit_cvt": metadata.get("unit_cvt", 1.0),
+            "spatial_bounds": metadata.get("spatial_bounds"),
+        }
+
+    job_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    config = {
+        "job_type": "forecast",
+        "modal_app": settings.modal_forecast_app_name,
+        "modal_function": settings.modal_forecast_function_name,
+        "blend_id": body.blend_id,
+        # Frozen at submission time so a later edit to the blend doesn't
+        # retroactively change a forecast job already queued.
+        "blend_config_snapshot": blend_config,
+        "forecast_model_ids": forecast_model_ids,
+        "season_model_params": season_model_params,
+        "region_id": blend_config.get("region_id"),
+        "init_time": body.params.init_time,
+        "lead_hours": lead_hours,
+        "variables": variables,
+    }
+
+    async with get_db() as conn:
+        await lock_for_update(conn)
+        await conn.execute(
+            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
+        )
+        active_count = (
+            await conn.execute(
+                sa.select(sa.func.count())
+                .select_from(jobs)
+                .where(
+                    jobs.c.user_id == user_id,
+                    jobs.c.status.in_(ACTIVE_STATUSES),
+                )
+            )
+        ).scalar_one()
+        if active_count >= settings.max_active_jobs_per_user:
+            raise HTTPException(status_code=429, detail="active job quota exceeded")
+        result = await conn.execute(
+            sa.insert(jobs)
+            .values(
+                id=job_id,
+                user_id=user_id,
+                dataset_id=blend_row["dataset_id"],
+                job_type="forecast",
+                status="queued",
+                config_json=json.dumps(config),
+                run_id=body.run_id,
+                created_at=now,
+                runner_request={"job_id": job_id, "resources": {"gpus": 1}},
+            )
+            .returning(jobs)
+        )
+        row = dict(result.mappings().fetchone())
+        await audit(
+            conn,
+            "forecast.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            metadata={"blend_id": body.blend_id, "forecast_model_ids": forecast_model_ids},
+        )
+        await usage(
+            conn,
+            "forecast.submitted",
+            user_id=user_id,
+            resource_type="job",
+            resource_id=job_id,
+            quantity=1,
+        )
+
+    try:
+        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+    except Exception as exc:
+        async with get_db() as conn:
+            await conn.execute(
+                sa.update(jobs)
+                .where(jobs.c.id == job_id)
+                .values(
+                    status="failed",
+                    completed_at=datetime.now(UTC).isoformat(),
+                    error=str(exc),
+                )
+            )
+        raise HTTPException(
+            status_code=400, detail=f"Forecast submission failed: {exc}"
+        ) from exc
+
+    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
+    if handle.runner != "local":
+        values["status"] = "running"
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    return forecast_row_to_out(row, user_id)
 
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:

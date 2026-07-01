@@ -1,0 +1,35 @@
+# Pixi spec for the ai-almanac live-forecast execution environment.
+#
+# Holds earth2studio, its PyTorch/CUDA stack, and the geo stack needed to
+# render Cloud-Optimized GeoTIFFs (rasterio/GDAL/PROJ). Separate from the
+# benchmark/blending environments since this is by far the heaviest of the
+# three — kept out of the default install so `pip install ai-almanac` and
+# `ai-almanac env prepare`'s other environments stay light.
+#
+# Installed into `$AI_ALMANAC_DATA_DIR/forecast-env/` on first use via
+# `ai-almanac env prepare`. Real (non-stub) local execution requires a GPU —
+# see the `self-host-local-gpu` deployment profile.
+
+[workspace]
+name = "ai-almanac-forecast"
+description = "Live forecast execution environment for ai-almanac."
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+
+[dependencies]
+python = "3.11.*"
+pip = "*"
+pytorch = "*"
+# Geo stack — conda-forge handles the GDAL/PROJ C libs cleanly.
+gdal = "*"
+proj = "*"
+rasterio = "*"
+netcdf4 = "*"
+h5netcdf = "*"
+xarray = "*"
+zarr = "*"
+numpy = "*"
+pyyaml = "*"
+
+[pypi-dependencies]
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.14.0", extras = ["aifs", "data", "fuxi", "graphcast"] }

@@ -29,10 +29,12 @@ from ai_almanac.server.routers import (
     config,
     data_sources,
     datasets,
+    forecasts,
     fs,
     jobs,
     llm_profiles,
     regions,
+    tiles,
     uploads,
 )
 from ai_almanac.server.routers import (
@@ -198,6 +200,8 @@ async def _job_reconciler_loop() -> None:
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)
 
+tiles.add_exception_handlers(app)
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -287,11 +291,13 @@ app.include_router(config.router)
 app.include_router(config.root_router)
 app.include_router(data_sources.router)
 app.include_router(datasets.router)
+app.include_router(forecasts.router)
 app.include_router(fs.router)
 app.include_router(jobs.router)
 app.include_router(llm_profiles.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
+app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])
 app.include_router(uploads.router)
 
 

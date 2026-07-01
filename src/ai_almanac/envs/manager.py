@@ -15,7 +15,7 @@ import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from ai_almanac.paths import benchmark_env_dir, blending_env_dir
+from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
@@ -30,6 +30,11 @@ def _pixi_spec() -> Path:
 
 def _blending_pixi_spec() -> Path:
     spec = files("ai_almanac.envs").joinpath("blending.pixi.toml")
+    return Path(str(spec))
+
+
+def _forecast_pixi_spec() -> Path:
+    spec = files("ai_almanac.envs").joinpath("forecast.pixi.toml")
     return Path(str(spec))
 
 
@@ -110,11 +115,25 @@ def ensure_blending_env() -> Path:
     return env_dir
 
 
+def ensure_forecast_env() -> Path:
+    """Install the live-forecast dependencies (earth2studio + torch + geo stack).
+
+    By far the heaviest of the three environments (CUDA/PyTorch + AI model
+    checkpoints, downloaded lazily by earth2studio on first real run) — still
+    chained from ensure_env() for consistency with benchmark/blending, but
+    expect `ai-almanac env prepare` to take noticeably longer as a result.
+    """
+    env_dir = forecast_env_dir()
+    _install(_forecast_pixi_spec(), env_dir)
+    return env_dir
+
+
 def ensure_env() -> Path:
     """Idempotently prepare all local workload environments."""
     env_dir = benchmark_env_dir()
     _install(_pixi_spec(), env_dir)
     ensure_blending_env()
+    ensure_forecast_env()
     return env_dir
 
 
@@ -137,6 +156,28 @@ def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subproces
     """Spawn a process inside the blending environment."""
     pixi = _require_pixi()
     env_dir = blending_env_dir()
+    full_cmd = [
+        pixi,
+        "run",
+        "--manifest-path",
+        str(env_dir / "pixi.toml"),
+        "--",
+        *cmd,
+    ]
+    return subprocess.Popen(
+        full_cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+def run_forecast(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
+    """Spawn a process inside the forecast environment."""
+    pixi = _require_pixi()
+    env_dir = forecast_env_dir()
     full_cmd = [
         pixi,
         "run",

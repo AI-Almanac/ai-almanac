@@ -103,7 +103,7 @@ app.add_typer(env_app, name="env")
 
 @env_app.command("prepare")
 def env_prepare() -> None:
-    """Install or update the benchmark and blending environments."""
+    """Install or update the benchmark, blending, and forecast environments."""
     if shutil.which("pixi") is None:
         typer.secho(
             "pixi is not installed. Install it from https://pixi.sh and re-run.",
@@ -113,11 +113,12 @@ def env_prepare() -> None:
         raise typer.Exit(code=1)
 
     from ai_almanac.envs.manager import ensure_env
-    from ai_almanac.paths import blending_env_dir
+    from ai_almanac.paths import blending_env_dir, forecast_env_dir
 
     env_path = ensure_env()
     typer.echo(f"benchmark env ready at {env_path}")
     typer.echo(f"blending env ready at {blending_env_dir()}")
+    typer.echo(f"forecast env ready at {forecast_env_dir()}")
 
 
 @env_app.command("info")

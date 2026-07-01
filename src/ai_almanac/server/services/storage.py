@@ -145,6 +145,17 @@ class LocalStorage:
             return None
         return path.read_text()
 
+    def result_file_uri(self, job_id: str, kind: str, filename: str) -> str:
+        """Raw local path for range-read consumers (TiTiler/rio-tiler), as
+        opposed to result_file_path (single-level names only) / open_result_stream
+        (proxied bytes). Unlike result_file_path, filename may contain
+        subdirectories (e.g. a forecast's ``{model_id}/rasters/{var}/{lead}.tif``)
+        — safety against path traversal still comes from ``_contained``.
+        """
+        if kind not in {"output", "figure"}:
+            raise ValueError(f"Unknown result kind: {kind!r}")
+        return str(self._contained(self._outputs_dir, f"{job_id}/{kind}/{filename}"))
+
     @staticmethod
     def _contained(root: Path, relative: str) -> Path:
         path = (root / relative).resolve()
@@ -357,6 +368,16 @@ class GCSStorage:
         if not blob.exists():
             return None
         return blob.download_as_text()
+
+    def result_file_uri(self, job_id: str, kind: str, filename: str) -> str:
+        """Raw gs:// URI for range-read consumers (TiTiler/rio-tiler via GDAL's
+        /vsigs/ driver with ambient credentials), as opposed to
+        open_result_stream (proxied bytes) / generate_result_url (signed URLs
+        for direct browser access).
+        """
+        if kind not in {"output", "figure"}:
+            raise ValueError(f"Unknown result kind: {kind!r}")
+        return f"gs://{self._outputs_bucket}/{job_id}/{kind}/{filename}"
 
     def open_result_stream(
         self, job_id: str, kind: str, filename: str

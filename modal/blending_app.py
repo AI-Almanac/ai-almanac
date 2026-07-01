@@ -49,7 +49,7 @@ APP_NAME = "almanac-blending"
 BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
 DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
-DEFAULT_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
+DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
 GCP_SECRET_NAME = "gcp-service-account"
 
 
@@ -1583,6 +1583,198 @@ def train_blending_model_bundle(
         outputs_tar = _tar_directory(output_dir)
 
     return {"manifest": manifest, "outputs_tar": outputs_tar}
+
+
+def _merge_forecast_bundle(historical_bundle: bytes, live_bundle: bytes) -> bytes:
+    """Combine a model's historical `{year}.nc` bundle with a freshly-generated
+    live-season bundle into one bundle, so build_lat_lon_intermediates_bundle
+    processes the live season's forecast file alongside historical years
+    exactly like any other year — no special-casing in that function needed.
+    """
+    merged_dir = Path(tempfile.mkdtemp(prefix="blend-live-merge-"))
+    for bundle in (historical_bundle, live_bundle):
+        source_dir = _extract_bundle(bundle)
+        for path in sorted(source_dir.glob("*.nc")):
+            target = merged_dir / path.name
+            if target.exists():
+                raise ValueError(
+                    f"Live forecast year collides with an existing historical file: {path.name}"
+                )
+            target.write_bytes(path.read_bytes())
+    return _bundle_files(sorted(merged_dir.glob("*.nc")))
+
+
+def _find_result_file(result_files: list[str], prefix: str) -> str:
+    matches = [name for name in result_files if name.startswith(prefix)]
+    if not matches:
+        raise FileNotFoundError(
+            f"No training result file starting with {prefix!r}; found: {result_files}"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous training result files for prefix {prefix!r}: {matches}"
+        )
+    return matches[0]
+
+
+@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600)
+def score_live_forecast(
+    obs_bundle: bytes,
+    forecast_bundles: dict[str, bytes],
+    model_names: list[str],
+    blend_params: dict,
+    live_year: int,
+) -> bytes:
+    """Score a live/in-progress season against an already-trained blend, given
+    already-staged bundles (no GCS or local-file knowledge here — that's the
+    caller's job, mirroring how run_blend stages before calling
+    build_lat_lon_intermediates_bundle/train_blending_model_bundle).
+
+    Reuses build_lat_lon_intermediates_bundle and train_blending_model_bundle
+    completely unchanged: the live season is just one more forecast year with
+    no matching obs year, added to the blend's own true_holdout_years so it
+    is excluded from every training fold but still gets its own scoring pass
+    (see plan §"Key finding" — compute_cv_global already predicts holdout
+    years using only their feature columns, never their outcome).
+
+    forecast_bundles: one tar.gz bundle per blend model name, each already
+    merged (historical `{year}.nc` files + the live season's file) by the
+    caller via _merge_forecast_bundle.
+
+    Returns the live season's scored rows as CSV bytes
+    (blended_forecast_probabilities.csv content).
+    """
+    import pickle
+    import time
+
+    print("==> Building blending intermediates (including live season)")
+    t0 = time.perf_counter()
+    prep_kwargs = {
+        k: blend_params[k]
+        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+        if blend_params.get(k) is not None
+    }
+    intermediates = build_lat_lon_intermediates_bundle.local(
+        obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
+    )
+    print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
+    combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+
+    train_kwargs = {}
+    if blend_params.get("formula_text"):
+        train_kwargs["formula_text"] = blend_params["formula_text"]
+    true_holdout_years = _parse_years(blend_params.get("true_holdout_years") or "") or []
+    if live_year not in true_holdout_years:
+        true_holdout_years = sorted({*true_holdout_years, live_year})
+    print(f"==> Scoring live season {live_year} against trained blend")
+    t0 = time.perf_counter()
+    training = train_blending_model_bundle.local(
+        combined,
+        model_names=model_names,
+        training_years=_parse_years(blend_params.get("training_years") or "") or [],
+        cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
+        true_holdout_years=true_holdout_years,
+        return_outputs=True,
+        **train_kwargs,
+    )
+    print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
+    if not training["manifest"].get("ok"):
+        raise RuntimeError(
+            "Blend scoring pipeline failed; see manifest stderr_tail in run.log"
+        )
+
+    result_files = training["manifest"]["result_files"]
+    cv_preds_name = _find_result_file(result_files, "cv_preds_blended_model_global")
+    cv_preds_bytes = _read_tar_member_bytes(training["outputs_tar"], cv_preds_name)
+    cv_preds = pickle.loads(cv_preds_bytes)
+    live_rows = cv_preds[cv_preds["year"] == live_year].copy()
+    if live_rows.empty:
+        raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
+    return live_rows.to_csv(index=False).encode("utf-8")
+
+
+@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret])
+def score_live_forecast_bundle(
+    job_id: str,
+    blend_config: dict,
+    live_forecast_bundles: dict[str, bytes],
+    live_year: int,
+    outputs_bucket: str,
+) -> None:
+    """GCS-staging wrapper around score_live_forecast, mirroring run_blend's
+    relationship to build_lat_lon_intermediates_bundle/train_blending_model_bundle:
+    this function only stages inputs from/publishes outputs to GCS; all the
+    actual scoring logic lives in score_live_forecast so it's reusable from a
+    local (non-GCS) execution path too.
+    """
+    import sys
+    import traceback
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from google.cloud import storage as gcs
+
+    log_buffer = io.StringIO()
+    client = None
+    failure: Exception | None = None
+
+    with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
+        _LogTee(sys.stderr, log_buffer)
+    ):
+        try:
+            _write_gcp_credentials_from_secret()
+            client = gcs.Client()
+
+            params = blend_config.get("blend_params") or {}
+            model_names = blend_config["model_names"]
+            model_files = blend_config["model_files"]
+            missing = [name for name in model_names if name not in live_forecast_bundles]
+            if missing:
+                raise ValueError(f"No live forecast bundle provided for models: {missing}")
+
+            stage_root = Path(tempfile.mkdtemp(prefix="blend-live-"))
+            obs_local = stage_root / "obs"
+            obs_local.mkdir()
+            print(f"==> Staging obs from {blend_config['obs_dir']}")
+            _stage_gcs_prefix(client, blend_config["obs_dir"], obs_local, "obs")
+            obs_bundle = _bundle_files(sorted(obs_local.glob("*.nc")))
+
+            forecast_bundles: dict[str, bytes] = {}
+            for name in model_names:
+                model_local = stage_root / f"fc_{name}"
+                model_local.mkdir()
+                uris = model_files[name]
+                print(f"==> Staging historical forecast {name}: {len(uris)} files")
+                _stage_uris(client, uris, model_local, f"forecast {name}")
+                historical_bundle = _bundle_files(sorted(model_local.glob("*.nc")))
+                forecast_bundles[name] = _merge_forecast_bundle(
+                    historical_bundle, live_forecast_bundles[name]
+                )
+
+            csv_bytes = score_live_forecast.local(
+                obs_bundle, forecast_bundles, model_names, params, live_year
+            )
+
+            out_local = stage_root / "output"
+            out_local.mkdir()
+            (out_local / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
+            _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
+            print("==> Done.")
+        except Exception as exc:  # noqa: BLE001 — surfaced via run.log + raise
+            failure = exc
+            traceback.print_exc()
+        finally:
+            if client is not None:
+                try:
+                    _upload_run_log_to_gcs(
+                        client, outputs_bucket, job_id, log_buffer.getvalue()
+                    )
+                except Exception:
+                    traceback.print_exc()
+
+    if failure is not None:
+        raise RuntimeError(
+            f"Live forecast scoring for job {job_id} failed; see run.log for details: {failure}"
+        ) from failure
 
 
 @app.local_entrypoint()

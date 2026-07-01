@@ -53,6 +53,10 @@ def blending_env_dir() -> Path:
     return data_root() / "blending-env"
 
 
+def forecast_env_dir() -> Path:
+    return data_root() / "forecast-env"
+
+
 def cache_dir() -> Path:
     return data_root() / "cache"
 
