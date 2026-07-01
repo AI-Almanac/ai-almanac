@@ -56,16 +56,25 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
     if not outputs_bucket:
         return "job_runner=modal requires gcs_outputs_bucket to be set."
 
-    dataset_config = config.get("dataset_config") or {}
+    # Forecast jobs run live inference against GFS directly — there's no
+    # obs_dir/model_dir/model_files on the forecast job's own config to check.
+    # The live-scoring step does stage historical data, but from the parent
+    # blend's frozen config snapshot, so validate that instead.
+    staging_config = config
+    if config.get("job_type") == "forecast":
+        staging_config = config.get("blend_config_snapshot") or {}
+
+    dataset_config = staging_config.get("dataset_config") or {}
     if dataset_config.get("provider") not in _REMOTE_OBS_PROVIDERS:
-        obs_dir = config.get("obs_dir", "")
+        obs_dir = staging_config.get("obs_dir", "")
         if not str(obs_dir).startswith("gs://"):
             return f"job_runner=modal requires obs_dir to be a gs:// URI; got {obs_dir!r}."
 
-    # Blend jobs carry per-model {year}.nc staging URIs the server pre-resolved
-    # on the active backend; benchmark jobs stage a single model dir.
-    if "model_files" in config:
-        model_files = config.get("model_files") or {}
+    # Blend jobs (and forecast jobs' blend snapshot) carry per-model {year}.nc
+    # staging URIs the server pre-resolved on the active backend; benchmark
+    # jobs stage a single model dir.
+    if "model_files" in staging_config:
+        model_files = staging_config.get("model_files") or {}
         if not model_files:
             return "job_runner=modal blend requires at least one model."
         for name, uris in model_files.items():
@@ -79,7 +88,7 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
                     )
         return None
 
-    model_dir = config.get("model_dir", "")
+    model_dir = staging_config.get("model_dir", "")
     if not str(model_dir).startswith("gs://"):
         return f"job_runner=modal requires model_dir to be a gs:// URI; got {model_dir!r}."
 

@@ -36,6 +36,15 @@ _BLEND_CONFIG = {
 }
 
 
+_FORECAST_CONFIG = {
+    "job_type": "forecast",
+    "modal_app": "almanac-forecasts",
+    "modal_function": "run_forecast",
+    "blend_config_snapshot": _BLEND_CONFIG,
+    "forecast_model_ids": ["aifs"],
+}
+
+
 def _request(job_id: str = "job1") -> ExecutionRequest:
     return ExecutionRequest(job_id=job_id, workspace=Path("."), bundle_path=Path("."))
 
@@ -140,6 +149,19 @@ def test_preflight_rejects_empty_blend_models() -> None:
     config = {**_BLEND_CONFIG, "model_files": {}}
     error = mr._preflight_error(config, "out-bucket")
     assert error and "at least one model" in error
+
+
+def test_preflight_forecast_validates_blend_snapshot_not_top_level() -> None:
+    # A forecast job's own config has no obs_dir/model_files — only its
+    # blend_config_snapshot does (live inference reads GFS directly).
+    assert mr._preflight_error(_FORECAST_CONFIG, "out-bucket") is None
+
+
+def test_preflight_forecast_rejects_bad_snapshot_obs_dir() -> None:
+    bad_snapshot = {**_BLEND_CONFIG, "obs_dir": "/local/obs"}
+    config = {**_FORECAST_CONFIG, "blend_config_snapshot": bad_snapshot}
+    error = mr._preflight_error(config, "out-bucket")
+    assert error and "obs_dir" in error
 
 
 # --- submit / inspect / cancel ----------------------------------------------
