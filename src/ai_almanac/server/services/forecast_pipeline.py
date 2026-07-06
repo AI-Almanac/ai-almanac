@@ -133,9 +133,9 @@ def _daily_precip_trajectory(
 
     tp = select_variable(dataset, "tp").squeeze()
     lat_name, lon_name = lat_lon_names(tp)
-    # earth2studio's raw `tp` is typically an accumulated-since-init field in
-    # meters; unit_cvt (from the archived data source's metadata, applied by
-    # the caller) converts it to the mm/day convention ROMP/blending expect.
+    # unit_cvt (from the archived data source's metadata, applied by the
+    # caller) converts the model's native units to the mm/day convention
+    # ROMP/blending expect.
     # ponytail: native model grid, not reprojected to match the historical
     # archive's exact lat/lon cells — the blend joins by rounded lat/lon id,
     # so close-enough grids still join, just not cell-for-cell identical.
@@ -151,17 +151,15 @@ def _daily_precip_trajectory(
             daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan))
             continue
         window = tp.isel(lead_time=np.where(mask)[0])
-        # Accumulated field: today's total is the last sample in the window
-        # minus the last sample of the prior window (diff'd across windows
-        # below); for lead_day 0 it's just the raw accumulation to date.
-        daily_totals.append(window.isel(lead_time=-1))
+        # tp06/tp12 are period accumulations (precip since the *previous*
+        # step, resetting every step), not cumulative-since-init — so a
+        # day's total is the sum of the steps inside it, not a diff across
+        # days.
+        daily_totals.append(window.sum(dim="lead_time"))
 
     stacked = xr.concat(daily_totals, dim="day")
     stacked = stacked.assign_coords(day=list(range(max_lead_day + 1)))
-    # Convert cumulative-since-init totals into per-day increments.
-    per_day = stacked.diff(dim="day", label="upper")
-    per_day = xr.concat([stacked.isel(day=0).expand_dims(day=[0]), per_day], dim="day")
-    per_day = per_day.clip(min=0)
+    per_day = stacked.clip(min=0)
     result = per_day.transpose("day", lat_name, lon_name)
     shutil.rmtree(zarr_path, ignore_errors=True)
     return result
@@ -262,6 +260,10 @@ def variable_candidates(variable: str) -> tuple[str, ...]:
         "v850": ("v850",),
         "q850": ("q850",),
         "z500": ("z500",),
+        # AIFS/FuXi/GraphCastSmall name their precip output "tp06" (6h
+        # accumulation); GenCastMini's 12h-step output is "tp12". None of the
+        # registered models expose a plain "tp".
+        "tp": ("tp06", "tp12", "tp"),
     }
     return known.get(variable, (variable,))
 
