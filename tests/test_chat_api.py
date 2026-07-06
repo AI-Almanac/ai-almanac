@@ -27,11 +27,25 @@ def _scope(*, job_ids: list[str] | None = None) -> dict:
     }
 
 
-def _packaged_catalog(models: tuple = ()):
+_STATIC_CUSTOM_REGION = {
+    "id": "central-highlands",
+    "display_name": "Central Highlands",
+    "description": "",
+    "romp_name": None,
+    "lat_min": 20.0,
+    "lat_max": 27.0,
+    "lon_min": 88.0,
+    "lon_max": 93.0,
+    "land_only": False,
+    "shp_only": False,
+}
+
+
+def _packaged_catalog(models: tuple = (), extra_regions: tuple = ()):
     from ai_almanac.server.services.registry import CatalogSnapshot
     from ai_almanac.settings import get_packaged_regions
 
-    return CatalogSnapshot(regions=tuple(get_packaged_regions()), models=models)
+    return CatalogSnapshot(regions=(*get_packaged_regions(), *extra_regions), models=models)
 
 
 def _sse_events(body: str) -> list[dict]:
@@ -106,7 +120,8 @@ def test_apply_region_params_adds_custom_region_bounds() -> None:
     from ai_almanac.server.services.job_submission import apply_region_params
 
     params = apply_region_params(
-        {"region": "bangladesh", "start_date": "2020-05-01"}, _packaged_catalog()
+        {"region": "central-highlands", "start_date": "2020-05-01"},
+        _packaged_catalog(extra_regions=(_STATIC_CUSTOM_REGION,)),
     )
 
     assert params == {
@@ -134,15 +149,15 @@ def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> 
 
     metadata = job_region_metadata(
         {
-            "dataset_config": {"region": "bangladesh"},
+            "dataset_config": {"region": "central-highlands"},
             "romp_params": {"region": "custom"},
         },
-        _packaged_catalog(),
+        _packaged_catalog(extra_regions=(_STATIC_CUSTOM_REGION,)),
     )
 
     assert metadata == {
-        "region_id": "bangladesh",
-        "region_name": "Bangladesh",
+        "region_id": "central-highlands",
+        "region_name": "Central Highlands",
         "romp_region": "custom",
     }
 

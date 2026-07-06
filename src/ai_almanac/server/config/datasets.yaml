@@ -25,11 +25,6 @@
   region: india
   obs_file_pattern: "data_{}.nc"
 
-- id: bangladesh
-  name: "Bangladesh"
-  region: bangladesh
-  obs_file_pattern: "{}.nc"
-
 # --- Public remote datasets (always included; fetched at job time) ---
 
 - id: era5-ethiopia

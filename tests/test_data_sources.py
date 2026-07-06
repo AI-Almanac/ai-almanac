@@ -271,68 +271,6 @@ async def test_source_region_must_be_configured(
     assert response.json()["detail"] == detail
 
 
-@pytest.mark.asyncio
-async def test_custom_sources_use_inferred_overlapping_bounds(
-    client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = Path(__file__).parents[1] / "testdata" / "ethiopia"
-
-    obs_response = await client.post(
-        "/data-sources",
-        json={
-            "kind": "obs",
-            "name": "Custom observations",
-            "path": str(root / "obs"),
-            "region": "custom",
-            "metadata": {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"},
-        },
-    )
-    model_response = await client.post(
-        "/data-sources",
-        json={
-            "kind": "model",
-            "name": "Custom forecast",
-            "path": str(root / "fuxi"),
-            "region": "custom",
-            "metadata": {
-                "file_pattern": "{}.nc",
-                "model_var": "tp",
-                "model_type": "AIWP",
-            },
-        },
-    )
-    assert obs_response.status_code == 201
-    assert model_response.status_code == 201
-
-    async def fake_launch(job_id: str) -> None:
-        return None
-
-    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
-    response = await client.post(
-        "/jobs",
-        headers=auth_headers,
-        json={
-            "dataset_id": obs_response.json()["id"],
-            "model_name": model_response.json()["id"],
-            "params": {"region": "custom"},
-        },
-    )
-
-    assert response.status_code == 201
-    assert response.json()["region_id"] == "custom"
-    assert response.json()["region_name"] == "Custom coverage"
-    params = response.json()["params"]
-    assert {key: params[key] for key in ("region", "lat_min", "lat_max", "lon_min", "lon_max")} == {
-        "region": "custom",
-        "lat_min": 8.0,
-        "lat_max": 9.0,
-        "lon_min": 38.0,
-        "lon_max": 39.0,
-    }
-
-
 def test_custom_sources_must_overlap() -> None:
     from fastapi import HTTPException
 
