@@ -284,6 +284,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Several SvelteKit pages share a name with an API router (/blends, /forecasts,
+# /regions, /data-sources, /settings), so a hard refresh on one of those pages
+# is a real GET to this process and would otherwise be dispatched straight to
+# the API route, rendering its raw JSON instead of the SPA. A browser
+# top-level navigation is distinguishable from the SPA's own same-origin
+# fetch() calls (which never send `Sec-Fetch-Dest: document` and default to
+# `Accept: */*`), so route those to the SPA shell before the API routers ever
+# see them.
+_DOC_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
+
+def _is_page_navigation(request: Request) -> bool:
+    if request.method != "GET" or request.url.path in _DOC_PATHS:
+        return False
+    if request.headers.get("sec-fetch-dest") == "document":
+        return True
+    return request.headers.get("accept", "").startswith("text/html")
+
+
+@app.middleware("http")
+async def _spa_navigation_fallback(request: Request, call_next):
+    if _STATIC_DIR.exists() and _is_page_navigation(request):
+        response = FileResponse(_STATIC_DIR / "index.html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    return await call_next(request)
+
+
 app.include_router(auth.router)
 app.include_router(blends.router)
 app.include_router(chat.router)

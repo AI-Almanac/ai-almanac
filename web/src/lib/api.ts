@@ -88,8 +88,16 @@ async function request<T>(
 		headers: { 'Content-Type': 'application/json', ...headers, ...init.headers }
 	});
 
-	if (res.status === 401 && !retry && (await refreshAuthTokens())) {
-		return request<T>(path, init, true);
+	if (res.status === 401) {
+		if (!retry && (await refreshAuthTokens())) {
+			return request<T>(path, init, true);
+		}
+		// Refresh failed (or already retried once): the session is truly
+		// expired. Send the user to re-authenticate instead of letting every
+		// call site's Promise.allSettled swallow this as an empty result.
+		if (requireAuth && USE_BEARER_AUTH) {
+			login(window.location.pathname + window.location.search);
+		}
 	}
 
 	if (!res.ok) {
