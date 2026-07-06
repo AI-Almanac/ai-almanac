@@ -3,6 +3,10 @@
 Deploy with:
     modal deploy modal/forecasts_app.py
 
+After deploying, or whenever a model's upstream weights change, warm the
+weight cache once so real forecast jobs never pay for the download inline:
+    modal run modal/forecasts_app.py::warm_model_weights
+
 Runs one or more AI weather models (from server/config/forecast_models.yaml)
 against the latest GFS initial conditions via earth2studio, renders each
 variable/lead-hour combination as a Cloud-Optimized GeoTIFF, and publishes
@@ -46,10 +50,17 @@ FORECAST_PIPELINE_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_pip
 
 app = modal.App(APP_NAME)
 
-# Scratch space for passing the raw earth2studio zarr output between the GPU
-# inference function and the CPU render function (different containers).
-# Only the rendered COGs/manifest — not this zarr — are published as job
-# outputs; this volume is cleaned up per job+model once rendering finishes.
+# Two unrelated things share this volume, at different subtrees:
+#  - /cache/runs/{job_id}/{model_id}: scratch space for passing the raw
+#    earth2studio zarr output between the GPU inference function and the CPU
+#    render function (different containers). Cleaned up per job+model once
+#    rendering finishes — see _cleanup_volume_scratch.
+#  - /cache/earth2studio: downloaded model weights (EARTH2STUDIO_CACHE below).
+#    A few GB per model, well under Modal's per-volume soft limit, and never
+#    cleaned up — see warm_model_weights. Baking weights into the image was
+#    the other option, but it forces a full re-download on every deploy that
+#    touches an earlier image layer (e.g. forecast_pipeline.py); a volume
+#    decouples the weight cache from code changes entirely.
 forecast_volume = modal.Volume.from_name("earth2studio-cache", create_if_missing=True)
 
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME)
@@ -235,6 +246,33 @@ def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
 
 
 @app.function(
+    image=inference_image,
+    gpu="A100-80GB",
+    cpu=(8, 16),
+    memory=(32768, 65536),
+    timeout=7200,
+    volumes={"/cache": forecast_volume},
+)
+def warm_model_weights() -> None:
+    """Download every registered model's weights into the persistent volume
+    once, so run_forecast_inference/run_season_forecast_bundle never pay for
+    the download inline inside a real, timed forecast job. Re-run manually
+    after adding a model to the registry or when upstream weights change —
+    see the module docstring for the `modal run` invocation."""
+    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
+    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
+
+    pipeline = _load_pipeline()
+    registry = _load_model_registry()
+    for entry in registry.get("models") or []:
+        model_class = entry["earth2studio_class"]
+        print(f"==> Warming weights: {model_class}")
+        pipeline.load_model(model_class)
+    forecast_volume.commit()
+    print("==> Weight cache warmed")
+
+
+@app.function(
     image=render_image,
     cpu=(4, 8),
     memory=(16384, 32768),
@@ -275,6 +313,7 @@ def render_forecast_products(
     # ceiling than the single-run map-visualization inference function.
     timeout=21600,
     secrets=[gcp_secret],
+    volumes={"/cache": forecast_volume},
 )
 def run_season_forecast_bundle(
     job_id: str, model_id: str, config: dict, season_params: dict
@@ -282,6 +321,9 @@ def run_season_forecast_bundle(
     """Loop one model across the current season's issue dates and return a
     tar.gz bundle containing one NetCDF matching the historical `{year}.nc`
     schema, the same bundle shape run_blend's forecast_bundles expect."""
+    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
+    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
+
     pipeline = _load_pipeline()
     model_entry = _registry_entry(model_id)
     year = datetime.now(UTC).year
@@ -291,6 +333,7 @@ def run_season_forecast_bundle(
     pipeline.generate_season_forecast_netcdf(
         model_entry, config, season_params, scratch_root, out_path
     )
+    forecast_volume.commit()
     return pipeline.bundle_files([out_path])
 
 
@@ -302,8 +345,13 @@ def run_season_forecast_bundle(
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Run every requested model's inference + rendering in sequence and
+    """Run every requested model's inference + rendering concurrently and
     publish a run.log alongside the per-model output directories.
+
+    Models are independent of each other, so each phase fans out with
+    .spawn()/.get() instead of awaiting one model's .remote() call before
+    starting the next — otherwise this function's own timeout is spent
+    waiting on models one at a time instead of in parallel.
 
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark
     and run_blend so the platform's ModalRunner dispatches it the same way.
@@ -328,14 +376,30 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
 
         model_ids = config["forecast_model_ids"]
         failures: dict[str, str] = {}
-        for model_id in model_ids:
-            print(f"==> Running forecast inference: {model_id}")
+
+        print(f"==> Running forecast inference: {model_ids}")
+        inference_calls = {
+            model_id: run_forecast_inference.spawn(job_id, model_id, config)
+            for model_id in model_ids
+        }
+        run_infos: dict[str, dict] = {}
+        for model_id, call in inference_calls.items():
             try:
-                run_info = run_forecast_inference.remote(job_id, model_id, config)
-                print(f"==> Rendering forecast products: {model_id}")
-                render_forecast_products.remote(
-                    job_id, model_id, config, run_info, outputs_bucket
-                )
+                run_infos[model_id] = call.get()
+            except Exception as exc:
+                failures[model_id] = str(exc)
+                traceback.print_exc()
+
+        print(f"==> Rendering forecast products: {list(run_infos)}")
+        render_calls = {
+            model_id: render_forecast_products.spawn(
+                job_id, model_id, config, run_info, outputs_bucket
+            )
+            for model_id, run_info in run_infos.items()
+        }
+        for model_id, call in render_calls.items():
+            try:
+                call.get()
                 print(f"==> Done: {model_id}")
             except Exception as exc:
                 failures[model_id] = str(exc)
@@ -344,15 +408,18 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         blend_config = config.get("blend_config_snapshot")
         season_model_params = config.get("season_model_params") or {}
         if blend_config:
-            print("==> Running season-long inference for blend scoring")
+            season_model_ids = [m for m in model_ids if m not in failures]
+            print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
+            season_calls = {
+                model_id: run_season_forecast_bundle.spawn(
+                    job_id, model_id, config, season_model_params.get(model_id) or {}
+                )
+                for model_id in season_model_ids
+            }
             live_forecast_bundles: dict[str, bytes] = {}
-            for model_id in model_ids:
-                if model_id in failures:
-                    continue
+            for model_id, call in season_calls.items():
                 try:
-                    live_forecast_bundles[model_id] = run_season_forecast_bundle.remote(
-                        job_id, model_id, config, season_model_params.get(model_id) or {}
-                    )
+                    live_forecast_bundles[model_id] = call.get()
                 except Exception as exc:
                     failures[f"{model_id} (season)"] = str(exc)
                     traceback.print_exc()

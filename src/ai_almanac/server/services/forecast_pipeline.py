@@ -196,17 +196,23 @@ def generate_season_forecast_netcdf(
     from earth2studio.data import GFS
 
     model_class = model_entry["earth2studio_class"]
-    max_lead_day = int(config.get("max_lead_day", 45))
+    max_lead_day = int(config.get("max_lead_day") or 45)
     init_weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
     unit_cvt = float(season_params.get("unit_cvt", 1.0))
     bounds = season_params.get("spatial_bounds")
 
     year = dt.datetime.now(UTC).year
     issue_dates = season_issue_dates(
-        config.get("season_start_month_day", "05-01"), init_weekdays, year
+        config.get("season_start_month_day") or "05-01", init_weekdays, year
     )
     if not issue_dates:
         raise ValueError(f"No issue dates for season {year} yet")
+    max_issue_dates = config.get("max_issue_dates")
+    if max_issue_dates:
+        # Smoke-test knob: score against only the most recent N issue dates
+        # instead of the whole season-to-date, to validate the pipeline
+        # end-to-end without paying for a full season's worth of rollouts.
+        issue_dates = issue_dates[-int(max_issue_dates):]
 
     model = load_model(model_class)
     data = GFS()

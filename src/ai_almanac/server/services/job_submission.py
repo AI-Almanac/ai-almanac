@@ -507,6 +507,12 @@ class ForecastParams(BaseModel):
     init_time: str | None = None
     lead_hours: list[int] | None = None
     variables: list[str] | None = None
+    # Smoke-test knobs: shrink the season-long blend-scoring loop (see
+    # forecast_pipeline.generate_season_forecast_netcdf) without touching the
+    # map-visualization deliverable above. Unset means "full season, full
+    # 45-day lead" — today's default behavior.
+    max_lead_day: int | None = None
+    max_issue_dates: int | None = None
 
 
 class ForecastCreate(BaseModel):
@@ -637,6 +643,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             "spatial_bounds": metadata.get("spatial_bounds"),
         }
 
+    # The season loop must start counting issue dates from the same monsoon
+    # cutoff the blend was trained against, not an unrelated hardcoded date.
+    season_start_month_day = (blend_config.get("blend_params") or {}).get(
+        "cutoff_month_day"
+    ) or "05-01"
+
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     config = {
@@ -649,6 +661,9 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "blend_config_snapshot": blend_config,
         "forecast_model_ids": forecast_model_ids,
         "season_model_params": season_model_params,
+        "season_start_month_day": season_start_month_day,
+        "max_lead_day": body.params.max_lead_day,
+        "max_issue_dates": body.params.max_issue_dates,
         "region_id": blend_config.get("region_id"),
         "init_time": body.params.init_time,
         "lead_hours": lead_hours,
