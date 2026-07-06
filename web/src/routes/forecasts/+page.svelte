@@ -42,8 +42,10 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
-	let maxLeadDay = $state('');
-	let maxIssueDates = $state('');
+	// bind:value on <input type="number"> yields a number (or undefined when
+	// empty/invalid), not a string — unlike initTime's plain text input.
+	let maxLeadDay = $state<number | undefined>(undefined);
+	let maxIssueDates = $state<number | undefined>(undefined);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
 
@@ -190,8 +192,8 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		maxLeadDay = '';
-		maxIssueDates = '';
+		maxLeadDay = undefined;
+		maxIssueDates = undefined;
 	}
 
 	function selectForecast(id: string) {
@@ -209,17 +211,19 @@
 		if (!formValid || submitting) return;
 		submitting = true;
 		submitError = null;
-		const params: ForecastCreate['params'] = {
-			...(initTime.trim() ? { init_time: initTime.trim() } : {}),
-			...(maxLeadDay.trim() ? { max_lead_day: Number(maxLeadDay.trim()) } : {}),
-			...(maxIssueDates.trim() ? { max_issue_dates: Number(maxIssueDates.trim()) } : {})
-		};
-		const body: ForecastCreate = {
-			blend_id: blendId,
-			forecast_model_ids: forecastModelIds,
-			...(Object.keys(params ?? {}).length ? { params } : {})
-		};
 		try {
+			const params: ForecastCreate['params'] = {
+				...(initTime.trim() ? { init_time: initTime.trim() } : {}),
+				...(maxLeadDay != null && !Number.isNaN(maxLeadDay) ? { max_lead_day: maxLeadDay } : {}),
+				...(maxIssueDates != null && !Number.isNaN(maxIssueDates)
+					? { max_issue_dates: maxIssueDates }
+					: {})
+			};
+			const body: ForecastCreate = {
+				blend_id: blendId,
+				forecast_model_ids: forecastModelIds,
+				...(Object.keys(params).length ? { params } : {})
+			};
 			const forecast = await createForecast(body);
 			forecasts = [forecast, ...forecasts];
 			creating = false;
