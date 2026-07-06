@@ -1,4 +1,4 @@
-"""Feature-flag gating for the in-development data-management feature."""
+"""Feature-flag gating for in-development features (data-management, forecasting)."""
 
 from __future__ import annotations
 
@@ -67,3 +67,35 @@ async def test_region_create_allowed_when_enabled(
     )
     # Not a 404 from the flag gate; the feature is reachable.
     assert resp.status_code != 404
+
+
+@pytest.mark.asyncio
+async def test_forecasting_capability_defaults_disabled(
+    client: httpx.AsyncClient,
+) -> None:
+    # enable_forecasting defaults to False (unlike enable_data_management) so
+    # an accidental prod deploy never ships the in-development feature.
+    assert settings.enable_forecasting is False
+    caps = (await client.get("/auth/me")).json()["capabilities"]
+    assert caps["can_use_forecasting"] is False
+
+
+@pytest.mark.asyncio
+async def test_forecasts_router_hidden_when_disabled(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "enable_forecasting", False)
+    assert (await client.get("/forecasts")).status_code == 404
+    assert (await client.get("/forecasts/models")).status_code == 404
+    assert (await client.post("/forecasts", json={"blend_id": "nope"})).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_forecasts_router_reachable_when_enabled(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "enable_forecasting", True)
+    # Not a 404 from the flag gate; the feature is reachable (reads too,
+    # unlike data-management's mutations-only gate).
+    assert (await client.get("/forecasts")).status_code != 404
+    assert (await client.get("/forecasts/models")).status_code != 404

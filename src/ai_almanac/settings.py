@@ -219,6 +219,10 @@ class Settings(BaseSettings):
     # the admin Settings page. Name new flags `enable_<feature>` and surface them
     # in the "Features" group of routers/settings.py.
     enable_data_management: bool = True
+    # Defaults to disabled (unlike the other feature flags above) — still
+    # under active development and requires GPU/Modal infra most installs
+    # won't have configured; opt in explicitly once it's ready to ship.
+    enable_forecasting: bool = False
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 

@@ -22,6 +22,12 @@
 	} from '$lib/api';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import ForecastMap from '$lib/components/ForecastMap.svelte';
+	import { goto } from '$app/navigation';
+	import { account } from '$lib/account.svelte';
+
+	$effect(() => {
+		if (account.loaded && !account.canUseForecasting) goto('/');
+	});
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 

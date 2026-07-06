@@ -243,6 +243,14 @@ async def require_data_management() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
+async def require_forecasting() -> None:
+    """Gate the whole forecasting feature behind its flag — unlike
+    require_data_management, this covers reads too, since the feature isn't
+    ready to expose to any user yet, not just its mutations."""
+    if not settings.enable_forecasting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
 

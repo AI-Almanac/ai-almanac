@@ -25,6 +25,10 @@ class AccountState {
 		return this.account?.capabilities.can_manage_data ?? false;
 	}
 
+	get canUseForecasting(): boolean {
+		return this.account?.capabilities.can_use_forecasting ?? false;
+	}
+
 	get label(): string {
 		const a = this.account;
 		if (!a) return '';
