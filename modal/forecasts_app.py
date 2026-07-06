@@ -37,6 +37,7 @@ import io
 import json
 import os
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -241,7 +242,10 @@ def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
     model_entry = _registry_entry(model_id)
     zarr_path = _zarr_volume_path(job_id, model_id)
     run_info = pipeline.run_forecast_inference(config, model_entry, zarr_path)
+    print("==> Committing volume (uploads any newly-downloaded model weights)")
+    t0 = time.perf_counter()
     forecast_volume.commit()
+    print(f"==> Volume commit done in {time.perf_counter() - t0:.1f}s")
     return run_info
 
 
@@ -268,8 +272,10 @@ def warm_model_weights() -> None:
         model_class = entry["earth2studio_class"]
         print(f"==> Warming weights: {model_class}")
         pipeline.load_model(model_class)
+    print("==> Committing volume")
+    t0 = time.perf_counter()
     forecast_volume.commit()
-    print("==> Weight cache warmed")
+    print(f"==> Weight cache warmed; volume commit took {time.perf_counter() - t0:.1f}s")
 
 
 @app.function(
@@ -333,7 +339,10 @@ def run_season_forecast_bundle(
     pipeline.generate_season_forecast_netcdf(
         model_entry, config, season_params, scratch_root, out_path
     )
+    print(f"==> [{model_id}] Committing volume (uploads any newly-downloaded model weights)")
+    t0 = time.perf_counter()
     forecast_volume.commit()
+    print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")
     return pipeline.bundle_files([out_path])
 
 

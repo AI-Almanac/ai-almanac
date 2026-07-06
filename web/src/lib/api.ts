@@ -628,6 +628,10 @@ export type Forecast = {
 
 export type ForecastParams = {
 	init_time?: string | null;
+	// Smoke-test knobs for the season-long blend-scoring loop: shrink it to a
+	// short window instead of the full monsoon season. Unset means full season.
+	max_lead_day?: number | null;
+	max_issue_dates?: number | null;
 };
 
 export type ForecastCreate = {

@@ -42,6 +42,8 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
+	let maxLeadDay = $state('');
+	let maxIssueDates = $state('');
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
 
@@ -188,6 +190,8 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
+		maxLeadDay = '';
+		maxIssueDates = '';
 	}
 
 	function selectForecast(id: string) {
@@ -205,10 +209,15 @@
 		if (!formValid || submitting) return;
 		submitting = true;
 		submitError = null;
+		const params: ForecastCreate['params'] = {
+			...(initTime.trim() ? { init_time: initTime.trim() } : {}),
+			...(maxLeadDay.trim() ? { max_lead_day: Number(maxLeadDay.trim()) } : {}),
+			...(maxIssueDates.trim() ? { max_issue_dates: Number(maxIssueDates.trim()) } : {})
+		};
 		const body: ForecastCreate = {
 			blend_id: blendId,
 			forecast_model_ids: forecastModelIds,
-			...(initTime.trim() ? { params: { init_time: initTime.trim() } } : {})
+			...(Object.keys(params ?? {}).length ? { params } : {})
 		};
 		try {
 			const forecast = await createForecast(body);
@@ -383,6 +392,24 @@
 						<label class="field">
 							<span>Init time (UTC)</span>
 							<input type="text" bind:value={initTime} placeholder="defaults to latest available" />
+						</label>
+						<label class="field">
+							<span>Max season lead days</span>
+							<input
+								type="number"
+								min="1"
+								bind:value={maxLeadDay}
+								placeholder="defaults to full 45-day lead"
+							/>
+						</label>
+						<label class="field">
+							<span>Max season issue dates</span>
+							<input
+								type="number"
+								min="1"
+								bind:value={maxIssueDates}
+								placeholder="defaults to the whole season-to-date"
+							/>
 						</label>
 					</details>
 				{/if}

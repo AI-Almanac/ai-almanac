@@ -21,6 +21,7 @@ import datetime as dt
 import io
 import json
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -128,8 +129,12 @@ def _daily_precip_trajectory(
     nsteps = (max_lead_day * 24) // step_hours
     zarr_path = scratch_root / f"{issue_date.isoformat()}.zarr"
     io_backend = ZarrBackend(str(zarr_path))
+    t0 = time.perf_counter()
     deterministic([issue_date.strftime("%Y-%m-%dT%H:%M:%S")], nsteps, model, data, io_backend)
+    print(f"    rollout done in {time.perf_counter() - t0:.1f}s", flush=True)
+    t0 = time.perf_counter()
     dataset = xr.open_zarr(zarr_path).load()
+    print(f"    zarr load done in {time.perf_counter() - t0:.1f}s", flush=True)
 
     tp = select_variable(dataset, "tp").squeeze()
     lat_name, lon_name = lat_lon_names(tp)
@@ -215,13 +220,25 @@ def generate_season_forecast_netcdf(
     model = load_model(model_class)
     data = GFS()
     _, step_hours = lead_steps([max_lead_day * 24], model_class)
+    nsteps = (max_lead_day * 24) // step_hours
     scratch_root.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"==> Season loop: {len(issue_dates)} issue date(s) "
+        f"({issue_dates[0]}..{issue_dates[-1]}), {nsteps} rollout steps "
+        f"({step_hours}h each) per issue date",
+        flush=True,
+    )
     per_issue = []
-    for issue_date in issue_dates:
-        print(f"  season inference: issue date {issue_date}", flush=True)
+    for i, issue_date in enumerate(issue_dates, start=1):
+        t0 = time.perf_counter()
+        print(f"  [{i}/{len(issue_dates)}] season inference: issue date {issue_date}", flush=True)
         trajectory = _daily_precip_trajectory(
             model, data, issue_date, max_lead_day, step_hours, scratch_root
+        )
+        print(
+            f"  [{i}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s",
+            flush=True,
         )
         per_issue.append(trajectory.assign_coords(time=np.datetime64(issue_date)))
 
