@@ -39,7 +39,7 @@ class DataSourceOut(BaseModel):
     path: str
     region: str | None
     metadata: dict
-    location_type: Literal["local_directory"]
+    location_type: Literal["local_directory", "gcs"]
     status: Literal["ready", "invalid"]
     validation_error: str | None
     created_at: str
