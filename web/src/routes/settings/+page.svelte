@@ -45,6 +45,17 @@
 				values[name] = '';
 				original[name] = '';
 			}
+			// Multiline fields (e.g. the chat system prompt) show the effective
+			// value — the built-in default — when no override is saved yet, so
+			// the box never looks empty. Starts clean (not dirty) until edited.
+			for (const group of s.groups) {
+				for (const field of group.fields) {
+					if (field.multiline && !values[field.name]) {
+						values[field.name] = field.default;
+						original[field.name] = field.default;
+					}
+				}
+			}
 			configPath = p;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -214,6 +225,29 @@
 											/>
 											<span>{Boolean(values[field.name]) ? 'enabled' : 'disabled'}</span>
 										</label>
+									{:else if field.multiline}
+										<details class="prompt-editor">
+											<summary>Edit ({String(values[field.name] ?? '').length} chars)</summary>
+											<textarea
+												id={`f-${field.name}`}
+												rows="16"
+												disabled={!field.editable}
+												value={String(values[field.name] ?? '')}
+												oninput={(e) => onValueChange(field, e.currentTarget.value)}
+											></textarea>
+											<div class="prompt-actions">
+												{#if savedFlash && savedFlash.startsWith(group.name)}
+													<span class="flash">✓ saved</span>
+												{/if}
+												<button
+													type="button"
+													onclick={() => saveGroup(group)}
+													disabled={savingGroup === group.name || values[field.name] === original[field.name]}
+												>
+													{savingGroup === group.name ? 'Saving…' : 'Save prompt'}
+												</button>
+											</div>
+										</details>
 									{:else}
 										<input
 											id={`f-${field.name}`}
@@ -397,6 +431,34 @@
 		border-color: var(--color-border);
 		font-weight: 500;
 		padding: 0.45rem 0.75rem;
+	}
+	.prompt-editor {
+		width: 100%;
+	}
+	.prompt-editor summary {
+		cursor: pointer;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
+	}
+	.prompt-editor textarea {
+		width: 100%;
+		min-height: 20rem;
+		margin-top: 0.5rem;
+		border-radius: 0.4rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		color: var(--color-text);
+		padding: 0.65rem;
+		font: inherit;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.85rem;
+		resize: vertical;
+	}
+	.prompt-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-top: 0.6rem;
 	}
 	.checkrow {
 		display: inline-flex;

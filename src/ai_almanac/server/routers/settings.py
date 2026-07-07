@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from ai_almanac.paths import config_yaml_path
 from ai_almanac.server.auth import AdminUser
+from ai_almanac.server.services.llm import SYSTEM_PROMPT
 from ai_almanac.settings import (
     LOCAL_ONLY_FIELDS,
     RESTART_REQUIRED_FIELDS,
@@ -65,6 +66,7 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ("llm_history_max_messages", "Chat history limit", "Max messages kept in chat history sent to the assistant"),
             ("llm_tool_result_max_chars", "Tool output limit", "Max characters of tool output forwarded to the assistant"),
             ("llm_code_context_max_chars", "Code context limit", "Max characters of code context included per request"),
+            ("chat_system_prompt", "System prompt", "Instructions given to the assistant before every conversation. Leave empty to use the built-in default."),
         ],
     ),
     (
@@ -100,6 +102,14 @@ _SCHEMA_FIELDS: frozenset[str] = frozenset(
     field_name for _, fields in _FIELD_GROUPS for field_name, _, _ in fields
 )
 
+# Long free-text fields the UI renders as a textarea (in a collapsible section)
+# instead of a single-line input.
+MULTILINE_FIELDS: frozenset[str] = frozenset({"chat_system_prompt"})
+
+# Field name -> effective value to show when the override is unset, so the UI
+# displays the built-in prompt instead of a blank box.
+_LIVE_DEFAULTS: dict[str, Any] = {"chat_system_prompt": SYSTEM_PROMPT}
+
 
 class FieldSchema(BaseModel):
     name: str
@@ -110,6 +120,7 @@ class FieldSchema(BaseModel):
     sensitive: bool
     restart_required: bool
     editable: bool
+    multiline: bool
 
 
 class SettingsSchema(BaseModel):
@@ -177,10 +188,11 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     label=label,
                     description=description,
                     type=_python_type_name(info.annotation),
-                    default=info.default,
+                    default=_LIVE_DEFAULTS.get(field_name, info.default),
                     sensitive=field_name in SENSITIVE_FIELDS,
                     restart_required=field_name in RESTART_REQUIRED_FIELDS,
                     editable=not (shared and field_name in SHARED_ENV_ONLY_FIELDS),
+                    multiline=field_name in MULTILINE_FIELDS,
                 )
             )
         if rendered:

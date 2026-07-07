@@ -155,6 +155,7 @@ export interface SettingsField {
 	sensitive: boolean;
 	restart_required: boolean;
 	editable: boolean;
+	multiline: boolean;
 }
 
 export interface SettingsGroup {

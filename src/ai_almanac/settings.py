@@ -213,6 +213,10 @@ class Settings(BaseSettings):
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
+    # Overrides the built-in chat system prompt (services/llm.py:SYSTEM_PROMPT)
+    # when non-empty. Edited from the admin Settings page.
+    chat_system_prompt: str = ""
+
     # Feature flags. Boolean gates for features still in development. Default True
     # for zero-setup local installs; managed deployments set them False in
     # config.yaml/env until the feature is ready, then flip them at runtime from
