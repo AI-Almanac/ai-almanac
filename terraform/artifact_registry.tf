@@ -1,10 +1,8 @@
 # ---------------------------------------------------------------------------
-# Artifact Registry — remote repository proxying GHCR
-# Cloud Run requires images from GCR, AR, or Docker Hub.
-# This remote repo transparently proxies ghcr.io so CI stays unchanged.
+# Artifact Registry — Docker repo for almanac service images
 #
 # Image path convention:
-#   us-central1-docker.pkg.dev/PROJECT/ghcr-proxy/hholb/IMAGE:TAG
+#   us-central1-docker.pkg.dev/PROJECT/almanac/IMAGE:TAG
 # ---------------------------------------------------------------------------
 
 resource "google_artifact_registry_repository" "images" {
@@ -72,7 +70,7 @@ data "google_project" "project" {
   project_id = var.project_id
 }
 
-# Convenience locals — build AR proxy paths from ghcr_owner.
+# Convenience locals — default image paths in this project's AR repo.
 # cloud_run.tf and batch.tf reference these instead of raw var.*_image.
 locals {
   ar_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/almanac"

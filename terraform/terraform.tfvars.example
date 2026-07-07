@@ -1,10 +1,10 @@
 project_id  = "your-gcp-project-id"
 region      = "us-central1"
-ghcr_owner  = "your-github-username-or-org"
 
-# Image overrides — leave unset to use the AR proxy paths derived from ghcr_owner.
+# Image overrides — leave unset to use the default paths in this project's
+# Artifact Registry repo (see locals in artifact_registry.tf).
 # app_image  = "..." # single-process app image (API + bundled SPA), used by prod + staging
-# romp_image = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
+# romp_image = "..." # ROMP worker image, pulled by Cloud Batch
 
 # Cloud SQL
 db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load

@@ -51,8 +51,8 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   # The Homebrew tap and .deb package live in adjacent repos:
-  #   github.com/<org>/homebrew-ai-almanac   — formula
-  #   github.com/<org>/ai-almanac-apt        — fpm-built .deb + apt repo
+  #   github.com/AI-Almanac/homebrew-ai-almanac   — formula
+  #   github.com/AI-Almanac/ai-almanac-apt        — fpm-built .deb + apt repo
   # Each repo's own release.yml watches for the version bump and re-publishes
   # its artifact. They're not built here so this workflow stays focused on the
   # PyPI source of truth.

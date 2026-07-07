@@ -9,11 +9,6 @@ variable "region" {
   default     = "us-central1"
 }
 
-variable "ghcr_owner" {
-  description = "GitHub user/org that owns the GHCR packages (e.g. hholb)"
-  type        = string
-}
-
 # Derived image paths — resolved at plan time via locals in artifact_registry.tf
 # Override these only if you push images to a different registry.
 variable "app_image" {

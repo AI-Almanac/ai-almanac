@@ -4,8 +4,8 @@ on:
   pull_request:
   push:
     branches:
-      - sveltekit
-      - hholb/python-first
+      - main
+      - develop
 
 concurrency:
   group: ci-${{ github.ref }}
