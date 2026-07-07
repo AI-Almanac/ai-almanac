@@ -118,13 +118,14 @@ def _enforce_deployment() -> None:
 
 
 async def _seed_data_sources() -> None:
-    """Populate the data_sources table from the packaged YAMLs on first launch
-    so existing testdata setups (`*_OBS_DIR`, `*_MODEL_DIR` env vars) work
-    without the user needing to register anything manually."""
-    from ai_almanac.server.services.data_sources import seed_from_yaml_if_empty
+    """Sync data_sources with the packaged YAMLs on every startup, so newly
+    added built-in datasets/models (and existing testdata setups via
+    `*_OBS_DIR`, `*_MODEL_DIR` env vars) appear without the user needing to
+    register anything manually."""
+    from ai_almanac.server.services.data_sources import sync_packaged_data_sources
 
     try:
-        count = await seed_from_yaml_if_empty()
+        count = await sync_packaged_data_sources()
         if count:
             logger.info("seeded %d data source(s) from packaged YAMLs", count)
     except Exception as e:  # noqa: BLE001 — non-fatal: keep serving

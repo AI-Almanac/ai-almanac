@@ -443,32 +443,35 @@ async def get_model_sources(region: str | None = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# First-launch seeder.
+# Packaged-YAML seeder/sync.
 # ---------------------------------------------------------------------------
 
 
-async def seed_from_yaml_if_empty() -> int:
-    """Populate the data_sources table from the packaged YAMLs on first launch.
+async def sync_packaged_data_sources() -> int:
+    """Add any packaged YAML entries not yet registered, on every startup.
 
-    Idempotent: skips if the table already has any rows. Honors env vars from
-    the previous registry (e.g. `TEST_ETHIOPIA_OBS_DIR`) so existing testdata
-    setups continue to work without changes.
+    Mirrors `seed_packaged_regions`: this isn't just a first-launch seed, it
+    keeps existing installations in sync as new built-in datasets/models are
+    added to `datasets.yaml`/`models.yaml`, without requiring the (currently
+    disabled) data-management UI. Each entry is keyed by its yaml `id` plus
+    kind/region, stored as `yaml_id` in metadata, so re-running never
+    duplicates a source. Existing non-ready rows are revalidated every call.
 
-    Returns the number of rows inserted (0 if already seeded).
+    Returns the number of rows inserted.
     """
     async with get_db() as conn:
-        existing = (await conn.execute(text("SELECT COUNT(*) FROM data_sources"))).scalar()
         rows = (
-            (await conn.execute(text("SELECT id FROM data_sources WHERE status != 'ready'")))
+            (await conn.execute(text("SELECT id, kind, region, status, metadata FROM data_sources")))
             .mappings()
             .fetchall()
-            if existing
-            else []
         )
-    if existing:
-        for row in rows:
+    existing_keys = set()
+    for row in rows:
+        yaml_id = _decode_metadata(row["metadata"]).get("yaml_id")
+        if yaml_id:
+            existing_keys.add((row["kind"], row["region"], yaml_id))
+        if row["status"] != "ready":
             await revalidate_source(row["id"])
-        return 0
 
     inserted = 0
 
@@ -480,6 +483,9 @@ async def seed_from_yaml_if_empty() -> int:
             # Remote (ARCO/e2s) sources don't fit the local-path model; skip
             # for the POC. We'll handle remote registration separately later.
             continue
+        region = entry.get("region")
+        if ("obs", region, entry["id"]) in existing_keys:
+            continue
         env_key = _env_key(entry["id"], "obs_dir")
         path = _env_value(env_key)
         if not path:
@@ -488,7 +494,7 @@ async def seed_from_yaml_if_empty() -> int:
             kind="obs",
             name=entry.get("name", entry["id"]),
             path=path,
-            region=entry.get("region"),
+            region=region,
             metadata={
                 "yaml_id": entry["id"],
                 "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
@@ -500,6 +506,8 @@ async def seed_from_yaml_if_empty() -> int:
     # Seed model directories from models.yaml.
     raw_models = yaml.safe_load(_MODELS_YAML.read_text())
     for entry in raw_models:
+        if ("model", entry["region"], entry["id"]) in existing_keys:
+            continue
         env_key = _env_key(entry["region"], entry["id"], "model_dir")
         path = _env_value(env_key)
         if not path:
