@@ -23,6 +23,7 @@ scripts/backend-env.yaml
 *.db-shm
 *.db-wal
 job_outputs/
+data/
 
 # Data archives
 *.zip
@@ -49,3 +50,6 @@ terraform/backend.hcl
 # Local tooling / scratch
 .localrag/
 __marimo__/
+node_modules/
+process-compose-dev.log
+uv.lock
