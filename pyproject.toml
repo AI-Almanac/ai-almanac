@@ -96,6 +96,7 @@ check-web = { cmd = "npm run check", depends-on = ["install-web"], cwd = "web", 
 test-web = { cmd = "npm test -- --run", depends-on = ["install-web"], cwd = "web", description = "Run frontend tests" }
 backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the FastAPI development server" }
 test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
+generate-api-types = { cmd = "bash scripts/generate-api-types.sh", default-environment = "dev", description = "Regenerate web/src/lib/api-types.gen.ts from the FastAPI OpenAPI schema" }
 test-compose-e2e = { cmd = "./scripts/e2e-compose.sh", description = "Run the containerized PostgreSQL benchmark smoke flow" }
 self-host-local = { cmd = "./scripts/self-host-local.sh", description = "Start the local shared-mode development stack" }
 self-host-local-gpu = { cmd = "./scripts/self-host-local.sh gpu", description = "Start local shared mode with the real Pixi GPU runner" }

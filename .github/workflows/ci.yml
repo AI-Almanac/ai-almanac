@@ -42,5 +42,12 @@ jobs:
       - name: Lint and type-check (backend + frontend)
         run: pixi run check
 
+      # The TS API types are generated from the FastAPI OpenAPI schema; a stale
+      # file means a backend contract change wasn't propagated to the frontend.
+      - name: API types are current
+        run: |
+          pixi run generate-api-types
+          git diff --exit-code web/src/lib/api-types.gen.ts
+
       - name: Tests (backend + frontend)
         run: pixi run test
