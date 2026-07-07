@@ -226,3 +226,11 @@ variable "ethiopia_graphcast_model_dir" {
   type    = string
   default = ""
 }
+variable "ethiopia_aifs_single_v2_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ethiopia_aifs_ens_v2_model_dir" {
+  type    = string
+  default = ""
+}

@@ -282,6 +282,14 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "ETHIOPIA_GRAPHCAST_MODEL_DIR"
         value = var.ethiopia_graphcast_model_dir
       }
+      env {
+        name  = "ETHIOPIA_AIFS_SINGLE_V2_MODEL_DIR"
+        value = var.ethiopia_aifs_single_v2_model_dir
+      }
+      env {
+        name  = "ETHIOPIA_AIFS_ENS_V2_MODEL_DIR"
+        value = var.ethiopia_aifs_ens_v2_model_dir
+      }
     }
   }
 
