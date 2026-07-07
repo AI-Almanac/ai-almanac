@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Cloud SQL — PostgreSQL
-# Cloud Run connects via the built-in Cloud SQL Auth Proxy (no VPC needed).
-# Connection string passed to backend as DATABASE_URL env var.
+# One shared instance; each env gets its own database and user via
+# modules/almanac-env. Cloud Run connects via the built-in Auth Proxy socket.
 # ---------------------------------------------------------------------------
 
 resource "google_sql_database_instance" "almanac" {
@@ -11,7 +11,7 @@ resource "google_sql_database_instance" "almanac" {
 
   settings {
     tier    = var.db_tier  # e.g. "db-f1-micro" for dev, "db-g1-small" for prod
-    edition = "ENTERPRISE"  # ENTERPRISE_PLUS is the new default but requires different tier names
+    edition = "ENTERPRISE" # ENTERPRISE_PLUS is the new default but requires different tier names
 
     backup_configuration {
       enabled    = true
@@ -30,24 +30,6 @@ resource "google_sql_database_instance" "almanac" {
   }
 
   deletion_protection = true
-}
-
-resource "google_sql_database" "almanac" {
-  name     = "almanac"
-  instance = google_sql_database_instance.almanac.name
-}
-
-resource "google_sql_user" "backend" {
-  name     = "almanac-backend"
-  instance = google_sql_database_instance.almanac.name
-  password = var.db_password  # set in terraform.tfvars (gitignored)
-}
-
-# Allow the backend service account to connect via Cloud SQL Auth Proxy
-resource "google_project_iam_member" "backend_sql_client" {
-  project = var.project_id
-  role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.backend.email}"
 }
 
 output "cloud_sql_connection_name" {

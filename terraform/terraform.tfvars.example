@@ -1,21 +1,24 @@
-project_id  = "your-gcp-project-id"
-region      = "us-central1"
+# Copy to terraform.tfvars and fill in the two DB passwords; everything else
+# below is the real production configuration. terraform.tfvars is gitignored.
+
+project_id = "ai-almanac"
+region     = "us-central1"
 
 # Image overrides — leave unset to use the default paths in this project's
-# Artifact Registry repo (see locals in artifact_registry.tf).
-# app_image  = "..." # single-process app image (API + bundled SPA), used by prod + staging
-# romp_image = "..." # ROMP worker image, pulled by Cloud Batch
+# Artifact Registry repo (see locals in artifact_registry.tf). CI owns image
+# rollouts; Terraform ignores image changes on the services and migrate jobs.
+# app_image  = "us-central1-docker.pkg.dev/ai-almanac/almanac/ai-almanac-web:latest"
+# romp_image = "us-central1-docker.pkg.dev/ai-almanac/almanac/romp:latest"
 
-# Cloud SQL
-db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
-db_password = "changeme"      # also stored in Secret Manager after first apply
-# staging_db_password defaults to db_password when omitted; set it to isolate
-# staging credentials from production.
-# staging_db_password = "changeme-staging"
+# Cloud SQL — one shared instance; per-env databases/users come from
+# modules/almanac-env. Passwords also live in Secret Manager (see README.md).
+db_tier             = "db-f1-micro" # upgrade to db-g1-small for production load
+db_password         = "CHANGE-ME"
+staging_db_password = "CHANGE-ME" # defaults to db_password when omitted
 
 # Domains served by the shared load balancer (SPA + API, same origin). Point
-# each domain's A record at the LB IP (see the `lb_ip` output) to provision its
-# managed cert.
+# each domain's A record at the LB IP (see the `lb_ip` output) to provision
+# its managed cert.
 custom_domain         = "ai-almanac.org"
 staging_custom_domain = "staging.ai-almanac.org"
 
@@ -24,16 +27,35 @@ staging_custom_domain = "staging.ai-almanac.org"
 frontend_url         = "https://ai-almanac.org"
 staging_frontend_url = "https://staging.ai-almanac.org"
 
-# Auth — the backend runs shared mode with app-level Globus token validation
-# (AUTH_MODE=globus, set in cloud_run.tf). Set at least one admin or the backend
-# refuses to start. Globus client id/secret and the credential-encryption-key
-# are populated in Secret Manager after the first apply (see secrets.tf).
-admin_emails = "you@example.com"
+# Auth — the backend runs shared mode with app-level Globus token validation.
+# Set at least one admin or the backend refuses to start.
+admin_emails = "hholbrook@uchicago.edu"
 # admin_subjects = "globus-sub-1,globus-sub-2"
 
-# Chat assistant / LLM
-# Leave llm_base_url empty to keep chat disabled in production.
-# llm_base_url            = "https://your-llm-provider.example/v1"
-# llm_model               = "claude-sonnet-4-6"
-# enable_run_code         = false
-# enable_run_code_sandbox = false
+# Job runner and data config
+job_runner = "modal"
+
+imd_2p0_obs_dir  = "gs://almanac-data-ai-almanac/obs/imd-2p0"
+ethiopia_obs_dir = "gs://almanac-data-ai-almanac/obs/ethiopia"
+
+india_aifs_model_dir       = "gs://almanac-data-ai-almanac/models/india/aifs"
+india_aifs_daily_model_dir = "gs://almanac-data-ai-almanac/models/india/aifs_daily"
+india_fuxi_model_dir       = "gs://almanac-data-ai-almanac/models/india/fuxi"
+india_fuxi_s2s_model_dir   = "gs://almanac-data-ai-almanac/models/india/fuxi_s2s"
+india_gencast_model_dir    = "gs://almanac-data-ai-almanac/models/india/gencast"
+india_graphcast_model_dir  = "gs://almanac-data-ai-almanac/models/india/graphcast"
+india_ifs_model_dir        = "gs://almanac-data-ai-almanac/models/india/ifs"
+india_neuralgcm_model_dir  = "gs://almanac-data-ai-almanac/models/india/neuralgcm"
+
+ethiopia_aifs_model_dir           = "gs://almanac-data-ai-almanac/models/ethiopia/aifs"
+ethiopia_fuxi_model_dir           = "gs://almanac-data-ai-almanac/models/ethiopia/fuxi"
+ethiopia_gencast_model_dir        = "gs://almanac-data-ai-almanac/models/ethiopia/gencast"
+ethiopia_graphcast_model_dir      = "gs://almanac-data-ai-almanac/models/ethiopia/graphcast"
+ethiopia_aifs_single_v2_model_dir = "gs://almanac-data-ai-almanac/models/ethiopia/AIFS-single-v2"
+ethiopia_aifs_ens_v2_model_dir    = "gs://almanac-data-ai-almanac/models/ethiopia/AIFS-ens-v2"
+
+# Chat assistant / LLM. Leave llm_base_url empty to keep chat disabled.
+llm_base_url            = "https://openrouter.ai/api/v1"
+llm_model               = "anthropic/claude-haiku-4.5"
+enable_run_code         = true
+enable_run_code_sandbox = true
