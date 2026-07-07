@@ -2067,7 +2067,7 @@ export interface components {
              * @default benchmark_run_group
              * @enum {string}
              */
-            kind: "benchmark_setup" | "benchmark_run_group" | "blend_setup" | "job_set";
+            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "job_set";
             /** Key */
             key: string;
             /** Title */
@@ -2086,7 +2086,7 @@ export interface components {
              * @default completed
              * @enum {string}
              */
-            status: "running" | "completed" | "failed";
+            status: "completed" | "failed" | "running";
             /** Input */
             input?: {
                 [key: string]: unknown;
@@ -2104,7 +2104,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant";
+            role: "assistant" | "user";
             /**
              * Content
              * @default
@@ -2120,7 +2120,7 @@ export interface components {
              * @default completed
              * @enum {string}
              */
-            status: "streaming" | "completed" | "failed";
+            status: "completed" | "failed" | "streaming";
             /** Error */
             error?: string | null;
             /** Tool Calls */
@@ -2134,7 +2134,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "obs" | "model";
+            kind: "model" | "obs";
             /** Name */
             name: string;
             /** Path */
@@ -2154,7 +2154,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "obs" | "model";
+            kind: "model" | "obs";
             /** Name */
             name: string;
             /** Path */
@@ -2169,12 +2169,12 @@ export interface components {
              * Location Type
              * @enum {string}
              */
-            location_type: "local_directory" | "gcs";
+            location_type: "gcs" | "local_directory";
             /**
              * Status
              * @enum {string}
              */
-            status: "ready" | "invalid";
+            status: "invalid" | "ready";
             /** Validation Error */
             validation_error: string | null;
             /** Created At */
@@ -2201,7 +2201,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "obs" | "model";
+            kind: "model" | "obs";
             /** Path */
             path: string;
             /** Region */
@@ -2214,7 +2214,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "ready" | "invalid";
+            status: "invalid" | "ready";
             /** Validation Error */
             validation_error: string | null;
         };
@@ -2479,7 +2479,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "file" | "dir";
+            kind: "dir" | "file";
             /** Size */
             size: number | null;
             /** Is Hidden */
@@ -2582,7 +2582,7 @@ export interface components {
              * @description Type of data represented in the tileset
              * @enum {string}
              */
-            dataType: "map" | "vector" | "coverage";
+            dataType: "coverage" | "map" | "vector";
             /**
              * Geometrydimension
              * @description The geometry dimension of the features shown in this layer (0: points, 1: curves, 2: surfaces, 3: solids), unspecified: mixed or unknown
@@ -2688,7 +2688,7 @@ export interface components {
          * @description Available Output image type.
          * @enum {string}
          */
-        ImageType: "png" | "npy" | "tif" | "tiff" | "jpeg" | "jpg" | "jp2" | "webp" | "pngraw";
+        ImageType: "jp2" | "jpeg" | "jpg" | "npy" | "png" | "pngraw" | "tif" | "tiff" | "webp";
         /**
          * Info
          * @description Dataset Info.
@@ -2721,7 +2721,7 @@ export interface components {
              * Nodata Type
              * @enum {string}
              */
-            nodata_type: "Alpha" | "Mask" | "Internal" | "Nodata" | "None";
+            nodata_type: "Alpha" | "Internal" | "Mask" | "Nodata" | "None";
             /** Colorinterp */
             colorinterp?: string[] | null;
             /** Scales */
@@ -3610,7 +3610,7 @@ export interface components {
              * @default xyz
              * @enum {string}
              */
-            scheme: "xyz" | "tms";
+            scheme: "tms" | "xyz";
             /** Tiles */
             tiles: string[];
             /** Vector Layers */
@@ -3719,7 +3719,7 @@ export interface components {
              * @description Type of data represented in the tileset
              * @enum {string}
              */
-            dataType: "map" | "vector" | "coverage";
+            dataType: "coverage" | "map" | "vector";
             crs: components["schemas"]["CRS"];
             /**
              * Tilematrixseturi
@@ -3761,7 +3761,7 @@ export interface components {
              * @description Restrictions on the availability of the Tile Set that the user needs to be aware of before using or redistributing the Tile Set
              * @default unclassified
              */
-            accessConstraints: ("unclassified" | "restricted" | "confidential" | "secret" | "topSecret") | null;
+            accessConstraints: ("confidential" | "restricted" | "secret" | "topSecret" | "unclassified") | null;
             /**
              * Keywords
              * @description keywords about this tileset
@@ -4554,7 +4554,7 @@ export interface operations {
     list_data_sources_data_sources_get: {
         parameters: {
             query?: {
-                kind?: ("obs" | "model") | null;
+                kind?: ("model" | "obs") | null;
             };
             header?: never;
             path?: never;
@@ -4618,7 +4618,7 @@ export interface operations {
     discover_catalog_data_sources_catalog_get: {
         parameters: {
             query?: {
-                kind?: ("obs" | "forecasts") | null;
+                kind?: ("forecasts" | "obs") | null;
             };
             header?: never;
             path?: never;
@@ -6212,18 +6212,18 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number;
                 height?: number | null;
                 width?: number | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Return statistics for categorical dataset. Defaults to `False` */
@@ -6296,18 +6296,18 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 height?: number | null;
                 width?: number | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /**
@@ -6476,19 +6476,19 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6559,19 +6559,19 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6646,19 +6646,19 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6721,19 +6721,19 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6786,13 +6786,13 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
             };
             header?: never;
             path: {
@@ -6837,22 +6837,22 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number;
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6910,24 +6910,24 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number;
                 height?: number | null;
                 width?: number | null;
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -6984,24 +6984,24 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number;
                 height?: number | null;
                 width?: number | null;
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -7055,24 +7055,24 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Coordinate Reference System of the input coords. Default to `epsg:4326`. */
                 coord_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -7138,13 +7138,13 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 height?: number | null;
                 width?: number | null;
@@ -7153,11 +7153,11 @@ export interface operations {
                 /** @description Coordinate Reference System of the input coords. Default to `epsg:4326`. */
                 coord_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -7221,24 +7221,24 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 /** @description Coordinate Reference System of the input coords. Default to `epsg:4326`. */
                 coord_crs?: string | null;
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -7300,13 +7300,13 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 height?: number | null;
                 width?: number | null;
@@ -7315,11 +7315,11 @@ export interface operations {
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
@@ -7380,13 +7380,13 @@ export interface operations {
                 /** @description rio-tiler's band math expression */
                 expression?: string | null;
                 /** @description Overwrite internal Nodata value; nan or valid float values only. */
-                nodata?: ("nan" | "inf" | "-inf") | number | null;
+                nodata?: ("-inf" | "inf" | "nan") | number | null;
                 /** @description Apply internal Scale/Offset. Defaults to `False`. */
                 unscale?: boolean | null;
                 /** @description RasterIO resampling algorithm. Defaults to `nearest`. */
-                resampling?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "gauss" | "rms") | null;
+                resampling?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "gauss" | "lanczos" | "mode" | "nearest" | "rms") | null;
                 /** @description WarpKernel resampling algorithm (only used when doing re-projection). Defaults to `nearest`. */
-                reproject?: ("nearest" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "average" | "mode" | "max" | "min" | "med" | "q1" | "q3" | "sum" | "rms") | null;
+                reproject?: ("average" | "bilinear" | "cubic" | "cubic_spline" | "lanczos" | "max" | "med" | "min" | "mode" | "nearest" | "q1" | "q3" | "rms" | "sum") | null;
                 max_size?: number | null;
                 height?: number | null;
                 width?: number | null;
@@ -7395,11 +7395,11 @@ export interface operations {
                 /** @description Output Coordinate Reference System. */
                 dst_crs?: string | null;
                 /** @description Algorithm name */
-                algorithm?: "hillshade" | "slope" | "contours" | "normalizedIndex" | "terrarium" | "terrainrgb" | "cast" | "ceil" | "floor" | "min" | "max" | "median" | "mean" | "std" | "var" | "sum" | "grayscale" | "bitonal";
+                algorithm?: "bitonal" | "cast" | "ceil" | "contours" | "floor" | "grayscale" | "hillshade" | "max" | "mean" | "median" | "min" | "normalizedIndex" | "slope" | "std" | "sum" | "terrainrgb" | "terrarium" | "var";
                 /** @description Algorithm parameter */
                 algorithm_params?: string | null;
                 /** @description Colormap name */
-                colormap_name?: "dense_r" | "delta" | "algae_r" | "ylorbr" | "oxy" | "copper" | "tab20c_r" | "cividis_r" | "solar" | "gnuplot" | "dark2_r" | "gist_yarg_r" | "balance_r" | "gist_earth" | "balance" | "jet" | "gist_heat" | "rdylgn" | "rainbow_r" | "turbid_r" | "magma_r" | "gist_stern_r" | "plasma" | "gnuplot2_r" | "rdylgn_r" | "matter" | "puor_r" | "cool" | "gist_gray_r" | "spectral" | "turbo_r" | "amp" | "gist_heat_r" | "accent" | "ice" | "brg" | "hsv_r" | "tab10" | "brg_r" | "ylgnbu" | "accent_r" | "coolwarm" | "winter_r" | "binary" | "bwr_r" | "wistia" | "bone" | "paired" | "rdylbu" | "inferno" | "summer_r" | "hot" | "gist_ncar" | "ylorbr_r" | "amp_r" | "tarn_r" | "orrd" | "bupu" | "dense" | "greens_r" | "hot_r" | "phase" | "ocean" | "plasma_r" | "afmhot_r" | "autumn" | "gist_stern" | "diff_r" | "prgn" | "tab20b_r" | "solar_r" | "cubehelix" | "prism" | "gnuplot_r" | "inferno_r" | "twilight_r" | "jet_r" | "brbg" | "autumn_r" | "afmhot" | "rain" | "purd_r" | "wistia_r" | "tab10_r" | "coolwarm_r" | "bugn_r" | "viridis" | "ylgn_r" | "gist_rainbow" | "rainbow" | "spring_r" | "puor" | "greys" | "pubu" | "dark2" | "bugn" | "phase_r" | "thermal_r" | "set2" | "flag_r" | "ylorrd_r" | "copper_r" | "spectral_r" | "prism_r" | "set3" | "ylgnbu_r" | "rain_r" | "brbg_r" | "terrain_r" | "pastel1_r" | "rdbu" | "bwr" | "set1" | "tab20b" | "blues_r" | "purples" | "terrain" | "gist_rainbow_r" | "haline" | "summer" | "tab20c" | "turbid" | "flag" | "twilight_shifted" | "gray_r" | "delta_r" | "nipy_spectral" | "topo_r" | "oranges_r" | "prgn_r" | "diff" | "set3_r" | "deep" | "ylorrd" | "cfastie" | "rplumbo" | "gray" | "deep_r" | "gist_yarg" | "twilight" | "rdbu_r" | "pink_r" | "reds" | "algae" | "speed_r" | "twilight_shifted_r" | "bone_r" | "cividis" | "set1_r" | "purples_r" | "rdgy_r" | "matter_r" | "gist_gray" | "cool_r" | "ice_r" | "speed" | "gist_ncar_r" | "rdgy" | "ylgn" | "oxy_r" | "pastel2_r" | "pastel2" | "nipy_spectral_r" | "tempo_r" | "haline_r" | "viridis_r" | "gnuplot2" | "pubu_r" | "bupu_r" | "pastel1" | "binary_r" | "greys_r" | "paired_r" | "orrd_r" | "gnbu" | "topo" | "pubugn" | "tempo" | "tab20_r" | "pink" | "gnbu_r" | "tab20" | "blues" | "rdpu_r" | "turbo" | "rdylbu_r" | "hsv" | "winter" | "magma" | "seismic" | "piyg" | "cmrmap_r" | "schwarzwald" | "gist_earth_r" | "cubehelix_r" | "piyg_r" | "seismic_r" | "thermal" | "cmrmap" | "purd" | "rdpu" | "oranges" | "set2_r" | "greens" | "ocean_r" | "spring" | "curl" | "tarn" | "curl_r" | "reds_r" | "pubugn_r" | "almanac";
+                colormap_name?: "accent" | "accent_r" | "afmhot" | "afmhot_r" | "algae" | "algae_r" | "almanac" | "amp" | "amp_r" | "autumn" | "autumn_r" | "balance" | "balance_r" | "binary" | "binary_r" | "blues" | "blues_r" | "bone" | "bone_r" | "brbg" | "brbg_r" | "brg" | "brg_r" | "bugn" | "bugn_r" | "bupu" | "bupu_r" | "bwr" | "bwr_r" | "cfastie" | "cividis" | "cividis_r" | "cmrmap" | "cmrmap_r" | "cool" | "cool_r" | "coolwarm" | "coolwarm_r" | "copper" | "copper_r" | "cubehelix" | "cubehelix_r" | "curl" | "curl_r" | "dark2" | "dark2_r" | "deep" | "deep_r" | "delta" | "delta_r" | "dense" | "dense_r" | "diff" | "diff_r" | "flag" | "flag_r" | "gist_earth" | "gist_earth_r" | "gist_gray" | "gist_gray_r" | "gist_heat" | "gist_heat_r" | "gist_ncar" | "gist_ncar_r" | "gist_rainbow" | "gist_rainbow_r" | "gist_stern" | "gist_stern_r" | "gist_yarg" | "gist_yarg_r" | "gnbu" | "gnbu_r" | "gnuplot" | "gnuplot2" | "gnuplot2_r" | "gnuplot_r" | "gray" | "gray_r" | "greens" | "greens_r" | "greys" | "greys_r" | "haline" | "haline_r" | "hot" | "hot_r" | "hsv" | "hsv_r" | "ice" | "ice_r" | "inferno" | "inferno_r" | "jet" | "jet_r" | "magma" | "magma_r" | "matter" | "matter_r" | "nipy_spectral" | "nipy_spectral_r" | "ocean" | "ocean_r" | "oranges" | "oranges_r" | "orrd" | "orrd_r" | "oxy" | "oxy_r" | "paired" | "paired_r" | "pastel1" | "pastel1_r" | "pastel2" | "pastel2_r" | "phase" | "phase_r" | "pink" | "pink_r" | "piyg" | "piyg_r" | "plasma" | "plasma_r" | "prgn" | "prgn_r" | "prism" | "prism_r" | "pubu" | "pubu_r" | "pubugn" | "pubugn_r" | "puor" | "puor_r" | "purd" | "purd_r" | "purples" | "purples_r" | "rain" | "rain_r" | "rainbow" | "rainbow_r" | "rdbu" | "rdbu_r" | "rdgy" | "rdgy_r" | "rdpu" | "rdpu_r" | "rdylbu" | "rdylbu_r" | "rdylgn" | "rdylgn_r" | "reds" | "reds_r" | "rplumbo" | "schwarzwald" | "seismic" | "seismic_r" | "set1" | "set1_r" | "set2" | "set2_r" | "set3" | "set3_r" | "solar" | "solar_r" | "spectral" | "spectral_r" | "speed" | "speed_r" | "spring" | "spring_r" | "summer" | "summer_r" | "tab10" | "tab10_r" | "tab20" | "tab20_r" | "tab20b" | "tab20b_r" | "tab20c" | "tab20c_r" | "tarn" | "tarn_r" | "tempo" | "tempo_r" | "terrain" | "terrain_r" | "thermal" | "thermal_r" | "topo" | "topo_r" | "turbid" | "turbid_r" | "turbo" | "turbo_r" | "twilight" | "twilight_r" | "twilight_shifted" | "twilight_shifted_r" | "viridis" | "viridis_r" | "winter" | "winter_r" | "wistia" | "wistia_r" | "ylgn" | "ylgn_r" | "ylgnbu" | "ylgnbu_r" | "ylorbr" | "ylorbr_r" | "ylorrd" | "ylorrd_r";
                 /** @description JSON encoded custom Colormap */
                 colormap?: string | null;
                 /** @description comma (',') delimited Min,Max range. Can set multiple time for multiple bands. */
