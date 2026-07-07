@@ -45,6 +45,7 @@
 
 - id: aifs
   display_name: "AIFS Single v1"
+  romp_name: "AIFS"
   region: india
   model_type: AIWP
   model_var: tp
@@ -61,6 +62,7 @@
 
 - id: aifs_daily
   display_name: "AIFS Single v1 (Daily)"
+  romp_name: "AIFS_Daily"
   region: india
   model_type: AIWP
   model_var: tp
@@ -172,6 +174,7 @@
 
 - id: aifs
   display_name: "AIFS Single v1"
+  romp_name: "AIFS"
   region: ethiopia
   model_type: AIWP
   model_var: tp
@@ -232,6 +235,7 @@
 
 - id: aifs_single_v2
   display_name: "AIFS Single v2"
+  romp_name: "AIFS_Single_v2"
   region: ethiopia
   model_type: AIWP
   model_var: tp
@@ -246,6 +250,7 @@
 
 - id: aifs_ens_v2
   display_name: "AIFS Ensemble v2"
+  romp_name: "AIFS_Ensemble_v2"
   region: ethiopia
   model_type: AIWP
   model_var: tp

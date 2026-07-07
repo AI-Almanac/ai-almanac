@@ -856,7 +856,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
 
     config = {
-        "model_name": model_source["name"],
+        "model_name": model_cfg.get("romp_name") or model_source["name"],
         "model_display_name": model_source["name"],
         "model_source_id": body.model_name,
         "obs_dir": obs_dir,
