@@ -34,7 +34,7 @@ class DataSourceUpdate(BaseModel):
 
 class DataSourceOut(BaseModel):
     id: str
-    kind: str
+    kind: Literal["obs", "model"]
     name: str
     path: str
     region: str | None
