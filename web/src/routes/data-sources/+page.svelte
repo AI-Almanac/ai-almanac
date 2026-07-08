@@ -314,14 +314,13 @@
 	<DataCatalogPageHeader
 		eyebrow="Catalog entries"
 		title="Data sources"
-		description="Register the local directories that hold your observation datasets and model forecast outputs. Each entry is a pointer — the app reads the files but never modifies them."
+		description="Register the storage locations that hold your observation datasets and model forecast outputs — a local directory or a gs:// path readable by the service. Each entry is a pointer — the app reads the files but never modifies them."
 	/>
 
 	{#if error}
 		<div class="banner err">{error}</div>
 	{/if}
 
-	{#if account.isAdmin}
 	<section class="add">
 		<h2>{editingId ? 'Edit source' : 'Add a source'}</h2>
 		<form onsubmit={onSubmit}>
@@ -345,15 +344,17 @@
 			</div>
 			<div class="path-row">
 				<label class="grow">
-					<span>Directory</span>
+					<span>Directory or gs:// URL</span>
 					<input
 						type="text"
 						bind:value={formPath}
-						placeholder="/data/era5/ethiopia or /home/me/forecasts/fuxi"
+						placeholder="gs://my-bucket/forecasts/fuxi or /data/era5/ethiopia"
 						required
 					/>
 				</label>
-				<button type="button" class="browse" onclick={() => (pickerOpen = true)}>Browse</button>
+				{#if account.canBrowseFs}
+					<button type="button" class="browse" onclick={() => (pickerOpen = true)}>Browse</button>
+				{/if}
 			</div>
 			<div class="row">
 				<label class="grow">
@@ -524,7 +525,6 @@
 			</div>
 		</form>
 	</section>
-	{/if}
 
 	<section>
 		<h2>Observation datasets <span class="count">({obsSources.length})</span></h2>
@@ -577,6 +577,7 @@
 				{src.name}
 				{#if regionName(src.region)}<span class="tag">{regionName(src.region)}</span>{/if}
 				<span class:warn={src.status === 'invalid'} class="tag">{src.status}</span>
+				<span class="tag">{src.visibility === 'shared' ? 'shared' : 'private'}</span>
 			</div>
 			<code class="path">{src.path}</code>
 			{#if spatialBounds(src)}
@@ -589,7 +590,7 @@
 				<p class="validation-error">{src.validation_error}</p>
 			{/if}
 		</div>
-		{#if account.isAdmin}
+		{#if account.isAdmin || src.is_owner}
 			<div class="source-actions">
 				<button class="rm" onclick={() => onEdit(src)}>Edit</button>
 				<button class="rm" disabled={revalidatingId === src.id} onclick={() => onRevalidate(src)}>
