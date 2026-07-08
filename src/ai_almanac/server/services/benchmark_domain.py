@@ -97,10 +97,6 @@ def _scope_params(scope: BenchmarkScope) -> dict:
     return params
 
 
-def _env_key(*parts: str) -> str:
-    return "_".join(p for p in parts if p).upper().replace("-", "_")
-
-
 SHARED_ROMP_PARAM_KEYS = {
     "obs",
     "obs_file_pattern",

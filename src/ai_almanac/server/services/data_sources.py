@@ -1,10 +1,9 @@
 """Data sources catalog service.
 
-A data source is a pointer to a directory on disk (or a remote URL, for
-e.g. ARCO ERA5) that the app can use as either ground-truth observations
-or model forecasts in a benchmark. Replaces the env-var-driven YAML registry
-for runtime use; the YAML files still ship and seed an empty DB on first
-launch so testdata works without configuration.
+A data source is a pointer to a directory on disk, a gs:// prefix, or a
+remote provider URL (e.g. ARCO ERA5) that the app can use as ground-truth
+observations or model forecasts in a benchmark. Rows are registered through
+the data-sources API/UI and validated at registration; there is no seeding.
 """
 
 from __future__ import annotations
@@ -18,11 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
-from ai_almanac.settings import _DATASETS_YAML, _MODELS_YAML, _env_key, _env_value
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
@@ -463,86 +460,3 @@ async def get_model_sources(
         sources = [s for s in sources if (s.get("region") or "").lower() == region.lower()]
     return sources
 
-
-# ---------------------------------------------------------------------------
-# Packaged-YAML seeder/sync.
-# ---------------------------------------------------------------------------
-
-
-async def sync_packaged_data_sources() -> int:
-    """Add any packaged YAML entries not yet registered, on every startup.
-
-    Mirrors `seed_packaged_regions`: this isn't just a first-launch seed, it
-    keeps existing installations in sync as new built-in datasets/models are
-    added to `datasets.yaml`/`models.yaml`, without requiring the (currently
-    disabled) data-management UI. Each entry is keyed by its yaml `id` plus
-    kind/region, stored as `yaml_id` in metadata, so re-running never
-    duplicates a source. Existing non-ready rows are revalidated every call.
-
-    Returns the number of rows inserted.
-    """
-    async with get_db() as conn:
-        rows = (
-            (await conn.execute(text("SELECT id, kind, region, status, metadata FROM data_sources")))
-            .mappings()
-            .fetchall()
-        )
-    existing_keys = set()
-    for row in rows:
-        yaml_id = _decode_metadata(row["metadata"]).get("yaml_id")
-        if yaml_id:
-            existing_keys.add((row["kind"], row["region"], yaml_id))
-        if row["status"] != "ready":
-            await revalidate_source(row["id"])
-
-    inserted = 0
-
-    # Seed obs datasets from datasets.yaml.
-    raw_datasets = yaml.safe_load(_DATASETS_YAML.read_text())
-    for entry in raw_datasets:
-        provider = entry.get("provider", "local")
-        if provider != "local":
-            # Remote (ARCO/e2s) sources don't fit the local-path model; skip
-            # for the POC. We'll handle remote registration separately later.
-            continue
-        region = entry.get("region")
-        if ("obs", region, entry["id"]) in existing_keys:
-            continue
-        env_key = _env_key(entry["id"], "obs_dir")
-        path = _env_value(env_key)
-        if not path:
-            continue
-        await create_source(
-            kind="obs",
-            name=entry.get("name", entry["id"]),
-            path=path,
-            region=region,
-            metadata={
-                "yaml_id": entry["id"],
-                "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
-                "obs_var": entry.get("obs_var", "RAINFALL"),
-            },
-        )
-        inserted += 1
-
-    # Seed model directories from models.yaml.
-    raw_models = yaml.safe_load(_MODELS_YAML.read_text())
-    for entry in raw_models:
-        if ("model", entry["region"], entry["id"]) in existing_keys:
-            continue
-        env_key = _env_key(entry["region"], entry["id"], "model_dir")
-        path = _env_value(env_key)
-        if not path:
-            continue
-        meta = {k: v for k, v in entry.items() if k not in ("display_name", "region")}
-        meta["yaml_id"] = entry["id"]  # preserve the slug so existing UI URLs work
-        await create_source(
-            kind="model",
-            name=entry.get("display_name", entry["id"]),
-            path=path,
-            region=entry["region"],
-            metadata=meta,
-        )
-        inserted += 1
-
-    return inserted

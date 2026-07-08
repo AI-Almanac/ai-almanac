@@ -5,7 +5,7 @@
 #
 # defaults: default values for optional ROMP run parameters. These match
 #           the defaults in ROMP's generate_config.py and are used when a
-#           field is not set on the model entry in models.yaml or the
+#           field is not set on the model source's metadata or the
 #           submitted job's RompParams.
 
 metrics:

@@ -285,15 +285,18 @@ async def test_region_delete_requires_admin_in_shared(
 
 
 @pytest.mark.asyncio
-async def test_data_source_delete_requires_admin_in_shared(
+async def test_data_source_delete_hides_unowned_sources(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Non-admins can only delete sources they own; anything else is a uniform
+    404 so other users' sources aren't discoverable. Ownership CRUD semantics
+    are covered in test_data_sources.py."""
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "")
     resp = await client.delete(
         "/data-sources/anything", headers={"X-Forwarded-User": "rando"}
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

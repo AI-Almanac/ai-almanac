@@ -55,8 +55,11 @@ Python tests use a temporary SQLite data directory. Frontend tests use Vitest.
 
 ## Data Sources
 
-Runtime data sources and regions are managed through the application database.
-Packaged YAML files seed an empty installation and provide defaults.
+Datasets are pointers registered through the data-sources API/UI: a row in
+`data_sources` naming a local directory or `gs://` prefix, validated at
+registration. Admin-registered rows are shared built-ins; user-registered
+rows are private. There is no YAML or env-var dataset seeding; regions are
+still seeded from packaged `regions.yaml`.
 
 Model initialization weekdays use Python weekday numbering: Monday is `0` and
 Sunday is `6`.

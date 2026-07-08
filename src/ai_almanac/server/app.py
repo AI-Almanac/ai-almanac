@@ -82,7 +82,6 @@ async def lifespan(app: FastAPI):
     # overlay) is reachable; the call at line ~75 only saw config.yaml + env.
     _reload_user_config()
     await _seed_regions()
-    await _seed_data_sources()
     await _reconcile_jobs()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
@@ -114,21 +113,6 @@ def _enforce_deployment() -> None:
     from ai_almanac.server.auth import enforce_deployment_invariants
 
     enforce_deployment_invariants()
-
-
-async def _seed_data_sources() -> None:
-    """Sync data_sources with the packaged YAMLs on every startup, so newly
-    added built-in datasets/models (and existing testdata setups via
-    `*_OBS_DIR`, `*_MODEL_DIR` env vars) appear without the user needing to
-    register anything manually."""
-    from ai_almanac.server.services.data_sources import sync_packaged_data_sources
-
-    try:
-        count = await sync_packaged_data_sources()
-        if count:
-            logger.info("seeded %d data source(s) from packaged YAMLs", count)
-    except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
-        logger.warning("data source seeding failed: %s", e)
 
 
 async def _seed_regions() -> None:
