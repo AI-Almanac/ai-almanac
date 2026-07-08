@@ -1,11 +1,16 @@
 name: ci
 
+# pull_request stays unfiltered: check-and-test is a required status check on
+# main, and a path-skipped required check leaves doc-only PRs blocked forever.
 on:
   pull_request:
   push:
     branches:
       - main
       - develop
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
 
 concurrency:
   group: ci-${{ github.ref }}
