@@ -169,11 +169,3 @@ variable "enable_run_code" {
 variable "enable_run_code_sandbox" {
   type = bool
 }
-
-variable "data_dir_envs" {
-  description = "Obs/model data-directory env vars, identical across envs. A list (not a map) so the container env order is stable — append new entries at the end."
-  type = list(object({
-    name  = string
-    value = string
-  }))
-}

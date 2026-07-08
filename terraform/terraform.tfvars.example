@@ -35,25 +35,6 @@ admin_emails = "hholbrook@uchicago.edu"
 # Job runner and data config
 job_runner = "modal"
 
-imd_2p0_obs_dir  = "gs://almanac-data-ai-almanac/obs/imd-2p0"
-ethiopia_obs_dir = "gs://almanac-data-ai-almanac/obs/ethiopia"
-
-india_aifs_model_dir       = "gs://almanac-data-ai-almanac/models/india/aifs"
-india_aifs_daily_model_dir = "gs://almanac-data-ai-almanac/models/india/aifs_daily"
-india_fuxi_model_dir       = "gs://almanac-data-ai-almanac/models/india/fuxi"
-india_fuxi_s2s_model_dir   = "gs://almanac-data-ai-almanac/models/india/fuxi_s2s"
-india_gencast_model_dir    = "gs://almanac-data-ai-almanac/models/india/gencast"
-india_graphcast_model_dir  = "gs://almanac-data-ai-almanac/models/india/graphcast"
-india_ifs_model_dir        = "gs://almanac-data-ai-almanac/models/india/ifs"
-india_neuralgcm_model_dir  = "gs://almanac-data-ai-almanac/models/india/neuralgcm"
-
-ethiopia_aifs_model_dir           = "gs://almanac-data-ai-almanac/models/ethiopia/aifs"
-ethiopia_fuxi_model_dir           = "gs://almanac-data-ai-almanac/models/ethiopia/fuxi"
-ethiopia_gencast_model_dir        = "gs://almanac-data-ai-almanac/models/ethiopia/gencast"
-ethiopia_graphcast_model_dir      = "gs://almanac-data-ai-almanac/models/ethiopia/graphcast"
-ethiopia_aifs_single_v2_model_dir = "gs://almanac-data-ai-almanac/models/ethiopia/AIFS-single-v2"
-ethiopia_aifs_ens_v2_model_dir    = "gs://almanac-data-ai-almanac/models/ethiopia/AIFS-ens-v2"
-
 # Chat assistant / LLM. Leave llm_base_url empty to keep chat disabled.
 llm_base_url            = "https://openrouter.ai/api/v1"
 llm_model               = "anthropic/claude-haiku-4.5"
