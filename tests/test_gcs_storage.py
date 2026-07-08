@@ -123,14 +123,6 @@ def test_job_output_uri_points_at_outputs_bucket(store: GCSStorage) -> None:
     )
 
 
-def test_resolve_obs_path(store: GCSStorage) -> None:
-    # gs:// and absolute paths pass through unchanged
-    assert store.resolve_obs_path("gs://b/x/y.nc") == "gs://b/x/y.nc"
-    assert store.resolve_obs_path("/mnt/data/x.nc") == "/mnt/data/x.nc"
-    # relative upload key resolves to the parent prefix in the uploads bucket
-    assert store.resolve_obs_path("user/ds/file.nc") == "gs://up/user/ds"
-
-
 def test_result_url_points_at_the_backend_proxy(store: GCSStorage) -> None:
     # Result files are streamed through the backend, not the bucket directly, so
     # the browser fetches them same-origin (no signed URL, no bucket CORS).

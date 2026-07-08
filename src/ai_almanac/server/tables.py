@@ -34,19 +34,6 @@ users = sa.Table(
     sa.Column("llm_preference", sa.Text(), nullable=False, server_default="auto"),
 )
 
-datasets = sa.Table(
-    "datasets",
-    metadata,
-    sa.Column("id", sa.Text(), primary_key=True),
-    sa.Column("user_id", sa.Text(), sa.ForeignKey("users.id"), nullable=False),
-    sa.Column("name", sa.Text(), nullable=False),
-    sa.Column("status", sa.Text(), nullable=False, server_default="pending"),
-    sa.Column("storage_key", sa.Text()),
-    sa.Column("error", sa.Text()),
-    sa.Column("created_at", sa.Text(), nullable=False),
-    sa.Column("ready_at", sa.Text()),
-)
-
 jobs = sa.Table(
     "jobs",
     metadata,

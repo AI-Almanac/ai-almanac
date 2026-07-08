@@ -84,12 +84,6 @@ class LocalStorage:
         self._upload_dir.mkdir(parents=True, exist_ok=True)
         self._outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    def resolve_obs_path(self, storage_key: str) -> str:
-        key = Path(storage_key)
-        if key.is_absolute():
-            return str(key)
-        return str(self._contained(self._upload_dir, storage_key).parent)
-
     def job_dir(self, job_id: str) -> Path:
         """Root directory holding a job's workspace (output/, figure/, run.log)."""
         return self._contained(self._outputs_dir, job_id)
@@ -291,12 +285,6 @@ class GCSStorage:
         import gcsfs
 
         return gcsfs.GCSFileSystem()
-
-    def resolve_obs_path(self, storage_key: str) -> str:
-        if storage_key.startswith("gs://") or Path(storage_key).is_absolute():
-            return storage_key
-        prefix = "/".join(storage_key.split("/")[:-1])
-        return f"gs://{self._uploads_bucket}/{prefix}"
 
     def job_dir(self, job_id: str) -> Path:
         raise NotImplementedError(
