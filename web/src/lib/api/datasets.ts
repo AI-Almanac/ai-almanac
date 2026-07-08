@@ -17,10 +17,3 @@ export type Dataset = {
 export async function getDatasets() {
 	return request<Dataset[]>('/datasets');
 }
-
-export async function createDatasetFromPath(name: string, obs_dir: string) {
-	return request<Dataset>('/datasets/from-path', {
-		method: 'POST',
-		body: JSON.stringify({ name, obs_dir })
-	});
-}

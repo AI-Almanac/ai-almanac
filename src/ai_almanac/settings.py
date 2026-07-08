@@ -230,14 +230,10 @@ class Settings(BaseSettings):
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
-    # Shared-host quotas and upload policy.
+    # Shared-host quotas.
     max_active_jobs_per_user: int = 2
-    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
-    max_stored_upload_bytes_per_user: int = 10 * 1024 * 1024 * 1024
     max_concurrent_llm_requests_per_user: int = 2
     max_llm_requests_per_minute: int = 30
-    upload_grant_ttl_seconds: int = 900
-    allowed_upload_extensions: str = ".nc,.zip,.tar,.gz,.tgz"
 
     def resolve_database_url(self) -> str:
         if self.database_url:

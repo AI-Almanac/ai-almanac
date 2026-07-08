@@ -79,7 +79,7 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
         "Features",
         [
-            ("enable_data_management", "Data management", "Let users create custom regions and upload their own datasets"),
+            ("enable_data_management", "Data management", "Let users create custom regions and register their own datasets"),
             ("enable_forecasting", "Live forecasting", "Let users generate live AI weather forecasts and score them against a trained blend"),
         ],
     ),

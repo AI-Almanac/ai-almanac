@@ -107,12 +107,6 @@ class LocalStorage:
         """Absolute path of a dataset dir (``{kind}/{region}/{id}``) for staging."""
         return str(self._contained(self._datasets_dir, prefix))
 
-    def generate_upload_url(self, storage_key: str, base_url: str) -> str:
-        return base_url.rstrip("/") + f"/upload/{storage_key}"
-
-    def confirm_upload(self, storage_key: str) -> bool:
-        return self._contained(self._upload_dir, storage_key).exists()
-
     def resolve_obs_path(self, storage_key: str) -> str:
         key = Path(storage_key)
         if key.is_absolute():
@@ -320,22 +314,6 @@ class GCSStorage:
         import gcsfs
 
         return gcsfs.GCSFileSystem()
-
-    def generate_upload_url(self, storage_key: str, base_url: str) -> str:
-        return (
-            self._bucket(self._uploads_bucket)
-            .blob(storage_key)
-            .generate_signed_url(
-                version="v4",
-                expiration=self._SIGNED_URL_EXPIRY,
-                method="PUT",
-                content_type="application/octet-stream",
-                **self._signing_kwargs(),
-            )
-        )
-
-    def confirm_upload(self, storage_key: str) -> bool:
-        return self._bucket(self._uploads_bucket).blob(storage_key).exists()
 
     def resolve_obs_path(self, storage_key: str) -> str:
         if storage_key.startswith("gs://") or Path(storage_key).is_absolute():

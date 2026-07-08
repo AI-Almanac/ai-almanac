@@ -31,8 +31,6 @@ async def me(user: CurrentUser) -> dict:
             "can_use_forecasting": settings.enable_forecasting,
             "can_run_code": settings.enable_run_code,
             "max_active_jobs": settings.max_active_jobs_per_user,
-            "max_upload_bytes": settings.max_upload_bytes,
-            "max_stored_upload_bytes": settings.max_stored_upload_bytes_per_user,
             "max_concurrent_llm_requests": settings.max_concurrent_llm_requests_per_user,
             "max_llm_requests_per_minute": settings.max_llm_requests_per_minute,
         },
