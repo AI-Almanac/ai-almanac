@@ -94,8 +94,8 @@ def _parse_metrics_cache(value: object) -> JobMetrics | None:
 
 
 @router.get("/models")
-async def list_models(region: str | None = None):
-    return await load_model_registry(region)
+async def list_models(user: CurrentUser, region: str | None = None):
+    return await load_model_registry(region, user_id=user.id, is_admin=user.is_admin)
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)

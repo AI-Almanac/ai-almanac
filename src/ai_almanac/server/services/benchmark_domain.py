@@ -184,7 +184,7 @@ def _region_by_id(catalog: CatalogSnapshot, region_id: object) -> dict | None:
 async def _dataset_candidates(user_id: str) -> list[dict]:
     from ai_almanac.server.services.data_sources import get_obs_sources
 
-    sources = await get_obs_sources()
+    sources = await get_obs_sources(user_id=user_id)
     return [
         {
             "id": source["id"],
@@ -385,7 +385,9 @@ async def _exec_list_datasets(args: dict, user_id: str, scope: BenchmarkScope) -
 
 async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     region = args.get("region")
-    models = await load_model_registry(region if isinstance(region, str) else None)
+    models = await load_model_registry(
+        region if isinstance(region, str) else None, user_id=user_id
+    )
     return json.dumps(
         [
             {

@@ -189,7 +189,15 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
 
     storage = get_storage()
     pattern = _source_file_pattern(kind, metadata)
-    identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+    try:
+        identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+    except Exception as exc:
+        return (
+            "invalid",
+            f"Cannot read {path}: {type(exc).__name__}: {exc}. "
+            "Check that the path exists and is readable by the service account.",
+            metadata,
+        )
     if not identifiers:
         return "invalid", f"No files match {pattern!r} under {path}.", metadata
 
@@ -266,6 +274,10 @@ def _finalize_inspection(
 
 
 async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+    # Remote-provider sources (e.g. era5_arco) have no file tree to inspect;
+    # their metadata (arco_url, variable, bounds) is the contract.
+    if (metadata or {}).get("provider") not in (None, "local"):
+        return "ready", None, dict(metadata)
     inspect = _inspect_gcs_source if str(path).startswith("gs://") else _inspect_local_source
     return await asyncio.to_thread(inspect, kind, path, metadata)
 
@@ -299,6 +311,8 @@ async def create_source(
     path: str,
     region: str | None = None,
     metadata: dict | None = None,
+    owner_id: str | None = None,
+    visibility: str = "shared",
 ) -> dict:
     """Insert a new data source. Returns the created row."""
     normalized_region = region.strip().lower() if region else None
@@ -312,9 +326,10 @@ async def create_source(
             text(
                 "INSERT INTO data_sources "
                 "(id, kind, name, path, region, metadata, location_type, status, "
-                "validation_error, created_at, updated_at) "
+                "validation_error, owner_id, visibility, created_at, updated_at) "
                 "VALUES (:id, :kind, :name, :path, :region, :metadata, "
-                "'local_directory', :status, :validation_error, :now, :now)"
+                ":location_type, :status, :validation_error, :owner_id, :visibility, "
+                ":now, :now)"
             ),
             {
                 "id": source_id,
@@ -324,8 +339,11 @@ async def create_source(
                 "region": normalized_region,
                 # SQLite's JSON column doesn't auto-serialize Python dicts; emit a string.
                 "metadata": json.dumps(normalized_metadata),
+                "location_type": "gcs" if path.startswith("gs://") else "local_directory",
                 "status": status,
                 "validation_error": validation_error,
+                "owner_id": owner_id,
+                "visibility": visibility,
                 "now": now,
             },
         )
@@ -429,14 +447,18 @@ async def delete_source(source_id: str) -> bool:
         return result.rowcount > 0
 
 
-async def get_obs_sources() -> list[dict]:
-    """Return all configured obs data sources (for the demo-dataset registry)."""
-    return await list_sources(kind="obs")
+async def get_obs_sources(
+    *, user_id: str | None = None, is_admin: bool = False
+) -> list[dict]:
+    """Return obs data sources visible to the given user (all when unscoped)."""
+    return await list_sources(kind="obs", user_id=user_id, is_admin=is_admin)
 
 
-async def get_model_sources(region: str | None = None) -> list[dict]:
-    """Return all configured model data sources, optionally for a specific region."""
-    sources = await list_sources(kind="model")
+async def get_model_sources(
+    region: str | None = None, *, user_id: str | None = None, is_admin: bool = False
+) -> list[dict]:
+    """Return model data sources visible to the given user, optionally per region."""
+    sources = await list_sources(kind="model", user_id=user_id, is_admin=is_admin)
     if region:
         sources = [s for s in sources if (s.get("region") or "").lower() == region.lower()]
     return sources

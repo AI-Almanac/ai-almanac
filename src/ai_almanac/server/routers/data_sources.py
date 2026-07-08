@@ -9,12 +9,37 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.auth import AdminUser, CurrentUser, require_data_management
+from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
 from ai_almanac.server.services.data_catalog import discover_datasets
+from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
+
+
+def _normalized_path(raw: str) -> str:
+    raw = raw.strip()
+    return raw if raw.startswith("gs://") else str(Path(raw).expanduser().resolve())
+
+
+def _check_path_allowed(user, path: str) -> None:
+    """Non-admin sources in shared deployments must live in cloud storage."""
+    if (
+        not user.is_admin
+        and settings.deployment_mode == "shared"
+        and not path.startswith("gs://")
+    ):
+        raise HTTPException(
+            status_code=400, detail="user datasets must be gs:// URLs"
+        )
+
+
+async def _owned_source_or_404(source_id: str, user) -> dict:
+    source = await svc.get_source(source_id)
+    if not source or not (user.is_admin or source.get("owner_id") == user.id):
+        raise HTTPException(status_code=404, detail="data source not found")
+    return source
 
 
 class DataSourceIn(BaseModel):
@@ -42,6 +67,8 @@ class DataSourceOut(BaseModel):
     location_type: Literal["local_directory", "gcs"]
     status: Literal["ready", "invalid"]
     validation_error: str | None
+    visibility: Literal["private", "shared"]
+    is_owner: bool
     created_at: str
     updated_at: str | None
 
@@ -55,7 +82,7 @@ class DataSourceValidationOut(BaseModel):
     validation_error: str | None
 
 
-def _to_out(row: dict) -> DataSourceOut:
+def _to_out(row: dict, user) -> DataSourceOut:
     import json as _json
 
     raw = row.get("metadata") or {}
@@ -74,6 +101,8 @@ def _to_out(row: dict) -> DataSourceOut:
         location_type=row.get("location_type") or "local_directory",
         status=row.get("status") or "invalid",
         validation_error=row.get("validation_error"),
+        visibility=row.get("visibility") or "shared",
+        is_owner=row.get("owner_id") == user.id,
         created_at=row["created_at"],
         updated_at=row.get("updated_at"),
     )
@@ -96,7 +125,7 @@ async def list_data_sources(
     user: CurrentUser, kind: Literal["obs", "model"] | None = None
 ):
     rows = await svc.list_sources(kind=kind, user_id=user.id, is_admin=user.is_admin)
-    return [_to_out(r) for r in rows]
+    return [_to_out(r, user) for r in rows]
 
 
 class DiscoveredDatasetOut(BaseModel):
@@ -140,8 +169,9 @@ async def discover_catalog(
     response_model=DataSourceValidationOut,
     dependencies=[Depends(require_data_management)],
 )
-async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
-    normalized_path = str(Path(body.path).expanduser().resolve())
+async def validate_data_source(body: DataSourceIn, user: CurrentUser):
+    normalized_path = _normalized_path(body.path)
+    _check_path_allowed(user, normalized_path)
     region = await _parse_region(body.region)
     status, validation_error, metadata = await svc.validate_source(
         body.kind,
@@ -164,8 +194,9 @@ async def validate_data_source(body: DataSourceIn, _admin: AdminUser):
     status_code=201,
     dependencies=[Depends(require_data_management)],
 )
-async def create_data_source(body: DataSourceIn, _admin: AdminUser):
-    normalized = str(Path(body.path).expanduser().resolve())
+async def create_data_source(body: DataSourceIn, user: CurrentUser):
+    normalized = _normalized_path(body.path)
+    _check_path_allowed(user, normalized)
     region = await _parse_region(body.region)
     row = await svc.create_source(
         kind=body.kind,
@@ -173,8 +204,10 @@ async def create_data_source(body: DataSourceIn, _admin: AdminUser):
         path=normalized,
         region=region,
         metadata=body.metadata,
+        owner_id=None if user.is_admin else user.id,
+        visibility="shared" if user.is_admin else "private",
     )
-    return _to_out(row)
+    return _to_out(row, user)
 
 
 @router.put(
@@ -183,20 +216,20 @@ async def create_data_source(body: DataSourceIn, _admin: AdminUser):
     dependencies=[Depends(require_data_management)],
 )
 async def update_data_source(
-    source_id: str, body: DataSourceUpdate, _admin: AdminUser
+    source_id: str, body: DataSourceUpdate, user: CurrentUser
 ):
-    existing = await svc.get_source(source_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="data source not found")
+    await _owned_source_or_404(source_id, user)
+    normalized = _normalized_path(body.path)
+    _check_path_allowed(user, normalized)
     region = await _parse_region(body.region)
     row = await svc.update_source(
         source_id,
         name=body.name.strip(),
-        path=str(Path(body.path).expanduser().resolve()),
+        path=normalized,
         region=region,
         metadata=body.metadata,
     )
-    return _to_out(row)
+    return _to_out(row, user)
 
 
 @router.post(
@@ -204,11 +237,12 @@ async def update_data_source(
     response_model=DataSourceOut,
     dependencies=[Depends(require_data_management)],
 )
-async def revalidate_data_source(source_id: str, _admin: AdminUser):
+async def revalidate_data_source(source_id: str, user: CurrentUser):
+    await _owned_source_or_404(source_id, user)
     row = await svc.revalidate_source(source_id)
     if not row:
         raise HTTPException(status_code=404, detail="data source not found")
-    return _to_out(row)
+    return _to_out(row, user)
 
 
 @router.delete(
@@ -216,7 +250,8 @@ async def revalidate_data_source(source_id: str, _admin: AdminUser):
     status_code=204,
     dependencies=[Depends(require_data_management)],
 )
-async def delete_data_source(source_id: str, _admin: AdminUser):
+async def delete_data_source(source_id: str, user: CurrentUser):
+    await _owned_source_or_404(source_id, user)
     ok = await svc.delete_source(source_id)
     if not ok:
         raise HTTPException(status_code=404, detail="data source not found")
