@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
@@ -19,7 +20,6 @@ from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services.data_catalog import year_uris
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
@@ -289,6 +289,16 @@ class BlendOut(BaseModel):
 def _blend_model_key(name: str) -> str:
     """Filesystem/column-safe key used for a forecast model inside the blend."""
     return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
+    """Per-year ``{year}.nc`` file URIs under a dataset dir (path or ``gs://``).
+
+    The unit of staging is one ``{year}.nc`` file, so a job pulls exactly the
+    years it uses instead of a whole (potentially GB-scale) dataset dir.
+    """
+    base = base_uri.rstrip("/")
+    return [f"{base}/{year}.nc" for year in years]
 
 
 def _parse_year_spec(value: str | None) -> list[int]:

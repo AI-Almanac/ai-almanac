@@ -1,8 +1,7 @@
-"""Local observation and model source catalog."""
+"""Observation and model source catalog (local directories and gs:// pointers)."""
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Literal
 
@@ -12,7 +11,6 @@ from pydantic import BaseModel, Field
 from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
-from ai_almanac.server.services.data_catalog import discover_datasets
 from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
@@ -126,42 +124,6 @@ async def list_data_sources(
 ):
     rows = await svc.list_sources(kind=kind, user_id=user.id, is_admin=user.is_admin)
     return [_to_out(r, user) for r in rows]
-
-
-class DiscoveredDatasetOut(BaseModel):
-    kind: str
-    region: str
-    id: str
-    years: list[int]
-    manifest: dict | None
-
-
-@router.get("/catalog", response_model=list[DiscoveredDatasetOut])
-async def discover_catalog(
-    _user: CurrentUser, kind: Literal["obs", "forecasts"] | None = None
-):
-    """Datasets discovered by walking the active backend's dataset tree.
-
-    Read-only and database-free: the uniform layout is the source of truth for
-    *what data exists*, so this reflects the mirrored tree on local/GCS/volume
-    storage without any seeding.
-    """
-    datasets = await asyncio.to_thread(discover_datasets)
-    return [
-        DiscoveredDatasetOut(
-            kind=dataset.ref.kind,
-            region=dataset.ref.region,
-            id=dataset.ref.id,
-            years=list(dataset.years),
-            manifest=(
-                dataset.manifest.model_dump(exclude_none=True)
-                if dataset.manifest
-                else None
-            ),
-        )
-        for dataset in datasets
-        if kind is None or dataset.ref.kind == kind
-    ]
 
 
 @router.post(
