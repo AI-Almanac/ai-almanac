@@ -337,7 +337,12 @@ def run_season_forecast_bundle(
     scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{job_id}-{model_id}-"))
     out_path = stage_root / f"{year}.nc"
     pipeline.generate_season_forecast_netcdf(
-        model_entry, config, season_params, scratch_root, out_path
+        model_entry,
+        config,
+        season_params,
+        scratch_root,
+        out_path,
+        cache_dir=Path("/cache/season-forecasts"),
     )
     print(f"==> [{model_id}] Committing volume (uploads any newly-downloaded model weights)")
     t0 = time.perf_counter()

@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import os
 import tarfile
 import time
 from pathlib import Path
@@ -182,17 +183,58 @@ def select_lat_lon_bounds(data_array, bounds: dict):
     return data_array.sel({lat_name: lat_slice, lon_name: slice(min(lon_bounds), max(lon_bounds))})
 
 
+def cached_trajectory(
+    cache_dir: Path | None,
+    model_id: str,
+    max_lead_day: int,
+    issue_date: dt.date,
+    compute,
+):
+    """Read-through cache for one issue date's daily-precip trajectory.
+
+    A rollout initialized from a past date is deterministic (fixed weights,
+    archived GFS conditions), so its reduced trajectory never changes — cache
+    it and every later forecast job skips that GPU run. Cached at the model's
+    native grid and units (unit_cvt/bounds are applied downstream), so one
+    entry serves any blend using the model.
+    """
+    import uuid
+
+    import xarray as xr
+
+    if cache_dir is None:
+        return compute(), False
+    cache_file = (
+        cache_dir / model_id / f"lead{int(max_lead_day)}d" / f"{issue_date.isoformat()}.nc"
+    )
+    if cache_file.exists():
+        return xr.open_dataarray(cache_file).load(), True
+    trajectory = compute()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    # ponytail: no eviction — a season is a few GB per model and dates stop
+    # accruing when the season ends; add cleanup if the volume ever fills.
+    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
+    trajectory.rename("tp").to_netcdf(
+        tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
+    )
+    os.replace(tmp_path, cache_file)
+    return trajectory, False
+
+
 def generate_season_forecast_netcdf(
     model_entry: dict,
     config: dict,
     season_params: dict,
     scratch_root: Path,
     out_path: Path,
+    cache_dir: Path | None = None,
 ) -> Path:
     """Loop one model across the current season's issue dates and write
     out_path as a NetCDF matching the historical `{year}.nc` schema (time x
     day x lat x lon, variable tp). Caller decides scratch_root/out_path —
     Modal mode uses container-local temp dirs, local mode plain temp dirs.
+    With cache_dir set, past issue dates are served from cache and only new
+    ones are rolled out (see cached_trajectory).
     """
     import numpy as np
     import xarray as xr
@@ -217,11 +259,21 @@ def generate_season_forecast_netcdf(
         # end-to-end without paying for a full season's worth of rollouts.
         issue_dates = issue_dates[-int(max_issue_dates):]
 
-    model = load_model(model_class)
-    data = GFS()
     _, step_hours = lead_steps([max_lead_day * 24], model_class)
     nsteps = (max_lead_day * 24) // step_hours
     scratch_root.mkdir(parents=True, exist_ok=True)
+
+    # Loading model weights is expensive; defer until the first cache miss so
+    # a fully cached season never touches the GPU.
+    loaded: dict[str, Any] = {}
+
+    def _rollout(issue_date: dt.date):
+        if not loaded:
+            loaded["model"] = load_model(model_class)
+            loaded["data"] = GFS()
+        return _daily_precip_trajectory(
+            loaded["model"], loaded["data"], issue_date, max_lead_day, step_hours, scratch_root
+        )
 
     print(
         f"==> Season loop: {len(issue_dates)} issue date(s) "
@@ -233,11 +285,16 @@ def generate_season_forecast_netcdf(
     for i, issue_date in enumerate(issue_dates, start=1):
         t0 = time.perf_counter()
         print(f"  [{i}/{len(issue_dates)}] season inference: issue date {issue_date}", flush=True)
-        trajectory = _daily_precip_trajectory(
-            model, data, issue_date, max_lead_day, step_hours, scratch_root
+        trajectory, from_cache = cached_trajectory(
+            cache_dir,
+            model_entry["id"],
+            max_lead_day,
+            issue_date,
+            lambda date=issue_date: _rollout(date),
         )
         print(
-            f"  [{i}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s",
+            f"  [{i}/{len(issue_dates)}] "
+            f"{'cached' if from_cache else f'done in {time.perf_counter() - t0:.1f}s'}",
             flush=True,
         )
         per_issue.append(trajectory.assign_coords(time=np.datetime64(issue_date)))

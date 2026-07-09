@@ -22,3 +22,69 @@ def test_season_issue_dates_can_be_capped_to_most_recent():
     assert len(capped) == 10
     assert capped[-1] == dates[-1]
     assert capped[0] == dates[-10]
+
+
+def _trajectory():
+    import numpy as np
+    import xarray as xr
+
+    return xr.DataArray(
+        np.arange(24, dtype="float32").reshape(2, 3, 4),
+        dims=("day", "lat", "lon"),
+        coords={"day": [0, 1], "lat": [1.0, 2.0, 3.0], "lon": [10.0, 11.0, 12.0, 13.0]},
+        name="tp",
+    )
+
+
+def test_cached_trajectory_computes_once_then_reads_cache(tmp_path):
+    import xarray as xr
+
+    from ai_almanac.server.services.forecast_pipeline import cached_trajectory
+
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return _trajectory()
+
+    issue_date = dt.date(2026, 5, 4)
+    first, first_cached = cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
+    second, second_cached = cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
+
+    assert (first_cached, second_cached) == (False, True)
+    assert len(calls) == 1
+    xr.testing.assert_allclose(first, second)
+
+
+def test_cached_trajectory_key_separates_models_and_leads(tmp_path):
+    from ai_almanac.server.services.forecast_pipeline import cached_trajectory
+
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return _trajectory()
+
+    issue_date = dt.date(2026, 5, 4)
+    cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
+    cached_trajectory(tmp_path, "gencast", 45, issue_date, compute)
+    cached_trajectory(tmp_path, "aifs", 30, issue_date, compute)
+
+    assert len(calls) == 3
+
+
+def test_cached_trajectory_without_cache_dir_always_computes():
+    from ai_almanac.server.services.forecast_pipeline import cached_trajectory
+
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return _trajectory()
+
+    issue_date = dt.date(2026, 5, 4)
+    _, cached = cached_trajectory(None, "aifs", 45, issue_date, compute)
+    _, cached_again = cached_trajectory(None, "aifs", 45, issue_date, compute)
+
+    assert (cached, cached_again) == (False, False)
+    assert len(calls) == 2

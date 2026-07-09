@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
+from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
 from ai_almanac.settings import get_packaged_forecast_models
 
@@ -57,7 +58,12 @@ def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path
     year = datetime.now(UTC).year
     out_path = stage_root / f"{year}.nc"
     return forecast_pipeline.generate_season_forecast_netcdf(
-        model_entry, config, season_params, scratch_root, out_path
+        model_entry,
+        config,
+        season_params,
+        scratch_root,
+        out_path,
+        cache_dir=cache_dir() / "season-forecasts",
     )
 
 
