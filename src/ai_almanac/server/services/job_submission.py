@@ -585,6 +585,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     """
     blend_row = await _resolve_parent_blend(body.blend_id, user_id)
     blend_config = json.loads(blend_row.get("config_json") or "{}")
+    # Where the blend's training run published its artifacts. The live-scoring
+    # step applies coefs_blended_model_global_final.pkl from here instead of
+    # retraining the CV; blends trained before that artifact existed fall back
+    # to retraining.
+    blend_config["blend_output_uri"] = get_storage().job_output_uri(body.blend_id)[0]
 
     model_names: list[str] = blend_config.get("model_names") or []
     # Live inference runs against the forecast_models.yaml registry (earth2studio

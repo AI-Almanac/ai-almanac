@@ -78,10 +78,18 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
         live_bundle = workflow._bundle_files([live_forecast_paths[name]])
         forecast_bundles[name] = workflow._merge_forecast_bundle(historical_bundle, live_bundle)
 
+    coef_pkl = None
+    blend_output_uri = str(blend_config.get("blend_output_uri") or "")
+    if blend_output_uri and not blend_output_uri.startswith("gs://"):
+        coef_path = Path(blend_output_uri) / workflow.FINAL_COEF_FILENAME
+        if coef_path.is_file():
+            print("==> Using trained blend coefficients (skipping CV retrain)", flush=True)
+            coef_pkl = coef_path.read_bytes()
+
     live_year = datetime.now(UTC).year
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
     csv_bytes = workflow.score_live_forecast.local(
-        obs_bundle, forecast_bundles, model_names, params, live_year
+        obs_bundle, forecast_bundles, model_names, params, live_year, coef_pkl=coef_pkl
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
