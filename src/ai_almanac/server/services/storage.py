@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 
-from ai_almanac.paths import datasets_dir, uploads_dir
+from ai_almanac.paths import uploads_dir
 
 # Probed in priority order when a chat figure's extension is unknown.
 _CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
@@ -78,46 +78,11 @@ class LocalStorage:
 
     is_local: bool = True
 
-    def __init__(self, upload_dir: Path, job_outputs_dir: Path, datasets_dir: Path):
+    def __init__(self, upload_dir: Path, job_outputs_dir: Path):
         self._upload_dir = Path(upload_dir).resolve()
         self._outputs_dir = Path(job_outputs_dir).resolve()
-        self._datasets_dir = Path(datasets_dir).resolve()
         self._upload_dir.mkdir(parents=True, exist_ok=True)
         self._outputs_dir.mkdir(parents=True, exist_ok=True)
-        self._datasets_dir.mkdir(parents=True, exist_ok=True)
-
-    def list_dataset_tree(self) -> list[str]:
-        """Posix relpaths of every file under the dataset root (the catalog walk)."""
-        root = self._datasets_dir
-        return sorted(
-            p.relative_to(root).as_posix()
-            for p in root.rglob("*")
-            if p.is_file()
-        )
-
-    def read_dataset_text(self, relkey: str) -> str | None:
-        """Read a text file (e.g. a manifest) under the dataset root, or None."""
-        try:
-            path = self._contained(self._datasets_dir, relkey)
-        except ValueError:
-            return None
-        return path.read_text() if path.is_file() else None
-
-    def dataset_uri(self, prefix: str) -> str:
-        """Absolute path of a dataset dir (``{kind}/{region}/{id}``) for staging."""
-        return str(self._contained(self._datasets_dir, prefix))
-
-    def generate_upload_url(self, storage_key: str, base_url: str) -> str:
-        return base_url.rstrip("/") + f"/upload/{storage_key}"
-
-    def confirm_upload(self, storage_key: str) -> bool:
-        return self._contained(self._upload_dir, storage_key).exists()
-
-    def resolve_obs_path(self, storage_key: str) -> str:
-        key = Path(storage_key)
-        if key.is_absolute():
-            return str(key)
-        return str(self._contained(self._upload_dir, storage_key).parent)
 
     def job_dir(self, job_id: str) -> Path:
         """Root directory holding a job's workspace (output/, figure/, run.log)."""
@@ -321,28 +286,6 @@ class GCSStorage:
 
         return gcsfs.GCSFileSystem()
 
-    def generate_upload_url(self, storage_key: str, base_url: str) -> str:
-        return (
-            self._bucket(self._uploads_bucket)
-            .blob(storage_key)
-            .generate_signed_url(
-                version="v4",
-                expiration=self._SIGNED_URL_EXPIRY,
-                method="PUT",
-                content_type="application/octet-stream",
-                **self._signing_kwargs(),
-            )
-        )
-
-    def confirm_upload(self, storage_key: str) -> bool:
-        return self._bucket(self._uploads_bucket).blob(storage_key).exists()
-
-    def resolve_obs_path(self, storage_key: str) -> str:
-        if storage_key.startswith("gs://") or Path(storage_key).is_absolute():
-            return storage_key
-        prefix = "/".join(storage_key.split("/")[:-1])
-        return f"gs://{self._uploads_bucket}/{prefix}"
-
     def job_dir(self, job_id: str) -> Path:
         raise NotImplementedError(
             "GCS storage has no local job workspace; jobs run on a remote runner"
@@ -452,32 +395,6 @@ class GCSStorage:
         base = str(path).removeprefix("gs://").rstrip("/")
         return [f"gs://{match}" for match in sorted(fs.glob(f"{base}/{glob}"))]
 
-    def _datasets_base(self) -> str:
-        return f"{self._data_bucket}/datasets"
-
-    def list_dataset_tree(self) -> list[str]:
-        """Posix relpaths of every object under the dataset prefix (the catalog walk)."""
-        fs = self._fs()
-        base = self._datasets_base()
-        return sorted(
-            match.removeprefix(f"{base}/")
-            for match in fs.glob(f"{base}/**")
-            if not fs.isdir(match)
-        )
-
-    def read_dataset_text(self, relkey: str) -> str | None:
-        """Read a text object (e.g. a manifest) under the dataset prefix, or None."""
-        fs = self._fs()
-        key = f"{self._datasets_base()}/{relkey}"
-        if not fs.exists(key):
-            return None
-        with fs.open(key, "rt") as handle:
-            return handle.read()
-
-    def dataset_uri(self, prefix: str) -> str:
-        """``gs://`` URI of a dataset dir (``{kind}/{region}/{id}``) for staging."""
-        return f"gs://{self._datasets_base()}/{prefix}"
-
     def open_nc_dataset(self, path):
         import xarray as xr
 
@@ -577,7 +494,6 @@ def get_storage() -> StorageBackend:
         _instance = LocalStorage(
             upload_dir=uploads_dir(),
             job_outputs_dir=Path(desired),
-            datasets_dir=datasets_dir(),
         )
         _instance_key = key
     return _instance

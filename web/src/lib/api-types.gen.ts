@@ -319,30 +319,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/data-sources/catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Discover Catalog
-         * @description Datasets discovered by walking the active backend's dataset tree.
-         *
-         *     Read-only and database-free: the uniform layout is the source of truth for
-         *     *what data exists*, so this reflects the mirrored tree on local/GCS/volume
-         *     storage without any seeding.
-         */
-        get: operations["discover_catalog_data_sources_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/data-sources/validate": {
         parameters: {
             query?: never;
@@ -395,40 +371,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/datasets/upload-url": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Request Upload Url */
-        post: operations["request_upload_url_datasets_upload_url_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{dataset_id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Confirm Upload */
-        post: operations["confirm_upload_datasets__dataset_id__confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/datasets": {
         parameters: {
             query?: never;
@@ -438,44 +380,6 @@ export interface paths {
         };
         /** List Datasets */
         get: operations["list_datasets_datasets_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/from-path": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Dataset From Path
-         * @description Register a local directory as a ready dataset without an upload step.
-         *     Only available when STORAGE_BACKEND=local (local development).
-         */
-        post: operations["dataset_from_path_datasets_from_path_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{dataset_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Dataset */
-        get: operations["get_dataset_datasets__dataset_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1462,74 +1366,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/uploads": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Upload Session */
-        post: operations["create_upload_session_uploads_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/uploads/{session_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Upload Content */
-        put: operations["upload_content_uploads__session_id__content_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/uploads/{session_id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Confirm Upload */
-        post: operations["confirm_upload_uploads__session_id__confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/uploads/{session_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Cancel Upload */
-        delete: operations["cancel_upload_uploads__session_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/health": {
         parameters: {
             query?: never;
@@ -2177,6 +2013,13 @@ export interface components {
             status: "invalid" | "ready";
             /** Validation Error */
             validation_error: string | null;
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "private" | "shared";
+            /** Is Owner */
+            is_owner: boolean;
             /** Created At */
             created_at: string;
             /** Updated At */
@@ -2218,13 +2061,6 @@ export interface components {
             /** Validation Error */
             validation_error: string | null;
         };
-        /** DatasetFromPathRequest */
-        DatasetFromPathRequest: {
-            /** Name */
-            name: string;
-            /** Obs Dir */
-            obs_dir: string;
-        };
         /** DatasetOut */
         DatasetOut: {
             /** Id */
@@ -2256,21 +2092,6 @@ export interface components {
             obs_year_start?: number | null;
             /** Obs Year End */
             obs_year_end?: number | null;
-        };
-        /** DiscoveredDatasetOut */
-        DiscoveredDatasetOut: {
-            /** Kind */
-            kind: string;
-            /** Region */
-            region: string;
-            /** Id */
-            id: string;
-            /** Years */
-            years: number[];
-            /** Manifest */
-            manifest: {
-                [key: string]: unknown;
-            } | null;
         };
         /**
          * Feature
@@ -3802,50 +3623,6 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
-        /** UploadSessionCreate */
-        UploadSessionCreate: {
-            /** Name */
-            name: string;
-            /** Filename */
-            filename: string;
-            /** Region */
-            region?: string | null;
-            /** Expected Size Bytes */
-            expected_size_bytes?: number | null;
-        };
-        /** UploadSessionOut */
-        UploadSessionOut: {
-            /** Id */
-            id: string;
-            /** Data Source Id */
-            data_source_id: string;
-            /** Filename */
-            filename: string;
-            /** Status */
-            status: string;
-            /** Expires At */
-            expires_at: string;
-            /** Max Size Bytes */
-            max_size_bytes: number;
-            /** Upload Url */
-            upload_url?: string | null;
-        };
-        /** UploadUrlRequest */
-        UploadUrlRequest: {
-            /** Name */
-            name: string;
-            /** Filename */
-            filename: string;
-        };
-        /** UploadUrlResponse */
-        UploadUrlResponse: {
-            /** Dataset Id */
-            dataset_id: string;
-            /** Upload Url */
-            upload_url: string;
-            /** Storage Key */
-            storage_key: string;
-        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -4615,37 +4392,6 @@ export interface operations {
             };
         };
     };
-    discover_catalog_data_sources_catalog_get: {
-        parameters: {
-            query?: {
-                kind?: ("forecasts" | "obs") | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DiscoveredDatasetOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     validate_data_source_data_sources_validate_post: {
         parameters: {
             query?: never;
@@ -4774,70 +4520,6 @@ export interface operations {
             };
         };
     };
-    request_upload_url_datasets_upload_url_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UploadUrlRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UploadUrlResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    confirm_upload_datasets__dataset_id__confirm_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dataset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_datasets_datasets_get: {
         parameters: {
             query?: never;
@@ -4854,70 +4536,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetOut"][];
-                };
-            };
-        };
-    };
-    dataset_from_path_datasets_from_path_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetFromPathRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dataset_datasets__dataset_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dataset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7433,134 +7051,6 @@ export interface operations {
                     "image/tiff; application=geotiff": unknown;
                     "application/x-binary": unknown;
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_upload_session_uploads_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UploadSessionCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UploadSessionOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upload_content_uploads__session_id__content_put: {
-        parameters: {
-            query: {
-                grant: string;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    confirm_upload_uploads__session_id__confirm_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UploadSessionOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_upload_uploads__session_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {

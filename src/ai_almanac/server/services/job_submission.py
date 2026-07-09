@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
@@ -19,14 +20,13 @@ from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services.data_catalog import year_uris
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
-from ai_almanac.server.tables import datasets, jobs, users
+from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import get_packaged_forecast_models, settings
 
 
@@ -222,32 +222,20 @@ def apply_inferred_custom_bounds(
 
 
 async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str | None:
-    """Resolve an observation source, with legacy upload compatibility."""
+    """Resolve an observation source to the path a runner reads."""
     if obs_dir_override:
         return obs_dir_override
     source = await data_source_service.get_source(dataset_id)
-    if source:
-        if source["kind"] != "obs":
-            raise HTTPException(status_code=400, detail="Selected source is not observations")
-        if source.get("status") != "ready":
-            raise HTTPException(
-                status_code=409,
-                detail=source.get("validation_error") or "Observation source is not ready",
-            )
-        return source["path"]
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    sa.select(datasets.c.storage_key).where(datasets.c.id == dataset_id)
-                )
-            )
-            .mappings()
-            .fetchone()
+    if not source:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if source["kind"] != "obs":
+        raise HTTPException(status_code=400, detail="Selected source is not observations")
+    if source.get("status") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=source.get("validation_error") or "Observation source is not ready",
         )
-    if not row or not row["storage_key"]:
-        raise HTTPException(status_code=400, detail="Dataset has no storage_key")
-    return get_storage().resolve_obs_path(row["storage_key"])
+    return source["path"]
 
 
 class BlendParams(BaseModel):
@@ -289,6 +277,16 @@ class BlendOut(BaseModel):
 def _blend_model_key(name: str) -> str:
     """Filesystem/column-safe key used for a forecast model inside the blend."""
     return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
+    """Per-year ``{year}.nc`` file URIs under a dataset dir (path or ``gs://``).
+
+    The unit of staging is one ``{year}.nc`` file, so a job pulls exactly the
+    years it uses instead of a whole (potentially GB-scale) dataset dir.
+    """
+    base = base_uri.rstrip("/")
+    return [f"{base}/{year}.nc" for year in years]
 
 
 def _parse_year_spec(value: str | None) -> list[int]:
@@ -747,40 +745,21 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
-    if observation_source:
-        if (
-            observation_source.get("owner_id") not in (None, user_id)
-            and observation_source.get("visibility") != "shared"
-        ):
-            raise HTTPException(status_code=404, detail="Dataset not found")
-        if observation_source["kind"] != "obs":
-            raise HTTPException(status_code=400, detail="Selected source is not observations")
-        if observation_source.get("status") != "ready":
-            raise HTTPException(
-                status_code=409,
-                detail=observation_source.get("validation_error")
-                or "Observation source is not ready",
-            )
-    else:
-        async with get_db() as conn:
-            ds = (
-                (
-                    await conn.execute(
-                        sa.select(datasets).where(
-                            datasets.c.id == body.dataset_id,
-                            datasets.c.user_id == user_id,
-                        )
-                    )
-                )
-                .mappings()
-                .fetchone()
-            )
-        if not ds:
-            raise HTTPException(status_code=404, detail="Dataset not found")
-        if ds["status"] != "ready":
-            raise HTTPException(
-                status_code=409, detail=f"Dataset is not ready (status: {ds['status']})"
-            )
+    if not observation_source:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if (
+        observation_source.get("owner_id") not in (None, user_id)
+        and observation_source.get("visibility") != "shared"
+    ):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if observation_source["kind"] != "obs":
+        raise HTTPException(status_code=400, detail="Selected source is not observations")
+    if observation_source.get("status") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=observation_source.get("validation_error")
+            or "Observation source is not ready",
+        )
 
     region = (body.params.region or "").lower()
     model_source = await data_source_service.get_source(body.model_name)

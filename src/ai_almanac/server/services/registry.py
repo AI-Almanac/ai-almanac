@@ -27,9 +27,20 @@ def _registry_entry(source: dict) -> dict:
     }
 
 
-async def load_model_registry(region: str | None = None) -> list[dict]:
-    """Ready model sources in the shape ROMP job assembly expects."""
-    sources = await data_sources.get_model_sources(region)
+async def load_model_registry(
+    region: str | None = None,
+    *,
+    user_id: str | None = None,
+    is_admin: bool = False,
+) -> list[dict]:
+    """Ready model sources in the shape ROMP job assembly expects.
+
+    Pass `user_id` to hide other users' private sources; unscoped calls (job
+    display, validation of already-submitted ids) see everything.
+    """
+    sources = await data_sources.get_model_sources(
+        region, user_id=user_id, is_admin=is_admin
+    )
     entries = [_registry_entry(s) for s in sources if s.get("status") == "ready"]
     entries.sort(key=lambda entry: (entry["region"], entry["display_name"]))
     return entries

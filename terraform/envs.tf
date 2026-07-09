@@ -39,27 +39,6 @@ locals {
     }
   }
 
-  # Obs/model data directories, identical in both envs. A list so the
-  # container env order is stable — append new entries at the end.
-  data_dir_envs = [
-    { name = "ETHIOPIA_OBS_DIR", value = var.ethiopia_obs_dir },
-    { name = "IMD_2P0_OBS_DIR", value = var.imd_2p0_obs_dir },
-    { name = "INDIA_AIFS_MODEL_DIR", value = var.india_aifs_model_dir },
-    { name = "INDIA_AIFS_DAILY_MODEL_DIR", value = var.india_aifs_daily_model_dir },
-    { name = "INDIA_FUXI_MODEL_DIR", value = var.india_fuxi_model_dir },
-    { name = "INDIA_FUXI_S2S_MODEL_DIR", value = var.india_fuxi_s2s_model_dir },
-    { name = "INDIA_GENCAST_MODEL_DIR", value = var.india_gencast_model_dir },
-    { name = "INDIA_GRAPHCAST_MODEL_DIR", value = var.india_graphcast_model_dir },
-    { name = "INDIA_IFS_MODEL_DIR", value = var.india_ifs_model_dir },
-    { name = "INDIA_NEURALGCM_MODEL_DIR", value = var.india_neuralgcm_model_dir },
-    { name = "ETHIOPIA_AIFS_MODEL_DIR", value = var.ethiopia_aifs_model_dir },
-    { name = "ETHIOPIA_FUXI_MODEL_DIR", value = var.ethiopia_fuxi_model_dir },
-    { name = "ETHIOPIA_GENCAST_MODEL_DIR", value = var.ethiopia_gencast_model_dir },
-    { name = "ETHIOPIA_GRAPHCAST_MODEL_DIR", value = var.ethiopia_graphcast_model_dir },
-    { name = "ETHIOPIA_AIFS_SINGLE_V2_MODEL_DIR", value = var.ethiopia_aifs_single_v2_model_dir },
-    { name = "ETHIOPIA_AIFS_ENS_V2_MODEL_DIR", value = var.ethiopia_aifs_ens_v2_model_dir },
-  ]
-
   env_config = {
     prod = {
       service_name          = "almanac-backend"
@@ -140,7 +119,6 @@ module "env" {
   enable_run_code         = var.enable_run_code
   enable_run_code_sandbox = var.enable_run_code_sandbox
   shared_secrets          = local.shared_secrets
-  data_dir_envs           = local.data_dir_envs
 }
 
 output "backend_url" {

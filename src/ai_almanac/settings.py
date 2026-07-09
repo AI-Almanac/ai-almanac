@@ -13,7 +13,6 @@ from importlib.resources import files
 from pathlib import Path
 
 import yaml
-from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -30,49 +29,9 @@ from ai_almanac.paths import (
 # ---------------------------------------------------------------------------
 
 _CONFIG_PKG = files("ai_almanac.server").joinpath("config")
-_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("models.yaml")))
-_DATASETS_YAML = Path(str(_CONFIG_PKG.joinpath("datasets.yaml")))
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
 _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
-
-
-# ---------------------------------------------------------------------------
-# Env-var lookup with .env fallback.
-# Searched paths: CWD/.env, then the repo-root .env when running from source.
-# ---------------------------------------------------------------------------
-
-_ENV_FILE_NAMES = (
-    Path.cwd() / ".env",
-    Path(__file__).resolve().parents[2] / ".env",
-)
-_env_file_cache: dict[str, str] | None = None
-
-
-def _env_file_values() -> dict[str, str]:
-    global _env_file_cache
-    if _env_file_cache is not None:
-        return _env_file_cache
-
-    values: dict[str, str] = {}
-    for env_file in dict.fromkeys(_ENV_FILE_NAMES):
-        if not env_file.exists():
-            continue
-        for key, value in dotenv_values(env_file).items():
-            if value is not None:
-                values.setdefault(key, value)
-
-    _env_file_cache = values
-    return values
-
-
-def _env_value(key: str) -> str:
-    return os.environ.get(key, _env_file_values().get(key, ""))
-
-
-def _env_key(*parts: str) -> str:
-    """Join parts into an uppercase env var name."""
-    return "_".join(p for p in parts if p).upper().replace("-", "_")
 
 
 # ---------------------------------------------------------------------------
@@ -230,14 +189,10 @@ class Settings(BaseSettings):
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
-    # Shared-host quotas and upload policy.
+    # Shared-host quotas.
     max_active_jobs_per_user: int = 2
-    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
-    max_stored_upload_bytes_per_user: int = 10 * 1024 * 1024 * 1024
     max_concurrent_llm_requests_per_user: int = 2
     max_llm_requests_per_minute: int = 30
-    upload_grant_ttl_seconds: int = 900
-    allowed_upload_extensions: str = ".nc,.zip,.tar,.gz,.tgz"
 
     def resolve_database_url(self) -> str:
         if self.database_url:

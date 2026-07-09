@@ -1,33 +1,28 @@
 #!/usr/bin/env bash
-# Upload all benchmark data to GCS and configure the backend Cloud Run service.
+# Upload benchmark data to the shared GCS data bucket.
 #
-# This script is the single source of truth for production data configuration.
-# It uploads both India and Ethiopia data and sets ALL relevant env vars in one
-# operation so nothing gets accidentally clobbered.
+# After uploading, register each dataset from the Data Sources admin page
+# (or POST /data-sources) pointing at its gs:// prefix — no env vars, no
+# terraform, no redeploy.
 #
-# Usage: ./scripts/upload-data.sh [--india-only | --ethiopia-only | --env-only]
+# Usage: ./scripts/upload-data.sh [--india-only | --ethiopia-only]
 #
 # Requires: gcloud CLI authenticated with sufficient permissions
 #   - storage.objects.create on almanac-data-ai-almanac
-#   - run.services.update on almanac-backend
 
 set -euo pipefail
 
 INDIA_DIR="${INDIA_DIR:-$HOME/code/ROMP/data/india}"
 ETHIOPIA_DIR="${ETHIOPIA_DIR:-$HOME/code/ROMP/data/ethiopia}"
 BUCKET="gs://almanac-data-ai-almanac"
-SERVICE="almanac-backend"
-REGION="us-central1"
 
 UPLOAD_INDIA=true
 UPLOAD_ETHIOPIA=true
-UPDATE_ENV=true
 
 for arg in "$@"; do
   case "$arg" in
     --india-only)    UPLOAD_ETHIOPIA=false ;;
     --ethiopia-only) UPLOAD_INDIA=false ;;
-    --env-only)      UPLOAD_INDIA=false; UPLOAD_ETHIOPIA=false ;;
   esac
 done
 
@@ -83,41 +78,7 @@ if $UPLOAD_ETHIOPIA; then
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# Configure the backend Cloud Run service
-# Sets ALL data-related env vars in one shot. Terraform-managed vars
-# (DATABASE_URL, FRONTEND_URL, secret refs, etc.) are left untouched.
-# ---------------------------------------------------------------------------
-
-if $UPDATE_ENV; then
-  echo ""
-  echo "==> Updating Cloud Run env vars"
-
-  gcloud run services update "$SERVICE" \
-    --region="$REGION" \
-    --update-env-vars "^@^\
-STORAGE_BACKEND=gcs\
-@JOB_RUNNER=batch\
-@GCP_PROJECT=ai-almanac\
-@GCP_REGION=us-central1\
-@ETHIOPIA_OBS_DIR=gs://${BUCKET#gs://}/obs/ethiopia\
-@IMD_2P0_OBS_DIR=gs://${BUCKET#gs://}/obs/imd-2p0\
-@INDIA_AIFS_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/aifs\
-@INDIA_AIFS_DAILY_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/aifs_daily\
-@INDIA_FUXI_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/fuxi\
-@INDIA_FUXI_S2S_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/fuxi_s2s\
-@INDIA_GENCAST_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/gencast\
-@INDIA_GRAPHCAST_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/graphcast\
-@INDIA_IFS_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/ifs\
-@INDIA_NEURALGCM_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/neuralgcm\
-@ETHIOPIA_AIFS_MODEL_DIR=gs://almanac-data-ai-almanac/models/ethiopia/aifs\
-@ETHIOPIA_FUXI_MODEL_DIR=gs://almanac-data-ai-almanac/models/ethiopia/fuxi\
-@ETHIOPIA_GENCAST_MODEL_DIR=gs://almanac-data-ai-almanac/models/ethiopia/gencast\
-@ETHIOPIA_GRAPHCAST_MODEL_DIR=gs://almanac-data-ai-almanac/models/ethiopia/graphcast"
-
-  echo ""
-  echo "==> Done. Verify:"
-  echo "    curl https://api.ai-almanac.org/health"
-  echo "    curl -H 'Authorization: Bearer <token>' https://api.ai-almanac.org/datasets"
-  echo "    curl -H 'Authorization: Bearer <token>' https://api.ai-almanac.org/jobs/models"
-fi
+echo ""
+echo "==> Done. Register the uploaded prefixes on the Data Sources page:"
+echo "    ${BUCKET}/obs/...    (observations)"
+echo "    ${BUCKET}/models/... (model forecasts)"

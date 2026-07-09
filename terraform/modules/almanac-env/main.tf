@@ -402,14 +402,6 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "BATCH_WORKER_SA"
         value = var.batch_worker_email
       }
-
-      dynamic "env" {
-        for_each = var.data_dir_envs
-        content {
-          name  = env.value.name
-          value = env.value.value
-        }
-      }
     }
   }
 

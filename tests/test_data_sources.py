@@ -296,3 +296,172 @@ def test_custom_sources_must_overlap() -> None:
                 }
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Ownership and pointer (gs://) registration
+# ---------------------------------------------------------------------------
+
+_OBS_ROOT = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
+
+
+def _proxy_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proxy auth where only 'root' is admin; others are plain users."""
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "root")
+
+
+def _obs_body(name: str, path: str | None = None) -> dict:
+    return {
+        "kind": "obs",
+        "name": name,
+        "path": path or str(_OBS_ROOT),
+        "region": "ethiopia",
+        "metadata": {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_admin_source_is_private_and_invisible_to_others(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _proxy_users(monkeypatch)
+    alice = {"X-Forwarded-User": "alice"}
+    bob = {"X-Forwarded-User": "bob"}
+
+    created = await client.post(
+        "/data-sources", json=_obs_body("Alice obs"), headers=alice
+    )
+    assert created.status_code == 201
+    row = created.json()
+    assert row["visibility"] == "private"
+    assert row["is_owner"] is True
+
+    bob_list = await client.get("/data-sources", headers=bob)
+    assert row["id"] not in [s["id"] for s in bob_list.json()]
+
+    for attempt in (
+        client.put(
+            f"/data-sources/{row['id']}", json=_obs_body("Steal"), headers=bob
+        ),
+        client.post(f"/data-sources/{row['id']}/revalidate", headers=bob),
+        client.delete(f"/data-sources/{row['id']}", headers=bob),
+    ):
+        assert (await attempt).status_code == 404
+
+    deleted = await client.delete(f"/data-sources/{row['id']}", headers=alice)
+    assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_admin_source_is_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _proxy_users(monkeypatch)
+    created = await client.post(
+        "/data-sources",
+        json=_obs_body("Built-in obs"),
+        headers={"X-Forwarded-User": "root"},
+    )
+    assert created.status_code == 201
+    row = created.json()
+    assert row["visibility"] == "shared"
+
+    other = await client.get(
+        "/data-sources", headers={"X-Forwarded-User": "bob"}
+    )
+    assert row["id"] in [s["id"] for s in other.json()]
+
+    await client.delete(
+        f"/data-sources/{row['id']}", headers={"X-Forwarded-User": "root"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_deployment_rejects_non_admin_local_paths(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.settings import settings
+
+    _proxy_users(monkeypatch)
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+
+    response = await client.post(
+        "/data-sources",
+        json=_obs_body("Local sneak"),
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"},
+    )
+    assert response.status_code == 400
+    assert "gs://" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_gs_path_survives_registration_unmangled(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import storage as storage_mod
+    from tests.test_gcs_source_validation import _FakeGcsStorage
+
+    gs_path = "gs://bucket/ethiopia/obs"
+    fake = _FakeGcsStorage(_OBS_ROOT, gs_path)
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: fake)
+
+    created = await client.post(
+        "/data-sources", json=_obs_body("GCS obs", path=gs_path)
+    )
+    assert created.status_code == 201
+    row = created.json()
+    assert row["path"] == gs_path
+    assert row["location_type"] == "gcs"
+    assert row["status"] == "ready"
+
+    await client.delete(f"/data-sources/{row['id']}")
+
+
+@pytest.mark.asyncio
+async def test_unreadable_gcs_path_reports_clear_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import data_sources as svc
+    from ai_almanac.server.services import storage as storage_mod
+
+    class _DeniedStorage:
+        def list_dataset_files(self, path: str, glob: str) -> list[str]:
+            raise PermissionError("403 forbidden")
+
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: _DeniedStorage())
+
+    status, error, _ = await svc.validate_source(
+        "obs", "gs://locked-bucket/obs", {"obs_file_pattern": "{}.nc"}
+    )
+    assert status == "invalid"
+    assert "readable by the service account" in error
+
+
+@pytest.mark.asyncio
+async def test_remote_provider_source_registers_ready_without_inspection(
+    client: httpx.AsyncClient,
+) -> None:
+    created = await client.post(
+        "/data-sources",
+        json={
+            "kind": "obs",
+            "name": "ERA5 Ethiopia",
+            "path": "gs://gcp-public-data-arco-era5/ar/full.zarr-v3",
+            "region": "ethiopia",
+            "metadata": {
+                "provider": "era5_arco",
+                "arco_url": "gs://gcp-public-data-arco-era5/ar/full.zarr-v3",
+                "precip_var": "total_precipitation",
+                "unit_cvt": 1000.0,
+            },
+        },
+    )
+    assert created.status_code == 201
+    row = created.json()
+    assert row["status"] == "ready"
+    assert row["metadata"]["provider"] == "era5_arco"
+
+    await client.delete(f"/data-sources/{row['id']}")

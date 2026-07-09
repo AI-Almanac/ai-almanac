@@ -30,7 +30,7 @@ from ai_almanac.settings import settings
 
 # Providers whose obs data is read remotely by the compute, so the obs path is
 # not required to be a gs:// URI (mirrors the production runner).
-_REMOTE_OBS_PROVIDERS = frozenset({"earth2studio", "arco"})
+_REMOTE_OBS_PROVIDERS = frozenset({"earth2studio", "era5_arco"})
 
 
 class ModalPreflightError(Exception):

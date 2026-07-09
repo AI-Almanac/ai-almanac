@@ -35,7 +35,6 @@ from ai_almanac.server.routers import (
     llm_profiles,
     regions,
     tiles,
-    uploads,
 )
 from ai_almanac.server.routers import (
     settings as settings_router,
@@ -83,7 +82,6 @@ async def lifespan(app: FastAPI):
     # overlay) is reachable; the call at line ~75 only saw config.yaml + env.
     _reload_user_config()
     await _seed_regions()
-    await _seed_data_sources()
     await _reconcile_jobs()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
@@ -115,21 +113,6 @@ def _enforce_deployment() -> None:
     from ai_almanac.server.auth import enforce_deployment_invariants
 
     enforce_deployment_invariants()
-
-
-async def _seed_data_sources() -> None:
-    """Sync data_sources with the packaged YAMLs on every startup, so newly
-    added built-in datasets/models (and existing testdata setups via
-    `*_OBS_DIR`, `*_MODEL_DIR` env vars) appear without the user needing to
-    register anything manually."""
-    from ai_almanac.server.services.data_sources import sync_packaged_data_sources
-
-    try:
-        count = await sync_packaged_data_sources()
-        if count:
-            logger.info("seeded %d data source(s) from packaged YAMLs", count)
-    except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
-        logger.warning("data source seeding failed: %s", e)
 
 
 async def _seed_regions() -> None:
@@ -176,21 +159,12 @@ async def _run_background_step(name: str, step) -> None:
         await _record_background_event(f"background.{name}.recovered")
 
 
-async def _cleanup_uploads() -> None:
-    from ai_almanac.server.routers.uploads import cleanup_expired_uploads
-
-    cleaned = await cleanup_expired_uploads()
-    if cleaned:
-        logger.info("expired %d abandoned upload(s)", cleaned)
-
-
 async def _reconcile_jobs() -> None:
     from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
     await _run_background_step("job_reconciliation", reconcile_jobs)
     await _run_background_step("artifact_publication", publish_pending)
-    await _run_background_step("upload_cleanup", _cleanup_uploads)
 
 
 async def _job_reconciler_loop() -> None:
@@ -327,7 +301,6 @@ app.include_router(llm_profiles.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
 app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])
-app.include_router(uploads.router)
 
 
 @app.get("/health")

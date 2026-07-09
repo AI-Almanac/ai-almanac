@@ -8,9 +8,8 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
 - `envs.tf` — prod and staging, two instances of `modules/almanac-env`.
   Add env vars, buckets, or secret wiring in the module once and both
   environments pick it up. Per-env values (names, scaling, retention) live in
-  `local.env_config`; the obs/model data-directory env vars live in
-  `local.data_dir_envs` (a list — append at the end to keep container env
-  order stable).
+  `local.env_config`. Datasets are not wired here: they are registered at
+  runtime through the app's Data Sources page as `gs://` pointers.
 - `modules/almanac-env/` — one environment: Cloud Run service + migrate job,
   database/user on the shared SQL instance, uploads/outputs buckets, backend
   service account, IAM, and secret access.
