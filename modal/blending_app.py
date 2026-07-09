@@ -50,6 +50,10 @@ BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blendin
 DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
+
+# Written by train_blending_model_bundle's final fit; applied by
+# apply_blend_coefs_bundle to score live seasons without retraining.
+FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
 GCP_SECRET_NAME = "gcp-service-account"
 
 
@@ -1349,46 +1353,31 @@ def build_lat_lon_intermediates_bundle(
     return {"manifest": manifest, "outputs_tar": outputs_tar}
 
 
-@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
-def train_blending_model_bundle(
+def _prepare_blend_workspace(
     combined_wide_pkl: bytes,
     model_names: list[str],
-    training_years: list[int],
-    cv_holdout_years: list[int],
-    true_holdout_years: list[int] | None = None,
-    cutoff_mode: str = "clim_mok_date",
-    day_max: int = 28,
-    days_per_week: int = 7,
-    n_weeks: int = 4,
-    rain_window: int = 3,
-    formula_text: str | None = None,
-    include_raw_forecasts: bool = True,
-    include_calibrated_forecasts: bool = True,
-    cores: int | None = None,
-    return_outputs: bool = True,
-) -> dict:
-    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    cutoff_mode: str,
+    day_max: int,
+    days_per_week: int,
+    n_weeks: int,
+    rain_window: int,
+):
+    """Materialize the workspace both training and coef-apply need: the
+    combined wide pickle on disk, the weekly connect output (the pipeline
+    input every blending script reads), and the dissemination cells CSV.
+    Returns (work_dir, combined, weekly, pipeline_input_path, dissemination_path)."""
     import pickle
-    import subprocess
     import sys
-    import uuid
 
     import pandas as pd
-    import yaml
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.blending_process.connect_utils import make_cv_rds_from_daylevel
-    from python.blending_process.blend_evaluation_utils import make_cutoff_tag
 
     if not model_names:
         raise ValueError("model_names must not be empty")
-    if not training_years:
-        raise ValueError("training_years must not be empty")
-    if not cv_holdout_years:
-        raise ValueError("cv_holdout_years must not be empty")
 
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
-    results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
     combined_path = work_dir / "combined_wide.pkl"
     pipeline_input_path = work_dir / "cv_data_clim_mok_date_new_pipeline.pkl"
     combined_path.write_bytes(combined_wide_pkl)
@@ -1435,13 +1424,27 @@ def train_blending_model_bundle(
         dissemination_path,
         index=False,
     )
+    return work_dir, combined, weekly, pipeline_input_path, dissemination_path
 
-    if formula_text is None:
-        formula_terms = ["prob_clim_mr_qx"] + [
-            f"diff_{name}_qx" for name in model_names
-        ]
-        formula_text = "outcome ~ " + " * ".join(formula_terms)
 
+def _default_formula_text(model_names: list[str]) -> str:
+    formula_terms = ["prob_clim_mr_qx"] + [f"diff_{name}_qx" for name in model_names]
+    return "outcome ~ " + " * ".join(formula_terms)
+
+
+def _build_blend_spec(
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None,
+    cutoff_mode: str,
+    formula_text: str,
+    include_raw_forecasts: bool,
+    include_calibrated_forecasts: bool,
+    work_dir: Path,
+    results_dir: Path,
+    dissemination_path: Path,
+) -> dict:
     forecast_extras = [
         {
             "name": name,
@@ -1453,7 +1456,7 @@ def train_blending_model_bundle(
         }
         for name in model_names
     ]
-    blend_spec = {
+    return {
         "run": {
             "cutoff_mode": cutoff_mode,
             "MR": True,
@@ -1494,6 +1497,70 @@ def train_blending_model_bundle(
         },
     }
 
+
+@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
+def train_blending_model_bundle(
+    combined_wide_pkl: bytes,
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None = None,
+    cutoff_mode: str = "clim_mok_date",
+    day_max: int = 28,
+    days_per_week: int = 7,
+    n_weeks: int = 4,
+    rain_window: int = 3,
+    formula_text: str | None = None,
+    include_raw_forecasts: bool = True,
+    include_calibrated_forecasts: bool = True,
+    cores: int | None = None,
+    return_outputs: bool = True,
+) -> dict:
+    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    import pickle
+    import subprocess
+    import sys
+    import uuid
+
+    import pandas as pd
+    import yaml
+
+    sys.path.insert(0, str(BLENDING_ROOT))
+    from python.blending_process.blend_evaluation_utils import make_cutoff_tag
+
+    if not training_years:
+        raise ValueError("training_years must not be empty")
+    if not cv_holdout_years:
+        raise ValueError("cv_holdout_years must not be empty")
+
+    work_dir, combined, weekly, pipeline_input_path, dissemination_path = (
+        _prepare_blend_workspace(
+            combined_wide_pkl,
+            model_names,
+            cutoff_mode,
+            day_max,
+            days_per_week,
+            n_weeks,
+            rain_window,
+        )
+    )
+    results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
+
+    formula_text = formula_text or _default_formula_text(model_names)
+    blend_spec = _build_blend_spec(
+        model_names=model_names,
+        training_years=training_years,
+        cv_holdout_years=cv_holdout_years,
+        true_holdout_years=true_holdout_years,
+        cutoff_mode=cutoff_mode,
+        formula_text=formula_text,
+        include_raw_forecasts=include_raw_forecasts,
+        include_calibrated_forecasts=include_calibrated_forecasts,
+        work_dir=work_dir,
+        results_dir=results_dir,
+        dissemination_path=dissemination_path,
+    )
+
     spec_id = f"almanac_training_{uuid.uuid4().hex}"
     spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
     spec_path.write_text(yaml.dump(blend_spec, default_flow_style=False))
@@ -1517,6 +1584,30 @@ def train_blending_model_bundle(
             text=True,
             check=False,
         )
+        # Fit the production model on all training years (no holdout) so the
+        # coef bundle (FINAL_COEF_FILENAME) ships with the training outputs —
+        # live forecasts apply it directly instead of retraining (see
+        # apply_blend_coefs_bundle / score_live_forecast).
+        final_fit = None
+        if completed.returncode == 0:
+            final_fit = subprocess.run(
+                [
+                    sys.executable,
+                    "predict/3_fit_final_model.py",
+                    "--spec_id",
+                    spec_id,
+                    "--model",
+                    "blended_model",
+                    "--dissem_file",
+                    str(work_dir / "dissemination_cells.csv"),
+                    "--out_dir",
+                    str(results_dir),
+                ],
+                cwd=str(BLENDING_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
     finally:
         try:
             spec_path.unlink()
@@ -1535,8 +1626,9 @@ def train_blending_model_bundle(
         summary_rows = pd.read_csv(summary_csv).head(20).to_dict(orient="records")
 
     manifest = {
-        "ok": completed.returncode == 0,
+        "ok": completed.returncode == 0 and (final_fit is None or final_fit.returncode == 0),
         "returncode": int(completed.returncode),
+        "final_fit_returncode": int(final_fit.returncode) if final_fit is not None else None,
         "model_names": model_names,
         "training_years": sorted(int(year) for year in training_years),
         "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
@@ -1561,8 +1653,12 @@ def train_blending_model_bundle(
         },
         "result_files": result_files,
         "summary_rows": summary_rows,
-        "stdout_tail": completed.stdout.splitlines()[-80:],
-        "stderr_tail": completed.stderr.splitlines()[-80:],
+        "stdout_tail": (
+            completed.stdout.splitlines() + (final_fit.stdout.splitlines() if final_fit else [])
+        )[-80:],
+        "stderr_tail": (
+            completed.stderr.splitlines() + (final_fit.stderr.splitlines() if final_fit else [])
+        )[-80:],
     }
 
     outputs_tar = None
@@ -1583,6 +1679,122 @@ def train_blending_model_bundle(
         outputs_tar = _tar_directory(output_dir)
 
     return {"manifest": manifest, "outputs_tar": outputs_tar}
+
+
+@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
+def apply_blend_coefs_bundle(
+    combined_wide_pkl: bytes,
+    coef_pkl: bytes,
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    live_year: int,
+    cutoff_mode: str = "clim_mok_date",
+    day_max: int = 28,
+    days_per_week: int = 7,
+    n_weeks: int = 4,
+    rain_window: int = 3,
+    formula_text: str | None = None,
+) -> bytes:
+    """Score one live season by applying a trained blend's saved coef bundle
+    (the FINAL_COEF_FILENAME pickle written by train_blending_model_bundle's
+    final fit) via predict/apply_blend_model.py — the fast path that skips CV
+    retraining entirely. Returns the live season's scored rows as CSV bytes."""
+    import subprocess
+    import sys
+    import uuid
+
+    import yaml
+
+    if not training_years:
+        raise ValueError("training_years must not be empty")
+    if not cv_holdout_years:
+        raise ValueError("cv_holdout_years must not be empty")
+
+    work_dir, _, weekly, _, dissemination_path = _prepare_blend_workspace(
+        combined_wide_pkl,
+        model_names,
+        cutoff_mode,
+        day_max,
+        days_per_week,
+        n_weeks,
+        rain_window,
+    )
+    results_dir = Path(tempfile.mkdtemp(prefix="blend-apply-results-"))
+
+    # Same feature-NaN filter 1_blend_evaluation.py applies before predicting,
+    # so this path scores the same rows the retrain path would have.
+    feature_cols = [
+        column
+        for column in weekly.columns
+        if column.startswith(("prob_clim_mr", "diff_", "min_", "max_"))
+    ]
+    live_rows = weekly[weekly["year"] == int(live_year)].dropna(subset=feature_cols)
+    if live_rows.empty:
+        raise RuntimeError(f"No scoreable rows for live season {live_year}")
+    live_input_path = work_dir / f"live_input_{int(live_year)}.pkl"
+    live_rows.to_pickle(live_input_path)
+
+    coef_dir = work_dir / "coefs"
+    coef_dir.mkdir()
+    (coef_dir / FINAL_COEF_FILENAME).write_bytes(coef_pkl)
+
+    blend_spec = _build_blend_spec(
+        model_names=model_names,
+        training_years=training_years,
+        cv_holdout_years=cv_holdout_years,
+        true_holdout_years=[int(live_year)],
+        cutoff_mode=cutoff_mode,
+        formula_text=formula_text or _default_formula_text(model_names),
+        include_raw_forecasts=True,
+        include_calibrated_forecasts=True,
+        work_dir=work_dir,
+        results_dir=results_dir,
+        dissemination_path=dissemination_path,
+    )
+    spec_id = f"almanac_apply_{uuid.uuid4().hex}"
+    spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
+    spec_path.write_text(yaml.dump(blend_spec, default_flow_style=False))
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "predict/apply_blend_model.py",
+                "--spec_id",
+                spec_id,
+                "--model",
+                "blended_model",
+                "--year",
+                str(int(live_year)),
+                "--coef_tag",
+                "final",
+                "--input_path",
+                str(live_input_path),
+                "--coef_dir",
+                str(coef_dir),
+                "--out_dir",
+                str(results_dir),
+                "--dissem_file",
+                str(dissemination_path),
+            ],
+            cwd=str(BLENDING_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        try:
+            spec_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    preds_csv = results_dir / f"blended_model_global_year{int(live_year)}_preds.csv"
+    if completed.returncode != 0 or not preds_csv.exists():
+        tail = "\n".join(completed.stderr.splitlines()[-40:])
+        raise RuntimeError(
+            f"apply_blend_model.py failed (returncode {completed.returncode}):\n{tail}"
+        )
+    return preds_csv.read_bytes()
 
 
 def _merge_forecast_bundle(historical_bundle: bytes, live_bundle: bytes) -> bytes:
@@ -1624,13 +1836,18 @@ def score_live_forecast(
     model_names: list[str],
     blend_params: dict,
     live_year: int,
+    coef_pkl: bytes | None = None,
 ) -> bytes:
     """Score a live/in-progress season against an already-trained blend, given
     already-staged bundles (no GCS or local-file knowledge here — that's the
     caller's job, mirroring how run_blend stages before calling
     build_lat_lon_intermediates_bundle/train_blending_model_bundle).
 
-    Reuses build_lat_lon_intermediates_bundle and train_blending_model_bundle
+    When coef_pkl (the blend's saved FINAL_COEF_FILENAME bundle) is provided,
+    the trained weights are applied directly via apply_blend_coefs_bundle and
+    no retraining happens. Without it, this falls back to the original
+    retrain-based scoring, which reuses build_lat_lon_intermediates_bundle and
+    train_blending_model_bundle
     completely unchanged: the live season is just one more forecast year with
     no matching obs year, added to the blend's own true_holdout_years so it
     is excluded from every training fold but still gets its own scoring pass
@@ -1659,6 +1876,21 @@ def score_live_forecast(
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
     combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+
+    if coef_pkl is not None:
+        print(f"==> Applying trained blend coefficients to live season {live_year}")
+        t0 = time.perf_counter()
+        csv_bytes = apply_blend_coefs_bundle.local(
+            combined,
+            coef_pkl,
+            model_names,
+            training_years=_parse_years(blend_params.get("training_years") or "") or [],
+            cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
+            live_year=live_year,
+            formula_text=blend_params.get("formula_text") or None,
+        )
+        print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
+        return csv_bytes
 
     train_kwargs = {}
     if blend_params.get("formula_text"):
@@ -1750,8 +1982,25 @@ def score_live_forecast_bundle(
                     historical_bundle, live_forecast_bundles[name]
                 )
 
+            coef_pkl = None
+            blend_output_uri = blend_config.get("blend_output_uri")
+            if blend_output_uri:
+                bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
+                coef_blob = client.bucket(bucket_name).blob(
+                    f"{prefix.rstrip('/')}/{FINAL_COEF_FILENAME}"
+                )
+                if coef_blob.exists():
+                    print("==> Staging trained blend coefficients (skipping CV retrain)")
+                    coef_pkl = coef_blob.download_as_bytes()
+                else:
+                    print(
+                        "==> Blend outputs have no final coef bundle; "
+                        "falling back to retrain-based scoring"
+                    )
+
             csv_bytes = score_live_forecast.local(
-                obs_bundle, forecast_bundles, model_names, params, live_year
+                obs_bundle, forecast_bundles, model_names, params, live_year,
+                coef_pkl=coef_pkl,
             )
 
             out_local = stage_root / "output"
