@@ -20,7 +20,9 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import os
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -182,17 +184,83 @@ def select_lat_lon_bounds(data_array, bounds: dict):
     return data_array.sel({lat_name: lat_slice, lon_name: slice(min(lon_bounds), max(lon_bounds))})
 
 
+def cached_trajectory(
+    cache_dir: Path | str | None,
+    model_id: str,
+    max_lead_day: int,
+    issue_date: dt.date,
+    compute,
+):
+    """Read-through cache for one issue date's daily-precip trajectory.
+
+    A rollout initialized from a past date is deterministic (fixed weights,
+    archived GFS conditions), so its reduced trajectory never changes — cache
+    it and every later forecast job skips that GPU run. Cached at the model's
+    native grid and units (unit_cvt/bounds are applied downstream), so one
+    entry serves any blend using the model.
+
+    cache_dir may be a local Path or a gs:// URI for durable cloud storage.
+    """
+    import uuid
+
+    import xarray as xr
+
+    if cache_dir is None:
+        return compute(), False
+
+    cache_uri = str(cache_dir)
+    rel = f"{model_id}/lead{int(max_lead_day)}d/{issue_date.isoformat()}.nc"
+
+    if cache_uri.startswith("gs://"):
+        import gcsfs
+
+        fs = gcsfs.GCSFileSystem()
+        # ponytail: no eviction — a season accumulates at most ~26 entries per
+        # model; add cleanup if the bucket grows unbounded at season boundaries.
+        cache_path = f"{cache_uri.rstrip('/')}/{rel}"
+        if fs.exists(cache_path):
+            return xr.open_dataarray(cache_path, engine="h5netcdf").load(), True
+        trajectory = compute()
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            trajectory.rename("tp").to_netcdf(
+                tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
+            )
+            fs.put(str(tmp_path), cache_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return trajectory, False
+
+    # Local path branch — atomic rename avoids partial reads on cache miss.
+    cache_file = Path(cache_dir) / rel
+    if cache_file.exists():
+        return xr.open_dataarray(cache_file).load(), True
+    trajectory = compute()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
+    trajectory.rename("tp").to_netcdf(
+        tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
+    )
+    os.replace(tmp_path, cache_file)
+    return trajectory, False
+
+
 def generate_season_forecast_netcdf(
     model_entry: dict,
     config: dict,
     season_params: dict,
     scratch_root: Path,
     out_path: Path,
+    cache_dir: Path | str | None = None,
 ) -> Path:
     """Loop one model across the current season's issue dates and write
     out_path as a NetCDF matching the historical `{year}.nc` schema (time x
     day x lat x lon, variable tp). Caller decides scratch_root/out_path —
     Modal mode uses container-local temp dirs, local mode plain temp dirs.
+    With cache_dir set, past issue dates are served from cache and only new
+    ones are rolled out (see cached_trajectory). cache_dir may be a local
+    Path or a gs:// URI.
     """
     import numpy as np
     import xarray as xr
@@ -217,11 +285,21 @@ def generate_season_forecast_netcdf(
         # end-to-end without paying for a full season's worth of rollouts.
         issue_dates = issue_dates[-int(max_issue_dates):]
 
-    model = load_model(model_class)
-    data = GFS()
     _, step_hours = lead_steps([max_lead_day * 24], model_class)
     nsteps = (max_lead_day * 24) // step_hours
     scratch_root.mkdir(parents=True, exist_ok=True)
+
+    # Loading model weights is expensive; defer until the first cache miss so
+    # a fully cached season never touches the GPU.
+    loaded: dict[str, Any] = {}
+
+    def _rollout(issue_date: dt.date):
+        if not loaded:
+            loaded["model"] = load_model(model_class)
+            loaded["data"] = GFS()
+        return _daily_precip_trajectory(
+            loaded["model"], loaded["data"], issue_date, max_lead_day, step_hours, scratch_root
+        )
 
     print(
         f"==> Season loop: {len(issue_dates)} issue date(s) "
@@ -233,11 +311,16 @@ def generate_season_forecast_netcdf(
     for i, issue_date in enumerate(issue_dates, start=1):
         t0 = time.perf_counter()
         print(f"  [{i}/{len(issue_dates)}] season inference: issue date {issue_date}", flush=True)
-        trajectory = _daily_precip_trajectory(
-            model, data, issue_date, max_lead_day, step_hours, scratch_root
+        trajectory, from_cache = cached_trajectory(
+            cache_dir,
+            model_entry["id"],
+            max_lead_day,
+            issue_date,
+            lambda date=issue_date: _rollout(date),
         )
         print(
-            f"  [{i}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s",
+            f"  [{i}/{len(issue_dates)}] "
+            f"{'cached' if from_cache else f'done in {time.perf_counter() - t0:.1f}s'}",
             flush=True,
         )
         per_issue.append(trajectory.assign_coords(time=np.datetime64(issue_date)))
