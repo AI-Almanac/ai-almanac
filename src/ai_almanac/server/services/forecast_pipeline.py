@@ -307,7 +307,7 @@ def generate_season_forecast_netcdf(
         f"({step_hours}h each) per issue date",
         flush=True,
     )
-    per_issue = []
+    slice_paths: list[Path] = []
     for i, issue_date in enumerate(issue_dates, start=1):
         t0 = time.perf_counter()
         print(f"  [{i}/{len(issue_dates)}] season inference: issue date {issue_date}", flush=True)
@@ -323,14 +323,20 @@ def generate_season_forecast_netcdf(
             f"{'cached' if from_cache else f'done in {time.perf_counter() - t0:.1f}s'}",
             flush=True,
         )
-        per_issue.append(trajectory.assign_coords(time=np.datetime64(issue_date)))
-
-    combined = xr.concat(per_issue, dim="time") * unit_cvt
-    if bounds:
-        combined = select_lat_lon_bounds(combined, bounds)
+        # Write each slice to scratch immediately and release the in-memory
+        # array — accumulating all N trajectories before xr.concat causes OOM
+        # on long seasons. open_mfdataset reassembles lazily via dask below.
+        traj = trajectory.assign_coords(time=np.datetime64(issue_date)) * unit_cvt
+        if bounds:
+            traj = select_lat_lon_bounds(traj, bounds)
+        slice_path = scratch_root / f"slice_{i:03d}.nc"
+        traj.rename("tp").to_netcdf(slice_path)
+        slice_paths.append(slice_path)
+        del trajectory, traj
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    combined.rename("tp").to_dataset().to_netcdf(out_path)
+    with xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds:
+        ds.to_netcdf(out_path)
     return out_path
 
 
