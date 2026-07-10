@@ -671,6 +671,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "init_time": body.params.init_time,
         "lead_hours": lead_hours,
         "variables": variables,
+        "gcs_cache_bucket": settings.gcs_data_bucket,
     }
 
     async with get_db() as conn:

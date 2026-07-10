@@ -330,6 +330,13 @@ def run_season_forecast_bundle(
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
 
+    cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
+    if cache_bucket:
+        _write_gcp_credentials_from_secret()
+        cache_dir = f"gs://{cache_bucket}/season-forecasts"
+    else:
+        cache_dir = Path("/cache/season-forecasts")
+
     pipeline = _load_pipeline()
     model_entry = _registry_entry(model_id)
     year = datetime.now(UTC).year
@@ -342,9 +349,9 @@ def run_season_forecast_bundle(
         season_params,
         scratch_root,
         out_path,
-        cache_dir=Path("/cache/season-forecasts"),
+        cache_dir=cache_dir,
     )
-    print(f"==> [{model_id}] Committing volume (uploads any newly-downloaded model weights)")
+    print(f"==> [{model_id}] Committing volume (model weight cache)")
     t0 = time.perf_counter()
     forecast_volume.commit()
     print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")

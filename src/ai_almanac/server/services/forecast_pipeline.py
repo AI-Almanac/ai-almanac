@@ -22,6 +22,7 @@ import io
 import json
 import os
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -184,7 +185,7 @@ def select_lat_lon_bounds(data_array, bounds: dict):
 
 
 def cached_trajectory(
-    cache_dir: Path | None,
+    cache_dir: "Path | str | None",
     model_id: str,
     max_lead_day: int,
     issue_date: dt.date,
@@ -197,6 +198,8 @@ def cached_trajectory(
     it and every later forecast job skips that GPU run. Cached at the model's
     native grid and units (unit_cvt/bounds are applied downstream), so one
     entry serves any blend using the model.
+
+    cache_dir may be a local Path or a gs:// URI for durable cloud storage.
     """
     import uuid
 
@@ -204,15 +207,37 @@ def cached_trajectory(
 
     if cache_dir is None:
         return compute(), False
-    cache_file = (
-        cache_dir / model_id / f"lead{int(max_lead_day)}d" / f"{issue_date.isoformat()}.nc"
-    )
+
+    cache_uri = str(cache_dir)
+    rel = f"{model_id}/lead{int(max_lead_day)}d/{issue_date.isoformat()}.nc"
+
+    if cache_uri.startswith("gs://"):
+        import gcsfs
+
+        fs = gcsfs.GCSFileSystem()
+        # ponytail: no eviction — a season accumulates at most ~26 entries per
+        # model; add cleanup if the bucket grows unbounded at season boundaries.
+        cache_path = f"{cache_uri.rstrip('/')}/{rel}"
+        if fs.exists(cache_path):
+            return xr.open_dataarray(cache_path, engine="h5netcdf").load(), True
+        trajectory = compute()
+        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            trajectory.rename("tp").to_netcdf(
+                tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
+            )
+            fs.put(str(tmp_path), cache_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return trajectory, False
+
+    # Local path branch — atomic rename avoids partial reads on cache miss.
+    cache_file = Path(cache_dir) / rel
     if cache_file.exists():
         return xr.open_dataarray(cache_file).load(), True
     trajectory = compute()
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    # ponytail: no eviction — a season is a few GB per model and dates stop
-    # accruing when the season ends; add cleanup if the volume ever fills.
     tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
     trajectory.rename("tp").to_netcdf(
         tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
@@ -227,14 +252,15 @@ def generate_season_forecast_netcdf(
     season_params: dict,
     scratch_root: Path,
     out_path: Path,
-    cache_dir: Path | None = None,
+    cache_dir: "Path | str | None" = None,
 ) -> Path:
     """Loop one model across the current season's issue dates and write
     out_path as a NetCDF matching the historical `{year}.nc` schema (time x
     day x lat x lon, variable tp). Caller decides scratch_root/out_path —
     Modal mode uses container-local temp dirs, local mode plain temp dirs.
     With cache_dir set, past issue dates are served from cache and only new
-    ones are rolled out (see cached_trajectory).
+    ones are rolled out (see cached_trajectory). cache_dir may be a local
+    Path or a gs:// URI.
     """
     import numpy as np
     import xarray as xr
