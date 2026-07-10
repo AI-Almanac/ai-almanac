@@ -18,6 +18,7 @@ module has no opinion on where the model registry or job config come from.
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import io
 import json
 import os
@@ -135,9 +136,13 @@ def _daily_precip_trajectory(
     deterministic([issue_date.strftime("%Y-%m-%dT%H:%M:%S")], nsteps, model, data, io_backend)
     print(f"    rollout done in {time.perf_counter() - t0:.1f}s", flush=True)
     t0 = time.perf_counter()
-    dataset = xr.open_zarr(zarr_path).load()
-    print(f"    zarr load done in {time.perf_counter() - t0:.1f}s", flush=True)
 
+    # Open lazily — do NOT call .load() on the full dataset. At global
+    # resolution a model like AIFS/FuXi writes 10-20 GB across all pressure
+    # levels and variables; loading everything before selecting tp causes OOM
+    # after just a few rollouts. Instead, select tp lazily and .compute() one
+    # day's sum at a time so peak memory per rollout is ~tp-only.
+    dataset = xr.open_zarr(zarr_path)
     tp = select_variable(dataset, "tp").squeeze()
     lat_name, lon_name = lat_lon_names(tp)
     # unit_cvt (from the archived data source's metadata, applied by the
@@ -155,20 +160,25 @@ def _daily_precip_trajectory(
         day_end = day_start + 24
         mask = (lead_hours_coord >= day_start) & (lead_hours_coord < day_end)
         if not mask.any():
-            daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan))
+            daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan).compute())
             continue
         window = tp.isel(lead_time=np.where(mask)[0])
         # tp06/tp12 are period accumulations (precip since the *previous*
         # step, resetting every step), not cumulative-since-init — so a
         # day's total is the sum of the steps inside it, not a diff across
         # days.
-        daily_totals.append(window.sum(dim="lead_time"))
+        daily_totals.append(window.sum(dim="lead_time").compute())
+
+    # Release all zarr file handles before rmtree so nothing is left open.
+    dataset.close()
+    del tp
+    print(f"    zarr reduce done in {time.perf_counter() - t0:.1f}s", flush=True)
+    shutil.rmtree(zarr_path, ignore_errors=True)
 
     stacked = xr.concat(daily_totals, dim="day")
     stacked = stacked.assign_coords(day=list(range(max_lead_day + 1)))
     per_day = stacked.clip(min=0)
     result = per_day.transpose("day", lat_name, lon_name)
-    shutil.rmtree(zarr_path, ignore_errors=True)
     return result
 
 
@@ -333,6 +343,7 @@ def generate_season_forecast_netcdf(
         traj.rename("tp").to_netcdf(slice_path)
         slice_paths.append(slice_path)
         del trajectory, traj
+        gc.collect()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds:
