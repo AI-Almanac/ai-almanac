@@ -185,7 +185,7 @@ def select_lat_lon_bounds(data_array, bounds: dict):
 
 
 def cached_trajectory(
-    cache_dir: "Path | str | None",
+    cache_dir: Path | str | None,
     model_id: str,
     max_lead_day: int,
     issue_date: dt.date,
@@ -252,7 +252,7 @@ def generate_season_forecast_netcdf(
     season_params: dict,
     scratch_root: Path,
     out_path: Path,
-    cache_dir: "Path | str | None" = None,
+    cache_dir: Path | str | None = None,
 ) -> Path:
     """Loop one model across the current season's issue dates and write
     out_path as a NetCDF matching the historical `{year}.nc` schema (time x
