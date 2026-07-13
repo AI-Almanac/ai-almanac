@@ -278,7 +278,7 @@ async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
     return {"csv": text or ""}
 
 
-@router.get("/{job_id}/results/{kind}/{filename}")
+@router.get("/{job_id}/results/{kind}/{filename:path}")
 async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJob):
     """Serve a result file from this origin — a local file or a proxied GCS stream."""
     if kind not in ("output", "figure"):
