@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { sendChatMessage, usesBearerAuth, type ChatEvent } from '../src/lib/api';
+import { isBackendUrl, sendChatMessage, usesBearerAuth, type ChatEvent } from '../src/lib/api';
 
 describe('usesBearerAuth', () => {
 	it('uses proxy-provided identity without requiring a browser token', () => {
@@ -13,6 +13,38 @@ describe('usesBearerAuth', () => {
 
 	it('falls back to the build-time Globus client for the Vite dev server', () => {
 		expect(usesBearerAuth(undefined, 'globus-client')).toBe(true);
+	});
+});
+
+describe('isBackendUrl', () => {
+	it('treats relative same-origin API URLs as backend URLs', () => {
+		expect(
+			isBackendUrl(
+				'/cog/tiles/WebMercatorQuad/0/0/0.png?job_id=job-1',
+				'',
+				'https://staging.ai-almanac.org/forecasts'
+			)
+		).toBe(true);
+	});
+
+	it('does not treat external basemap URLs as backend URLs', () => {
+		expect(
+			isBackendUrl(
+				'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+				'',
+				'https://staging.ai-almanac.org/forecasts'
+			)
+		).toBe(false);
+	});
+
+	it('treats configured API-origin URLs as backend URLs', () => {
+		expect(
+			isBackendUrl(
+				'https://api.ai-almanac.org/cog/point/10,5?job_id=job-1',
+				'https://api.ai-almanac.org',
+				'https://app.ai-almanac.org/forecasts'
+			)
+		).toBe(true);
 	});
 });
 

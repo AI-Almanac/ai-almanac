@@ -25,6 +25,21 @@ export const BASE_URL =
 		? runtimeConfig.apiUrl
 		: import.meta.env.VITE_API_URL || '';
 
+export function isBackendUrl(
+	url: string,
+	baseUrl = BASE_URL,
+	locationHref = typeof window !== 'undefined' ? window.location.href : 'http://localhost/'
+): boolean {
+	try {
+		const requestUrl = new URL(url, locationHref);
+		if (!baseUrl) return requestUrl.origin === new URL(locationHref).origin;
+		const apiUrl = new URL(baseUrl, locationHref);
+		return url.startsWith(baseUrl) || requestUrl.origin === apiUrl.origin;
+	} catch {
+		return false;
+	}
+}
+
 export function usesBearerAuth(
 	config: Window['__ALMANAC_CONFIG__'],
 	globusClientId: string | undefined
