@@ -109,3 +109,15 @@ export function cogPointUrl(jobId: string, path: string, lon: number, lat: numbe
 	const qs = new URLSearchParams({ job_id: jobId, path });
 	return `${BASE_URL}/cog/point/${lon.toFixed(5)},${lat.toFixed(5)}?${qs.toString()}`;
 }
+
+// probs[date_idx] = [cv_week1, cv_week2, cv_week3, cv_week4, cv_later]
+export type BlendForecastPoint = { lat: number; lon: number; probs: number[][] };
+
+export type BlendForecastData = {
+	issue_dates: string[];
+	points: BlendForecastPoint[];
+};
+
+export async function getBlendForecast(jobId: string): Promise<BlendForecastData> {
+	return request<BlendForecastData>(`/jobs/${jobId}/blend-forecast`);
+}
