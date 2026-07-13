@@ -386,6 +386,13 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "STORAGE_BACKEND"
         value = "gcs"
       }
+      # Tell GDAL's /vsigs/ driver to use the GCE metadata server for credentials.
+      # Required for TiTiler/rio-tiler to read gs:// COGs — GDAL has separate
+      # credential discovery from Python's ADC and doesn't auto-detect Cloud Run.
+      env {
+        name  = "CPL_MACHINE_IS_GCE"
+        value = "YES"
+      }
       env {
         name  = "JOB_RUNNER"
         value = var.job_runner
