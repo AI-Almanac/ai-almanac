@@ -584,6 +584,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/blend-forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Blend Forecast
+         * @description Return blended onset probabilities for all issue dates and grid points.
+         *
+         *     Parses blended_forecast_probabilities.csv server-side and returns a
+         *     compact structure suitable for client-side choropleth rendering.
+         */
+        get: operations["get_blend_forecast_jobs__job_id__blend_forecast_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/blend-summary": {
         parameters: {
             query?: never;
@@ -4922,6 +4945,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_blend_forecast_jobs__job_id__blend_forecast_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
