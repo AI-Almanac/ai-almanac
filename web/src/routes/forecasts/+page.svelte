@@ -22,6 +22,7 @@
 	} from '$lib/api';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import ForecastMap from '$lib/components/ForecastMap.svelte';
+	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 
@@ -316,7 +317,10 @@
 				}
 				if (cancelled) return;
 				manifests = loadedManifests;
-				activeModelId = job.forecast_model_ids.find((id) => loadedManifests[id]) ?? null;
+				// Stay on blend tab (null) by default; user can click a model tab.
+				if (activeModelId !== null) {
+					activeModelId = job.forecast_model_ids.find((id) => loadedManifests[id]) ?? null;
+				}
 			} catch {
 				if (!cancelled) artifacts = [];
 			}
@@ -503,6 +507,14 @@
 						<div class="map-section">
 							<div class="map-controls">
 								<div class="tabs">
+									<button
+										type="button"
+										class="tab"
+										class:active={activeModelId === null}
+										onclick={() => (activeModelId = null)}
+									>
+										Onset Probabilities
+									</button>
 									{#each selected.forecast_model_ids as modelId (modelId)}
 										<button
 											type="button"
@@ -515,7 +527,7 @@
 										</button>
 									{/each}
 								</div>
-								{#if activeManifest}
+								{#if activeModelId !== null && activeManifest}
 									<div class="selectors">
 										<label>
 											Variable
@@ -537,7 +549,9 @@
 								{/if}
 							</div>
 							<div class="map-host">
-								{#if activeModelId && activeManifest}
+								{#if activeModelId === null}
+									<BlendForecastMap jobId={selected.id} />
+								{:else if activeModelId && activeManifest}
 									{#key activeModelId}
 										<ForecastMap
 											jobId={selected.id}

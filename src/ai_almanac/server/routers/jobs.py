@@ -254,6 +254,68 @@ async def list_artifacts(job_id: str, job: ReadableJob):
     ]
 
 
+@router.get("/{job_id}/blend-forecast")
+async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
+    """Return blended onset probabilities for all issue dates and grid points.
+
+    Parses blended_forecast_probabilities.csv server-side and returns a
+    compact structure suitable for client-side choropleth rendering.
+    """
+    import csv
+    import io
+
+    _require_complete(job)
+    artifact = next(
+        (
+            a
+            for a in await list_job_artifacts(job_id)
+            if a["filename"] == "blended_forecast_probabilities.csv"
+        ),
+        None,
+    )
+    if artifact is None:
+        return {"issue_dates": [], "points": []}
+
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, artifact["kind"], artifact["filename"]
+    )
+    if not text:
+        return {"issue_dates": [], "points": []}
+
+    reader = csv.DictReader(io.StringIO(text))
+    # point_id → {date → [w1, w2, w3, w4, later]}
+    by_point: dict[str, dict[str, list[float]]] = {}
+    # preserve insertion order for issue_dates
+    date_order: dict[str, None] = {}
+    for row in reader:
+        point_id = row["id"]
+        date = row["time"]
+        date_order[date] = None
+        if point_id not in by_point:
+            by_point[point_id] = {}
+        by_point[point_id][date] = [
+            float(row.get("cv_week1") or 0),
+            float(row.get("cv_week2") or 0),
+            float(row.get("cv_week3") or 0),
+            float(row.get("cv_week4") or 0),
+            float(row.get("cv_later") or 0),
+        ]
+
+    issue_dates = list(date_order)
+    points = []
+    for point_id, date_map in by_point.items():
+        lat_str, lon_str = point_id.split("_", 1)
+        points.append(
+            {
+                "lat": float(lat_str),
+                "lon": float(lon_str),
+                "probs": [date_map.get(d, [0, 0, 0, 0, 0]) for d in issue_dates],
+            }
+        )
+
+    return {"issue_dates": issue_dates, "points": points}
+
+
 @router.get("/{job_id}/blend-summary")
 async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
     """Return the blend's pooled summary CSV, read server-side.
