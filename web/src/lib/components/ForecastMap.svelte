@@ -160,7 +160,10 @@
 			zoom: 1.8,
 			attributionControl: false,
 			transformRequest: (url) => {
-				if (!url.startsWith(BASE_URL)) return { url };
+				const isBackend = BASE_URL
+					? url.startsWith(BASE_URL)
+					: new URL(url).origin === window.location.origin;
+				if (!isBackend) return { url };
 				const headers = authHeaders() as Record<string, string>;
 				return Object.keys(headers).length ? { url, headers } : { url };
 			}
