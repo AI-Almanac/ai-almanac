@@ -60,7 +60,14 @@
 		const lid = `fc-lyr-${modelId}-${lh}`;
 		if (map.getSource(sid) || map.getLayer(lid)) return;
 		const tileUrl = cogTileTemplate(jobId, `${modelId}/${p.cog}`, [p.min, p.max]);
-		map.addSource(sid, { type: 'raster', tiles: [tileUrl], tileSize: 256, attribution: '' });
+		const [west, south, east, north] = p.bounds_lonlat;
+		map.addSource(sid, {
+			type: 'raster',
+			tiles: [tileUrl],
+			tileSize: 256,
+			bounds: [west, south, east, north],
+			attribution: ''
+		});
 		map.addLayer({
 			id: lid,
 			type: 'raster',
