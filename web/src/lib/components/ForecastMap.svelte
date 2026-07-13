@@ -3,7 +3,7 @@
 	import maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { authHeaders } from '$lib/auth';
-	import { BASE_URL, cogPointUrl, cogTileTemplate, type ForecastManifest } from '$lib/api';
+	import { cogPointUrl, cogTileTemplate, isBackendUrl, type ForecastManifest } from '$lib/api';
 
 	type Props = {
 		jobId: string;
@@ -167,10 +167,7 @@
 			zoom: 1.8,
 			attributionControl: false,
 			transformRequest: (url) => {
-				const isBackend = BASE_URL
-					? url.startsWith(BASE_URL)
-					: new URL(url).origin === window.location.origin;
-				if (!isBackend) return { url };
+				if (!isBackendUrl(url)) return { url };
 				const headers = authHeaders() as Record<string, string>;
 				return Object.keys(headers).length ? { url, headers } : { url };
 			}
