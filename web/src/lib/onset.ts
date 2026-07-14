@@ -24,10 +24,12 @@ export const WEEK_SHORT: Record<Week, string> = {
 };
 
 // Onset probability is magnitude → one sequential hue (blue), light→dark, not a
-// rainbow. Documented blue ramp steps 700→100.
+// rainbow. The floor is lifted off the near-black basemap (#0d1117) so a
+// low-probability cell reads as a dim dot, not a hole — "low" must never be
+// indistinguishable from "no data."
 export const PROB_RAMP: [number, string][] = [
-	[0, '#0d366b'],
-	[0.25, '#1c5cab'],
+	[0, '#2b4a72'],
+	[0.25, '#2f68b0'],
 	[0.5, '#3987e5'],
 	[0.75, '#86b6ef'],
 	[1, '#cde2fb']

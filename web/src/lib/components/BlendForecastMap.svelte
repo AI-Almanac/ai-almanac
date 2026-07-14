@@ -86,6 +86,23 @@
 		if (src) src.setData(buildGeoJson(data, selectedDate, selectedWeek));
 	}
 
+	// Nudge the dark basemap so land reads as a surface a shade above the void
+	// and water sits below it — gives the dot field something to rest on.
+	// Carto layer names vary, so match defensively and skip anything absent.
+	function liftBasemap() {
+		if (!map) return;
+		try {
+			for (const layer of map.getStyle().layers ?? []) {
+				if (layer.type === 'background')
+					map.setPaintProperty(layer.id, 'background-color', '#151b24');
+				else if (layer.id.includes('water'))
+					map.setPaintProperty(layer.id, 'fill-color', '#0b0e13');
+			}
+		} catch {
+			/* basemap has no matching layers; leave the default style */
+		}
+	}
+
 	function initLayer(d: BlendForecastData) {
 		if (!map) return;
 		const geojson = buildGeoJson(d, selectedDate, selectedWeek);
@@ -102,8 +119,8 @@
 				'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 4, 5, 10, 8, 16],
 				'circle-color': ['get', 'color'],
 				'circle-opacity': ['get', 'opacity'],
-				'circle-stroke-width': 0.5,
-				'circle-stroke-color': 'rgba(255,255,255,0.18)'
+				'circle-stroke-width': 0.75,
+				'circle-stroke-color': 'rgba(255,255,255,0.35)'
 			}
 		});
 		fitToData(d);
@@ -193,13 +210,12 @@
 	// Plain-language statement of what the colors mean, tied to the current
 	// selection so the reader never has to infer the reference frame.
 	const caption = $derived.by(() => {
-		const issued = selectedDate ? `forecast issued ${fmtDate(selectedDate)}` : '';
 		if (colorMode === 'expected') {
-			return `Most likely onset window per location, ${issued}. Fainter dots mean the timing is less certain.`;
+			return 'Most likely onset window per location. Fainter dots mean the timing is less certain.';
 		}
 		const thr = data?.onset_threshold;
 		const onset = thr != null ? `monsoon onset (rainfall ≥ ${thr} mm)` : 'monsoon onset';
-		return `Chance ${onset} begins in ${WEEK_LABELS[selectedWeek]}, ${issued}.`;
+		return `Chance ${onset} begins in ${WEEK_LABELS[selectedWeek]}.`;
 	});
 
 	function nearestPoint(lng: number, lat: number) {
@@ -228,6 +244,7 @@
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 		map.on('load', () => {
 			mapReady = true;
+			liftBasemap();
 			if (data) initLayer(data);
 		});
 
@@ -330,6 +347,11 @@
 			<p class="legend-caption">{caption}</p>
 			{#if colorMode === 'window'}
 				<div class="legend-bar" style="background: {legendGradient}"></div>
+				<div class="legend-ticks">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
 				<div class="legend-labels">
 					<span>0%</span>
 					<span>50%</span>
@@ -517,13 +539,15 @@
 	}
 
 	.scrub-btn.play {
-		background: rgba(43, 127, 207, 0.25);
-		border-color: rgba(43, 127, 207, 0.5);
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		color: #fff;
 		font-size: 0.7rem;
 	}
 
-	.scrub-btn.play:hover {
-		background: rgba(43, 127, 207, 0.4);
+	.scrub-btn.play:hover:not(:disabled) {
+		background: var(--color-accent-hover);
+		border-color: var(--color-accent-hover);
 	}
 
 	.scrub-meta {
@@ -571,7 +595,7 @@
 		top: 1.35rem;
 		height: 2px;
 		transform: translateY(-50%);
-		background: rgba(43, 127, 207, 0.6);
+		background: var(--color-accent);
 		border-radius: 999px;
 		pointer-events: none;
 	}
@@ -624,9 +648,9 @@
 	.tl-tick.active::after {
 		width: 0.7rem;
 		height: 0.7rem;
-		background: rgb(43, 127, 207);
-		border-color: rgba(43, 127, 207, 0.85);
-		box-shadow: 0 0 0 3px rgba(43, 127, 207, 0.25);
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 3px var(--color-accent-border);
 	}
 
 	.map-host {
@@ -738,7 +762,7 @@
 	}
 
 	.tt-col.active .tt-bar-track {
-		box-shadow: inset 0 0 0 1.5px rgba(87, 165, 255, 0.75);
+		box-shadow: inset 0 0 0 1.5px var(--color-accent);
 	}
 
 	.control-rail {
@@ -779,7 +803,7 @@
 		margin: 0.45rem 0 0;
 		font-size: 0.64rem;
 		line-height: 1.4;
-		color: rgba(138, 130, 120, 0.85);
+		color: rgba(200, 192, 180, 0.82);
 	}
 
 	.rail-def-region {
@@ -795,7 +819,7 @@
 		font-weight: 800;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
-		color: rgba(200, 192, 180, 0.75);
+		color: rgba(200, 192, 180, 0.95);
 	}
 
 	.rail-collapse,
@@ -851,7 +875,7 @@
 		font-weight: 700;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.85);
+		color: rgba(200, 192, 180, 0.92);
 	}
 
 	.mode-toggle {
@@ -881,8 +905,8 @@
 	}
 
 	.mode-toggle button.active {
-		background: rgb(43, 127, 207);
-		border-color: rgb(43, 127, 207);
+		background: var(--color-accent);
+		border-color: var(--color-accent);
 		color: #fff;
 	}
 
@@ -915,9 +939,9 @@
 	}
 
 	.week-btn.active {
-		background: rgba(43, 127, 207, 0.25);
-		border-color: rgba(43, 127, 207, 0.55);
-		color: #e8e3d8;
+		background: var(--color-accent);
+		border-color: var(--color-accent);
+		color: #fff;
 	}
 
 	.legend-caption {
@@ -958,11 +982,23 @@
 		box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 	}
 
+	.legend-ticks {
+		display: flex;
+		justify-content: space-between;
+		margin-top: 0.2rem;
+	}
+
+	.legend-ticks span {
+		width: 1px;
+		height: 0.28rem;
+		background: rgba(200, 192, 180, 0.4);
+	}
+
 	.legend-labels {
 		display: flex;
 		justify-content: space-between;
 		align-items: baseline;
-		margin-top: 0.28rem;
+		margin-top: 0.12rem;
 		font-size: 0.72rem;
 		font-weight: 700;
 		font-variant-numeric: tabular-nums;
