@@ -116,6 +116,12 @@ export type BlendForecastPoint = { lat: number; lon: number; probs: number[][] }
 export type BlendForecastData = {
 	issue_dates: string[];
 	points: BlendForecastPoint[];
+	// Rainfall threshold (mm) that defines "onset"; null if the CSV omits it.
+	onset_threshold: number | null;
+	// Region display name and its onset definition (e.g. India → Modified
+	// Moron–Robertson), so the UI can name what "onset" means here.
+	region_name: string | null;
+	onset_definition: string | null;
 };
 
 export async function getBlendForecast(jobId: string): Promise<BlendForecastData> {

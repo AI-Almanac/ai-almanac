@@ -513,7 +513,7 @@
 										class:active={activeModelId === null}
 										onclick={() => (activeModelId = null)}
 									>
-										Onset Probabilities
+										Monsoon Onset
 									</button>
 									{#each selected.forecast_model_ids as modelId (modelId)}
 										<button
