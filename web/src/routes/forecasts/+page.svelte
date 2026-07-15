@@ -3,6 +3,7 @@
 	import {
 		listForecasts,
 		createForecast,
+		refreshForecast as refreshForecastRun,
 		listBlends,
 		getForecastModels,
 		getJobArtifacts,
@@ -128,12 +129,31 @@
 		return 'mixed';
 	}
 
+	// A forecast's logical identity: same blend + models + init source is "the
+	// same forecast," just re-run. An "update" reuses this spec, so weekly
+	// refreshes share a key.
+	function specKey(f: Forecast): string {
+		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'gfs'}`;
+	}
+
+	// Collapse each spec to its most recent run so a season of weekly updates
+	// shows one current entry instead of 20+ near-identical rows. Older runs stay
+	// in `forecasts` (still selectable, still streamed) — just not listed.
+	const latestForecasts = $derived.by(() => {
+		const byKey = new Map<string, Forecast>();
+		for (const f of forecasts) {
+			const current = byKey.get(specKey(f));
+			if (!current || f.created_at > current.created_at) byKey.set(specKey(f), f);
+		}
+		return [...byKey.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+	});
+
 	const sidebarSections = $derived<RunSection[]>([
 		{
 			title: 'My Forecasts',
 			open: true,
 			emptyLabel: loaded ? 'No forecasts yet.' : 'Loading…',
-			items: forecasts.map((f) => ({
+			items: latestForecasts.map((f) => ({
 				id: f.id,
 				title: blendName(f.blend_id),
 				meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
@@ -250,18 +270,17 @@
 		}
 	}
 
-	// Re-run an existing forecast's exact spec. The season loop serves cached
-	// issue dates and rolls out only the ones that have elapsed since — cheap
-	// relative to a cold season (D5).
+	// Re-run an existing forecast with its ORIGINAL spec (server-side replay of
+	// init source/window/time). The season loop serves cached issue dates and
+	// rolls out only the ones that have elapsed since — cheap relative to a cold
+	// season (D5). Reusing the original params keeps it on the same trajectory
+	// set so the cache actually hits.
 	async function updateForecast() {
 		if (!selected || updating) return;
 		updating = true;
 		actionError = null;
 		try {
-			const forecast = await createForecast({
-				blend_id: selected.blend_id,
-				forecast_model_ids: selected.forecast_model_ids
-			});
+			const forecast = await refreshForecastRun(selected.id);
 			forecasts = [forecast, ...forecasts];
 			selectedId = forecast.id;
 		} catch (err) {

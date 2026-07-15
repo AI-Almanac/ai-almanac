@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -16,6 +17,7 @@ from pathlib import Path
 import sqlalchemy as sa
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services import trajectory_sets
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.server.tables import jobs
@@ -121,11 +123,25 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
 
 async def _finalize_remote_job(job_id: str, status: str, error: str | None) -> None:
     async with get_db() as conn:
-        await conn.execute(
+        result = await conn.execute(
             sa.update(jobs)
             .where(jobs.c.id == job_id, jobs.c.status.in_(ACTIVE_STATUSES))
             .values(status=status, completed_at=_now(), error=error)
+            .returning(jobs.c.config_json)
         )
+        row = result.mappings().fetchone()
+        if status != "complete" or row is None:
+            return
+        config = json.loads(row["config_json"] or "{}")
+        if config.get("job_type") != "forecast":
+            return
+        # The Modal rollout populated the shared trajectory store; record
+        # coverage so later runs score against it GPU-free. Bookkeeping only —
+        # never fail an otherwise-successful forecast over it.
+        try:
+            await trajectory_sets.mark_coverage_from_config(conn, config)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to mark trajectory coverage for %s", job_id)
 
 
 async def _modal_failure_log(job_id: str) -> str:

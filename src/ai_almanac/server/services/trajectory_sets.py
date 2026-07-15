@@ -161,6 +161,26 @@ async def set_is_ready(
     return {_iso(d) for d in needed_dates} <= _covered(row)
 
 
+async def mark_coverage_from_config(conn: AsyncConnection, config: dict) -> None:
+    """Mark every model in a completed forecast job's config as covered and its
+    set complete. The async twin of job_workload._mark_trajectory_coverage, used
+    by the Modal completion reconciler (the local subprocess path marks its own).
+    """
+    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
+
+    init_source = config.get("init_source") or "gfs"
+    season = str(config.get("season") or datetime.now(UTC).year)
+    covered = season_covered_dates(config)
+    for name, dates in covered.items():
+        row = await get_set(
+            conn, model_name=name, init_source=init_source, season=season
+        )
+        if row is None:
+            continue
+        await mark_dates_covered(conn, row["id"], dates)
+        await set_status(conn, row["id"], "complete")
+
+
 async def list_sets(conn: AsyncConnection) -> list[dict]:
     """All trajectory sets, newest first — for the admin coverage view."""
     rows = (

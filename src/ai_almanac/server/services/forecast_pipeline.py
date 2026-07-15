@@ -144,6 +144,33 @@ def season_issue_dates(
     return dates
 
 
+def season_covered_dates(config: dict) -> dict[str, list[str]]:
+    """Init dates each model's season rollout covers, from a forecast job config.
+
+    Single source of truth for the submit-time readiness gate and the two
+    coverage-marking paths (local subprocess and Modal reconciler). The gate and
+    the markers MUST compute identical dates — otherwise a completed set never
+    satisfies `set_is_ready` and every run re-triggers a GPU rollout.
+    """
+    season = int(config.get("season") or dt.datetime.now(UTC).year)
+    season_start = config.get("season_start_month_day") or "05-01"
+    season_params = config.get("season_model_params") or {}
+    max_issue_dates = config.get("max_issue_dates")
+    out: dict[str, list[str]] = {}
+    for name in config.get("forecast_model_ids") or []:
+        weekdays = [
+            int(d)
+            for d in str((season_params.get(name) or {}).get("init_days") or "0,3").split(
+                ","
+            )
+        ]
+        dates = season_issue_dates(season_start, weekdays, season)
+        if max_issue_dates:
+            dates = dates[-int(max_issue_dates) :]
+        out[name] = [d.isoformat() for d in dates]
+    return out
+
+
 def _daily_precip_trajectory(
     model, data, issue_date: dt.date, max_lead_day: int, step_hours: int, scratch_root: Path
 ):
