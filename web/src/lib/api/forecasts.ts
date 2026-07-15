@@ -1,6 +1,6 @@
 // ---- Forecasts ---------------------------------------------------------------
-import { BASE_URL, request } from './core';
-import { fetchResultBlob, type JobArtifact, type JobStatus } from './jobs';
+import { request } from './core';
+import { type JobStatus } from './jobs';
 
 export type Forecast = {
 	id: string;
@@ -19,9 +19,11 @@ export type Forecast = {
 
 export type ForecastParams = {
 	init_time?: string | null;
-	// Smoke-test knobs for the season-long blend-scoring loop: shrink it to a
-	// short window instead of the full monsoon season. Unset means full season.
-	max_lead_day?: number | null;
+	// Which archived analysis a live rollout initializes from (part of the
+	// trajectory's identity). Defaults to "gfs" server-side.
+	init_source?: string | null;
+	// Smoke-test knob: shrink the season-long scoring loop to the most recent N
+	// issue dates. Unset means the whole season-to-date.
 	max_issue_dates?: number | null;
 };
 
@@ -50,64 +52,25 @@ export async function getForecastModels(): Promise<ForecastModel[]> {
 	return request<ForecastModel[]>('/forecasts/models');
 }
 
-// One model's rendered map deliverable — a COG per (variable, lead hour),
-// written by the job as `{model_id}/manifest.json` and indexed as a regular
-// job artifact. Read client-side (small JSON) rather than adding a dedicated
-// endpoint.
-export type ForecastMapProduct = {
-	unit: string;
-	crs: string;
-	cog: string;
-	bounds_lonlat: [number, number, number, number];
-	min: number;
-	max: number;
-};
-
-export type ForecastManifest = {
-	model_id: string;
+// A trajectory set: the deterministic season rollout for one
+// (model_name, init_source, season) triple, shared across every blend/region
+// that uses the model. Backs the admin coverage view.
+export type TrajectorySet = {
+	id: string;
 	model_name: string;
-	init_time: string | null;
-	native_step_hours: number | null;
-	variables: string[];
-	lead_hours: number[];
-	data_source: string;
+	init_source: string | null;
+	season: string | null;
+	status: string;
+	covered_init_dates: string[] | null;
+	storage_prefix?: string | null;
 	created_at: string;
-	map_products: Record<string, Record<string, ForecastMapProduct>>;
+	started_at?: string | null;
+	completed_at?: string | null;
+	error?: string | null;
 };
 
-export async function getForecastManifest(
-	modelId: string,
-	artifacts: JobArtifact[]
-): Promise<ForecastManifest | null> {
-	const artifact = artifacts.find((a) => a.filename === `${modelId}/manifest.json`);
-	if (!artifact) return null;
-	const objectUrl = await fetchResultBlob(artifact.url);
-	const res = await fetch(objectUrl);
-	return (await res.json()) as ForecastManifest;
-}
-
-// Tile/point URLs for the `/cog` router (TiTiler wrapping a job-scoped COG).
-// `job_id`+`path` (not a raw URL) are validated server-side the same way
-// `/jobs/{id}` endpoints check ownership.
-export function cogTileTemplate(
-	jobId: string,
-	path: string,
-	rescale: [number, number],
-	colormapName = 'almanac'
-): string {
-	const qs = new URLSearchParams({
-		job_id: jobId,
-		path,
-		rescale: `${rescale[0]},${rescale[1]}`,
-		colormap_name: colormapName,
-		return_mask: 'true'
-	});
-	return `${BASE_URL}/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png?${qs.toString()}`;
-}
-
-export function cogPointUrl(jobId: string, path: string, lon: number, lat: number): string {
-	const qs = new URLSearchParams({ job_id: jobId, path });
-	return `${BASE_URL}/cog/point/${lon.toFixed(5)},${lat.toFixed(5)}?${qs.toString()}`;
+export async function getTrajectorySets(): Promise<TrajectorySet[]> {
+	return request<TrajectorySet[]>('/forecasts/trajectories');
 }
 
 // probs[date_idx] = [cv_week1, cv_week2, cv_week3, cv_week4, cv_later]
@@ -116,6 +79,12 @@ export type BlendForecastPoint = { lat: number; lon: number; probs: number[][] }
 export type BlendForecastData = {
 	issue_dates: string[];
 	points: BlendForecastPoint[];
+	// Rainfall threshold (mm) that defines "onset"; null if the CSV omits it.
+	onset_threshold: number | null;
+	// Region display name and its onset definition (e.g. India → Modified
+	// Moron–Robertson), so the UI can name what "onset" means here.
+	region_name: string | null;
+	onset_definition: string | null;
 };
 
 export async function getBlendForecast(jobId: string): Promise<BlendForecastData> {

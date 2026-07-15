@@ -406,6 +406,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forecasts/trajectories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Trajectory Sets
+         * @description Trajectory-set coverage for the admin generation view.
+         */
+        get: operations["list_trajectory_sets_forecasts_trajectories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forecasts/models": {
         parameters: {
             query?: never;
@@ -2260,7 +2280,11 @@ export interface components {
             blend_id: string;
             /** Forecast Model Ids */
             forecast_model_ids?: string[] | null;
-            /** @default {} */
+            /**
+             * @default {
+             *       "init_source": "gfs"
+             *     }
+             */
             params: components["schemas"]["ForecastParams"];
             /** Run Id */
             run_id?: string | null;
@@ -2310,8 +2334,11 @@ export interface components {
             lead_hours?: number[] | null;
             /** Variables */
             variables?: string[] | null;
-            /** Max Lead Day */
-            max_lead_day?: number | null;
+            /**
+             * Init Source
+             * @default gfs
+             */
+            init_source: string;
             /** Max Issue Dates */
             max_issue_dates?: number | null;
         };
@@ -4612,6 +4639,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_trajectory_sets_forecasts_trajectories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

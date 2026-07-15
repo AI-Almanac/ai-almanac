@@ -30,10 +30,39 @@ from typing import Any
 
 UTC = dt.UTC
 
+# Bump when the reduction logic, units, or on-disk schema of a cached
+# trajectory changes so stale entries become misses instead of being served
+# with the wrong shape (D4). It is part of the cache key.
+TRAJECTORY_CACHE_VERSION = 1
+
+# Single canonical rollout horizon for the trajectory store (D4). The store
+# always holds the full trajectory, so lead is a fixed key segment rather than
+# a variable that splits the same rollout across `lead30d`/`lead45d` keys.
+CANONICAL_LEAD_DAY = 45
+
 
 # ---------------------------------------------------------------------------
 # earth2studio inference
 # ---------------------------------------------------------------------------
+
+
+def resolve_data_source(init_source: str):
+    """Map an init-source name to its earth2studio data source object.
+
+    The init source is part of a trajectory's identity (D6): the same model and
+    date initialized from GFS versus ERA5 are different assets, so serving one
+    for the other silently corrupts results. Register new earth2studio sources
+    (ARCO/ERA5, IFS, GEFS, ...) here by adding to the builder map.
+    """
+    known = ("gfs",)  # extend as earth2studio sources are wired in (ERA5/ARCO, IFS, GEFS)
+    name = init_source.lower()
+    if name not in known:
+        raise ValueError(
+            f"Unknown forecast init source {init_source!r}; known: {sorted(known)}"
+        )
+    from earth2studio.data import GFS
+
+    return {"gfs": GFS}[name]()
 
 
 def load_model(model_class: str):
@@ -65,16 +94,15 @@ def lead_steps(lead_hours: list[int], model_class: str) -> tuple[int, int]:
 
 
 def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> dict:
-    """Run one AI weather model against the latest GFS conditions; write its
-    raw output to zarr_path (a plain local path — Modal mode points this at
+    """Run one AI weather model against the configured init conditions; write
+    its raw output to zarr_path (a plain local path — Modal mode points this at
     Volume-backed scratch space, local mode at a plain temp dir)."""
-    from earth2studio.data import GFS
     from earth2studio.io import ZarrBackend
     from earth2studio.run import deterministic
 
     model_class = model_entry["earth2studio_class"]
     model = load_model(model_class)
-    data = GFS()
+    data = resolve_data_source(config.get("init_source", "gfs"))
     init_time = select_latest_init_time(config)
     nsteps, step_hours = lead_steps(config["lead_hours"], model_class)
     zarr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,17 +225,22 @@ def select_lat_lon_bounds(data_array, bounds: dict):
 def cached_trajectory(
     cache_dir: Path | str | None,
     model_id: str,
-    max_lead_day: int,
+    init_source: str,
     issue_date: dt.date,
     compute,
 ):
     """Read-through cache for one issue date's daily-precip trajectory.
 
     A rollout initialized from a past date is deterministic (fixed weights,
-    archived GFS conditions), so its reduced trajectory never changes — cache
+    archived init conditions), so its reduced trajectory never changes — cache
     it and every later forecast job skips that GPU run. Cached at the model's
     native grid and units (unit_cvt/bounds are applied downstream), so one
     entry serves any blend using the model.
+
+    The key is hardened per D4: it carries the init source (a GFS rollout is a
+    different asset than the same date from ERA5), a reduction/schema version
+    so bumps invalidate stale entries, and the fixed canonical `lead45d`
+    horizon so shorter windows never split the same rollout across keys.
 
     cache_dir may be a local Path or a gs:// URI for durable cloud storage.
     """
@@ -219,7 +252,10 @@ def cached_trajectory(
         return compute(), False
 
     cache_uri = str(cache_dir)
-    rel = f"{model_id}/lead{int(max_lead_day)}d/{issue_date.isoformat()}.nc"
+    rel = (
+        f"{model_id}/{init_source}/v{TRAJECTORY_CACHE_VERSION}"
+        f"/lead{CANONICAL_LEAD_DAY}d/{issue_date.isoformat()}.nc"
+    )
 
     if cache_uri.startswith("gs://"):
         import gcsfs
@@ -274,10 +310,13 @@ def generate_season_forecast_netcdf(
     """
     import numpy as np
     import xarray as xr
-    from earth2studio.data import GFS
 
     model_class = model_entry["earth2studio_class"]
-    max_lead_day = int(config.get("max_lead_day") or 45)
+    # D4: the store always holds the full canonical 45-day trajectory, so shorter
+    # windows never split the same rollout across cache keys. The max_lead_day
+    # knob is retired for the season path; use max_issue_dates to trim smoke cost.
+    lead_day = CANONICAL_LEAD_DAY
+    init_source = config.get("init_source", "gfs")
     init_weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
     unit_cvt = float(season_params.get("unit_cvt", 1.0))
     bounds = season_params.get("spatial_bounds")
@@ -295,8 +334,8 @@ def generate_season_forecast_netcdf(
         # end-to-end without paying for a full season's worth of rollouts.
         issue_dates = issue_dates[-int(max_issue_dates):]
 
-    _, step_hours = lead_steps([max_lead_day * 24], model_class)
-    nsteps = (max_lead_day * 24) // step_hours
+    _, step_hours = lead_steps([lead_day * 24], model_class)
+    nsteps = (lead_day * 24) // step_hours
     scratch_root.mkdir(parents=True, exist_ok=True)
 
     # Loading model weights is expensive; defer until the first cache miss so
@@ -306,9 +345,9 @@ def generate_season_forecast_netcdf(
     def _rollout(issue_date: dt.date):
         if not loaded:
             loaded["model"] = load_model(model_class)
-            loaded["data"] = GFS()
+            loaded["data"] = resolve_data_source(init_source)
         return _daily_precip_trajectory(
-            loaded["model"], loaded["data"], issue_date, max_lead_day, step_hours, scratch_root
+            loaded["model"], loaded["data"], issue_date, lead_day, step_hours, scratch_root
         )
 
     print(
@@ -324,7 +363,7 @@ def generate_season_forecast_netcdf(
         trajectory, from_cache = cached_trajectory(
             cache_dir,
             model_entry["id"],
-            max_lead_day,
+            init_source,
             issue_date,
             lambda date=issue_date: _rollout(date),
         )

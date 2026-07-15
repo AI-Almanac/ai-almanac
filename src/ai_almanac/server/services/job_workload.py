@@ -120,6 +120,75 @@ def _run_forecast(job_id: str, config: dict) -> None:
         env=process_env,
     )
     _stream_process(process)
+    # The rollout populated the shared trajectory store; record coverage so
+    # later runs score against it GPU-free. Bookkeeping only — never fail an
+    # otherwise-successful forecast over it.
+    try:
+        _mark_trajectory_coverage(config)
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: failed to record trajectory coverage: {exc}", flush=True)
+
+
+def _mark_trajectory_coverage(config: dict) -> None:
+    """Record which season init dates are now cached for each model's
+    `(model, init_source, season)` set, and mark the set complete.
+
+    Runs in the server environment (sync DB) after the rollout subprocess, so
+    the forecast pixi env / Modal container never needs database access. The
+    init dates are recomputed from the same deterministic inputs the season
+    loop used. Modal-runner jobs do not reach this path yet — their coverage
+    marking is a follow-up in the completion reconciler.
+    """
+    from datetime import UTC, datetime
+
+    from ai_almanac.server.services.forecast_pipeline import season_issue_dates
+    from ai_almanac.server.tables import forecast_runs
+
+    init_source = config.get("init_source", "gfs")
+    season = config.get("season") or str(datetime.now(UTC).year)
+    season_start = config.get("season_start_month_day") or "05-01"
+    season_params = config.get("season_model_params") or {}
+    max_issue_dates = config.get("max_issue_dates")
+    now = datetime.now(UTC).isoformat()
+
+    with sync_engine().begin() as conn:
+        for name in config.get("forecast_model_ids") or []:
+            weekdays = [
+                int(d)
+                for d in str((season_params.get(name) or {}).get("init_days") or "0,3").split(",")
+            ]
+            dates = season_issue_dates(season_start, weekdays, int(season))
+            if max_issue_dates:
+                dates = dates[-int(max_issue_dates) :]
+            covered = {d.isoformat() for d in dates}
+            row = (
+                conn.execute(
+                    sa.select(
+                        forecast_runs.c.id, forecast_runs.c.covered_init_dates
+                    ).where(
+                        forecast_runs.c.model_name == name,
+                        forecast_runs.c.init_source == init_source,
+                        forecast_runs.c.season == season,
+                    )
+                )
+                .mappings()
+                .fetchone()
+            )
+            if row is None:
+                continue
+            existing = row["covered_init_dates"] or []
+            if isinstance(existing, str):
+                existing = json.loads(existing)
+            covered |= {str(item) for item in existing}
+            conn.execute(
+                sa.update(forecast_runs)
+                .where(forecast_runs.c.id == row["id"])
+                .values(
+                    covered_init_dates=sorted(covered),
+                    status="complete",
+                    completed_at=now,
+                )
+            )
 
 
 def _stream_process(process: subprocess.Popen) -> None:

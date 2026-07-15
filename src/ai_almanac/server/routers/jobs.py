@@ -263,8 +263,28 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
     """
     import csv
     import io
+    import json as _json
+
+    from ai_almanac.server.services.region_catalog import get_region
 
     _require_complete(job)
+
+    # The region defines what "onset" means (e.g. India → Modified Moron–Robertson,
+    # Ethiopia → Kiremt); surface its name + definition so the UI can keep it visible.
+    config = _json.loads(job.get("config_json") or "{}")
+    region = await get_region(config["region_id"]) if config.get("region_id") else None
+    region_name = (region or {}).get("display_name")
+    onset_definition = (region or {}).get("description")
+
+    def _empty() -> dict:
+        return {
+            "issue_dates": [],
+            "points": [],
+            "onset_threshold": None,
+            "region_name": region_name,
+            "onset_definition": onset_definition,
+        }
+
     artifact = next(
         (
             a
@@ -274,23 +294,29 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
         None,
     )
     if artifact is None:
-        return {"issue_dates": [], "points": []}
+        return _empty()
 
     text = await asyncio.to_thread(
         get_storage().read_result_text, job_id, artifact["kind"], artifact["filename"]
     )
     if not text:
-        return {"issue_dates": [], "points": []}
+        return _empty()
 
     reader = csv.DictReader(io.StringIO(text))
     # point_id → {date → [w1, w2, w3, w4, later]}
     by_point: dict[str, dict[str, list[float]]] = {}
     # preserve insertion order for issue_dates
     date_order: dict[str, None] = {}
+    onset_threshold: float | None = None
     for row in reader:
         point_id = row["id"]
         date = row["time"]
         date_order[date] = None
+        if onset_threshold is None:
+            try:
+                onset_threshold = float(row.get("onset_threshold") or "")
+            except ValueError:
+                onset_threshold = None
         if point_id not in by_point:
             by_point[point_id] = {}
         by_point[point_id][date] = [
@@ -313,7 +339,13 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
             }
         )
 
-    return {"issue_dates": issue_dates, "points": points}
+    return {
+        "issue_dates": issue_dates,
+        "points": points,
+        "onset_threshold": onset_threshold,
+        "region_name": region_name,
+        "onset_definition": onset_definition,
+    }
 
 
 @router.get("/{job_id}/blend-summary")

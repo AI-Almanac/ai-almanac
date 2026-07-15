@@ -6,7 +6,6 @@
 		listBlends,
 		getForecastModels,
 		getJobArtifacts,
-		getForecastManifest,
 		cancelJob,
 		deleteJob,
 		fetchResultBlob,
@@ -14,14 +13,12 @@
 		type Blend,
 		type Forecast,
 		type ForecastCreate,
-		type ForecastManifest,
 		type ForecastModel,
 		type JobArtifact,
 		type JobStatus,
 		type JobStreamEvent
 	} from '$lib/api';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
-	import ForecastMap from '$lib/components/ForecastMap.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
@@ -49,12 +46,13 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
+	let initSource = $state('');
 	// bind:value on <input type="number"> yields a number (or undefined when
 	// empty/invalid), not a string — unlike initTime's plain text input.
-	let maxLeadDay = $state<number | undefined>(undefined);
 	let maxIssueDates = $state<number | undefined>(undefined);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
+	let updating = $state(false);
 
 	const completedBlends = $derived(blends.filter((b) => b.status === 'complete'));
 	const selectedBlend = $derived(blends.find((b) => b.id === blendId) ?? null);
@@ -199,8 +197,18 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		maxLeadDay = undefined;
+		initSource = '';
 		maxIssueDates = undefined;
+	}
+
+	// The 409 status is embedded in request()'s thrown message; translate it to
+	// a plain-language explanation of the trajectory-readiness gate.
+	function friendlyError(err: unknown): string {
+		const msg = err instanceof Error ? err.message : 'Submission failed';
+		if (msg.includes('(409)')) {
+			return 'This blend uses forecast data that has not been generated yet. An administrator needs to prepare it before this forecast can run.';
+		}
+		return msg;
 	}
 
 	function selectForecast(id: string) {
@@ -221,7 +229,7 @@
 		try {
 			const params: ForecastCreate['params'] = {
 				...(initTime.trim() ? { init_time: initTime.trim() } : {}),
-				...(maxLeadDay != null && !Number.isNaN(maxLeadDay) ? { max_lead_day: maxLeadDay } : {}),
+				...(initSource.trim() ? { init_source: initSource.trim() } : {}),
 				...(maxIssueDates != null && !Number.isNaN(maxIssueDates)
 					? { max_issue_dates: maxIssueDates }
 					: {})
@@ -236,9 +244,30 @@
 			creating = false;
 			selectedId = forecast.id;
 		} catch (err) {
-			submitError = err instanceof Error ? err.message : 'Submission failed';
+			submitError = friendlyError(err);
 		} finally {
 			submitting = false;
+		}
+	}
+
+	// Re-run an existing forecast's exact spec. The season loop serves cached
+	// issue dates and rolls out only the ones that have elapsed since — cheap
+	// relative to a cold season (D5).
+	async function updateForecast() {
+		if (!selected || updating) return;
+		updating = true;
+		actionError = null;
+		try {
+			const forecast = await createForecast({
+				blend_id: selected.blend_id,
+				forecast_model_ids: selected.forecast_model_ids
+			});
+			forecasts = [forecast, ...forecasts];
+			selectedId = forecast.id;
+		} catch (err) {
+			actionError = friendlyError(err);
+		} finally {
+			updating = false;
 		}
 	}
 
@@ -275,15 +304,9 @@
 		}).format(d);
 	}
 
-	// --- Result view: artifacts, per-model manifests, map controls ---
+	// --- Result view: downloadable artifacts ---
 	let artifacts = $state<JobArtifact[]>([]);
-	let manifests = $state<Record<string, ForecastManifest | null>>({});
-	let activeModelId = $state<string | null>(null);
-	let variable = $state('');
-	let leadHour = $state(0);
 
-	// Downloadable outputs, excluding the per-model raster/manifest files that
-	// back the map viewer (those aren't meant to be downloaded directly).
 	const downloadableArtifacts = $derived(
 		artifacts.filter(
 			(a) => !a.filename.endsWith('manifest.json') && !a.filename.includes('/rasters/')
@@ -294,8 +317,6 @@
 		const job = selected;
 		if (job?.status !== 'complete') {
 			artifacts = [];
-			manifests = {};
-			activeModelId = null;
 			return;
 		}
 		const id = job.id;
@@ -309,39 +330,16 @@
 				artifacts = found;
 				if (found.length === 0 && attempts++ < 6) {
 					setTimeout(load, 2000);
-					return;
-				}
-				const loadedManifests: Record<string, ForecastManifest | null> = {};
-				for (const modelId of job.forecast_model_ids) {
-					loadedManifests[modelId] = await getForecastManifest(modelId, found);
-				}
-				if (cancelled) return;
-				manifests = loadedManifests;
-				// Stay on blend tab (null) by default; user can click a model tab.
-				if (activeModelId !== null) {
-					activeModelId = job.forecast_model_ids.find((id) => loadedManifests[id]) ?? null;
 				}
 			} catch {
 				if (!cancelled) artifacts = [];
 			}
 		};
 		artifacts = [];
-		manifests = {};
 		void load();
 		return () => {
 			cancelled = true;
 		};
-	});
-
-	const activeManifest = $derived(activeModelId ? manifests[activeModelId] : null);
-
-	// Reset variable/lead-hour selection to something valid whenever the
-	// active model's manifest changes.
-	$effect(() => {
-		const m = activeManifest;
-		if (!m) return;
-		if (!m.variables.includes(variable)) variable = m.variables[0] ?? '';
-		if (!m.lead_hours.includes(leadHour)) leadHour = m.lead_hours[0] ?? 0;
 	});
 </script>
 
@@ -408,13 +406,8 @@
 							<input type="text" bind:value={initTime} placeholder="defaults to latest available" />
 						</label>
 						<label class="field">
-							<span>Max season lead days</span>
-							<input
-								type="number"
-								min="1"
-								bind:value={maxLeadDay}
-								placeholder="defaults to full 45-day lead"
-							/>
+							<span>Init source</span>
+							<input type="text" bind:value={initSource} placeholder="defaults to gfs" />
 						</label>
 						<label class="field">
 							<span>Max season issue dates</span>
@@ -447,10 +440,22 @@
 		{:else if selected}
 			<section class="card detail">
 				<header class="detail-header">
-					<div>
+					<div class="detail-id">
 						<p class="eyebrow">Forecast</p>
-						<h1>{blendName(selected.blend_id)}</h1>
-						<p class="muted">{selected.forecast_model_ids.join(', ')}</p>
+						<h1 class="forecast-id" title={blendName(selected.blend_id)}>
+							{blendName(selected.blend_id)}
+						</h1>
+						<p class="detail-meta">
+							{#if selected.forecast_model_ids.length}
+								<span>{selected.forecast_model_ids.join(', ')}</span>
+								<span class="dot" aria-hidden="true">·</span>
+							{/if}
+							<span>Submitted {formatDate(selected.created_at)}</span>
+							{#if selected.completed_at}
+								<span class="dot" aria-hidden="true">·</span>
+								<span>Completed {formatDate(selected.completed_at)}</span>
+							{/if}
+						</p>
 					</div>
 					<div class="detail-actions">
 						<span class="status-badge {statusClass(selected.status)}"
@@ -466,6 +471,11 @@
 								{selected.status === 'canceling' ? 'Canceling…' : 'Cancel'}
 							</button>
 						{/if}
+						{#if selected.status === 'complete'}
+							<button type="button" class="primary" disabled={updating} onclick={updateForecast}>
+								{updating ? 'Updating…' : 'Update forecast'}
+							</button>
+						{/if}
 					</div>
 				</header>
 
@@ -473,27 +483,12 @@
 					<p class="error">{actionError}</p>
 				{/if}
 
-				<dl class="facts">
-					<div>
-						<dt>Submitted</dt>
-						<dd>{formatDate(selected.created_at)}</dd>
-					</div>
-					<div>
-						<dt>Completed</dt>
-						<dd>{formatDate(selected.completed_at)}</dd>
-					</div>
-					<div>
-						<dt>Models</dt>
-						<dd>{selected.forecast_model_ids.length}</dd>
-					</div>
-				</dl>
-
 				{#if ACTIVE_STATUSES.includes(selected.status)}
 					<div class="running-state">
 						<div class="spinner"></div>
 						<div>
 							<strong>Running live inference</strong>
-							<p class="muted">Model maps and blended probabilities will appear here.</p>
+							<p class="muted">Blended onset probabilities will appear here.</p>
 						</div>
 					</div>
 				{/if}
@@ -503,72 +498,11 @@
 				{/if}
 
 				{#if selected.status === 'complete'}
-					{#if selected.forecast_model_ids.length > 0}
-						<div class="map-section">
-							<div class="map-controls">
-								<div class="tabs">
-									<button
-										type="button"
-										class="tab"
-										class:active={activeModelId === null}
-										onclick={() => (activeModelId = null)}
-									>
-										Onset Probabilities
-									</button>
-									{#each selected.forecast_model_ids as modelId (modelId)}
-										<button
-											type="button"
-											class="tab"
-											class:active={activeModelId === modelId}
-											disabled={!manifests[modelId]}
-											onclick={() => (activeModelId = modelId)}
-										>
-											{manifests[modelId]?.model_name ?? modelId}
-										</button>
-									{/each}
-								</div>
-								{#if activeModelId !== null && activeManifest}
-									<div class="selectors">
-										<label>
-											Variable
-											<select bind:value={variable}>
-												{#each activeManifest.variables as v (v)}
-													<option value={v}>{v}</option>
-												{/each}
-											</select>
-										</label>
-										<label>
-											Lead time
-											<select bind:value={leadHour}>
-												{#each activeManifest.lead_hours as lh (lh)}
-													<option value={lh}>+{lh}h</option>
-												{/each}
-											</select>
-										</label>
-									</div>
-								{/if}
-							</div>
-							<div class="map-host">
-								{#if activeModelId === null}
-									<BlendForecastMap jobId={selected.id} />
-								{:else if activeModelId && activeManifest}
-									{#key activeModelId}
-										<ForecastMap
-											jobId={selected.id}
-											modelId={activeModelId}
-											modelName={activeManifest.model_name}
-											manifest={activeManifest}
-											{variable}
-											{leadHour}
-											label={variable}
-										/>
-									{/key}
-								{:else}
-									<div class="map-empty muted">No map data available.</div>
-								{/if}
-							</div>
+					<div class="map-section">
+						<div class="map-host">
+							<BlendForecastMap jobId={selected.id} />
 						</div>
-					{/if}
+					</div>
 
 					<div class="artifacts">
 						<h2>Outputs</h2>
@@ -778,33 +712,31 @@
 		gap: 0.6rem;
 	}
 
-	.facts {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-		gap: 0.6rem;
-		margin: 0;
+	.detail-id {
+		min-width: 0;
+		flex: 1;
 	}
 
-	.facts div {
-		padding: 0.65rem 0.7rem;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
+	h1.forecast-id {
+		font-size: clamp(1.15rem, 2vw, 1.5rem);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
 	}
 
-	.facts dt {
+	.detail-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.4rem;
+		margin: 0.35rem 0 0;
+		font-size: 0.82rem;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
-		font-weight: 750;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		margin-bottom: 0.2rem;
 	}
 
-	.facts dd {
-		margin: 0;
-		color: var(--color-text);
-		font-weight: 650;
+	.detail-meta .dot {
+		color: var(--color-text-dim);
 	}
 
 	.running-state {
@@ -844,79 +776,14 @@
 		gap: 0.6rem;
 	}
 
-	.map-controls {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 1rem;
-		flex-wrap: wrap;
-	}
-
-	.tabs {
-		display: flex;
-		gap: 0.35rem;
-		flex-wrap: wrap;
-	}
-
-	.tab {
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		background: var(--color-surface);
-		color: var(--color-text-muted);
-		padding: 0.4rem 0.7rem;
-		font-size: 0.85rem;
-		font-weight: 650;
-		cursor: pointer;
-	}
-
-	.tab.active {
-		background: var(--color-accent);
-		border-color: var(--color-accent);
-		color: white;
-	}
-
-	.tab:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.selectors {
-		display: flex;
-		gap: 0.75rem;
-	}
-
-	.selectors label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: var(--color-text-muted);
-	}
-
-	.selectors select {
-		padding: 0.35rem 0.5rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		background: var(--color-bg);
-		color: var(--color-text);
-		font: inherit;
-	}
-
 	.map-host {
 		position: relative;
 		width: 100%;
 		aspect-ratio: 16 / 9;
-		border: 1px solid var(--color-border);
+		border: 1px solid rgba(36, 33, 29, 0.22);
 		border-radius: 0.5rem;
 		overflow: hidden;
-	}
-
-	.map-empty {
-		display: grid;
-		place-items: center;
-		width: 100%;
-		height: 100%;
+		box-shadow: var(--shadow-soft);
 	}
 
 	.artifacts ul {

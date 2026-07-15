@@ -31,24 +31,6 @@ def _registry_entry(model_id: str) -> dict:
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
 
 
-def _run_model_products(model_id: str, config: dict, output_dir: Path) -> None:
-    """Map-visualization deliverable: one earth2studio run + rendered COGs,
-    written directly into the job's local output dir (no upload step needed
-    locally — storage.job_output_uri already resolves to a real local path).
-    """
-    model_entry = _registry_entry(model_id)
-    with tempfile.TemporaryDirectory(prefix=f"forecast-zarr-{model_id}-") as tmp:
-        zarr_path = Path(tmp) / "forecast.zarr"
-        print(f"==> Running forecast inference: {model_id}", flush=True)
-        run_info = forecast_pipeline.run_forecast_inference(config, model_entry, zarr_path)
-        print(f"==> Rendering forecast products: {model_id}", flush=True)
-        product_root = output_dir / model_id
-        product_root.mkdir(parents=True, exist_ok=True)
-        forecast_pipeline.render_forecast_products(
-            config, model_id, model_entry, run_info, zarr_path, product_root
-        )
-
-
 def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path:
     """Season-scoring deliverable: loop this model across the season-to-date
     and write one NetCDF matching the historical `{year}.nc` schema."""
@@ -102,40 +84,39 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
 
 
 def run(config: dict, output_dir: Path) -> None:
+    """Roll each blend model across the season-to-date (serving cached issue
+    dates and rolling out only misses) and score the assembled season against
+    the trained blend. The raw short-lead map deliverable was dropped (D1): it
+    re-ran a rollout already contained in the season loop's latest issue date.
+    """
     model_ids = config["forecast_model_ids"]
     failures: dict[str, str] = {}
-    for model_id in model_ids:
-        try:
-            _run_model_products(model_id, config, output_dir)
-        except Exception as exc:
-            failures[model_id] = str(exc)
-            traceback.print_exc()
 
     blend_config = config.get("blend_config_snapshot")
     season_model_params = config.get("season_model_params") or {}
-    if blend_config:
-        print("==> Running season-long inference for blend scoring", flush=True)
-        live_forecast_paths: dict[str, Path] = {}
-        for model_id in model_ids:
-            if model_id in failures:
-                continue
-            try:
-                live_forecast_paths[model_id] = _run_season_bundle(
-                    model_id, config, season_model_params.get(model_id) or {}
-                )
-            except Exception as exc:
-                failures[f"{model_id} (season)"] = str(exc)
-                traceback.print_exc()
+    if not blend_config:
+        raise RuntimeError("Forecast job config is missing its blend snapshot")
 
-        missing = [m for m in model_ids if m not in live_forecast_paths]
-        if not missing:
-            try:
-                _score_live(config, live_forecast_paths, output_dir)
-            except Exception as exc:
-                failures["blend_scoring"] = str(exc)
-                traceback.print_exc()
-        else:
-            print(f"==> Skipping blend scoring; missing season data for {missing}", flush=True)
+    print("==> Running season-long inference for blend scoring", flush=True)
+    live_forecast_paths: dict[str, Path] = {}
+    for model_id in model_ids:
+        try:
+            live_forecast_paths[model_id] = _run_season_bundle(
+                model_id, config, season_model_params.get(model_id) or {}
+            )
+        except Exception as exc:
+            failures[f"{model_id} (season)"] = str(exc)
+            traceback.print_exc()
+
+    missing = [m for m in model_ids if m not in live_forecast_paths]
+    if not missing:
+        try:
+            _score_live(config, live_forecast_paths, output_dir)
+        except Exception as exc:
+            failures["blend_scoring"] = str(exc)
+            traceback.print_exc()
+    else:
+        print(f"==> Skipping blend scoring; missing season data for {missing}", flush=True)
 
     if failures:
         raise RuntimeError(f"Forecast job failed for model(s) {sorted(failures)}: {failures}")
