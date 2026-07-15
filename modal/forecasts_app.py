@@ -398,38 +398,12 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         model_ids = config["forecast_model_ids"]
         failures: dict[str, str] = {}
 
-        print(f"==> Running forecast inference: {model_ids}")
-        inference_calls = {
-            model_id: run_forecast_inference.spawn(job_id, model_id, config)
-            for model_id in model_ids
-        }
-        run_infos: dict[str, dict] = {}
-        for model_id, call in inference_calls.items():
-            try:
-                run_infos[model_id] = call.get()
-            except Exception as exc:
-                failures[model_id] = str(exc)
-                traceback.print_exc()
-
-        print(f"==> Rendering forecast products: {list(run_infos)}")
-        render_calls = {
-            model_id: render_forecast_products.spawn(
-                job_id, model_id, config, run_info, outputs_bucket
-            )
-            for model_id, run_info in run_infos.items()
-        }
-        for model_id, call in render_calls.items():
-            try:
-                call.get()
-                print(f"==> Done: {model_id}")
-            except Exception as exc:
-                failures[model_id] = str(exc)
-                traceback.print_exc()
-
+        # The raw short-lead map deliverable was dropped (D1): its rollout is
+        # already contained in the season loop's latest issue date.
         blend_config = config.get("blend_config_snapshot")
         season_model_params = config.get("season_model_params") or {}
         if blend_config:
-            season_model_ids = [m for m in model_ids if m not in failures]
+            season_model_ids = list(model_ids)
             print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
             season_calls = {
                 model_id: run_season_forecast_bundle.spawn(

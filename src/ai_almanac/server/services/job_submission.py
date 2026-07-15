@@ -13,6 +13,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
+from ai_almanac.server.services import trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
@@ -505,12 +507,43 @@ class ForecastParams(BaseModel):
     init_time: str | None = None
     lead_hours: list[int] | None = None
     variables: list[str] | None = None
-    # Smoke-test knobs: shrink the season-long blend-scoring loop (see
-    # forecast_pipeline.generate_season_forecast_netcdf) without touching the
-    # map-visualization deliverable above. Unset means "full season, full
-    # 45-day lead" — today's default behavior.
-    max_lead_day: int | None = None
+    # Which archived reanalysis/analysis a live rollout initializes from. Part
+    # of a trajectory's identity (D6) — a GFS rollout is a different asset than
+    # the same date from ERA5 — so it keys the shared trajectory store.
+    init_source: str = "gfs"
+    # Smoke-test knob: shrink the season-long scoring loop to the most recent N
+    # issue dates. Unset means the whole season-to-date.
     max_issue_dates: int | None = None
+
+
+class GenerationGate(NamedTuple):
+    """Decision for whether a forecast submission may run and its GPU need,
+    given each model's `(set_exists, is_ready)` trajectory state."""
+
+    allowed: bool
+    gpus: int
+    cold_models: list[str]
+
+
+def decide_forecast_generation(
+    readiness: dict[str, tuple[bool, bool]], *, is_admin: bool
+) -> GenerationGate:
+    """Gate a forecast against the shared trajectory store (the gate + cache
+    approach that replaces a separate generation job type):
+
+    - All sets ready -> GPU-free scoring; anyone may run it.
+    - A cold model (no set generated yet) -> needs a full-season rollout;
+      admin-only, since that is the expensive shared cost (D3).
+    - A stale set (exists but missing recent init dates) -> a bounded gap-fill
+      rollout; any user may trigger it (the incremental "update", D5).
+    """
+    all_ready = all(ready for _, ready in readiness.values())
+    cold = sorted(name for name, (exists, _) in readiness.items() if not exists)
+    if all_ready:
+        return GenerationGate(allowed=True, gpus=0, cold_models=[])
+    if cold and not is_admin:
+        return GenerationGate(allowed=False, gpus=1, cold_models=cold)
+    return GenerationGate(allowed=True, gpus=1, cold_models=cold)
 
 
 class ForecastCreate(BaseModel):
@@ -573,8 +606,15 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
     return dict(row)
 
 
-async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
+async def create_forecast_for_user(
+    body: ForecastCreate, user_id: str, *, is_admin: bool = False
+) -> ForecastOut:
     """Submit a live-forecast job: run the blend's models forward and score them.
+
+    Gated against the shared trajectory store: a run whose season is fully
+    cached scores for free (GPU-free); a cold model's full-season rollout is
+    admin-only; a stale set's gap-fill update is open to any user. See
+    decide_forecast_generation.
 
     Works with either job runner: locally via the `forecast` pixi environment
     (envs/forecast_entrypoint.py, requires a GPU host — see the
@@ -652,6 +692,60 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "cutoff_month_day"
     ) or "05-01"
 
+    # Gate against the shared trajectory store. The expensive season rollout is
+    # deterministic and model-scoped, so it is generated once (admin-triggered
+    # when cold) and every later run scores against the cache for free.
+    from ai_almanac.server.services.forecast_pipeline import season_issue_dates
+
+    init_source = body.params.init_source or "gfs"
+    season_year = datetime.now(UTC).year
+    season = str(season_year)
+    season_store_prefix = (
+        f"gs://{settings.gcs_data_bucket}/season-forecasts"
+        if settings.gcs_data_bucket
+        else "season-forecasts"
+    )
+
+    def _needed_dates(name: str) -> list[str]:
+        weekdays = [
+            int(d)
+            for d in str(season_model_params[name].get("init_days") or "0,3").split(",")
+        ]
+        dates = season_issue_dates(season_start_month_day, weekdays, season_year)
+        if body.params.max_issue_dates:
+            dates = dates[-int(body.params.max_issue_dates) :]
+        return [d.isoformat() for d in dates]
+
+    needed = {name: _needed_dates(name) for name in forecast_model_ids}
+    async with get_db() as conn:
+        readiness = {
+            name: (
+                (
+                    await trajectory_sets.get_set(
+                        conn, model_name=name, init_source=init_source, season=season
+                    )
+                )
+                is not None,
+                await trajectory_sets.set_is_ready(
+                    conn,
+                    model_name=name,
+                    init_source=init_source,
+                    season=season,
+                    needed_dates=needed[name],
+                ),
+            )
+            for name in forecast_model_ids
+        }
+    gate = decide_forecast_generation(readiness, is_admin=is_admin)
+    if not gate.allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Forecast data for model(s) has not been generated yet and must "
+                f"be prepared by an administrator: {', '.join(gate.cold_models)}"
+            ),
+        )
+
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     config = {
@@ -665,7 +759,8 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "forecast_model_ids": forecast_model_ids,
         "season_model_params": season_model_params,
         "season_start_month_day": season_start_month_day,
-        "max_lead_day": body.params.max_lead_day,
+        "init_source": init_source,
+        "season": season,
         "max_issue_dates": body.params.max_issue_dates,
         "region_id": blend_config.get("region_id"),
         "init_time": body.params.init_time,
@@ -702,11 +797,23 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
-                runner_request={"job_id": job_id, "resources": {"gpus": 1}},
+                runner_request={"job_id": job_id, "resources": {"gpus": gate.gpus}},
             )
             .returning(jobs)
         )
         row = dict(result.mappings().fetchone())
+        # Ensure a trajectory-set row exists per model so coverage can be
+        # marked on completion and the admin coverage view can see it.
+        for name in forecast_model_ids:
+            await trajectory_sets.create_or_get_set(
+                conn,
+                model_id=name,
+                model_name=name,
+                init_source=init_source,
+                season=season,
+                triggered_by_user_id=user_id,
+                storage_prefix=season_store_prefix,
+            )
         await audit(
             conn,
             "forecast.submitted",

@@ -75,6 +75,20 @@ Two distinct job types:
 This is the load-bearing change. Blend forecasts become cheap and ungated;
 GPU spend lives in one clearly-owned place.
 
+**MVP implementation note — gate + cache instead of two literal job types.**
+The season loop already defers model-weight loading until the first cache miss,
+so a forecast run against a fully-cached season *already touches no GPU*. The MVP
+therefore keeps a single `forecast` job type and achieves D2/D3/D5's outcome with
+a **readiness gate at submit time** (`decide_forecast_generation`): a warm run is
+dispatched GPU-free; a cold model's full-season rollout is admin-only; a stale
+set's gap-fill update is open to any user. The forecast job rolls out any missing
+init dates (populating the shared store) and scores in one pass; coverage is
+recorded on completion (`_mark_trajectory_coverage`) so the next run is warm. A
+separate generation-without-scoring job type was judged unnecessary ceremony for
+MVP — it can be added later without reshaping this. Deferred: coverage marking
+for the Modal runner (needs wiring in the completion reconciler; the local GPU
+path is complete).
+
 ### D3 — Two-tier generation: admin full-season, user incremental update (MVP)
 
 - **Full-season generation is admin-only**, via an explicit admin UI flow. This is
