@@ -17,6 +17,11 @@
 			{#if account.canUseForecasting}
 				<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
 			{/if}
+			{#if account.canUseForecasting && account.isAdmin}
+				<a href="/forecast-data" class:active={$page.url.pathname.startsWith('/forecast-data')}>
+					Forecast data
+				</a>
+			{/if}
 			{#if account.canManageData}
 				<a
 					href="/data-sources"
