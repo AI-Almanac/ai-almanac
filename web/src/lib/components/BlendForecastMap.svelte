@@ -17,6 +17,9 @@
 		type Week
 	} from '$lib/onset';
 	import CellInspector from './CellInspector.svelte';
+	import MapTooltip from './MapTooltip.svelte';
+	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
+	import { formatLatLon } from '$lib/geo';
 
 	type Props = { jobId: string };
 	let { jobId }: Props = $props();
@@ -24,6 +27,21 @@
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
 	let mapReady = $state(false);
+
+	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
+	let appliedBasemap: BasemapStyleId = 'carto-dark';
+	let fullscreen = $state(false);
+	const isDark = $derived(isDarkBasemap(selectedBasemap));
+
+	function basemapStyle() {
+		return BASEMAP_STYLES.find((s) => s.id === selectedBasemap) ?? BASEMAP_STYLES[0];
+	}
+
+	// Dot outlines flip with the basemap so a cell stays visible on light or
+	// dark tiles regardless of its fill.
+	function dotStroke(): string {
+		return isDark ? 'rgba(255,255,255,0.35)' : 'rgba(20,25,35,0.4)';
+	}
 
 	let data = $state<BlendForecastData | null>(null);
 	let loading = $state(true);
@@ -90,7 +108,7 @@
 	// and water sits below it — gives the dot field something to rest on.
 	// Carto layer names vary, so match defensively and skip anything absent.
 	function liftBasemap() {
-		if (!map) return;
+		if (!map || !isDark) return;
 		try {
 			for (const layer of map.getStyle().layers ?? []) {
 				if (layer.type === 'background')
@@ -103,7 +121,7 @@
 		}
 	}
 
-	function initLayer(d: BlendForecastData) {
+	function initLayer(d: BlendForecastData, { fit = true } = {}) {
 		if (!map) return;
 		const geojson = buildGeoJson(d, selectedDate, selectedWeek);
 		if (map.getSource('blend')) {
@@ -120,10 +138,10 @@
 				'circle-color': ['get', 'color'],
 				'circle-opacity': ['get', 'opacity'],
 				'circle-stroke-width': 0.75,
-				'circle-stroke-color': 'rgba(255,255,255,0.35)'
+				'circle-stroke-color': dotStroke()
 			}
 		});
-		fitToData(d);
+		if (fit) fitToData(d);
 	}
 
 	// Frame the map on the region's grid points, leaving room for the left rail
@@ -145,6 +163,19 @@
 			colorMode; // track
 			updateSource();
 		}
+	});
+
+	// Swap the basemap tiles without moving the camera; setStyle drops our
+	// custom layer, so re-add it (and re-lift the land) once the style loads.
+	$effect(() => {
+		const next = selectedBasemap;
+		if (!map || !mapReady || next === appliedBasemap) return;
+		appliedBasemap = next;
+		map.once('style.load', () => {
+			liftBasemap();
+			if (data) initLayer(data, { fit: false });
+		});
+		map.setStyle(basemapStyle().url);
 	});
 
 	// Returns a CSS calc() that positions a tick/label along the track,
@@ -236,7 +267,7 @@
 		if (!mapHost) return;
 		map = new maplibregl.Map({
 			container: mapHost,
-			style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+			style: basemapStyle().url,
 			center: [20, 10],
 			zoom: 1.8,
 			attributionControl: false
@@ -300,7 +331,7 @@
 	});
 </script>
 
-<div class="blend-map-wrap">
+<div class="blend-map-wrap" class:fullscreen>
 	<aside class="control-rail" class:collapsed>
 		<div class="rail-top">
 			<div class="rail-header">
@@ -342,6 +373,19 @@
 			</div>
 		{/if}
 
+		<div class="rail-group">
+			<span class="rail-label" id="basemap-label">Base map</span>
+			<select
+				class="rail-select"
+				aria-labelledby="basemap-label"
+				bind:value={selectedBasemap}
+			>
+				{#each BASEMAP_STYLES as style (style.id)}
+					<option value={style.id}>{style.label}</option>
+				{/each}
+			</select>
+		</div>
+
 		<div class="rail-group rail-legend">
 			<span class="rail-label">Legend</span>
 			<p class="legend-caption">{caption}</p>
@@ -376,6 +420,14 @@
 				»
 			</button>
 		{/if}
+		<button
+			class="fullscreen-btn"
+			aria-label={fullscreen ? 'Exit full screen' : 'View full screen'}
+			title={fullscreen ? 'Exit full screen' : 'View full screen'}
+			onclick={() => (fullscreen = !fullscreen)}
+		>
+			{fullscreen ? '⤡' : '⤢'}
+		</button>
 		<div class="map-host" bind:this={mapHost}></div>
 
 		{#if selectedCell && data}
@@ -397,12 +449,7 @@
 		{/if}
 
 		{#if tooltipVisible && !loading}
-			<div class="map-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
-				<span class="tt-coords"
-					>{Math.abs(tooltipLat).toFixed(2)}°{tooltipLat >= 0 ? 'N' : 'S'}&nbsp;&nbsp;{Math.abs(
-						tooltipLon
-					).toFixed(2)}°{tooltipLon >= 0 ? 'E' : 'W'}</span
-				>
+			<MapTooltip x={tooltipX} y={tooltipY} coords={formatLatLon(tooltipLat, tooltipLon)}>
 				{#if tooltipProbs}
 					<span class="tt-caption">Monsoon onset timing</span>
 					<div class="tt-spark">
@@ -422,7 +469,7 @@
 						{/each}
 					</div>
 				{/if}
-			</div>
+			</MapTooltip>
 		{/if}
 
 		{#if dateCount > 0}
@@ -483,6 +530,38 @@
 		position: relative;
 		flex: 1;
 		min-width: 0;
+	}
+
+	.blend-map-wrap.fullscreen {
+		position: fixed;
+		inset: 0;
+		z-index: 1000;
+	}
+
+	.fullscreen-btn {
+		position: absolute;
+		top: 0.6rem;
+		right: 3.4rem;
+		z-index: 3;
+		width: 1.9rem;
+		height: 1.9rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		border-radius: 0.25rem;
+		background: rgba(255, 255, 255, 0.9);
+		color: #333;
+		font-size: 1rem;
+		line-height: 1;
+		cursor: pointer;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+		transition: background 0.1s;
+	}
+
+	.fullscreen-btn:hover {
+		background: #fff;
+		color: #111;
 	}
 
 	.scrubber {
@@ -682,28 +761,6 @@
 
 	.overlay.muted {
 		color: rgba(138, 130, 120, 0.8);
-	}
-
-	.map-tooltip {
-		position: absolute;
-		z-index: 10;
-		pointer-events: none;
-		border: 1px solid rgba(255, 255, 255, 0.12);
-		border-radius: 0.4rem;
-		background: rgba(13, 17, 23, 0.9);
-		backdrop-filter: blur(6px);
-		padding: 0.35rem 0.6rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-		white-space: nowrap;
-	}
-
-	.tt-coords {
-		font-size: 0.72rem;
-		font-weight: 700;
-		color: #8a8278;
-		letter-spacing: 0.02em;
 	}
 
 	.tt-caption {
@@ -942,6 +999,26 @@
 		background: var(--color-accent);
 		border-color: var(--color-accent);
 		color: #fff;
+	}
+
+	.rail-select {
+		width: 100%;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 0.35rem;
+		background: rgba(255, 255, 255, 0.04);
+		color: #e8e3d8;
+		font-size: 0.72rem;
+		font-weight: 600;
+		padding: 0.35rem 0.4rem;
+		cursor: pointer;
+	}
+
+	.rail-select:hover {
+		border-color: rgba(255, 255, 255, 0.22);
+	}
+
+	.rail-select option {
+		color: #111;
 	}
 
 	.legend-caption {
