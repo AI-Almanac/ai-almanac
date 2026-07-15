@@ -4,6 +4,8 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { authHeaders } from '$lib/auth';
 	import { cogPointUrl, cogTileTemplate, isBackendUrl, type ForecastManifest } from '$lib/api';
+	import MapTooltip from '$lib/components/MapTooltip.svelte';
+	import { formatLatLon } from '$lib/geo';
 
 	type Props = {
 		jobId: string;
@@ -96,12 +98,6 @@
 
 	function fmtVal(value: number): string {
 		return Math.abs(value) >= 10 ? Math.round(value).toString() : value.toFixed(1);
-	}
-
-	function fmtCoords(lat: number, lon: number): string {
-		const latStr = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}`;
-		const lonStr = `${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
-		return `${latStr}  ${lonStr}`;
 	}
 
 	function fmtValidTime(isoInit: string | null, offsetHours: number): string {
@@ -239,14 +235,13 @@
 	</div>
 
 	{#if tooltipVisible}
-		<div class="map-tooltip" style="left: {tooltipX}px; top: {tooltipY}px">
-			<span class="tt-coords">{fmtCoords(tooltipLat, tooltipLon)}</span>
+		<MapTooltip x={tooltipX} y={tooltipY} coords={formatLatLon(tooltipLat, tooltipLon)}>
 			{#if tooltipValue !== null && activeProduct}
 				<span class="tt-value"
 					>{fmtVal(tooltipValue)}<span class="tt-unit"> {activeProduct.unit}</span></span
 				>
 			{/if}
-		</div>
+		</MapTooltip>
 	{/if}
 
 	{#if activeProduct}
@@ -372,28 +367,6 @@
 		color: rgba(138, 130, 120, 0.8);
 		font-size: 0.67rem;
 		font-weight: 600;
-	}
-
-	.map-tooltip {
-		position: absolute;
-		z-index: 10;
-		pointer-events: none;
-		border: 1px solid rgba(255, 255, 255, 0.12);
-		border-radius: 0.4rem;
-		background: rgba(13, 17, 23, 0.9);
-		backdrop-filter: blur(6px);
-		padding: 0.35rem 0.6rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-		white-space: nowrap;
-	}
-
-	.tt-coords {
-		font-size: 0.72rem;
-		font-weight: 700;
-		color: #8a8278;
-		letter-spacing: 0.02em;
 	}
 
 	.tt-value {

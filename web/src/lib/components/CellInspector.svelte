@@ -13,6 +13,7 @@
 		monthLabel,
 		LATER_START_DAY
 	} from '$lib/onset';
+	import { formatCoord } from '$lib/geo';
 
 	type Props = {
 		point: BlendForecastPoint;
@@ -22,10 +23,6 @@
 		onClose: () => void;
 	};
 	let { point, issueDates, regionName, selectedDate, onClose }: Props = $props();
-
-	function coord(v: number, pos: string, neg: string): string {
-		return `${Math.abs(v).toFixed(2)}°${v >= 0 ? pos : neg}`;
-	}
 
 	// Season date axis: earliest Week-1 start → latest Week-4 end, across all
 	// forecasts. "Later" is open-ended so it lives off-axis in its own column.
@@ -95,7 +92,7 @@
 	<header class="ins-header">
 		<div>
 			<span class="ins-title">Onset outlook</span>
-			<span class="ins-coords">{coord(point.lat, 'N', 'S')} {coord(point.lon, 'E', 'W')}</span>
+			<span class="ins-coords">{formatCoord(point.lat, 'N', 'S')} {formatCoord(point.lon, 'E', 'W')}</span>
 		</div>
 		<button class="ins-close" aria-label="Close" onclick={onClose}>×</button>
 	</header>
