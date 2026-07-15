@@ -37,7 +37,57 @@
 	let creating = $state(false);
 	let loaded = $state(false);
 
-	const selected = $derived(forecasts.find((f) => f.id === selectedId) ?? null);
+	// A forecast's logical identity: same blend + models + init source is "the
+	// same forecast," just re-run. An "update" reuses this spec, so weekly
+	// refreshes share a key.
+	function specKey(f: Forecast): string {
+		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'gfs'}`;
+	}
+
+	const newestRun = (runs: Forecast[]): Forecast =>
+		runs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+
+	// The run that stands in for a spec group: an in-flight run (so progress and
+	// cancel stay visible), else the most recent successful run (so a failed or
+	// canceled update never hides the last good forecast), else the most recent
+	// run (surface the error). Older runs stay in `forecasts`, just not listed.
+	function representativeRun(runs: Forecast[]): Forecast {
+		const active = runs.filter((r) => ACTIVE_STATUSES.includes(r.status));
+		if (active.length) return newestRun(active);
+		const complete = runs.filter((r) => r.status === 'complete');
+		if (complete.length) return newestRun(complete);
+		return newestRun(runs);
+	}
+
+	// Collapse each spec to one representative so a season of weekly updates
+	// shows one current entry instead of 20+ near-identical rows.
+	const latestForecasts = $derived.by(() => {
+		const groups = new Map<string, Forecast[]>();
+		for (const f of forecasts) {
+			const runs = groups.get(specKey(f));
+			if (runs) runs.push(f);
+			else groups.set(specKey(f), [f]);
+		}
+		return [...groups.values()]
+			.map(representativeRun)
+			.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+	});
+
+	// Resolve the selection to its group's representative, so selecting (or
+	// having just run) a now-failed run still shows the last successful data.
+	const selected = $derived.by(() => {
+		const target = forecasts.find((f) => f.id === selectedId);
+		if (!target) return null;
+		return latestForecasts.find((f) => specKey(f) === specKey(target)) ?? target;
+	});
+
+	// True when a more recent run in the selected group failed/canceled while we
+	// fall back to showing an older successful one — so the UI can say so.
+	const newerRunFailed = $derived.by(() => {
+		if (!selected || selected.status !== 'complete') return false;
+		const newest = newestRun(forecasts.filter((f) => specKey(f) === specKey(selected)));
+		return newest.id !== selected.id && ['failed', 'canceled'].includes(newest.status);
+	});
 
 	function blendName(blendId: string): string {
 		return blends.find((b) => b.id === blendId)?.name || blendId;
@@ -128,25 +178,6 @@
 		if (ACTIVE_STATUSES.includes(status)) return 'running';
 		return 'mixed';
 	}
-
-	// A forecast's logical identity: same blend + models + init source is "the
-	// same forecast," just re-run. An "update" reuses this spec, so weekly
-	// refreshes share a key.
-	function specKey(f: Forecast): string {
-		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'gfs'}`;
-	}
-
-	// Collapse each spec to its most recent run so a season of weekly updates
-	// shows one current entry instead of 20+ near-identical rows. Older runs stay
-	// in `forecasts` (still selectable, still streamed) — just not listed.
-	const latestForecasts = $derived.by(() => {
-		const byKey = new Map<string, Forecast>();
-		for (const f of forecasts) {
-			const current = byKey.get(specKey(f));
-			if (!current || f.created_at > current.created_at) byKey.set(specKey(f), f);
-		}
-		return [...byKey.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-	});
 
 	const sidebarSections = $derived<RunSection[]>([
 		{
@@ -366,7 +397,7 @@
 	{#if !creating}
 		<RunSidebar
 			newLabel="New forecast"
-			{selectedId}
+			selectedId={selected?.id ?? null}
 			sections={sidebarSections}
 			onNew={startNew}
 			onSelect={selectForecast}
@@ -494,12 +525,23 @@
 							<button type="button" class="primary" disabled={updating} onclick={updateForecast}>
 								{updating ? 'Updating…' : 'Update forecast'}
 							</button>
+						{:else if selected.status === 'failed' || selected.status === 'canceled'}
+							<button type="button" class="primary" disabled={updating} onclick={updateForecast}>
+								{updating ? 'Retrying…' : 'Retry'}
+							</button>
 						{/if}
 					</div>
 				</header>
 
 				{#if actionError}
 					<p class="error">{actionError}</p>
+				{/if}
+
+				{#if newerRunFailed}
+					<p class="notice muted">
+						The most recent update didn’t finish — showing the last successful forecast. Update
+						again to retry.
+					</p>
 				{/if}
 
 				{#if ACTIVE_STATUSES.includes(selected.status)}
@@ -842,6 +884,10 @@
 	.error,
 	.error-block {
 		color: var(--color-danger);
+		font-size: 0.85rem;
+	}
+
+	.notice {
 		font-size: 0.85rem;
 	}
 
