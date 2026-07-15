@@ -48,15 +48,15 @@ def test_cached_trajectory_computes_once_then_reads_cache(tmp_path):
         return _trajectory()
 
     issue_date = dt.date(2026, 5, 4)
-    first, first_cached = cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
-    second, second_cached = cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
+    first, first_cached = cached_trajectory(tmp_path, "aifs", "gfs", issue_date, compute)
+    second, second_cached = cached_trajectory(tmp_path, "aifs", "gfs", issue_date, compute)
 
     assert (first_cached, second_cached) == (False, True)
     assert len(calls) == 1
     xr.testing.assert_allclose(first, second)
 
 
-def test_cached_trajectory_key_separates_models_and_leads(tmp_path):
+def test_cached_trajectory_key_separates_models_and_sources(tmp_path):
     from ai_almanac.server.services.forecast_pipeline import cached_trajectory
 
     calls = []
@@ -66,11 +66,33 @@ def test_cached_trajectory_key_separates_models_and_leads(tmp_path):
         return _trajectory()
 
     issue_date = dt.date(2026, 5, 4)
-    cached_trajectory(tmp_path, "aifs", 45, issue_date, compute)
-    cached_trajectory(tmp_path, "gencast", 45, issue_date, compute)
-    cached_trajectory(tmp_path, "aifs", 30, issue_date, compute)
+    # Distinct model or distinct init source => distinct asset => distinct key.
+    cached_trajectory(tmp_path, "aifs", "gfs", issue_date, compute)
+    cached_trajectory(tmp_path, "gencast", "gfs", issue_date, compute)
+    cached_trajectory(tmp_path, "aifs", "era5", issue_date, compute)
 
     assert len(calls) == 3
+
+
+def test_cached_trajectory_key_carries_source_version_and_lead(tmp_path):
+    from ai_almanac.server.services.forecast_pipeline import (
+        CANONICAL_LEAD_DAY,
+        TRAJECTORY_CACHE_VERSION,
+        cached_trajectory,
+    )
+
+    issue_date = dt.date(2026, 5, 4)
+    cached_trajectory(tmp_path, "aifs", "gfs", issue_date, _trajectory)
+
+    expected = (
+        tmp_path
+        / "aifs"
+        / "gfs"
+        / f"v{TRAJECTORY_CACHE_VERSION}"
+        / f"lead{CANONICAL_LEAD_DAY}d"
+        / "2026-05-04.nc"
+    )
+    assert expected.exists()
 
 
 def test_cached_trajectory_without_cache_dir_always_computes():
@@ -83,8 +105,17 @@ def test_cached_trajectory_without_cache_dir_always_computes():
         return _trajectory()
 
     issue_date = dt.date(2026, 5, 4)
-    _, cached = cached_trajectory(None, "aifs", 45, issue_date, compute)
-    _, cached_again = cached_trajectory(None, "aifs", 45, issue_date, compute)
+    _, cached = cached_trajectory(None, "aifs", "gfs", issue_date, compute)
+    _, cached_again = cached_trajectory(None, "aifs", "gfs", issue_date, compute)
 
     assert (cached, cached_again) == (False, False)
     assert len(calls) == 2
+
+
+def test_resolve_data_source_rejects_unknown_without_importing_earth2studio():
+    import pytest
+
+    from ai_almanac.server.services.forecast_pipeline import resolve_data_source
+
+    with pytest.raises(ValueError, match="Unknown forecast init source"):
+        resolve_data_source("nope")

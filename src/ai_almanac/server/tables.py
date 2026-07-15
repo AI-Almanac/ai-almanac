@@ -86,6 +86,37 @@ job_artifacts = sa.Table(
     sa.Column("created_at", sa.Text(), nullable=False),
 )
 
+# Trajectory-set generation tracking (repurposed from the dead per-run
+# `forecast_runs` table; see migration 0016). One row per trajectory set —
+# a `(model_name, init_source, season)` triple — recording generation status,
+# provenance, and which init dates have been rolled out and cached.
+# `variables`/`lead_hours` are NOT NULL JSON inherited from the original schema;
+# the generation service writes empty lists when a set carries none.
+forecast_runs = sa.Table(
+    "forecast_runs",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("user_id", sa.Text(), sa.ForeignKey("users.id"), nullable=False),
+    sa.Column("status", sa.Text(), nullable=False, server_default="queued"),
+    sa.Column("model_id", sa.Text(), nullable=False),
+    sa.Column("model_name", sa.Text(), nullable=False),
+    sa.Column("init_time", sa.Text()),
+    sa.Column("variables", sa.JSON(), nullable=False),
+    sa.Column("lead_hours", sa.JSON(), nullable=False),
+    sa.Column("storage_prefix", sa.Text(), nullable=False),
+    sa.Column("manifest_key", sa.Text()),
+    sa.Column("config_json", sa.JSON()),
+    sa.Column("modal_call_id", sa.Text()),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("started_at", sa.Text()),
+    sa.Column("completed_at", sa.Text()),
+    sa.Column("error", sa.Text()),
+    # Added in 0016 for trajectory-set tracking.
+    sa.Column("init_source", sa.Text()),
+    sa.Column("season", sa.Text()),
+    sa.Column("covered_init_dates", sa.JSON()),
+)
+
 # Persistent settings overlay written by the admin Settings UI. Lives in the
 # database (not the container's ephemeral config.yaml) so admin changes survive
 # redeploys. One row per overridden setting; `value` round-trips scalars as JSON.
