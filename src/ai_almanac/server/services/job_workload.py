@@ -141,26 +141,17 @@ def _mark_trajectory_coverage(config: dict) -> None:
     """
     from datetime import UTC, datetime
 
-    from ai_almanac.server.services.forecast_pipeline import season_issue_dates
+    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
     from ai_almanac.server.tables import forecast_runs
 
     init_source = config.get("init_source", "gfs")
     season = config.get("season") or str(datetime.now(UTC).year)
-    season_start = config.get("season_start_month_day") or "05-01"
-    season_params = config.get("season_model_params") or {}
-    max_issue_dates = config.get("max_issue_dates")
     now = datetime.now(UTC).isoformat()
+    covered_by_model = season_covered_dates(config)
 
     with sync_engine().begin() as conn:
-        for name in config.get("forecast_model_ids") or []:
-            weekdays = [
-                int(d)
-                for d in str((season_params.get(name) or {}).get("init_days") or "0,3").split(",")
-            ]
-            dates = season_issue_dates(season_start, weekdays, int(season))
-            if max_issue_dates:
-                dates = dates[-int(max_issue_dates) :]
-            covered = {d.isoformat() for d in dates}
+        for name, dates in covered_by_model.items():
+            covered = set(dates)
             row = (
                 conn.execute(
                     sa.select(

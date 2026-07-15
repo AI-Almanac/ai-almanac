@@ -8,6 +8,7 @@ export type Forecast = {
 	status: JobStatus;
 	forecast_model_ids: string[];
 	init_time: string | null;
+	init_source?: string;
 	region_id?: string | null;
 	created_at: string;
 	completed_at?: string | null;
@@ -46,6 +47,12 @@ export async function listForecasts(): Promise<Forecast[]> {
 
 export async function createForecast(body: ForecastCreate): Promise<Forecast> {
 	return request<Forecast>('/forecasts', { method: 'POST', body: JSON.stringify(body) });
+}
+
+// Re-run an existing forecast with its original parameters, so the cumulative
+// season rollout reuses the cache and only fills in newly-elapsed init dates.
+export async function refreshForecast(forecastId: string): Promise<Forecast> {
+	return request<Forecast>(`/forecasts/${forecastId}/refresh`, { method: 'POST' });
 }
 
 export async function getForecastModels(): Promise<ForecastModel[]> {

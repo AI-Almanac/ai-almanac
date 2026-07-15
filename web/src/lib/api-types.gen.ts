@@ -406,6 +406,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forecasts/{forecast_id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Forecast
+         * @description Re-run a forecast with its original spec so it reuses the cached season.
+         */
+        post: operations["refresh_forecast_forecasts__forecast_id__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forecasts/trajectories": {
         parameters: {
             query?: never;
@@ -2301,6 +2321,11 @@ export interface components {
             forecast_model_ids: string[];
             /** Init Time */
             init_time?: string | null;
+            /**
+             * Init Source
+             * @default gfs
+             */
+            init_source: string;
             /** Region Id */
             region_id?: string | null;
             /** Created At */
@@ -4622,6 +4647,37 @@ export interface operations {
                 "application/json": components["schemas"]["ForecastCreate"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_forecast_forecasts__forecast_id__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                forecast_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             201: {

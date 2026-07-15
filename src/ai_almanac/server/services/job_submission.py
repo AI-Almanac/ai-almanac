@@ -559,6 +559,7 @@ class ForecastOut(BaseModel):
     status: str
     forecast_model_ids: list[str]
     init_time: str | None = None
+    init_source: str = "gfs"
     region_id: str | None = None
     created_at: str
     completed_at: str | None = None
@@ -577,6 +578,7 @@ def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
         status=row["status"],
         forecast_model_ids=cfg.get("forecast_model_ids") or [],
         init_time=cfg.get("init_time"),
+        init_source=cfg.get("init_source") or "gfs",
         region_id=cfg.get("region_id"),
         created_at=row["created_at"],
         completed_at=row.get("completed_at"),
@@ -695,28 +697,28 @@ async def create_forecast_for_user(
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
     # when cold) and every later run scores against the cache for free.
-    from ai_almanac.server.services.forecast_pipeline import season_issue_dates
+    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
 
     init_source = body.params.init_source or "gfs"
-    season_year = datetime.now(UTC).year
-    season = str(season_year)
+    season = str(datetime.now(UTC).year)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
         if settings.gcs_data_bucket
         else "season-forecasts"
     )
 
-    def _needed_dates(name: str) -> list[str]:
-        weekdays = [
-            int(d)
-            for d in str(season_model_params[name].get("init_days") or "0,3").split(",")
-        ]
-        dates = season_issue_dates(season_start_month_day, weekdays, season_year)
-        if body.params.max_issue_dates:
-            dates = dates[-int(body.params.max_issue_dates) :]
-        return [d.isoformat() for d in dates]
-
-    needed = {name: _needed_dates(name) for name in forecast_model_ids}
+    # Same computation the completion markers use, so a set the rollout marks
+    # complete actually satisfies this gate on the next run (see
+    # season_covered_dates).
+    needed = season_covered_dates(
+        {
+            "season": season,
+            "season_start_month_day": season_start_month_day,
+            "season_model_params": season_model_params,
+            "forecast_model_ids": forecast_model_ids,
+            "max_issue_dates": body.params.max_issue_dates,
+        }
+    )
     async with get_db() as conn:
         readiness = {
             name: (
@@ -854,6 +856,52 @@ async def create_forecast_for_user(
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
     return forecast_row_to_out(row, user_id)
+
+
+async def refresh_forecast_for_user(
+    forecast_id: str, user_id: str, *, is_admin: bool = False
+) -> ForecastOut:
+    """Re-run an existing forecast with its ORIGINAL generation parameters.
+
+    The season rollout is cumulative and cache-backed, so an "update" should
+    land on the same trajectory set as the first run — reusing every cached
+    issue date and only rolling out the ones that have since elapsed. That only
+    holds if we replay the frozen spec (init source, init window, init time);
+    falling back to submission defaults would target a different set (e.g. the
+    full season instead of the original's recent-N window) and miss the cache.
+    Mirrors the benchmark rerun path: read the frozen config, rebuild the
+    request, delegate to create_forecast_for_user.
+    """
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    sa.select(jobs.c.user_id, jobs.c.config_json, jobs.c.visibility, jobs.c.run_id)
+                    .where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row or (
+        row["user_id"] != user_id and (row["visibility"] or "private") != "shared"
+    ):
+        raise HTTPException(status_code=404, detail=f"Unknown forecast: {forecast_id!r}")
+
+    cfg = json.loads(row["config_json"] or "{}")
+    body = ForecastCreate(
+        blend_id=cfg.get("blend_id") or "",
+        forecast_model_ids=cfg.get("forecast_model_ids") or None,
+        params=ForecastParams(
+            init_time=cfg.get("init_time"),
+            init_source=cfg.get("init_source") or "gfs",
+            max_issue_dates=cfg.get("max_issue_dates"),
+            lead_hours=cfg.get("lead_hours"),
+            variables=cfg.get("variables"),
+        ),
+        run_id=row["run_id"],
+    )
+    return await create_forecast_for_user(body, user_id, is_admin=is_admin)
 
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
