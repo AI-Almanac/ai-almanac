@@ -106,7 +106,7 @@
 
 	<p class="ins-hint">
 		Each row is one forecast{regionName ? ` · ${regionName}` : ''}, reading top (earliest) to bottom
-		(latest). Its colored blocks show where that forecast placed onset on the calendar — brighter =
+		(latest). Its colored blocks show where that forecast placed onset on the calendar — deeper color =
 		more likely, ringed = most likely. When the ringed blocks line up in a column, the forecasts
 		agree on that onset date.
 	</p>
@@ -311,7 +311,8 @@
 		top: 0;
 		height: 100%;
 		border-radius: 0.15rem;
-		opacity: 0.5;
+		opacity: 0.62;
+		box-shadow: inset 0 0 0 1px rgba(31, 43, 52, 0.14);
 	}
 
 	.cal-seg.best,
@@ -323,7 +324,8 @@
 	.cal-later {
 		height: 1.05rem;
 		border-radius: 0.15rem;
-		opacity: 0.5;
+		opacity: 0.62;
+		box-shadow: inset 0 0 0 1px rgba(31, 43, 52, 0.14);
 	}
 
 	/* axis header */

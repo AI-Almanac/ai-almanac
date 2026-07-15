@@ -23,16 +23,18 @@ export const WEEK_SHORT: Record<Week, string> = {
 	later: 'Later'
 };
 
-// Onset probability is magnitude → one sequential hue (blue), light→dark, not a
-// rainbow. The floor is lifted off the near-black basemap (#0d1117) so a
-// low-probability cell reads as a dim dot, not a hole — "low" must never be
-// indistinguishable from "no data."
+// Onset probability is magnitude → one sequential blue, dim→vivid, not a
+// rainbow. Two constraints share this ramp: dots sit on the near-black basemap
+// (low must read as a dim dot, not a hole) and the legend now sits on a light
+// glass panel (no end may go near-white or it vanishes). So both ends stay
+// saturated — low is a dim steel blue, high a vivid royal blue that still pops
+// on dark yet holds contrast on white.
 export const PROB_RAMP: [number, string][] = [
-	[0, '#2b4a72'],
-	[0.25, '#2f68b0'],
-	[0.5, '#3987e5'],
-	[0.75, '#86b6ef'],
-	[1, '#cde2fb']
+	[0, '#173f6e'],
+	[0.25, '#255a9e'],
+	[0.5, '#3277cc'],
+	[0.75, '#4a90e2'],
+	[1, '#63a6f0']
 ];
 
 export const legendGradient = `linear-gradient(to right, ${PROB_RAMP.map(
@@ -43,14 +45,18 @@ export const legendGradient = `linear-gradient(to right, ${PROB_RAMP.map(
 // indexed week1..later to match WEEKS.
 export const WINDOW_RAMP = ['#cde2fb', '#86b6ef', '#3987e5', '#256abf', '#184f95'];
 
-// Light-surface variant: high probability reads darkest so cells stay legible
-// on a pale inspector panel (the inverse anchor of the dark-basemap ramp).
+// Light-surface variant (inspector heatmap). A single blue hue collapses the
+// low-mid range into near-identical pale tints on a light panel, so this is the
+// multi-hue ColorBrewer YlGnBu scheme instead: probability climbs through
+// yellow → green → teal → blue → navy, discriminating magnitude by hue *and*
+// lightness. The teal midpoint echoes the app accent; high reads darkest so the
+// most-likely window carries the most ink.
 export const PROB_RAMP_LIGHT: [number, string][] = [
-	[0, '#eef3fb'],
-	[0.25, '#c2d5f0'],
-	[0.5, '#84abdf'],
-	[0.75, '#3f77c4'],
-	[1, '#1b4a8c']
+	[0, '#ffffcc'],
+	[0.25, '#a1dab4'],
+	[0.5, '#41b6c4'],
+	[0.75, '#2c7fb8'],
+	[1, '#253494']
 ];
 
 function hexToRgb(h: string): [number, number, number] {

@@ -523,7 +523,7 @@
 		position: absolute;
 		inset: 0;
 		display: flex;
-		background: #0d1117;
+		background: var(--color-bg);
 	}
 
 	.map-area {
@@ -575,9 +575,9 @@
 		gap: 0.9rem;
 		height: 3.4rem;
 		padding: 0 1rem;
-		background: rgba(10, 14, 20, 0.85);
+		background: rgba(255, 255, 255, 0.9);
 		backdrop-filter: blur(8px);
-		border-top: 1px solid rgba(255, 255, 255, 0.06);
+		border-top: 1px solid rgba(0, 0, 0, 0.08);
 		pointer-events: auto;
 	}
 
@@ -594,10 +594,10 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid var(--color-border);
 		border-radius: 0.4rem;
-		background: rgba(255, 255, 255, 0.03);
-		color: #e8e3d8;
+		background: #fff;
+		color: #444;
 		font-size: 0.9rem;
 		line-height: 1;
 		cursor: pointer;
@@ -608,8 +608,9 @@
 	}
 
 	.scrub-btn:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.09);
-		border-color: rgba(255, 255, 255, 0.22);
+		background: var(--color-surface-muted);
+		border-color: var(--color-text-dim);
+		color: #111;
 	}
 
 	.scrub-btn:disabled {
@@ -642,13 +643,13 @@
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.8);
+		color: var(--color-text-muted);
 	}
 
 	.scrub-date {
 		font-size: 0.95rem;
 		font-weight: 800;
-		color: #e8e3d8;
+		color: var(--color-text);
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -664,7 +665,7 @@
 		right: 1.4rem;
 		top: 1.35rem;
 		height: 1px;
-		background: rgba(255, 255, 255, 0.1);
+		background: rgba(0, 0, 0, 0.12);
 		pointer-events: none;
 	}
 
@@ -687,7 +688,7 @@
 		font-weight: 700;
 		letter-spacing: 0.07em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.65);
+		color: var(--color-text-dim);
 		pointer-events: none;
 		white-space: nowrap;
 	}
@@ -712,15 +713,15 @@
 		width: 0.4rem;
 		height: 0.4rem;
 		border-radius: 50%;
-		background: rgba(200, 192, 180, 0.28);
-		border: 1px solid rgba(255, 255, 255, 0.14);
+		background: rgba(0, 0, 0, 0.18);
+		border: 1px solid rgba(0, 0, 0, 0.12);
 		transition:
 			background 0.1s,
 			transform 0.1s;
 	}
 
 	.tl-tick:hover::after {
-		background: rgba(200, 192, 180, 0.6);
+		background: rgba(0, 0, 0, 0.4);
 		transform: scale(1.5);
 	}
 
@@ -760,7 +761,7 @@
 	}
 
 	.overlay.muted {
-		color: rgba(138, 130, 120, 0.8);
+		color: var(--color-text-muted);
 	}
 
 	.tt-caption {
@@ -831,8 +832,8 @@
 		flex-direction: column;
 		gap: 1rem;
 		padding: 0.9rem;
-		background: #10151d;
-		border-right: 1px solid rgba(255, 255, 255, 0.08);
+		background: var(--color-surface);
+		border-right: 1px solid var(--color-border);
 		overflow-x: hidden;
 		overflow-y: auto;
 		transition:
@@ -861,14 +862,14 @@
 		margin: 0.45rem 0 0;
 		font-size: 0.64rem;
 		line-height: 1.4;
-		color: rgba(200, 192, 180, 0.82);
+		color: var(--color-text-muted);
 	}
 
 	.rail-def-region {
 		display: block;
 		font-size: 0.72rem;
 		font-weight: 800;
-		color: rgba(232, 227, 216, 0.92);
+		color: var(--color-text);
 		margin-bottom: 0.15rem;
 	}
 
@@ -877,7 +878,7 @@
 		font-weight: 800;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
-		color: rgba(200, 192, 180, 0.95);
+		color: var(--color-text-muted);
 	}
 
 	.rail-collapse,
@@ -887,22 +888,24 @@
 		justify-content: center;
 		width: 1.6rem;
 		height: 1.6rem;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
-		background: rgba(255, 255, 255, 0.03);
-		color: #e8e3d8;
+		background: #fff;
+		color: #444;
 		font-size: 0.85rem;
 		line-height: 1;
 		cursor: pointer;
 		transition:
 			background 0.12s,
-			border-color 0.12s;
+			border-color 0.12s,
+			color 0.12s;
 	}
 
 	.rail-collapse:hover,
 	.rail-reopen:hover {
-		background: rgba(255, 255, 255, 0.09);
-		border-color: rgba(255, 255, 255, 0.22);
+		background: var(--color-surface-muted);
+		border-color: var(--color-text-dim);
+		color: #111;
 	}
 
 	.rail-reopen {
@@ -912,7 +915,8 @@
 		z-index: 3;
 		width: 2rem;
 		height: 2rem;
-		background: rgba(10, 14, 20, 0.85);
+		background: rgba(255, 255, 255, 0.9);
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 		backdrop-filter: blur(8px);
 	}
 
@@ -925,7 +929,7 @@
 
 	.rail-legend {
 		padding-top: 0.9rem;
-		border-top: 1px solid rgba(255, 255, 255, 0.08);
+		border-top: 1px solid var(--color-border);
 	}
 
 	.rail-label {
@@ -933,7 +937,7 @@
 		font-weight: 700;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: rgba(200, 192, 180, 0.92);
+		color: var(--color-text-muted);
 	}
 
 	.mode-toggle {
@@ -943,10 +947,10 @@
 
 	.mode-toggle button {
 		flex: 1;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
-		background: rgba(255, 255, 255, 0.03);
-		color: rgba(200, 192, 180, 0.7);
+		background: #fff;
+		color: var(--color-text-muted);
 		font-size: 0.7rem;
 		font-weight: 700;
 		padding: 0.4rem 0.2rem;
@@ -958,8 +962,8 @@
 	}
 
 	.mode-toggle button:hover {
-		color: #e8e3d8;
-		border-color: rgba(255, 255, 255, 0.22);
+		color: var(--color-text);
+		border-color: var(--color-text-dim);
 	}
 
 	.mode-toggle button.active {
@@ -976,10 +980,10 @@
 
 	.week-btn {
 		flex: 1 1 3.2rem;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid var(--color-border);
 		border-radius: 0.3rem;
-		background: rgba(255, 255, 255, 0.03);
-		color: rgba(200, 192, 180, 0.7);
+		background: #fff;
+		color: var(--color-text-muted);
 		font-size: 0.72rem;
 		font-weight: 700;
 		padding: 0.3rem 0.2rem;
@@ -992,8 +996,8 @@
 	}
 
 	.week-btn:hover {
-		color: #e8e3d8;
-		border-color: rgba(255, 255, 255, 0.18);
+		color: var(--color-text);
+		border-color: var(--color-text-dim);
 	}
 
 	.week-btn.active {
@@ -1004,10 +1008,10 @@
 
 	.rail-select {
 		width: 100%;
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
-		background: rgba(255, 255, 255, 0.04);
-		color: #e8e3d8;
+		background: #fff;
+		color: var(--color-text);
 		font-size: 0.72rem;
 		font-weight: 600;
 		padding: 0.35rem 0.4rem;
@@ -1015,7 +1019,7 @@
 	}
 
 	.rail-select:hover {
-		border-color: rgba(255, 255, 255, 0.22);
+		border-color: var(--color-text-dim);
 	}
 
 	.rail-select option {
@@ -1026,7 +1030,7 @@
 		font-size: 0.67rem;
 		font-weight: 600;
 		line-height: 1.4;
-		color: rgba(200, 192, 180, 0.78);
+		color: var(--color-text-muted);
 		margin: 0 0 0.5rem;
 	}
 
@@ -1042,7 +1046,7 @@
 		gap: 0.3rem;
 		font-size: 0.66rem;
 		font-weight: 700;
-		color: rgba(232, 227, 216, 0.9);
+		color: var(--color-text);
 		white-space: nowrap;
 	}
 
@@ -1050,14 +1054,14 @@
 		width: 0.8rem;
 		height: 0.8rem;
 		border-radius: 0.2rem;
-		box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+		box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
 		flex: none;
 	}
 
 	.legend-bar {
 		height: 0.4rem;
 		border-radius: 999px;
-		box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+		box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
 	}
 
 	.legend-ticks {
@@ -1069,7 +1073,7 @@
 	.legend-ticks span {
 		width: 1px;
 		height: 0.28rem;
-		background: rgba(200, 192, 180, 0.4);
+		background: var(--color-text-dim);
 	}
 
 	.legend-labels {
@@ -1080,6 +1084,6 @@
 		font-size: 0.72rem;
 		font-weight: 700;
 		font-variant-numeric: tabular-nums;
-		color: rgba(232, 227, 216, 0.9);
+		color: var(--color-text);
 	}
 </style>
