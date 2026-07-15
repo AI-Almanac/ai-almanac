@@ -3,7 +3,7 @@
 	import {
 		WEEKS,
 		WEEK_LABELS,
-		rampColor,
+		rampColorLight,
 		argmax,
 		fmtProb,
 		fmtDate,
@@ -148,7 +148,7 @@
 						<span
 							class="cal-seg"
 							class:best={w === best}
-							style="left: {leftPct(r.start)}%; width: {widthPct(7)}%; background: {rampColor(
+							style="left: {leftPct(r.start)}%; width: {widthPct(7)}%; background: {rampColorLight(
 								row[w] ?? 0
 							)}"
 							title="{WEEK_LABELS[WEEKS[w]]} · {fmtDate(dayToIso(r.start))}–{fmtDate(
@@ -160,7 +160,7 @@
 				<span
 					class="cal-later"
 					class:best={best === 4}
-					style="background: {rampColor(row[4] ?? 0)}"
+					style="background: {rampColorLight(row[4] ?? 0)}"
 					title="Later · onset after {fmtDate(laterStartIso(d))}: {fmtProb(row[4] ?? 0)}"
 				></span>
 			</div>
@@ -180,8 +180,12 @@
 		flex-direction: column;
 		gap: 0.6rem;
 		padding: 0.9rem;
-		background: #10151d;
-		border-left: 1px solid rgba(255, 255, 255, 0.08);
+		background:
+			linear-gradient(145deg, rgba(255, 255, 255, 0.97), rgba(239, 247, 243, 0.96)),
+			var(--color-surface);
+		border-left: 1px solid rgba(31, 43, 52, 0.12);
+		box-shadow: -1.25rem 0 2.5rem rgba(3, 14, 25, 0.18);
+		color: #1f2b34;
 		overflow-y: auto;
 	}
 
@@ -198,7 +202,7 @@
 		font-weight: 800;
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
-		color: rgba(200, 192, 180, 0.75);
+		color: #54706f;
 	}
 
 	.ins-coords {
@@ -206,7 +210,7 @@
 		margin-top: 0.15rem;
 		font-size: 0.82rem;
 		font-weight: 800;
-		color: #e8e3d8;
+		color: #18252b;
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -214,29 +218,29 @@
 		flex: none;
 		width: 1.6rem;
 		height: 1.6rem;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid rgba(31, 43, 52, 0.18);
 		border-radius: 0.35rem;
-		background: rgba(255, 255, 255, 0.03);
-		color: #e8e3d8;
+		background: rgba(255, 255, 255, 0.72);
+		color: #223138;
 		font-size: 1rem;
 		line-height: 1;
 		cursor: pointer;
 	}
 
 	.ins-close:hover {
-		background: rgba(255, 255, 255, 0.09);
-		border-color: rgba(255, 255, 255, 0.22);
+		background: #fff;
+		border-color: rgba(31, 43, 52, 0.32);
 	}
 
 	.ins-headline {
 		margin: 0;
 		font-size: 0.78rem;
 		line-height: 1.4;
-		color: rgba(200, 192, 180, 0.85);
+		color: #46555c;
 	}
 
 	.ins-headline strong {
-		color: #e8e3d8;
+		color: #18252b;
 		font-weight: 800;
 		white-space: nowrap;
 	}
@@ -245,7 +249,7 @@
 		margin: 0;
 		font-size: 0.63rem;
 		line-height: 1.4;
-		color: rgba(138, 130, 120, 0.85);
+		color: #627174;
 	}
 
 	.cal-titles {
@@ -253,7 +257,7 @@
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.7);
+		color: #77868a;
 	}
 
 	.cal-axistitle {
@@ -264,9 +268,9 @@
 		position: absolute;
 		top: -1px;
 		bottom: -1px;
-		background: rgba(232, 227, 216, 0.08);
-		border-left: 1px solid rgba(232, 227, 216, 0.15);
-		border-right: 1px solid rgba(232, 227, 216, 0.15);
+		background: rgba(31, 43, 52, 0.06);
+		border-left: 1px solid rgba(31, 43, 52, 0.16);
+		border-right: 1px solid rgba(31, 43, 52, 0.16);
 		pointer-events: none;
 	}
 
@@ -286,14 +290,14 @@
 	.cal-date {
 		font-size: 0.62rem;
 		font-weight: 600;
-		color: rgba(200, 192, 180, 0.7);
+		color: #56656b;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 		text-align: right;
 	}
 
 	.cal-date.current {
-		color: #e8e3d8;
+		color: #18252b;
 		font-weight: 800;
 	}
 
@@ -313,7 +317,7 @@
 	.cal-seg.best,
 	.cal-later.best {
 		opacity: 1;
-		box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+		box-shadow: inset 0 0 0 1.5px rgba(24, 37, 43, 0.85);
 	}
 
 	.cal-later {
@@ -340,7 +344,7 @@
 		font-weight: 700;
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.8);
+		color: #77868a;
 		white-space: nowrap;
 	}
 
@@ -348,7 +352,7 @@
 		font-size: 0.56rem;
 		font-weight: 700;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.8);
+		color: #77868a;
 		text-align: center;
 		white-space: nowrap;
 	}

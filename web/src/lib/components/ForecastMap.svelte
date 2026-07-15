@@ -372,13 +372,13 @@
 	.tt-value {
 		font-size: 0.88rem;
 		font-weight: 800;
-		color: #e8e3d8;
+		color: #18252b;
 	}
 
 	.tt-unit {
 		font-size: 0.75rem;
 		font-weight: 600;
-		color: #8a8278;
+		color: #627174;
 	}
 
 	.note {

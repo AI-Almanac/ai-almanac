@@ -43,16 +43,26 @@ export const legendGradient = `linear-gradient(to right, ${PROB_RAMP.map(
 // indexed week1..later to match WEEKS.
 export const WINDOW_RAMP = ['#cde2fb', '#86b6ef', '#3987e5', '#256abf', '#184f95'];
 
+// Light-surface variant: high probability reads darkest so cells stay legible
+// on a pale inspector panel (the inverse anchor of the dark-basemap ramp).
+export const PROB_RAMP_LIGHT: [number, string][] = [
+	[0, '#eef3fb'],
+	[0.25, '#c2d5f0'],
+	[0.5, '#84abdf'],
+	[0.75, '#3f77c4'],
+	[1, '#1b4a8c']
+];
+
 function hexToRgb(h: string): [number, number, number] {
 	return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 }
 
-// Interpolate the sequential ramp in RGB for a magnitude in [0, 1].
-export function rampColor(v: number): string {
+// Interpolate a sequential ramp in RGB for a magnitude in [0, 1].
+function interpRamp(ramp: [number, string][], v: number): string {
 	const t = Math.max(0, Math.min(1, v));
-	for (let i = 1; i < PROB_RAMP.length; i++) {
-		const [v1, c1] = PROB_RAMP[i - 1];
-		const [v2, c2] = PROB_RAMP[i];
+	for (let i = 1; i < ramp.length; i++) {
+		const [v1, c1] = ramp[i - 1];
+		const [v2, c2] = ramp[i];
 		if (t <= v2) {
 			const f = v2 === v1 ? 0 : (t - v1) / (v2 - v1);
 			const a = hexToRgb(c1);
@@ -61,7 +71,16 @@ export function rampColor(v: number): string {
 			return `rgb(${m[0]}, ${m[1]}, ${m[2]})`;
 		}
 	}
-	return PROB_RAMP[PROB_RAMP.length - 1][1];
+	return ramp[ramp.length - 1][1];
+}
+
+// Dark-basemap ramp (map fill + legend) and its light-panel counterpart.
+export function rampColor(v: number): string {
+	return interpRamp(PROB_RAMP, v);
+}
+
+export function rampColorLight(v: number): string {
+	return interpRamp(PROB_RAMP_LIGHT, v);
 }
 
 export function argmax(arr: number[]): number {

@@ -24,21 +24,23 @@
 		position: absolute;
 		z-index: 10;
 		pointer-events: none;
-		border: 1px solid rgba(255, 255, 255, 0.12);
+		border: 1px solid rgba(31, 43, 52, 0.14);
 		border-radius: 0.4rem;
-		background: rgba(13, 17, 23, 0.9);
+		background: rgba(255, 255, 255, 0.95);
 		backdrop-filter: blur(6px);
 		padding: 0.35rem 0.6rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
 		white-space: nowrap;
+		color: #1f2b34;
+		box-shadow: 0 2px 8px rgba(3, 14, 25, 0.18);
 	}
 
 	.tt-coords {
 		font-size: 0.72rem;
 		font-weight: 700;
-		color: #8a8278;
+		color: #627174;
 		letter-spacing: 0.02em;
 	}
 </style>

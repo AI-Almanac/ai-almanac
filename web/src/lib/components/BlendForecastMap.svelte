@@ -768,7 +768,7 @@
 		font-weight: 700;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: rgba(138, 130, 120, 0.8);
+		color: #627174;
 		margin-top: 0.15rem;
 	}
 
@@ -792,30 +792,31 @@
 		display: flex;
 		align-items: flex-end;
 		border-radius: 0.2rem;
-		background: rgba(255, 255, 255, 0.05);
+		background: rgba(31, 43, 52, 0.06);
 	}
 
 	.tt-bar-fill {
 		width: 100%;
 		border-radius: 0.2rem;
+		box-shadow: inset 0 0 0 1px rgba(31, 43, 52, 0.18);
 	}
 
 	.tt-val {
 		font-size: 0.62rem;
 		font-weight: 700;
 		font-variant-numeric: tabular-nums;
-		color: rgba(200, 192, 180, 0.7);
+		color: #46555c;
 	}
 
 	.tt-lbl {
 		font-size: 0.56rem;
 		font-weight: 600;
-		color: rgba(138, 130, 120, 0.75);
+		color: #627174;
 		white-space: nowrap;
 	}
 
 	.tt-col.active .tt-val {
-		color: #e8e3d8;
+		color: #18252b;
 	}
 
 	.tt-col.active .tt-bar-track {

@@ -800,14 +800,15 @@
 	.tooltip {
 		position: absolute;
 		z-index: 30;
-		background: white;
-		border: 1px solid #ccc;
-		border-radius: 0.3rem;
+		background: rgba(255, 255, 255, 0.95);
+		backdrop-filter: blur(6px);
+		border: 1px solid rgba(31, 43, 52, 0.14);
+		border-radius: 0.4rem;
 		padding: 0.4rem 0.6rem;
 		font-size: 0.75rem;
 		font-family: var(--font-body);
-		color: #333;
-		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+		color: #1f2b34;
+		box-shadow: 0 2px 8px rgba(3, 14, 25, 0.18);
 		pointer-events: none;
 		line-height: 1.5;
 		min-width: 10rem;
@@ -826,20 +827,20 @@
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.07em;
-		color: #777;
+		color: #627174;
 		margin-bottom: 0.1rem;
 	}
 
 	.tooltip :global(.tt-metric) {
 		display: block;
 		font-size: 0.73rem;
-		color: #222;
+		color: #1f2b34;
 		font-family: var(--font-mono);
 	}
 
 	.tooltip :global(.tt-delta) {
 		font-size: 0.68rem;
-		color: #777;
+		color: #627174;
 	}
 
 	:global(body.figure-lightbox-open .map-root) .boundary-attribution,
