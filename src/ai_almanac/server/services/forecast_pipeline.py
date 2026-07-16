@@ -46,23 +46,44 @@ CANONICAL_LEAD_DAY = 45
 # ---------------------------------------------------------------------------
 
 
+# Selectable earth2studio analysis sources a live rollout can initialize from.
+# Single source of truth for both resolve_data_source (which object to build)
+# and the API's init-source list (what the UI offers as a dropdown). All are
+# zero-config, no-auth analysis sources whose ds(time, variable) output feeds
+# earth2studio's deterministic() the same way, and all carry a deep enough
+# archive to cover a season-to-date of weekly issue dates:
+#   - NCAR_ERA5: ERA5 reanalysis (1940->present). Chosen over ARCO, which is
+#     the same data but stops at 2025-12-31 and so can't init a current season.
+#   - GFS:       NOAA operational analysis (2021->present).
+#   - IFS:       ECMWF HRES operational analysis (2024-03->present).
+#
+# ponytail: CDS (ERA5) is also free but needs an API key, so it needs auth
+# plumbing before it can join; WB2ERA5 stops at 2023 (fixed benchmark), and the
+# satellite/radar sources can't provide a global model's input variables.
+INIT_SOURCES: dict[str, dict[str, str]] = {
+    "era5": {"display_name": "ERA5 (reanalysis)", "earth2studio_class": "NCAR_ERA5"},
+    "gfs": {"display_name": "GFS (NOAA)", "earth2studio_class": "GFS"},
+    "ifs": {"display_name": "IFS (ECMWF)", "earth2studio_class": "IFS"},
+}
+
+
 def resolve_data_source(init_source: str):
     """Map an init-source name to its earth2studio data source object.
 
     The init source is part of a trajectory's identity (D6): the same model and
     date initialized from GFS versus ERA5 are different assets, so serving one
     for the other silently corrupts results. Register new earth2studio sources
-    (ARCO/ERA5, IFS, GEFS, ...) here by adding to the builder map.
+    here by adding to INIT_SOURCES.
     """
-    known = ("gfs",)  # extend as earth2studio sources are wired in (ERA5/ARCO, IFS, GEFS)
     name = init_source.lower()
-    if name not in known:
+    entry = INIT_SOURCES.get(name)
+    if entry is None:
         raise ValueError(
-            f"Unknown forecast init source {init_source!r}; known: {sorted(known)}"
+            f"Unknown forecast init source {init_source!r}; known: {sorted(INIT_SOURCES)}"
         )
-    from earth2studio.data import GFS
+    import earth2studio.data as e2s_data
 
-    return {"gfs": GFS}[name]()
+    return getattr(e2s_data, entry["earth2studio_class"])()
 
 
 def load_model(model_class: str):
@@ -694,7 +715,9 @@ def render_forecast_products(
         "native_step_hours": run_info.get("native_step_hours"),
         "variables": config["variables"],
         "lead_hours": config["lead_hours"],
-        "data_source": "GFS",
+        "data_source": INIT_SOURCES.get(config.get("init_source", "gfs"), {}).get(
+            "display_name", "GFS"
+        ),
         "created_at": dt.datetime.now(UTC).isoformat(),
     }
     manifest["map_products"] = write_map_products(config, zarr_path, product_root)

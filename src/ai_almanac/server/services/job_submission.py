@@ -510,7 +510,7 @@ class ForecastParams(BaseModel):
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
     # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: str = "gfs"
+    init_source: str = "era5"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
     max_issue_dates: int | None = None
