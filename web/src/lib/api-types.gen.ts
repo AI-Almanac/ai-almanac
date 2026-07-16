@@ -463,6 +463,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forecasts/init-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Init Sources */
+        get: operations["list_init_sources_forecasts_init_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/fs/list": {
         parameters: {
             query?: never;
@@ -2302,7 +2319,7 @@ export interface components {
             forecast_model_ids?: string[] | null;
             /**
              * @default {
-             *       "init_source": "gfs"
+             *       "init_source": "era5"
              *     }
              */
             params: components["schemas"]["ForecastParams"];
@@ -2361,7 +2378,7 @@ export interface components {
             variables?: string[] | null;
             /**
              * Init Source
-             * @default gfs
+             * @default era5
              */
             init_source: string;
             /** Max Issue Dates */
@@ -4720,6 +4737,26 @@ export interface operations {
         };
     };
     list_forecast_models_forecasts_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_init_sources_forecasts_init_sources_get: {
         parameters: {
             query?: never;
             header?: never;
