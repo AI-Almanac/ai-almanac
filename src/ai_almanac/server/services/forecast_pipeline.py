@@ -145,17 +145,41 @@ def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> 
 
 
 def season_issue_dates(
-    season_start_month_day: str, init_weekdays: list[int], year: int
+    season_start_month_day: str,
+    init_weekdays: list[int],
+    year: int,
+    schedule_month_days: list[str] | None = None,
 ) -> list[dt.date]:
-    """Calendar dates in [season_start, today] whose weekday is in init_weekdays.
+    """Issue dates in [season_start, today] for one season/model.
 
-    Python weekday numbering (Monday=0..Sunday=6), matching this repo's
-    convention for model initialization weekdays elsewhere in the codebase.
+    The archives pin issue dates to fixed *calendar dates* (e.g. Apr 1, 4, 8),
+    not weekdays — the weekday of a given issue date drifts year to year, so a
+    weekday grid inferred from one year silently disagrees with another. When a
+    source's month-day schedule (a list of ``MM-DD``) is known, reproduce those
+    exact calendar dates: this lands a live rollout on the same seasonal
+    positions the blend was trained on, and lets two regions whose schedules
+    share calendar dates share cached trajectories.
+
+    ``init_weekdays`` (Python numbering, Monday=0..Sunday=6) is the fallback for
+    sources registered before a schedule was inferred.
     """
     month, day = (int(part) for part in season_start_month_day.split("-"))
     start = dt.date(year, month, day)
     today = dt.datetime.now(UTC).date()
     end = min(today, dt.date(year, 12, 31))
+
+    if schedule_month_days:
+        dates = []
+        for entry in schedule_month_days:
+            entry_month, entry_day = (int(part) for part in entry.split("-"))
+            try:
+                candidate = dt.date(year, entry_month, entry_day)
+            except ValueError:
+                continue  # e.g. 02-29 in a non-leap year — no such date this year
+            if start <= candidate <= end:
+                dates.append(candidate)
+        return sorted(dates)
+
     dates = []
     current = start
     while current <= end:
@@ -179,13 +203,11 @@ def season_covered_dates(config: dict) -> dict[str, list[str]]:
     max_issue_dates = config.get("max_issue_dates")
     out: dict[str, list[str]] = {}
     for name in config.get("forecast_model_ids") or []:
-        weekdays = [
-            int(d)
-            for d in str((season_params.get(name) or {}).get("init_days") or "0,3").split(
-                ","
-            )
-        ]
-        dates = season_issue_dates(season_start, weekdays, season)
+        params = season_params.get(name) or {}
+        weekdays = [int(d) for d in str(params.get("init_days") or "0,3").split(",")]
+        dates = season_issue_dates(
+            season_start, weekdays, season, params.get("init_month_days")
+        )
         if max_issue_dates:
             dates = dates[-int(max_issue_dates) :]
         out[name] = [d.isoformat() for d in dates]
@@ -366,12 +388,16 @@ def generate_season_forecast_netcdf(
     lead_day = CANONICAL_LEAD_DAY
     init_source = config.get("init_source", "gfs")
     init_weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
+    schedule_month_days = season_params.get("init_month_days")
     unit_cvt = float(season_params.get("unit_cvt", 1.0))
     bounds = season_params.get("spatial_bounds")
 
     year = dt.datetime.now(UTC).year
     issue_dates = season_issue_dates(
-        config.get("season_start_month_day") or "05-01", init_weekdays, year
+        config.get("season_start_month_day") or "05-01",
+        init_weekdays,
+        year,
+        schedule_month_days,
     )
     if not issue_dates:
         raise ValueError(f"No issue dates for season {year} yet")

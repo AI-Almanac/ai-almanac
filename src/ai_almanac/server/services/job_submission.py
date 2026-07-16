@@ -684,6 +684,10 @@ async def create_forecast_for_user(
         metadata = (source or {}).get("metadata") or {}
         season_model_params[name] = {
             "init_days": metadata.get("init_days") or "0,3",
+            # The archive's fixed calendar (MM-DD) issue-date schedule, when
+            # inferred at registration. Preferred over init_days weekdays so a
+            # live rollout reproduces the training dates (see season_issue_dates).
+            "init_month_days": metadata.get("init_month_days"),
             "unit_cvt": metadata.get("unit_cvt", 1.0),
             "spatial_bounds": metadata.get("spatial_bounds"),
         }
