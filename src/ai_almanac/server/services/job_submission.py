@@ -510,7 +510,7 @@ class ForecastParams(BaseModel):
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
     # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: str = "era5"
+    init_source: str = "ifs"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
     max_issue_dates: int | None = None
@@ -559,7 +559,7 @@ class ForecastOut(BaseModel):
     status: str
     forecast_model_ids: list[str]
     init_time: str | None = None
-    init_source: str = "gfs"
+    init_source: str = "ifs"
     region_id: str | None = None
     created_at: str
     completed_at: str | None = None
@@ -578,7 +578,7 @@ def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
         status=row["status"],
         forecast_model_ids=cfg.get("forecast_model_ids") or [],
         init_time=cfg.get("init_time"),
-        init_source=cfg.get("init_source") or "gfs",
+        init_source=cfg.get("init_source") or "ifs",
         region_id=cfg.get("region_id"),
         created_at=row["created_at"],
         completed_at=row.get("completed_at"),
@@ -699,7 +699,7 @@ async def create_forecast_for_user(
     # when cold) and every later run scores against the cache for free.
     from ai_almanac.server.services.forecast_pipeline import season_covered_dates
 
-    init_source = body.params.init_source or "gfs"
+    init_source = body.params.init_source or "ifs"
     season = str(datetime.now(UTC).year)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
@@ -894,7 +894,7 @@ async def refresh_forecast_for_user(
         forecast_model_ids=cfg.get("forecast_model_ids") or None,
         params=ForecastParams(
             init_time=cfg.get("init_time"),
-            init_source=cfg.get("init_source") or "gfs",
+            init_source=cfg.get("init_source") or "ifs",
             max_issue_dates=cfg.get("max_issue_dates"),
             lead_hours=cfg.get("lead_hours"),
             variables=cfg.get("variables"),

@@ -50,20 +50,22 @@ CANONICAL_LEAD_DAY = 45
 # Single source of truth for both resolve_data_source (which object to build)
 # and the API's init-source list (what the UI offers as a dropdown). All are
 # zero-config, no-auth analysis sources whose ds(time, variable) output feeds
-# earth2studio's deterministic() the same way, and all carry a deep enough
-# archive to cover a season-to-date of weekly issue dates:
-#   - NCAR_ERA5: ERA5 reanalysis (1940->present). Chosen over ARCO, which is
-#     the same data but stops at 2025-12-31 and so can't init a current season.
-#   - GFS:       NOAA operational analysis (2021->present).
-#   - IFS:       ECMWF HRES operational analysis (2024-03->present).
+# earth2studio's deterministic() the same way.
 #
-# ponytail: CDS (ERA5) is also free but needs an API key, so it needs auth
-# plumbing before it can join; WB2ERA5 stops at 2023 (fixed benchmark), and the
-# satellite/radar sources can't provide a global model's input variables.
+# The registered models (AIFS, FuXi, ...) ingest soil moisture (swvl1) and 6h
+# precip (tp06), so an init source's lexicon MUST map that full input set or a
+# rollout dies with KeyError. Only two free sources cover it:
+#   - IFS:  ECMWF HRES analysis, complete vocab AND live (2024-03->present) —
+#           the only free source usable for a current-season rollout.
+#   - ARCO: ERA5, complete vocab but frozen at 2025-12-31, so it can only
+#           initialize <=2025 dates (historical backtests).
+#
+# ponytail: GFS (no soil) and NCAR_ERA5 (no precip) can't init these models, so
+# they're out. CDS is complete and live ERA5 but needs an API key, so it needs
+# auth plumbing before it can join; WB2ERA5 stops at 2023 (fixed benchmark).
 INIT_SOURCES: dict[str, dict[str, str]] = {
-    "era5": {"display_name": "ERA5 (reanalysis)", "earth2studio_class": "NCAR_ERA5"},
-    "gfs": {"display_name": "GFS (NOAA)", "earth2studio_class": "GFS"},
     "ifs": {"display_name": "IFS (ECMWF)", "earth2studio_class": "IFS"},
+    "era5": {"display_name": "ERA5 (ARCO, through 2025)", "earth2studio_class": "ARCO"},
 }
 
 
@@ -123,7 +125,7 @@ def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> 
 
     model_class = model_entry["earth2studio_class"]
     model = load_model(model_class)
-    data = resolve_data_source(config.get("init_source", "gfs"))
+    data = resolve_data_source(config.get("init_source", "ifs"))
     init_time = select_latest_init_time(config)
     nsteps, step_hours = lead_steps(config["lead_hours"], model_class)
     zarr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,7 +366,7 @@ def generate_season_forecast_netcdf(
     # windows never split the same rollout across cache keys. The max_lead_day
     # knob is retired for the season path; use max_issue_dates to trim smoke cost.
     lead_day = CANONICAL_LEAD_DAY
-    init_source = config.get("init_source", "gfs")
+    init_source = config.get("init_source", "ifs")
     init_weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
     unit_cvt = float(season_params.get("unit_cvt", 1.0))
     bounds = season_params.get("spatial_bounds")
@@ -715,8 +717,8 @@ def render_forecast_products(
         "native_step_hours": run_info.get("native_step_hours"),
         "variables": config["variables"],
         "lead_hours": config["lead_hours"],
-        "data_source": INIT_SOURCES.get(config.get("init_source", "gfs"), {}).get(
-            "display_name", "GFS"
+        "data_source": INIT_SOURCES.get(config.get("init_source", "ifs"), {}).get(
+            "display_name", "IFS"
         ),
         "created_at": dt.datetime.now(UTC).isoformat(),
     }

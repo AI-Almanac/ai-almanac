@@ -44,7 +44,7 @@
 	// same forecast," just re-run. An "update" reuses this spec, so weekly
 	// refreshes share a key.
 	function specKey(f: Forecast): string {
-		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'gfs'}`;
+		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'ifs'}`;
 	}
 
 	const newestRun = (runs: Forecast[]): Forecast =>
@@ -100,7 +100,7 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
-	let initSource = $state('era5');
+	let initSource = $state('ifs');
 	// bind:value on <input type="number"> yields a number (or undefined when
 	// empty/invalid), not a string — unlike initTime's plain text input.
 	let maxIssueDates = $state<number | undefined>(undefined);
@@ -253,7 +253,7 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		initSource = 'era5';
+		initSource = 'ifs';
 		maxIssueDates = undefined;
 	}
 
