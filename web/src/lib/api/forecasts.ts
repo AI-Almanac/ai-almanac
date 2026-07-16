@@ -59,6 +59,16 @@ export async function getForecastModels(): Promise<ForecastModel[]> {
 	return request<ForecastModel[]>('/forecasts/models');
 }
 
+// Initialization data source a live rollout starts from (e.g. GFS, ERA5).
+export type InitSource = {
+	id: string;
+	display_name: string;
+};
+
+export async function getInitSources(): Promise<InitSource[]> {
+	return request<InitSource[]>('/forecasts/init-sources');
+}
+
 // A trajectory set: the deterministic season rollout for one
 // (model_name, init_source, season) triple, shared across every blend/region
 // that uses the model. Backs the admin coverage view.

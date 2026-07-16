@@ -6,6 +6,7 @@
 		refreshForecast as refreshForecastRun,
 		listBlends,
 		getForecastModels,
+		getInitSources,
 		getJobArtifacts,
 		cancelJob,
 		deleteJob,
@@ -15,6 +16,7 @@
 		type Forecast,
 		type ForecastCreate,
 		type ForecastModel,
+		type InitSource,
 		type JobArtifact,
 		type JobStatus,
 		type JobStreamEvent
@@ -33,6 +35,7 @@
 	let forecasts = $state<Forecast[]>([]);
 	let blends = $state<Blend[]>([]);
 	let forecastModels = $state<ForecastModel[]>([]);
+	let initSources = $state<InitSource[]>([]);
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -97,7 +100,7 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
-	let initSource = $state('');
+	let initSource = $state('era5');
 	// bind:value on <input type="number"> yields a number (or undefined when
 	// empty/invalid), not a string — unlike initTime's plain text input.
 	let maxIssueDates = $state<number | undefined>(undefined);
@@ -129,14 +132,16 @@
 	const formValid = $derived(blendId !== '' && forecastModelIds.length > 0);
 
 	async function load() {
-		const [f, b, m] = await Promise.allSettled([
+		const [f, b, m, s] = await Promise.allSettled([
 			listForecasts(),
 			listBlends(),
-			getForecastModels()
+			getForecastModels(),
+			getInitSources()
 		]);
 		if (f.status === 'fulfilled') forecasts = f.value;
 		if (b.status === 'fulfilled') blends = b.value;
 		if (m.status === 'fulfilled') forecastModels = m.value;
+		if (s.status === 'fulfilled') initSources = s.value;
 		loaded = true;
 	}
 
@@ -248,7 +253,7 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		initSource = '';
+		initSource = 'era5';
 		maxIssueDates = undefined;
 	}
 
@@ -428,6 +433,16 @@
 					{/if}
 				</label>
 
+				<label class="field">
+					<span>Initialization data source</span>
+					<select bind:value={initSource}>
+						{#each initSources as source (source.id)}
+							<option value={source.id}>{source.display_name}</option>
+						{/each}
+					</select>
+					<p class="muted">The conditions each live rollout is initialized from.</p>
+				</label>
+
 				{#if selectedBlend}
 					<fieldset class="field">
 						<legend>Forecast models</legend>
@@ -454,10 +469,6 @@
 						<label class="field">
 							<span>Init time (UTC)</span>
 							<input type="text" bind:value={initTime} placeholder="defaults to latest available" />
-						</label>
-						<label class="field">
-							<span>Init source</span>
-							<input type="text" bind:value={initSource} placeholder="defaults to gfs" />
 						</label>
 						<label class="field">
 							<span>Max season issue dates</span>

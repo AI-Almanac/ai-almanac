@@ -16,7 +16,10 @@ from fastapi import APIRouter, Depends, status
 from ai_almanac.server.auth import AdminUser, CurrentUser, require_forecasting
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import trajectory_sets
-from ai_almanac.server.services.forecast_models import load_forecast_model_registry
+from ai_almanac.server.services.forecast_models import (
+    load_forecast_model_registry,
+    load_init_sources,
+)
 from ai_almanac.server.services.job_submission import (
     ForecastCreate,
     ForecastOut,
@@ -76,3 +79,8 @@ async def list_forecasts(user: CurrentUser):
 @router.get("/models")
 async def list_forecast_models():
     return await load_forecast_model_registry()
+
+
+@router.get("/init-sources")
+async def list_init_sources():
+    return load_init_sources()
