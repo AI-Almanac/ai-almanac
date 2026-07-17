@@ -100,7 +100,7 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
-	let initSource = $state('era5');
+	let initSource = $state('gfs');
 	// bind:value on <input type="number"> yields a number (or undefined when
 	// empty/invalid), not a string — unlike initTime's plain text input.
 	let maxIssueDates = $state<number | undefined>(undefined);
@@ -253,7 +253,7 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		initSource = 'era5';
+		initSource = 'gfs';
 		maxIssueDates = undefined;
 	}
 

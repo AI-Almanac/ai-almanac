@@ -48,20 +48,19 @@ CANONICAL_LEAD_DAY = 45
 
 # Selectable earth2studio analysis sources a live rollout can initialize from.
 # Single source of truth for both resolve_data_source (which object to build)
-# and the API's init-source list (what the UI offers as a dropdown). All are
+# and the API's init-source list (what the UI offers as a dropdown). Both are
 # zero-config, no-auth analysis sources whose ds(time, variable) output feeds
-# earth2studio's deterministic() the same way, and all carry a deep enough
-# archive to cover a season-to-date of weekly issue dates:
-#   - NCAR_ERA5: ERA5 reanalysis (1940->present). Chosen over ARCO, which is
-#     the same data but stops at 2025-12-31 and so can't init a current season.
-#   - GFS:       NOAA operational analysis (2021->present).
-#   - IFS:       ECMWF HRES operational analysis (2024-03->present).
+# earth2studio's deterministic(), and both carry the full model input vocab
+# (soil, precip, ...) over a season-to-date:
+#   - GFS: NOAA operational analysis (2021->present). The default — proven in
+#     production for the registered models.
+#   - IFS: ECMWF HRES operational analysis (2024-03->present).
 #
-# ponytail: CDS (ERA5) is also free but needs an API key, so it needs auth
-# plumbing before it can join; WB2ERA5 stops at 2023 (fixed benchmark), and the
-# satellite/radar sources can't provide a global model's input variables.
+# ERA5 is intentionally absent: NCAR_ERA5 (free, live) has no precip in its
+# lexicon so it can't init precip models, and ARCO (free, complete) is frozen
+# at 2025-12-31. The only free+live+complete ERA5 is CDS, which needs an API
+# key — wire that (and its auth) before offering ERA5 here.
 INIT_SOURCES: dict[str, dict[str, str]] = {
-    "era5": {"display_name": "ERA5 (reanalysis)", "earth2studio_class": "NCAR_ERA5"},
     "gfs": {"display_name": "GFS (NOAA)", "earth2studio_class": "GFS"},
     "ifs": {"display_name": "IFS (ECMWF)", "earth2studio_class": "IFS"},
 }

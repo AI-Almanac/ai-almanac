@@ -2319,7 +2319,7 @@ export interface components {
             forecast_model_ids?: string[] | null;
             /**
              * @default {
-             *       "init_source": "era5"
+             *       "init_source": "gfs"
              *     }
              */
             params: components["schemas"]["ForecastParams"];
@@ -2378,7 +2378,7 @@ export interface components {
             variables?: string[] | null;
             /**
              * Init Source
-             * @default era5
+             * @default gfs
              */
             init_source: string;
             /** Max Issue Dates */
