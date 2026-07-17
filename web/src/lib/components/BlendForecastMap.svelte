@@ -6,10 +6,12 @@
 	import {
 		WEEKS,
 		WEEK_LABELS,
-		PROB_RAMP,
-		legendGradient,
+		probGradient,
 		WINDOW_RAMP,
+		ONSET_PASSED_COLOR,
 		rampColor,
+		consensusOnsetDay,
+		onsetHasPassed,
 		argmax,
 		fmtProb,
 		fmtDate,
@@ -53,6 +55,20 @@
 	// collapses the distribution to each point's most-likely window (which window).
 	let colorMode = $state<'window' | 'expected'>('window');
 
+	// Which end of the ordinal ramp is the soonest window. 'yellow' (imminent =
+	// hot) is our default; 'purple' matches the science team's static legend.
+	let soonestColor = $state<'yellow' | 'purple'>('yellow');
+	// The toggle flips the whole plasma direction: the vivid end marks both the
+	// soonest window and the highest probability.
+	const reversed = $derived(soonestColor === 'purple');
+	const windowRamp = $derived(reversed ? [...WINDOW_RAMP].reverse() : WINDOW_RAMP);
+
+	// Per-cell estimated onset day (index-aligned to data.points), used to gray a
+	// cell once the shown forecast was issued after onset likely occurred.
+	const cellConsensus = $derived.by(() =>
+		data ? data.points.map((pt) => consensusOnsetDay(data!.issue_dates, pt.probs)) : []
+	);
+
 	let playing = $state(false);
 	let playTimer: ReturnType<typeof setInterval> | null = null;
 	let collapsed = $state(false);
@@ -72,14 +88,21 @@
 	// Precompute each dot's color + opacity in JS (functional core) so the map
 	// paint stays a static `['get', …]`; the mode logic lives here, not in the
 	// MapLibre expression.
-	function featureStyle(row: number[], week: Week): { color: string; opacity: number } {
+	function featureStyle(
+		row: number[],
+		week: Week,
+		passed: boolean
+	): { color: string; opacity: number } {
+		// Onset already occurred by this issue date: the forward outlook is stale,
+		// so drain the color to a dim gray rather than show a misleading dot.
+		if (passed) return { color: ONSET_PASSED_COLOR, opacity: 0.45 };
 		if (colorMode === 'expected') {
 			const w = argmax(row);
 			// Fainter where the timing is uncertain — a weak plurality reads as
 			// "we don't really know when," with a visible floor so no dot vanishes.
-			return { color: WINDOW_RAMP[w], opacity: 0.4 + 0.55 * Math.min(1, row[w]) };
+			return { color: windowRamp[w], opacity: 0.4 + 0.55 * Math.min(1, row[w]) };
 		}
-		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0), opacity: 0.9 };
+		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0, reversed), opacity: 0.9 };
 	}
 
 	function buildGeoJson(d: BlendForecastData, date: string, week: Week) {
@@ -88,11 +111,12 @@
 			type: 'FeatureCollection' as const,
 			features: d.points.map((pt, i) => {
 				const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
-				const { color, opacity } = featureStyle(row, week);
+				const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[i] ?? null);
+				const { color, opacity } = featureStyle(row, week, passed);
 				return {
 					type: 'Feature' as const,
 					geometry: { type: 'Point' as const, coordinates: [pt.lon, pt.lat] },
-					properties: { color, opacity, idx: i }
+					properties: { color, opacity, idx: i, passed }
 				};
 			})
 		};
@@ -161,6 +185,7 @@
 		if (mapReady && data && selectedDate) {
 			selectedWeek; // track
 			colorMode; // track
+			soonestColor; // track
 			updateSource();
 		}
 	});
@@ -360,6 +385,18 @@
 			</div>
 		</div>
 
+		<div class="rail-group">
+			<span class="rail-label">Soonest onset color</span>
+			<div class="mode-toggle">
+				<button class:active={soonestColor === 'yellow'} onclick={() => (soonestColor = 'yellow')}>
+					Yellow
+				</button>
+				<button class:active={soonestColor === 'purple'} onclick={() => (soonestColor = 'purple')}>
+					Purple
+				</button>
+			</div>
+		</div>
+
 		{#if colorMode === 'window'}
 			<div class="rail-group">
 				<span class="rail-label">Onset window</span>
@@ -390,7 +427,7 @@
 			<span class="rail-label">Legend</span>
 			<p class="legend-caption">{caption}</p>
 			{#if colorMode === 'window'}
-				<div class="legend-bar" style="background: {legendGradient}"></div>
+				<div class="legend-bar" style="background: {probGradient(reversed)}"></div>
 				<div class="legend-ticks">
 					<span></span>
 					<span></span>
@@ -405,12 +442,21 @@
 				<div class="window-swatches">
 					{#each WEEKS as w, i (w)}
 						<div class="swatch-item">
-							<span class="swatch" style="background: {WINDOW_RAMP[i]}"></span>
+							<span class="swatch" style="background: {windowRamp[i]}"></span>
 							<span>{WEEK_LABELS[w]}</span>
 						</div>
 					{/each}
 				</div>
 			{/if}
+			<div class="swatch-item passed-note">
+				<span class="swatch" style="background: {ONSET_PASSED_COLOR}"></span>
+				<span>Peak onset window passed</span>
+			</div>
+			<p class="legend-note">
+				Gray means this forecast was issued after the window when onset was most likely — the peak
+				probability has passed, so the outlook ahead no longer applies. This is estimated from the
+				forecasts, not a confirmation that onset occurred.
+			</p>
 		</div>
 	</aside>
 
@@ -436,6 +482,7 @@
 				issueDates={data.issue_dates}
 				regionName={data.region_name}
 				{selectedDate}
+				{soonestColor}
 				onClose={() => (selectedCell = null)}
 			/>
 		{/if}
@@ -458,7 +505,7 @@
 								<div class="tt-bar-track">
 									<div
 										class="tt-bar-fill"
-										style="height: {Math.max(3, (tooltipProbs[i] ?? 0) * 100)}%; background: {WINDOW_RAMP[
+										style="height: {Math.max(3, (tooltipProbs[i] ?? 0) * 100)}%; background: {windowRamp[
 											i
 										]}"
 									></div>
@@ -1038,6 +1085,17 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.3rem 0.6rem;
+	}
+
+	.passed-note {
+		margin-top: 0.55rem;
+	}
+
+	.legend-note {
+		margin: 0.35rem 0 0;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		color: var(--color-text-muted);
 	}
 
 	.swatch-item {

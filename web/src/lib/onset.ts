@@ -23,41 +23,40 @@ export const WEEK_SHORT: Record<Week, string> = {
 	later: 'Later'
 };
 
-// Onset probability is magnitude → one sequential blue, dim→vivid, not a
-// rainbow. Two constraints share this ramp: dots sit on the near-black basemap
-// (low must read as a dim dot, not a hole) and the legend now sits on a light
-// glass panel (no end may go near-white or it vanishes). So both ends stay
-// saturated — low is a dim steel blue, high a vivid royal blue that still pops
-// on dark yet holds contrast on white.
+// The onset palette is matplotlib "plasma" — the ramp the science team uses in
+// their published onset graphics: soonest onset window = purple, latest =
+// yellow. One palette drives the map fill, the legend, the tooltip, and the
+// inspector so a hue means the same window everywhere. Sampled from purple up
+// (plasma's near-black low end is skipped so the dimmest dot still reads on the
+// dark basemap; the trade is that the yellow end sits low-contrast on the light
+// inspector panel — the block borders and ring carry it there).
+
+// Ordinal "which onset window" (week1..later), indexed to match WEEKS. Discrete
+// plasma samples running yellow (soonest onset — reads hot/imminent) → purple
+// (latest — recedes). Note: this reverses the science team's static legend
+// (purple=soonest → yellow=latest); we flip it so the nearest onset pops and
+// yellow stays "high signal" as in the magnitude ramp.
+export const WINDOW_RAMP = ['#f0f921', '#fb9f3a', '#d9586a', '#9e199d', '#4903a0'];
+
+// Continuous magnitude ramp (probability 0→1) built from the same plasma stops,
+// so the "by window" dots and the legend bar stay in the same palette: low reads
+// as dim purple, high as vivid yellow (hot = likely on the near-black basemap).
 export const PROB_RAMP: [number, string][] = [
-	[0, '#173f6e'],
-	[0.25, '#255a9e'],
-	[0.5, '#3277cc'],
-	[0.75, '#4a90e2'],
-	[1, '#63a6f0']
+	[0, '#4903a0'],
+	[0.25, '#9e199d'],
+	[0.5, '#d9586a'],
+	[0.75, '#fb9f3a'],
+	[1, '#f0f921']
 ];
 
-export const legendGradient = `linear-gradient(to right, ${PROB_RAMP.map(
-	([v, c]) => `${c} ${v * 100}%`
-).join(', ')})`;
-
-// "Which window" is ordinal (soonest→latest): one hue, monotone lightness,
-// indexed week1..later to match WEEKS.
-export const WINDOW_RAMP = ['#cde2fb', '#86b6ef', '#3987e5', '#256abf', '#184f95'];
-
-// Light-surface variant (inspector heatmap). A single blue hue collapses the
-// low-mid range into near-identical pale tints on a light panel, so this is the
-// multi-hue ColorBrewer YlGnBu scheme instead: probability climbs through
-// yellow → green → teal → blue → navy, discriminating magnitude by hue *and*
-// lightness. The teal midpoint echoes the app accent; high reads darkest so the
-// most-likely window carries the most ink.
-export const PROB_RAMP_LIGHT: [number, string][] = [
-	[0, '#ffffcc'],
-	[0.25, '#a1dab4'],
-	[0.5, '#41b6c4'],
-	[0.75, '#2c7fb8'],
-	[1, '#253494']
-];
+// Legend gradient for the magnitude ramp. `reversed` flips it so the vivid end
+// is purple instead of yellow, tracking the soonest-onset color toggle.
+export function probGradient(reversed = false): string {
+	const ramp = reversed
+		? [...PROB_RAMP].map(([v, c]) => [1 - v, c] as [number, string]).reverse()
+		: PROB_RAMP;
+	return `linear-gradient(to right, ${ramp.map(([v, c]) => `${c} ${v * 100}%`).join(', ')})`;
+}
 
 function hexToRgb(h: string): [number, number, number] {
 	return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -80,13 +79,10 @@ function interpRamp(ramp: [number, string][], v: number): string {
 	return ramp[ramp.length - 1][1];
 }
 
-// Dark-basemap ramp (map fill + legend) and its light-panel counterpart.
-export function rampColor(v: number): string {
-	return interpRamp(PROB_RAMP, v);
-}
-
-export function rampColorLight(v: number): string {
-	return interpRamp(PROB_RAMP_LIGHT, v);
+// Magnitude → plasma color for the map fill and inspector. `reversed` puts the
+// vivid end at low probability instead of high, tracking the soonest-onset toggle.
+export function rampColor(v: number, reversed = false): string {
+	return interpRamp(PROB_RAMP, reversed ? 1 - v : v);
 }
 
 export function argmax(arr: number[]): number {
@@ -139,4 +135,47 @@ export function dayToIso(day: number): string {
 export function windowDayRange(issueIso: string, weekIndex: number): { start: number; end: number } {
 	const start = isoToDay(issueIso) + ONSET_WINDOW_DAYS * weekIndex;
 	return { start, end: start + ONSET_WINDOW_DAYS - 1 };
+}
+
+// ---- "Peak onset window passed" --------------------------------------------
+//
+// Every forecast's windows are forward-looking (onset *begins* in week N after
+// issue), so once a forecast is issued past the window when onset was most
+// likely, it has no window left to place real mass in and dumps it into "Later"
+// — a misleading bright dot. We gray those cells out, matching the science
+// team's static figures. This is NOT a claim that onset was observed: we have no
+// observed onset date, so we estimate the most-likely onset per cell from the
+// season's own forecasts and drain the color once the issue date runs past it.
+
+// Neutral slate for a grayed cell; reads as inactive on the dark basemap.
+export const ONSET_PASSED_COLOR = '#8b929c';
+
+// Probability-weighted consensus onset day for a cell across the whole season,
+// using only the bounded windows ("Later" carries no date). null if no forecast
+// ever dated the onset. Forecasts that dump their mass into "Later" contribute
+// nothing, so the estimate is driven by the forecasts that actually placed onset
+// on the calendar — i.e. where the models agree.
+export function consensusOnsetDay(issueDates: string[], probs: number[][]): number | null {
+	let wsum = 0;
+	let dsum = 0;
+	issueDates.forEach((iso, di) => {
+		const row = probs[di] ?? [];
+		for (let w = 0; w < 4; w++) {
+			const p = row[w] ?? 0;
+			if (p <= 0) continue;
+			const r = windowDayRange(iso, w);
+			wsum += p;
+			dsum += (p * (r.start + r.end)) / 2;
+		}
+	});
+	return wsum > 0 ? dsum / wsum : null;
+}
+
+// Grace past the estimated onset before a cell counts as post-onset: once a
+// forecast is issued beyond the consensus ±3d band, onset has begun and its
+// forward outlook is stale.
+export const ONSET_PASSED_GRACE_DAYS = 3;
+
+export function onsetHasPassed(issueIso: string, consensusDay: number | null): boolean {
+	return consensusDay != null && isoToDay(issueIso) > consensusDay + ONSET_PASSED_GRACE_DAYS;
 }
