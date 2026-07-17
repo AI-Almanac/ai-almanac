@@ -114,6 +114,33 @@ def _initialization_days(dataset) -> tuple[str, str, int] | None:
     return ",".join(str(day) for day in weekdays), coordinate, int(values.size)
 
 
+def _initialization_schedule(dataset) -> list[str] | None:
+    """The archive's fixed-calendar issue-date schedule as sorted ``MM-DD``.
+
+    Archives pin issue dates to fixed calendar dates (e.g. Apr 1, 4, 8), not
+    weekdays — the weekday of an issue date drifts year to year, so a weekday
+    grid is both unstable across registrations and misaligned with training.
+    Recording the month-days lets a live forecast reproduce the archive's
+    calendar cadence (see forecast_pipeline.season_issue_dates). The month-days
+    are stable across years, so the first file is representative.
+    """
+    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
+    if coordinate is None or dataset[coordinate].ndim != 1:
+        return None
+    values = dataset[coordinate]
+    if values.size < 2:
+        return None
+    try:
+        months = [int(month) for month in values.dt.month.values.tolist()]
+        days = [int(day) for day in values.dt.day.values.tolist()]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    schedule = sorted(
+        {f"{month:02d}-{day:02d}" for month, day in zip(months, days, strict=True)}
+    )
+    return schedule or None
+
+
 def _normalized_initialization_days(value: object) -> str:
     raw_days = [day.strip() for day in str(value).split(",")]
     if not raw_days or any(not day for day in raw_days):
@@ -221,6 +248,9 @@ def _finalize_inspection(
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             initialization_days = _initialization_days(dataset) if kind == "model" else None
+            initialization_schedule = (
+                _initialization_schedule(dataset) if kind == "model" else None
+            )
     except Exception as exc:
         return (
             "invalid",
@@ -254,6 +284,9 @@ def _finalize_inspection(
             normalized["init_days_source"] = "default"
             normalized.pop("init_time_coordinate", None)
             normalized.pop("init_time_sample_count", None)
+        # The calendar schedule drives live forecast issue dates; init_days
+        # weekdays remain for ROMP and as the pre-schedule fallback.
+        normalized["init_month_days"] = initialization_schedule
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (

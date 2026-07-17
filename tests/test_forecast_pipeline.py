@@ -24,6 +24,39 @@ def test_season_issue_dates_can_be_capped_to_most_recent():
     assert capped[0] == dates[-10]
 
 
+def test_season_issue_dates_follows_calendar_schedule_over_weekday():
+    # A calendar-anchored archive: Apr 1 2020 is a Wednesday and Apr 4 a
+    # Saturday, so the weekday grid [0, 3] (Mon/Thu) would miss them entirely.
+    # With a schedule present, the exact month-days win regardless of weekday.
+    schedule = ["04-01", "04-04", "04-08", "05-02", "05-06"]
+    dates = season_issue_dates(
+        "01-01", init_weekdays=[0, 3], year=2020, schedule_month_days=schedule
+    )
+    assert dates == [
+        dt.date(2020, 4, 1),
+        dt.date(2020, 4, 4),
+        dt.date(2020, 4, 8),
+        dt.date(2020, 5, 2),
+        dt.date(2020, 5, 6),
+    ]
+
+
+def test_season_issue_dates_schedule_respects_season_start_window():
+    schedule = ["04-01", "04-04", "05-02", "05-06"]
+    dates = season_issue_dates(
+        "05-01", init_weekdays=[6], year=2020, schedule_month_days=schedule
+    )
+    assert dates == [dt.date(2020, 5, 2), dt.date(2020, 5, 6)]  # Apr dates trimmed
+
+
+def test_season_issue_dates_schedule_skips_dates_absent_in_year():
+    # 2021 is not a leap year, so 02-29 has no calendar date and is dropped.
+    dates = season_issue_dates(
+        "01-01", init_weekdays=[0], year=2021, schedule_month_days=["02-29", "03-01"]
+    )
+    assert dates == [dt.date(2021, 3, 1)]
+
+
 def _trajectory():
     import numpy as np
     import xarray as xr
