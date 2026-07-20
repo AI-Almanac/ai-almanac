@@ -85,6 +85,31 @@
 
 	const EMPTY_PROBS = [0, 0, 0, 0, 0];
 
+	// Smallest positive gap between unique coordinate values — the native grid
+	// step. Using the min (not the mean) keeps cells from overlapping when the
+	// grid has occasional gaps.
+	function minPositiveDiff(values: number[]): number | null {
+		const uniq = [...new Set(values)].sort((a, b) => a - b);
+		let min = Infinity;
+		for (let i = 1; i < uniq.length; i++) {
+			const d = uniq[i] - uniq[i - 1];
+			if (d > 0 && d < min) min = d;
+		}
+		return Number.isFinite(min) ? min : null;
+	}
+
+	// Cell size inferred from the data so squares tile the native lat/lon grid
+	// instead of overlapping like fixed-radius dots — Ethiopia's grid is far
+	// finer than India's, and a pixel radius can't serve both.
+	const gridStep = $derived.by(() => {
+		const fallback = { dx: 0.25, dy: 0.25 };
+		if (!data?.points.length) return fallback;
+		return {
+			dx: minPositiveDiff(data.points.map((p) => p.lon)) ?? fallback.dx,
+			dy: minPositiveDiff(data.points.map((p) => p.lat)) ?? fallback.dy
+		};
+	});
+
 	// Precompute each dot's color + opacity in JS (functional core) so the map
 	// paint stays a static `['get', …]`; the mode logic lives here, not in the
 	// MapLibre expression.
@@ -107,15 +132,26 @@
 
 	function buildGeoJson(d: BlendForecastData, date: string, week: Week) {
 		const dateIdx = d.issue_dates.indexOf(date);
+		const hx = gridStep.dx / 2;
+		const hy = gridStep.dy / 2;
 		return {
 			type: 'FeatureCollection' as const,
 			features: d.points.map((pt, i) => {
 				const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
 				const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[i] ?? null);
 				const { color, opacity } = featureStyle(row, week, passed);
+				// A square covering the point's grid cell, so cells tile the grid
+				// and scale with zoom (geographic units) rather than overlapping.
+				const ring = [
+					[pt.lon - hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat - hy]
+				];
 				return {
 					type: 'Feature' as const,
-					geometry: { type: 'Point' as const, coordinates: [pt.lon, pt.lat] },
+					geometry: { type: 'Polygon' as const, coordinates: [ring] },
 					properties: { color, opacity, idx: i, passed }
 				};
 			})
@@ -154,15 +190,13 @@
 		}
 		map.addSource('blend', { type: 'geojson', data: geojson });
 		map.addLayer({
-			id: 'blend-circles',
-			type: 'circle',
+			id: 'blend-cells',
+			type: 'fill',
 			source: 'blend',
 			paint: {
-				'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 4, 5, 10, 8, 16],
-				'circle-color': ['get', 'color'],
-				'circle-opacity': ['get', 'opacity'],
-				'circle-stroke-width': 0.75,
-				'circle-stroke-color': dotStroke()
+				'fill-color': ['get', 'color'],
+				'fill-opacity': ['get', 'opacity'],
+				'fill-outline-color': dotStroke()
 			}
 		});
 		if (fit) fitToData(d);
@@ -325,14 +359,14 @@
 		});
 
 		// Click a grid cell to open its season inspector.
-		map.on('click', 'blend-circles', (e) => {
+		map.on('click', 'blend-cells', (e) => {
 			const idx = e.features?.[0]?.properties?.idx;
 			if (typeof idx === 'number' && data) selectedCell = data.points[idx] ?? null;
 		});
-		map.on('mouseenter', 'blend-circles', () => {
+		map.on('mouseenter', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = 'pointer';
 		});
-		map.on('mouseleave', 'blend-circles', () => {
+		map.on('mouseleave', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = '';
 		});
 

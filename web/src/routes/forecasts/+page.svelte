@@ -572,7 +572,13 @@
 				{#if selected.status === 'complete'}
 					<div class="map-section">
 						<div class="map-host">
-							<BlendForecastMap jobId={selected.id} />
+							<!-- Keyed so switching forecasts remounts the map: its data,
+							     selected date, and open cell inspector all load only on
+							     mount, so without a fresh instance a switch leaves stale
+							     data on screen. -->
+							{#key selected.id}
+								<BlendForecastMap jobId={selected.id} />
+							{/key}
 						</div>
 					</div>
 
