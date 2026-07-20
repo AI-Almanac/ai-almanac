@@ -22,9 +22,13 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
+	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
+	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
+	import type { BoundaryStyleDef } from '$lib/components/metric-map/types';
+	import type { BoundaryLevel } from '$lib/api';
 
-	type Props = { jobId: string };
-	let { jobId }: Props = $props();
+	type Props = { jobId: string; regionId?: string | null };
+	let { jobId, regionId = null }: Props = $props();
 
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
@@ -83,7 +87,62 @@
 
 	let selectedCell = $state<BlendForecastPoint | null>(null);
 
+	// Subtler boundary styling than the benchmark map's: this map's bright plasma
+	// cells are the focus, so thin translucent lines over a soft dark halo keep
+	// the admin outlines legible without the heavy white halos flooding the grid.
+	const FORECAST_BOUNDARY_STYLES: Record<BoundaryLevel, BoundaryStyleDef> = {
+		adm1: {
+			...BOUNDARY_LEVELS.adm1,
+			strokeColor: 'rgba(236, 240, 245, 0.7)',
+			haloColor: 'rgba(10, 14, 20, 0.55)',
+			strokeWidth: 1.1,
+			haloWidth: 2.4
+		},
+		adm2: {
+			...BOUNDARY_LEVELS.adm2,
+			strokeColor: 'rgba(236, 240, 245, 0.42)',
+			haloColor: 'rgba(10, 14, 20, 0.4)',
+			strokeWidth: 0.6,
+			haloWidth: 1.5
+		}
+	};
+
+	// Optional admin-boundary overlays, reusing the benchmark map's layer
+	// manager. Keyed by the forecast's region id (from the parent), which the
+	// blend-forecast payload itself doesn't carry.
+	const boundaries = new BoundaryLayers(
+		() => map,
+		() => regionId ?? undefined,
+		FORECAST_BOUNDARY_STYLES
+	);
+	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
+
 	const EMPTY_PROBS = [0, 0, 0, 0, 0];
+
+	// Smallest positive gap between unique coordinate values — the native grid
+	// step. Using the min (not the mean) keeps cells from overlapping when the
+	// grid has occasional gaps.
+	function minPositiveDiff(values: number[]): number | null {
+		const uniq = [...new Set(values)].sort((a, b) => a - b);
+		let min = Infinity;
+		for (let i = 1; i < uniq.length; i++) {
+			const d = uniq[i] - uniq[i - 1];
+			if (d > 0 && d < min) min = d;
+		}
+		return Number.isFinite(min) ? min : null;
+	}
+
+	// Cell size inferred from the data so squares tile the native lat/lon grid
+	// instead of overlapping like fixed-radius dots — Ethiopia's grid is far
+	// finer than India's, and a pixel radius can't serve both.
+	const gridStep = $derived.by(() => {
+		const fallback = { dx: 0.25, dy: 0.25 };
+		if (!data?.points.length) return fallback;
+		return {
+			dx: minPositiveDiff(data.points.map((p) => p.lon)) ?? fallback.dx,
+			dy: minPositiveDiff(data.points.map((p) => p.lat)) ?? fallback.dy
+		};
+	});
 
 	// Precompute each dot's color + opacity in JS (functional core) so the map
 	// paint stays a static `['get', …]`; the mode logic lives here, not in the
@@ -107,15 +166,26 @@
 
 	function buildGeoJson(d: BlendForecastData, date: string, week: Week) {
 		const dateIdx = d.issue_dates.indexOf(date);
+		const hx = gridStep.dx / 2;
+		const hy = gridStep.dy / 2;
 		return {
 			type: 'FeatureCollection' as const,
 			features: d.points.map((pt, i) => {
 				const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
 				const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[i] ?? null);
 				const { color, opacity } = featureStyle(row, week, passed);
+				// A square covering the point's grid cell, so cells tile the grid
+				// and scale with zoom (geographic units) rather than overlapping.
+				const ring = [
+					[pt.lon - hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat - hy]
+				];
 				return {
 					type: 'Feature' as const,
-					geometry: { type: 'Point' as const, coordinates: [pt.lon, pt.lat] },
+					geometry: { type: 'Polygon' as const, coordinates: [ring] },
 					properties: { color, opacity, idx: i, passed }
 				};
 			})
@@ -154,15 +224,13 @@
 		}
 		map.addSource('blend', { type: 'geojson', data: geojson });
 		map.addLayer({
-			id: 'blend-circles',
-			type: 'circle',
+			id: 'blend-cells',
+			type: 'fill',
 			source: 'blend',
 			paint: {
-				'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 4, 5, 10, 8, 16],
-				'circle-color': ['get', 'color'],
-				'circle-opacity': ['get', 'opacity'],
-				'circle-stroke-width': 0.75,
-				'circle-stroke-color': dotStroke()
+				'fill-color': ['get', 'color'],
+				'fill-opacity': ['get', 'opacity'],
+				'fill-outline-color': dotStroke()
 			}
 		});
 		if (fit) fitToData(d);
@@ -199,6 +267,10 @@
 		map.once('style.load', () => {
 			liftBasemap();
 			if (data) initLayer(data, { fit: false });
+			// setStyle wipes every custom layer, so drop the manager's stale layer
+			// state and re-add the visible boundary levels on top of the cells.
+			boundaries.clearFromMap();
+			boundaries.reloadVisible();
 		});
 		map.setStyle(basemapStyle().url);
 	});
@@ -325,14 +397,14 @@
 		});
 
 		// Click a grid cell to open its season inspector.
-		map.on('click', 'blend-circles', (e) => {
+		map.on('click', 'blend-cells', (e) => {
 			const idx = e.features?.[0]?.properties?.idx;
 			if (typeof idx === 'number' && data) selectedCell = data.points[idx] ?? null;
 		});
-		map.on('mouseenter', 'blend-circles', () => {
+		map.on('mouseenter', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = 'pointer';
 		});
-		map.on('mouseleave', 'blend-circles', () => {
+		map.on('mouseleave', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = '';
 		});
 
@@ -423,6 +495,28 @@
 			</select>
 		</div>
 
+		{#if regionId}
+			<div class="rail-group">
+				<span class="rail-label">Admin boundaries</span>
+				<div class="mode-toggle">
+					{#each boundaryLevels as level (level)}
+						<button
+							class:active={boundaries.visibleLevels.has(level)}
+							disabled={boundaries.loading.has(level)}
+							onclick={() => boundaries.toggle(level)}
+						>
+							{BOUNDARY_LEVELS[level].label}
+						</button>
+					{/each}
+				</div>
+				{#each boundaryLevels as level (level)}
+					{#if boundaries.errors[level]}
+						<p class="boundary-error">{boundaries.errors[level]}</p>
+					{/if}
+				{/each}
+			</div>
+		{/if}
+
 		<div class="rail-group rail-legend">
 			<span class="rail-label">Legend</span>
 			<p class="legend-caption">{caption}</p>
@@ -457,6 +551,13 @@
 				probability has passed, so the outlook ahead no longer applies. This is estimated from the
 				forecasts, not a confirmation that onset occurred.
 			</p>
+			{#if boundaries.visibleLayers.length > 0}
+				<p class="legend-note">
+					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
+						.map((l) => l.label)
+						.join('; ')})
+				</p>
+			{/if}
 		</div>
 	</aside>
 
@@ -1096,6 +1197,13 @@
 		font-size: 0.62rem;
 		line-height: 1.4;
 		color: var(--color-text-muted);
+	}
+
+	.boundary-error {
+		margin: 0.35rem 0 0;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		color: var(--color-danger);
 	}
 
 	.swatch-item {

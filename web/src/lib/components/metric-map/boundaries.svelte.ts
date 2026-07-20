@@ -2,7 +2,12 @@ import type maplibregl from 'maplibre-gl';
 import { getRegionBoundary } from '$lib/api';
 import { BOUNDARY_LEVELS } from './constants';
 import { boundaryLayerId, boundarySourceId } from './layerKeys';
-import type { BoundaryCacheEntry, BoundaryLayerState, BoundaryLevel } from './types';
+import type {
+	BoundaryCacheEntry,
+	BoundaryLayerState,
+	BoundaryLevel,
+	BoundaryStyleDef
+} from './types';
 
 type BoundaryMetadata = Awaited<ReturnType<typeof getRegionBoundary>>['metadata'];
 
@@ -43,7 +48,10 @@ export class BoundaryLayers {
 
 	constructor(
 		private getMap: () => maplibregl.Map | null,
-		private getRegion: () => string | undefined
+		private getRegion: () => string | undefined,
+		// Per-map line styling; defaults to the shared BOUNDARY_LEVELS so callers
+		// that don't care (the benchmark map) are unaffected.
+		private styles: Record<BoundaryLevel, BoundaryStyleDef> = BOUNDARY_LEVELS
 	) {}
 
 	/** Remove all boundary layers from the map and reset load state. */
@@ -132,7 +140,7 @@ export class BoundaryLayers {
 	): BoundaryLayerState | null {
 		const map = this.getMap();
 		if (!map) return null;
-		const style = BOUNDARY_LEVELS[level];
+		const style = this.styles[level];
 		const sourceId = boundarySourceId(level);
 		const haloLayerId = `${boundaryLayerId(level)}-halo`;
 		const layerId = boundaryLayerId(level);

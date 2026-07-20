@@ -1,8 +1,10 @@
 import json
 import logging
+import ssl
 from typing import Any
 
 import aiohttp
+import certifi
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -12,6 +14,12 @@ from ai_almanac.server.services.regions import list_region_options
 
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
+
+# Verify the geoBoundaries TLS cert against certifi's CA bundle rather than the
+# ambient system trust store, which some environments (e.g. a bare pixi Python)
+# leave unpopulated — ssl.get_default_verify_paths() returns nothing there and
+# every HTTPS fetch fails with CERTIFICATE_VERIFY_FAILED.
+_BOUNDARY_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
@@ -130,7 +138,8 @@ async def get_boundary(
         return cached
 
     timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    connector = aiohttp.TCPConnector(ssl=_BOUNDARY_SSL_CONTEXT)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         metadata = await _fetch_json(session, _metadata_url(iso, boundary_type))
         geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get(
             "gjDownloadURL"
