@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import datetime as dt
 
-from ai_almanac.server.services.forecast_pipeline import season_issue_dates
+from ai_almanac.server.services.forecast_pipeline import _split_gs_uri, season_issue_dates
+
+
+def test_split_gs_uri_separates_bucket_from_key():
+    assert _split_gs_uri("gs://my-bucket/season-forecasts/aifs/gfs/v1/x.nc") == (
+        "my-bucket",
+        "season-forecasts/aifs/gfs/v1/x.nc",
+    )
+    # Bare bucket with no key.
+    assert _split_gs_uri("gs://my-bucket") == ("my-bucket", "")
 
 
 def test_season_issue_dates_matches_weekday_cadence():
