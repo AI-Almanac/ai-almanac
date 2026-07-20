@@ -22,9 +22,12 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
+	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
+	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
+	import type { BoundaryLevel } from '$lib/api';
 
-	type Props = { jobId: string };
-	let { jobId }: Props = $props();
+	type Props = { jobId: string; regionId?: string | null };
+	let { jobId, regionId = null }: Props = $props();
 
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
@@ -82,6 +85,15 @@
 	let tooltipProbs = $state<number[] | null>(null);
 
 	let selectedCell = $state<BlendForecastPoint | null>(null);
+
+	// Optional admin-boundary overlays, reusing the benchmark map's layer
+	// manager. Keyed by the forecast's region id (from the parent), which the
+	// blend-forecast payload itself doesn't carry.
+	const boundaries = new BoundaryLayers(
+		() => map,
+		() => regionId ?? undefined
+	);
+	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
 
 	const EMPTY_PROBS = [0, 0, 0, 0, 0];
 
@@ -233,6 +245,10 @@
 		map.once('style.load', () => {
 			liftBasemap();
 			if (data) initLayer(data, { fit: false });
+			// setStyle wipes every custom layer, so drop the manager's stale layer
+			// state and re-add the visible boundary levels on top of the cells.
+			boundaries.clearFromMap();
+			boundaries.reloadVisible();
 		});
 		map.setStyle(basemapStyle().url);
 	});
@@ -457,6 +473,28 @@
 			</select>
 		</div>
 
+		{#if regionId}
+			<div class="rail-group">
+				<span class="rail-label">Admin boundaries</span>
+				<div class="mode-toggle">
+					{#each boundaryLevels as level (level)}
+						<button
+							class:active={boundaries.visibleLevels.has(level)}
+							disabled={boundaries.loading.has(level)}
+							onclick={() => boundaries.toggle(level)}
+						>
+							{BOUNDARY_LEVELS[level].label}
+						</button>
+					{/each}
+				</div>
+				{#each boundaryLevels as level (level)}
+					{#if boundaries.errors[level]}
+						<p class="boundary-error">{boundaries.errors[level]}</p>
+					{/if}
+				{/each}
+			</div>
+		{/if}
+
 		<div class="rail-group rail-legend">
 			<span class="rail-label">Legend</span>
 			<p class="legend-caption">{caption}</p>
@@ -491,6 +529,13 @@
 				probability has passed, so the outlook ahead no longer applies. This is estimated from the
 				forecasts, not a confirmation that onset occurred.
 			</p>
+			{#if boundaries.visibleLayers.length > 0}
+				<p class="legend-note">
+					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
+						.map((l) => l.label)
+						.join('; ')})
+				</p>
+			{/if}
 		</div>
 	</aside>
 
@@ -1130,6 +1175,13 @@
 		font-size: 0.62rem;
 		line-height: 1.4;
 		color: var(--color-text-muted);
+	}
+
+	.boundary-error {
+		margin: 0.35rem 0 0;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		color: var(--color-danger);
 	}
 
 	.swatch-item {

@@ -577,7 +577,7 @@
 							     mount, so without a fresh instance a switch leaves stale
 							     data on screen. -->
 							{#key selected.id}
-								<BlendForecastMap jobId={selected.id} />
+								<BlendForecastMap jobId={selected.id} regionId={selected.region_id ?? null} />
 							{/key}
 						</div>
 					</div>
