@@ -24,6 +24,7 @@
 	import { formatLatLon } from '$lib/geo';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
 	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
+	import type { BoundaryStyleDef } from '$lib/components/metric-map/types';
 	import type { BoundaryLevel } from '$lib/api';
 
 	type Props = { jobId: string; regionId?: string | null };
@@ -86,12 +87,33 @@
 
 	let selectedCell = $state<BlendForecastPoint | null>(null);
 
+	// Subtler boundary styling than the benchmark map's: this map's bright plasma
+	// cells are the focus, so thin translucent lines over a soft dark halo keep
+	// the admin outlines legible without the heavy white halos flooding the grid.
+	const FORECAST_BOUNDARY_STYLES: Record<BoundaryLevel, BoundaryStyleDef> = {
+		adm1: {
+			...BOUNDARY_LEVELS.adm1,
+			strokeColor: 'rgba(236, 240, 245, 0.7)',
+			haloColor: 'rgba(10, 14, 20, 0.55)',
+			strokeWidth: 1.1,
+			haloWidth: 2.4
+		},
+		adm2: {
+			...BOUNDARY_LEVELS.adm2,
+			strokeColor: 'rgba(236, 240, 245, 0.42)',
+			haloColor: 'rgba(10, 14, 20, 0.4)',
+			strokeWidth: 0.6,
+			haloWidth: 1.5
+		}
+	};
+
 	// Optional admin-boundary overlays, reusing the benchmark map's layer
 	// manager. Keyed by the forecast's region id (from the parent), which the
 	// blend-forecast payload itself doesn't carry.
 	const boundaries = new BoundaryLayers(
 		() => map,
-		() => regionId ?? undefined
+		() => regionId ?? undefined,
+		FORECAST_BOUNDARY_STYLES
 	);
 	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
 
