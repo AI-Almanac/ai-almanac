@@ -1814,7 +1814,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0
-  sha256: 91fd256789b53e63c4cbe54e1aa2291e49b884d260345044d40a2caec13b813e
+  sha256: eda483667a6f0d70c355551b7d9e7b01a4356ad51e1fbe98fb82e31237f3f69c
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0
@@ -1842,6 +1842,7 @@ packages:
   - modal>=1.5.0,<2
   - globus-sdk>=4.8.0,<5
   - titiler-core>=2.0.5,<3
+  - certifi
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/67/cd/0d76dfc5de72bde52f55f53e925c7d152d9c7906634ec1e0cbc7e8d4ad93/aiofile-3.11.1-py3-none-any.whl
   name: aiofile
