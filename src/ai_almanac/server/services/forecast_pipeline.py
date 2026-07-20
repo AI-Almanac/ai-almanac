@@ -489,8 +489,18 @@ def generate_season_forecast_netcdf(
         del trajectory, traj
         gc.collect()
 
+    import dask
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds:
+    # HDF5/h5py is not thread-safe; open_mfdataset + to_netcdf under dask's
+    # default threaded scheduler deadlocks reading the slices while writing the
+    # output (hangs indefinitely, no error). Force the single-threaded scheduler
+    # — the write still streams slice-by-slice, so memory stays flat.
+    # ponytail: single-threaded reassembly, revisit if a full season's write
+    # becomes a wall-clock bottleneck (it's I/O-bound on tiny regional slices).
+    with dask.config.set(scheduler="single-threaded"), xr.open_mfdataset(
+        slice_paths, concat_dim="time", combine="nested"
+    ) as ds:
         ds.to_netcdf(out_path)
     return out_path
 
