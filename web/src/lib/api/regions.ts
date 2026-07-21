@@ -18,7 +18,7 @@ export type Region = {
 	boundary_iso: string | null;
 };
 
-export type BoundaryLevel = 'adm1' | 'adm2';
+export type BoundaryLevel = 'adm1' | 'adm2' | 'adm3';
 
 export type RegionBoundaryMetadata = {
 	boundaryID: string | null;

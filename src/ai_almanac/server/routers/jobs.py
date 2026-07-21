@@ -281,6 +281,7 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
             "issue_dates": [],
             "points": [],
             "onset_threshold": None,
+            "region_id": config.get("region_id"),
             "region_name": region_name,
             "onset_definition": onset_definition,
         }
@@ -351,6 +352,7 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
         "issue_dates": issue_dates,
         "points": points,
         "onset_threshold": onset_threshold,
+        "region_id": config.get("region_id"),
         "region_name": region_name,
         "onset_definition": onset_definition,
     }

@@ -98,6 +98,7 @@ export type BlendForecastData = {
 	points: BlendForecastPoint[];
 	// Rainfall threshold (mm) that defines "onset"; null if the CSV omits it.
 	onset_threshold: number | null;
+	region_id: string | null;
 	// Region display name and its onset definition (e.g. India → Modified
 	// Moron–Robertson), so the UI can name what "onset" means here.
 	region_name: string | null;

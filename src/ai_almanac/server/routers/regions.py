@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
     "adm2": "ADM2",
+    "adm3": "ADM3",
 }
 
 _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
