@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
 	import {
 		listBlends,
@@ -11,7 +11,6 @@
 		cancelJob,
 		deleteJob,
 		fetchResultBlob,
-		subscribeJob,
 		type Blend,
 		type BlendCreate,
 		type BlendRunSpec,
@@ -19,8 +18,7 @@
 		type DataSource,
 		type Job,
 		type JobArtifact,
-		type JobStatus,
-		type JobStreamEvent
+		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
@@ -267,51 +265,33 @@
 	// list on a timer. Replacing the array on every poll reassigned every blend
 	// object, which remounted the detail view and made the page jump. Here only
 	// the blend whose status actually changed is rewritten.
-	const streams = new Map<string, () => void>();
-	$effect(() => {
-		const active = new Set(
-			blends.filter((b) => ACTIVE_STATUSES.includes(b.status)).map((b) => b.id)
-		);
-		for (const id of active) {
-			if (!streams.has(id))
-				streams.set(
-					id,
-					subscribeJob(id, (event) => onBlendEvent(id, event))
-				);
-		}
-		for (const [id, close] of streams) {
-			if (!active.has(id)) {
-				close();
-				streams.delete(id);
-			}
-		}
-	});
-	onDestroy(() => {
-		for (const close of streams.values()) close();
-		streams.clear();
-	});
+	// While any blend is active, re-fetch the list and replace only the blends
+	// whose status changed (a wholesale rewrite remounts the detail view and
+	// makes the page jump). Bounded by the server's ~5s reconcile cadence, so a
+	// 3s poll is as live as the data gets. Returning the stop fn lets $effect
+	// tear the timer down on unmount.
+	$effect(() =>
+		pollWhileActive(() => blends.some((b) => ACTIVE_STATUSES.includes(b.status)), syncBlendStatuses)
+	);
 
-	function onBlendEvent(id: string, event: JobStreamEvent) {
-		if (event.type !== 'status' && event.type !== 'done') return;
-		patchBlendStatus(id, event.payload.status as JobStatus);
-		// The stream only carries status; pull completed_at/error once on finish.
-		if (event.type === 'done') void refreshBlend(id);
+	async function syncBlendStatuses() {
+		let fresh: Blend[];
+		try {
+			fresh = await listBlends();
+		} catch {
+			return; // transient — next tick retries
+		}
+		const byId = new Map(fresh.map((b) => [b.id, b]));
+		blends = blends.map((b) => {
+			const updated = byId.get(b.id);
+			return updated && updated.status !== b.status ? updated : b;
+		});
 	}
 
 	function patchBlendStatus(id: string, status: JobStatus) {
 		const idx = blends.findIndex((b) => b.id === id);
 		if (idx === -1 || blends[idx].status === status) return;
 		blends[idx] = { ...blends[idx], status };
-	}
-
-	async function refreshBlend(id: string) {
-		try {
-			const fresh = (await listBlends()).find((b) => b.id === id);
-			const idx = blends.findIndex((b) => b.id === id);
-			if (fresh && idx !== -1) blends[idx] = fresh;
-		} catch {
-			/* transient — the status patch already reflects the terminal state */
-		}
 	}
 
 	$effect(() => {

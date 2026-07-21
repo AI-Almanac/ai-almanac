@@ -1,16 +1,10 @@
-"""Phase 2 — identity parsing, role policies, and WebSocket authorization."""
+"""Phase 2 — identity parsing and role policies."""
 
 from __future__ import annotations
 
-import sqlite3
-import uuid
-
 import httpx
 import pytest
-from starlette.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
-from ai_almanac.paths import database_path
 from ai_almanac.server.auth import enforce_deployment_invariants
 from ai_almanac.settings import settings
 
@@ -297,67 +291,6 @@ async def test_data_source_delete_hides_unowned_sources(
         "/data-sources/anything", headers={"X-Forwarded-User": "rando"}
     )
     assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# WebSocket authorization (previously unauthenticated)
-# ---------------------------------------------------------------------------
-
-
-def _insert_owned_job(external_id: str, user_id: str, job_id: str) -> None:
-    with sqlite3.connect(database_path()) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO users (id, external_id, created_at) VALUES (?, ?, ?)",
-            (user_id, external_id, "2026-01-01T00:00:00"),
-        )
-        conn.execute(
-            "INSERT INTO jobs (id, user_id, dataset_id, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (job_id, user_id, "ds", "running", "2026-01-01T00:00:00"),
-        )
-        conn.commit()
-
-
-def test_ws_rejects_missing_identity_in_shared(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from ai_almanac.server.app import app
-
-    with TestClient(app) as tc:
-        monkeypatch.setattr(settings, "auth_mode", "proxy")
-        with pytest.raises(WebSocketDisconnect), tc.websocket_connect(
-            "/jobs/anything/stream"
-        ):
-            pass
-
-
-def test_ws_rejects_non_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.app import app
-
-    owner_id = str(uuid.uuid4())
-    job_id = str(uuid.uuid4())
-    with TestClient(app) as tc:
-        monkeypatch.setattr(settings, "auth_mode", "proxy")
-        _insert_owned_job(f"owner-{owner_id}", owner_id, job_id)
-        with pytest.raises(WebSocketDisconnect), tc.websocket_connect(
-            f"/jobs/{job_id}/stream", headers={"X-Forwarded-User": "intruder"}
-        ) as ws:
-            ws.receive_json()
-
-
-def test_ws_allows_owner() -> None:
-    from ai_almanac.server.app import app
-
-    owner_id = str(uuid.uuid4())
-    external_id = f"owner-{owner_id}"
-    job_id = str(uuid.uuid4())
-    with TestClient(app) as tc:
-        _insert_owned_job(external_id, owner_id, job_id)
-        with tc.websocket_connect(
-            f"/jobs/{job_id}/stream", headers={"X-Forwarded-User": external_id}
-        ) as ws:
-            msg = ws.receive_json()
-            assert msg["type"] in ("status", "log", "done")
 
 
 # ---------------------------------------------------------------------------

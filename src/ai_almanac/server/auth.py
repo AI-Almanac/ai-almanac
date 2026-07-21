@@ -1,7 +1,7 @@
 """Request identity and authorization.
 
-Parses an `AuthenticatedUser` from each request (or WebSocket handshake) and
-exposes role-based FastAPI dependencies. Replaces the old attribution shim.
+Parses an `AuthenticatedUser` from each request and exposes role-based FastAPI
+dependencies. Replaces the old attribution shim.
 
 Two deployment modes (see `settings.deployment_mode` / `settings.auth_mode`):
 
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Annotated, Literal
 
-from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, status
 from starlette.datastructures import Headers
 
 from ai_almanac.server.db import get_db, get_or_create_user
@@ -253,30 +253,6 @@ async def require_forecasting() -> None:
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
-
-
-async def authenticate_websocket(websocket: WebSocket) -> AuthenticatedUser | None:
-    """Resolve identity for a WebSocket handshake.
-
-    Returns the user, or closes the handshake (policy violation) and returns
-    None when identity is required but absent. The caller must stop on None.
-    """
-    try:
-        if settings.deployment_mode == "shared":
-            origin = websocket.headers.get("origin")
-            allowed = _split_csv(settings.frontend_url)
-            if not origin or origin not in allowed:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return None
-        if settings.auth_mode == "globus":
-            return await _resolve_globus_token(
-                _bearer_token(websocket.headers)
-                or websocket.query_params.get("access_token")
-            )
-        return await _resolve_identity(websocket.headers)
-    except _MissingIdentity:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return None
 
 
 def enforce_deployment_invariants() -> None:

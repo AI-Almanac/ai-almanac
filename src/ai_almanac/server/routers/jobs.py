@@ -9,14 +9,12 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
-    WebSocket,
-    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ai_almanac.server.auth import CurrentUser, authenticate_websocket
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
@@ -149,69 +147,6 @@ def _require_complete(job: dict) -> None:
         raise HTTPException(
             status_code=409, detail=f"Job is not complete (status: {job['status']})"
         )
-
-
-@router.websocket("/{job_id}/stream")
-async def stream_job(ws: WebSocket, job_id: str) -> None:
-    """Stream durable log additions and status changes to the job's owner."""
-    user = await authenticate_websocket(ws)
-    if user is None:
-        return  # handshake already closed (missing identity in shared mode)
-    await ws.accept()
-
-    job = await job_access.fetch_job(job_id)
-    if job is None or not job_access.can_read(job, user):
-        # Don't leak existence of other users' jobs; reject uniformly.
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    storage = get_storage()
-    sent_lines = 0
-    previous_status: str | None = None
-    try:
-        while True:
-            logs = await asyncio.to_thread(storage.read_log, job_id)
-            lines = logs.splitlines()
-            for line in lines[sent_lines:]:
-                await ws.send_json({"type": "log", "payload": {"line": line}})
-            sent_lines = len(lines)
-
-            async with get_db() as conn:
-                row = (
-                    (
-                        await conn.execute(
-                            sa.select(jobs.c.status, jobs.c.exit_code).where(
-                                jobs.c.id == job_id
-                            )
-                        )
-                    )
-                    .mappings()
-                    .fetchone()
-                )
-            if not row:
-                await ws.send_json(
-                    {"type": "done", "payload": {"status": "deleted"}}
-                )
-                break
-            if row["status"] != previous_status:
-                previous_status = row["status"]
-                await ws.send_json(
-                    {"type": "status", "payload": {"status": row["status"]}}
-                )
-            if row["status"] in ("complete", "failed", "canceled"):
-                await ws.send_json(
-                    {
-                        "type": "done",
-                        "payload": {
-                            "status": row["status"],
-                            "exit_code": row["exit_code"],
-                        },
-                    }
-                )
-                break
-            await asyncio.sleep(0.75)
-    except WebSocketDisconnect:
-        pass
 
 
 @router.post("/{job_id}/cancel", response_model=JobOut)
