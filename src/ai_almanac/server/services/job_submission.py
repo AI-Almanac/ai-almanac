@@ -13,7 +13,6 @@ import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -516,34 +515,14 @@ class ForecastParams(BaseModel):
     max_issue_dates: int | None = None
 
 
-class GenerationGate(NamedTuple):
-    """Decision for whether a forecast submission may run and its GPU need,
-    given each model's `(set_exists, is_ready)` trajectory state."""
-
-    allowed: bool
-    gpus: int
-    cold_models: list[str]
-
-
-def decide_forecast_generation(
-    readiness: dict[str, tuple[bool, bool]], *, is_admin: bool
-) -> GenerationGate:
-    """Gate a forecast against the shared trajectory store (the gate + cache
-    approach that replaces a separate generation job type):
-
-    - All sets ready -> GPU-free scoring; anyone may run it.
-    - A cold model (no set generated yet) -> needs a full-season rollout;
-      admin-only, since that is the expensive shared cost (D3).
-    - A stale set (exists but missing recent init dates) -> a bounded gap-fill
-      rollout; any user may trigger it (the incremental "update", D5).
+def forecast_generation_gpus(model_ready: dict[str, bool]) -> int:
+    """GPUs a forecast submission needs, given each model's trajectory-set
+    readiness: 0 when every set already covers the season (GPU-free scoring
+    against the cache), 1 when any set needs a rollout — a cold model's
+    full-season generation or a stale set's gap-fill. Either rollout is open to
+    any user; the raw-forecast cache means a cold model is paid for only once.
     """
-    all_ready = all(ready for _, ready in readiness.values())
-    cold = sorted(name for name, (exists, _) in readiness.items() if not exists)
-    if all_ready:
-        return GenerationGate(allowed=True, gpus=0, cold_models=[])
-    if cold and not is_admin:
-        return GenerationGate(allowed=False, gpus=1, cold_models=cold)
-    return GenerationGate(allowed=True, gpus=1, cold_models=cold)
+    return 0 if all(model_ready.values()) else 1
 
 
 class ForecastCreate(BaseModel):
@@ -609,14 +588,13 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
 
 
 async def create_forecast_for_user(
-    body: ForecastCreate, user_id: str, *, is_admin: bool = False
+    body: ForecastCreate, user_id: str
 ) -> ForecastOut:
     """Submit a live-forecast job: run the blend's models forward and score them.
 
-    Gated against the shared trajectory store: a run whose season is fully
-    cached scores for free (GPU-free); a cold model's full-season rollout is
-    admin-only; a stale set's gap-fill update is open to any user. See
-    decide_forecast_generation.
+    A run whose season is fully cached scores for free (GPU-free); any run that
+    needs a rollout — a cold model's full season or a stale set's gap-fill —
+    requests one GPU. See forecast_generation_gpus.
 
     Works with either job runner: locally via the `forecast` pixi environment
     (envs/forecast_entrypoint.py, requires a GPU host — see the
@@ -724,33 +702,17 @@ async def create_forecast_for_user(
         }
     )
     async with get_db() as conn:
-        readiness = {
-            name: (
-                (
-                    await trajectory_sets.get_set(
-                        conn, model_name=name, init_source=init_source, season=season
-                    )
-                )
-                is not None,
-                await trajectory_sets.set_is_ready(
-                    conn,
-                    model_name=name,
-                    init_source=init_source,
-                    season=season,
-                    needed_dates=needed[name],
-                ),
+        model_ready = {
+            name: await trajectory_sets.set_is_ready(
+                conn,
+                model_name=name,
+                init_source=init_source,
+                season=season,
+                needed_dates=needed[name],
             )
             for name in forecast_model_ids
         }
-    gate = decide_forecast_generation(readiness, is_admin=is_admin)
-    if not gate.allowed:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Forecast data for model(s) has not been generated yet and must "
-                f"be prepared by an administrator: {', '.join(gate.cold_models)}"
-            ),
-        )
+    gpus = forecast_generation_gpus(model_ready)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
@@ -803,7 +765,7 @@ async def create_forecast_for_user(
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
-                runner_request={"job_id": job_id, "resources": {"gpus": gate.gpus}},
+                runner_request={"job_id": job_id, "resources": {"gpus": gpus}},
             )
             .returning(jobs)
         )
@@ -863,7 +825,7 @@ async def create_forecast_for_user(
 
 
 async def refresh_forecast_for_user(
-    forecast_id: str, user_id: str, *, is_admin: bool = False
+    forecast_id: str, user_id: str
 ) -> ForecastOut:
     """Re-run an existing forecast with its ORIGINAL generation parameters.
 
@@ -905,7 +867,7 @@ async def refresh_forecast_for_user(
         ),
         run_id=row["run_id"],
     )
-    return await create_forecast_for_user(body, user_id, is_admin=is_admin)
+    return await create_forecast_for_user(body, user_id)
 
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
