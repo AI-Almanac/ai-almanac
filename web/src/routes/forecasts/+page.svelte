@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
 	import {
 		listForecasts,
 		createForecast,
@@ -11,16 +10,15 @@
 		cancelJob,
 		deleteJob,
 		fetchResultBlob,
-		subscribeJob,
 		type Blend,
 		type Forecast,
 		type ForecastCreate,
 		type ForecastModel,
 		type InitSource,
 		type JobArtifact,
-		type JobStatus,
-		type JobStreamEvent
+		type JobStatus
 	} from '$lib/api';
+	import { pollWhileActive } from '$lib/poll';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
@@ -200,50 +198,35 @@
 		}
 	]);
 
-	const streams = new Map<string, () => void>();
-	$effect(() => {
-		const active = new Set(
-			forecasts.filter((f) => ACTIVE_STATUSES.includes(f.status)).map((f) => f.id)
-		);
-		for (const id of active) {
-			if (!streams.has(id))
-				streams.set(
-					id,
-					subscribeJob(id, (event) => onForecastEvent(id, event))
-				);
-		}
-		for (const [id, close] of streams) {
-			if (!active.has(id)) {
-				close();
-				streams.delete(id);
-			}
-		}
-	});
-	onDestroy(() => {
-		for (const close of streams.values()) close();
-		streams.clear();
-	});
+	// While any forecast is active, re-fetch the list and replace items whose
+	// status changed. Bounded by the server's ~5s reconcile cadence, so a 3s
+	// poll is as live as the data gets. Returning the stop fn lets $effect tear
+	// the timer down on unmount.
+	$effect(() =>
+		pollWhileActive(
+			() => forecasts.some((f) => ACTIVE_STATUSES.includes(f.status)),
+			syncForecastStatuses
+		)
+	);
 
-	function onForecastEvent(id: string, event: JobStreamEvent) {
-		if (event.type !== 'status' && event.type !== 'done') return;
-		patchStatus(id, event.payload.status as JobStatus);
-		if (event.type === 'done') void refreshForecast(id);
+	async function syncForecastStatuses() {
+		let fresh: Forecast[];
+		try {
+			fresh = await listForecasts();
+		} catch {
+			return; // transient — next tick retries
+		}
+		const byId = new Map(fresh.map((f) => [f.id, f]));
+		forecasts = forecasts.map((f) => {
+			const updated = byId.get(f.id);
+			return updated && updated.status !== f.status ? updated : f;
+		});
 	}
 
 	function patchStatus(id: string, status: JobStatus) {
 		const idx = forecasts.findIndex((f) => f.id === id);
 		if (idx === -1 || forecasts[idx].status === status) return;
 		forecasts[idx] = { ...forecasts[idx], status };
-	}
-
-	async function refreshForecast(id: string) {
-		try {
-			const fresh = (await listForecasts()).find((f) => f.id === id);
-			const idx = forecasts.findIndex((f) => f.id === id);
-			if (fresh && idx !== -1) forecasts[idx] = fresh;
-		} catch {
-			/* transient — the status patch already reflects the terminal state */
-		}
 	}
 
 	function startNew() {

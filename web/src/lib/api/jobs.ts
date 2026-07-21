@@ -1,5 +1,5 @@
 // ---- Jobs: submission, streaming, results, metrics ----------------------------
-import { getApiAccessToken, authHeaders } from '../auth';
+import { authHeaders } from '../auth';
 import { BASE_URL, request } from './core';
 
 export type JobStatus =
@@ -111,42 +111,6 @@ export type JobArtifact = {
 	created_at: string;
 	url: string;
 };
-
-// ---- WebSocket job streaming ------------------------------------------------
-
-export type JobStreamEvent =
-	| { type: 'status'; payload: { status: string } }
-	| { type: 'log'; payload: { line: string } }
-	| { type: 'done'; payload: { status: string; exit_code?: number } }
-	| { type: 'metric'; payload: Record<string, unknown> };
-
-/**
- * Subscribe to live job events (status, log lines, completion). Replaces HTTP
- * polling of `/jobs/{id}` and `/jobs/{id}/logs`. Returns a closer that
- * unsubscribes when called.
- */
-export function subscribeJob(
-	jobId: string,
-	onEvent: (event: JobStreamEvent) => void,
-	onClose?: (clean: boolean) => void
-): () => void {
-	const wsBase = BASE_URL
-		? BASE_URL.replace(/^https?:/, BASE_URL.startsWith('https:') ? 'wss:' : 'ws:')
-		: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-	const url = new URL(`/jobs/${jobId}/stream`, wsBase);
-	const accessToken = getApiAccessToken();
-	if (accessToken) url.searchParams.set('access_token', accessToken);
-	const ws = new WebSocket(url);
-	ws.onmessage = (e) => {
-		try {
-			onEvent(JSON.parse(e.data) as JobStreamEvent);
-		} catch {
-			/* ignore non-JSON frames */
-		}
-	};
-	ws.onclose = (e) => onClose?.(e.wasClean);
-	return () => ws.close();
-}
 
 export async function getModels(region?: string) {
 	const qs = region ? `?region=${encodeURIComponent(region)}` : '';
