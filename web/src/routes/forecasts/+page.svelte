@@ -240,14 +240,8 @@
 		maxIssueDates = undefined;
 	}
 
-	// The 409 status is embedded in request()'s thrown message; translate it to
-	// a plain-language explanation of the trajectory-readiness gate.
 	function friendlyError(err: unknown): string {
-		const msg = err instanceof Error ? err.message : 'Submission failed';
-		if (msg.includes('(409)')) {
-			return 'This blend uses forecast data that has not been generated yet. An administrator needs to prepare it before this forecast can run.';
-		}
-		return msg;
+		return err instanceof Error ? err.message : 'Submission failed';
 	}
 
 	function selectForecast(id: string) {

@@ -190,7 +190,7 @@ class Settings(BaseSettings):
     credential_encryption_key: str = ""
 
     # Shared-host quotas.
-    max_active_jobs_per_user: int = 2
+    max_active_jobs_per_user: int = 10
     max_concurrent_llm_requests_per_user: int = 2
     max_llm_requests_per_minute: int = 30
 

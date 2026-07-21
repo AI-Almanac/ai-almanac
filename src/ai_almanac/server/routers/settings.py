@@ -77,6 +77,12 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ],
     ),
     (
+        "Shared-host quotas",
+        [
+            ("max_active_jobs_per_user", "Active jobs per user", "Maximum jobs a single user may run at once"),
+        ],
+    ),
+    (
         "Features",
         [
             ("enable_data_management", "Data management", "Let users create custom regions and register their own datasets"),

@@ -39,7 +39,7 @@ router = APIRouter(
 
 @router.post("", response_model=ForecastOut, status_code=status.HTTP_201_CREATED)
 async def create_forecast(body: ForecastCreate, user: CurrentUser):
-    return await create_forecast_for_user(body, user.id, is_admin=user.is_admin)
+    return await create_forecast_for_user(body, user.id)
 
 
 @router.post(
@@ -49,7 +49,7 @@ async def create_forecast(body: ForecastCreate, user: CurrentUser):
 )
 async def refresh_forecast(forecast_id: str, user: CurrentUser):
     """Re-run a forecast with its original spec so it reuses the cached season."""
-    return await refresh_forecast_for_user(forecast_id, user.id, is_admin=user.is_admin)
+    return await refresh_forecast_for_user(forecast_id, user.id)
 
 
 @router.get("/trajectories")
