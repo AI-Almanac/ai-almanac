@@ -91,7 +91,7 @@ export async function getTrajectorySets(): Promise<TrajectorySet[]> {
 }
 
 // probs[date_idx] = [cv_week1, cv_week2, cv_week3, cv_week4, cv_later]
-export type BlendForecastPoint = { lat: number; lon: number; probs: number[][] };
+export type BlendForecastPoint = { id?: string; lat: number; lon: number; probs: number[][] };
 
 export type BlendForecastData = {
 	issue_dates: string[];
