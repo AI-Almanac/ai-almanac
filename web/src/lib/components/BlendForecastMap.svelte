@@ -3,6 +3,7 @@
 	import maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { getBlendForecast, type BlendForecastData, type BlendForecastPoint } from '$lib/api';
+	import { getRegionBoundary } from '$lib/api/regions';
 	import {
 		WEEKS,
 		WEEK_LABELS,
@@ -22,10 +23,14 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
+	import {
+		buildAdm3ForecastGeoJson,
+		usesNamedAreas,
+		type ForecastFeatureCollection
+	} from './blend-map/adm3';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
 	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
-	import type { BoundaryStyleDef } from '$lib/components/metric-map/types';
-	import type { BoundaryLevel } from '$lib/api';
+	import type { BoundaryLevel, BoundaryStyleDef } from '$lib/components/metric-map/types';
 
 	type Props = { jobId: string; regionId?: string | null };
 	let { jobId, regionId = null }: Props = $props();
@@ -50,6 +55,8 @@
 	}
 
 	let data = $state<BlendForecastData | null>(null);
+	let adm3Boundaries = $state<GeoJSON.FeatureCollection | null>(null);
+	let boundaryError = $state<string | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -164,7 +171,24 @@
 		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0, reversed), opacity: 0.9 };
 	}
 
-	function buildGeoJson(d: BlendForecastData, date: string, week: Week) {
+	function stylePoint(
+		d: BlendForecastData,
+		pt: BlendForecastPoint,
+		idx: number,
+		date: string,
+		week: Week
+	) {
+		const dateIdx = d.issue_dates.indexOf(date);
+		const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
+		const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[idx] ?? null);
+		return featureStyle(row, week, passed);
+	}
+
+	function buildPointGeoJson(
+		d: BlendForecastData,
+		date: string,
+		week: Week
+	): ForecastFeatureCollection {
 		const dateIdx = d.issue_dates.indexOf(date);
 		const hx = gridStep.dx / 2;
 		const hy = gridStep.dy / 2;
@@ -190,6 +214,16 @@
 				};
 			})
 		};
+	}
+
+	function buildGeoJson(d: BlendForecastData, date: string, week: Week): ForecastFeatureCollection {
+		if (adm3Boundaries && usesAdm3Polygons(d)) {
+			const polygonGeojson = buildAdm3ForecastGeoJson(d, adm3Boundaries, (pt, idx) =>
+				stylePoint(d, pt, idx, date, week)
+			);
+			if (polygonGeojson) return polygonGeojson;
+		}
+		return buildPointGeoJson(d, date, week);
 	}
 
 	function updateSource() {
@@ -233,7 +267,67 @@
 				'fill-outline-color': dotStroke()
 			}
 		});
+		map.addLayer({
+			id: 'blend-outlines',
+			type: 'line',
+			source: 'blend',
+			paint: {
+				'line-color': dotStroke(),
+				'line-opacity': 0.7,
+				'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.45, 7, 1.2]
+			}
+		});
 		if (fit) fitToData(d);
+	}
+
+	function usesAdm3Polygons(d: BlendForecastData): boolean {
+		return d.region_id === 'ethiopia' && usesNamedAreas(d.points);
+	}
+
+	function isFeatureCollection(value: unknown): value is GeoJSON.FeatureCollection {
+		return (
+			typeof value === 'object' &&
+			value != null &&
+			(value as { type?: unknown }).type === 'FeatureCollection' &&
+			Array.isArray((value as { features?: unknown }).features)
+		);
+	}
+
+	async function loadAdm3Boundaries(d: BlendForecastData) {
+		if (!usesAdm3Polygons(d)) return;
+		const regionId = d.region_id;
+		if (!regionId) return;
+		try {
+			const { geojson } = await getRegionBoundary(regionId, 'adm3');
+			if (!isFeatureCollection(geojson)) throw new Error('ADM3 boundary response was not GeoJSON');
+			const joined = buildAdm3ForecastGeoJson(d, geojson, (pt, idx) =>
+				stylePoint(d, pt, idx, selectedDate, selectedWeek)
+			);
+			if (!joined) throw new Error('ADM3 boundaries did not match forecast areas');
+			adm3Boundaries = geojson;
+			boundaryError = null;
+			if (mapReady) {
+				initLayer(d, { fit: false });
+				fitToData(d);
+			}
+		} catch (e) {
+			boundaryError = e instanceof Error ? e.message : 'Failed to load ADM3 boundaries';
+			adm3Boundaries = null;
+			if (mapReady) initLayer(d, { fit: false });
+		}
+	}
+
+	function extendBoundsWithCoordinates(bounds: maplibregl.LngLatBounds, coordinates: unknown) {
+		if (!Array.isArray(coordinates)) return;
+		if (
+			coordinates.length >= 2 &&
+			typeof coordinates[0] === 'number' &&
+			typeof coordinates[1] === 'number'
+		) {
+			bounds.extend([coordinates[0], coordinates[1]]);
+			return;
+		}
+		for (const child of coordinates) extendBoundsWithCoordinates(bounds, child);
 	}
 
 	// Frame the map on the region's grid points, leaving room for the left rail
@@ -241,7 +335,13 @@
 	function fitToData(d: BlendForecastData) {
 		if (!map || !d.points.length) return;
 		const bounds = new maplibregl.LngLatBounds();
-		for (const pt of d.points) bounds.extend([pt.lon, pt.lat]);
+		const geojson = buildGeoJson(d, selectedDate, selectedWeek);
+		if (geojson.features.some((feature) => feature.geometry.type !== 'Point')) {
+			for (const feature of geojson.features)
+				extendBoundsWithCoordinates(bounds, feature.geometry.coordinates);
+		} else {
+			for (const pt of d.points) bounds.extend([pt.lon, pt.lat]);
+		}
 		map.fitBounds(bounds, {
 			padding: { top: 48, right: 48, bottom: 80, left: collapsed ? 48 : 240 },
 			maxZoom: 6,
@@ -360,6 +460,20 @@
 		return bestDist < 4 ? best : null; // ~2 degrees snap radius
 	}
 
+	function featurePoint(point: maplibregl.PointLike): BlendForecastPoint | null {
+		if (!map || !data) return null;
+		const features = map.queryRenderedFeatures(point, {
+			layers: ['blend-cells'].filter((id) => map?.getLayer(id))
+		});
+		const idx = Number(features[0]?.properties?.idx);
+		return Number.isInteger(idx) ? (data.points[idx] ?? null) : null;
+	}
+
+	function selectFeatureCell(e: maplibregl.MapMouseEvent) {
+		const pt = featurePoint(e.point);
+		if (pt) selectedCell = pt;
+	}
+
 	onMount(async () => {
 		if (!mapHost) return;
 		map = new maplibregl.Map({
@@ -387,7 +501,7 @@
 			tooltipLat = e.lngLat.lat;
 			tooltipLon = e.lngLat.lng;
 			tooltipVisible = true;
-			const pt = nearestPoint(e.lngLat.lng, e.lngLat.lat);
+			const pt = featurePoint(e.point) ?? nearestPoint(e.lngLat.lng, e.lngLat.lat);
 			const dateIdx = data ? data.issue_dates.indexOf(selectedDate) : -1;
 			tooltipProbs = pt && dateIdx >= 0 ? (pt.probs[dateIdx] ?? null) : null;
 		});
@@ -397,10 +511,7 @@
 		});
 
 		// Click a grid cell to open its season inspector.
-		map.on('click', 'blend-cells', (e) => {
-			const idx = e.features?.[0]?.properties?.idx;
-			if (typeof idx === 'number' && data) selectedCell = data.points[idx] ?? null;
-		});
+		map.on('click', 'blend-cells', selectFeatureCell);
 		map.on('mouseenter', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = 'pointer';
 		});
@@ -413,6 +524,7 @@
 			data = d;
 			if (d.issue_dates.length) selectedDate = d.issue_dates[0];
 			if (mapReady) initLayer(d);
+			void loadAdm3Boundaries(d);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load blend forecast';
 		} finally {
@@ -474,7 +586,11 @@
 				<span class="rail-label">Onset window</span>
 				<div class="week-buttons">
 					{#each WEEKS as w (w)}
-						<button class="week-btn" class:active={w === selectedWeek} onclick={() => (selectedWeek = w)}>
+						<button
+							class="week-btn"
+							class:active={w === selectedWeek}
+							onclick={() => (selectedWeek = w)}
+						>
 							{WEEK_LABELS[w]}
 						</button>
 					{/each}
@@ -484,11 +600,7 @@
 
 		<div class="rail-group">
 			<span class="rail-label" id="basemap-label">Base map</span>
-			<select
-				class="rail-select"
-				aria-labelledby="basemap-label"
-				bind:value={selectedBasemap}
-			>
+			<select class="rail-select" aria-labelledby="basemap-label" bind:value={selectedBasemap}>
 				{#each BASEMAP_STYLES as style (style.id)}
 					<option value={style.id}>{style.label}</option>
 				{/each}
@@ -596,6 +708,10 @@
 			<div class="overlay muted">No blend forecast data for this job.</div>
 		{/if}
 
+		{#if boundaryError && data && usesAdm3Polygons(data)}
+			<div class="boundary-note">ADM3 boundaries unavailable; showing centroids.</div>
+		{/if}
+
 		{#if tooltipVisible && !loading}
 			<MapTooltip x={tooltipX} y={tooltipY} coords={formatLatLon(tooltipLat, tooltipLon)}>
 				{#if tooltipProbs}
@@ -606,9 +722,10 @@
 								<div class="tt-bar-track">
 									<div
 										class="tt-bar-fill"
-										style="height: {Math.max(3, (tooltipProbs[i] ?? 0) * 100)}%; background: {windowRamp[
-											i
-										]}"
+										style="height: {Math.max(
+											3,
+											(tooltipProbs[i] ?? 0) * 100
+										)}%; background: {windowRamp[i]}"
 									></div>
 								</div>
 								<span class="tt-val">{fmtProb(tooltipProbs[i] ?? 0)}</span>
@@ -622,46 +739,49 @@
 
 		{#if dateCount > 0}
 			<div class="scrubber">
-			<div class="scrub-controls">
-				<button
-					class="scrub-btn"
-					aria-label="Previous forecast"
-					disabled={dateIndex <= 0}
-					onclick={() => stepDate(-1)}>‹</button
-				>
-				<button
-					class="scrub-btn play"
-					aria-label={playing ? 'Pause' : 'Play'}
-					onclick={togglePlay}>{playing ? '❙❙' : '▶'}</button
-				>
-				<button
-					class="scrub-btn"
-					aria-label="Next forecast"
-					disabled={dateIndex >= dateCount - 1}
-					onclick={() => stepDate(1)}>›</button
-				>
-			</div>
-			<div class="scrub-meta">
-				<span class="scrub-label">Forecast issued</span>
-				<span class="scrub-date">{selectedDate ? fmtDate(selectedDate) : '—'}</span>
-			</div>
-			<div class="scrub-track">
-				<div class="tl-track"></div>
-				<div class="tl-progress" style="width: {tlWidth(Math.max(0, dateIndex), dateCount)}"></div>
-				{#each monthMarkers(data?.issue_dates ?? []) as m (m.label)}
-					<span class="tl-month" style="left: {tlLeft(m.i, dateCount)}">{m.label}</span>
-				{/each}
-				{#each data?.issue_dates ?? [] as d, i (d)}
+				<div class="scrub-controls">
 					<button
-						class="tl-tick"
-						class:active={d === selectedDate}
-						style="left: {tlLeft(i, dateCount)}"
-						aria-label={fmtDate(d)}
-						onclick={() => selectDate(d)}
-					></button>
-				{/each}
+						class="scrub-btn"
+						aria-label="Previous forecast"
+						disabled={dateIndex <= 0}
+						onclick={() => stepDate(-1)}>‹</button
+					>
+					<button
+						class="scrub-btn play"
+						aria-label={playing ? 'Pause' : 'Play'}
+						onclick={togglePlay}>{playing ? '❙❙' : '▶'}</button
+					>
+					<button
+						class="scrub-btn"
+						aria-label="Next forecast"
+						disabled={dateIndex >= dateCount - 1}
+						onclick={() => stepDate(1)}>›</button
+					>
+				</div>
+				<div class="scrub-meta">
+					<span class="scrub-label">Forecast issued</span>
+					<span class="scrub-date">{selectedDate ? fmtDate(selectedDate) : '—'}</span>
+				</div>
+				<div class="scrub-track">
+					<div class="tl-track"></div>
+					<div
+						class="tl-progress"
+						style="width: {tlWidth(Math.max(0, dateIndex), dateCount)}"
+					></div>
+					{#each monthMarkers(data?.issue_dates ?? []) as m (m.label)}
+						<span class="tl-month" style="left: {tlLeft(m.i, dateCount)}">{m.label}</span>
+					{/each}
+					{#each data?.issue_dates ?? [] as d, i (d)}
+						<button
+							class="tl-tick"
+							class:active={d === selectedDate}
+							style="left: {tlLeft(i, dateCount)}"
+							aria-label={fmtDate(d)}
+							onclick={() => selectDate(d)}
+						></button>
+					{/each}
+				</div>
 			</div>
-		</div>
 		{/if}
 	</div>
 </div>
@@ -910,6 +1030,24 @@
 
 	.overlay.muted {
 		color: var(--color-text-muted);
+	}
+
+	.boundary-note {
+		position: absolute;
+		top: 0.7rem;
+		left: 50%;
+		z-index: 3;
+		transform: translateX(-50%);
+		max-width: min(90%, 28rem);
+		padding: 0.45rem 0.7rem;
+		border: 1px solid rgba(31, 43, 52, 0.14);
+		border-radius: 0.35rem;
+		background: rgba(255, 255, 255, 0.92);
+		box-shadow: 0 0.35rem 1.1rem rgba(3, 14, 25, 0.16);
+		color: #35424a;
+		font-size: 0.68rem;
+		font-weight: 700;
+		pointer-events: none;
 	}
 
 	.tt-caption {

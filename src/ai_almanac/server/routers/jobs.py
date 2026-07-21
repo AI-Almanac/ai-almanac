@@ -281,6 +281,7 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
             "issue_dates": [],
             "points": [],
             "onset_threshold": None,
+            "region_id": config.get("region_id"),
             "region_name": region_name,
             "onset_definition": onset_definition,
         }
@@ -305,6 +306,7 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
     reader = csv.DictReader(io.StringIO(text))
     # point_id → {date → [w1, w2, w3, w4, later]}
     by_point: dict[str, dict[str, list[float]]] = {}
+    coords_by_point: dict[str, tuple[float, float]] = {}
     # preserve insertion order for issue_dates
     date_order: dict[str, None] = {}
     onset_threshold: float | None = None
@@ -326,15 +328,22 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
             float(row.get("cv_week4") or 0),
             float(row.get("cv_later") or 0),
         ]
+        if point_id not in coords_by_point and row.get("lat") and row.get("lon"):
+            coords_by_point[point_id] = (float(row["lat"]), float(row["lon"]))
 
     issue_dates = list(date_order)
     points = []
     for point_id, date_map in by_point.items():
-        lat_str, lon_str = point_id.split("_", 1)
+        if point_id in coords_by_point:
+            lat, lon = coords_by_point[point_id]
+        else:
+            lat_str, lon_str = point_id.split("_", 1)
+            lat, lon = float(lat_str), float(lon_str)
         points.append(
             {
-                "lat": float(lat_str),
-                "lon": float(lon_str),
+                "id": point_id,
+                "lat": lat,
+                "lon": lon,
                 "probs": [date_map.get(d, [0, 0, 0, 0, 0]) for d in issue_dates],
             }
         )
@@ -343,6 +352,7 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
         "issue_dates": issue_dates,
         "points": points,
         "onset_threshold": onset_threshold,
+        "region_id": config.get("region_id"),
         "region_name": region_name,
         "onset_definition": onset_definition,
     }

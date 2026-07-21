@@ -125,6 +125,8 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         for key in ("threshold_mm", "cutoff_month_day", "mok_month_day")
         if params.get(key) is not None
     }
+    if config.get("region_id"):
+        prep_kwargs["region_id"] = config["region_id"]
 
     print("==> Building blending intermediates", flush=True)
     intermediates = workflow.build_lat_lon_intermediates_bundle.local(

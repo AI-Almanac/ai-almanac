@@ -91,13 +91,14 @@ export async function getTrajectorySets(): Promise<TrajectorySet[]> {
 }
 
 // probs[date_idx] = [cv_week1, cv_week2, cv_week3, cv_week4, cv_later]
-export type BlendForecastPoint = { lat: number; lon: number; probs: number[][] };
+export type BlendForecastPoint = { id?: string; lat: number; lon: number; probs: number[][] };
 
 export type BlendForecastData = {
 	issue_dates: string[];
 	points: BlendForecastPoint[];
 	// Rainfall threshold (mm) that defines "onset"; null if the CSV omits it.
 	onset_threshold: number | null;
+	region_id: string | null;
 	// Region display name and its onset definition (e.g. India → Modified
 	// Moron–Robertson), so the UI can name what "onset" means here.
 	region_name: string | null;

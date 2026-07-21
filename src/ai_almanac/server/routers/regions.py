@@ -24,6 +24,7 @@ _BOUNDARY_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
     "adm2": "ADM2",
+    "adm3": "ADM3",
 }
 
 _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}

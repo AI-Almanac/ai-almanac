@@ -38,12 +38,13 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tarfile
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 import modal
-
 
 APP_NAME = "almanac-blending"
 BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
@@ -55,6 +56,7 @@ DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
 # apply_blend_coefs_bundle to score live seasons without retraining.
 FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
 GCP_SECRET_NAME = "gcp-service-account"
+ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
 
 app = modal.App(APP_NAME)
@@ -105,10 +107,8 @@ class _LogTee:
 
     def flush(self):
         for stream in self._streams:
-            try:
+            with suppress(Exception):
                 stream.flush()
-            except Exception:
-                pass
 
 
 def _write_gcp_credentials_from_secret() -> None:
@@ -144,7 +144,7 @@ def _stage_gcs_prefix(client, uri: str, local_dir: Path, label: str) -> int:
         results = transfer_manager.download_many_to_path(
             bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
         )
-        for name, result in zip(names, results):
+        for name, result in zip(names, results, strict=True):
             if isinstance(result, Exception):
                 print(f"  {label} FAILED: {name}: {result}")
     return len(names)
@@ -188,7 +188,7 @@ def _upload_output_dir_to_gcs(client, outputs_bucket: str, job_id: str, local_di
         blob_name_prefix=f"{job_id}/output/",
         worker_type="thread",
     )
-    for name, result in zip(files, results):
+    for name, result in zip(files, results, strict=True):
         if isinstance(result, Exception):
             print(f"  upload FAILED: output/{name}: {result}")
         else:
@@ -275,6 +275,8 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
                 if params.get(k) is not None
             }
+            if config.get("region_id"):
+                prep_kwargs["region_id"] = config["region_id"]
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
             intermediates = build_lat_lon_intermediates_bundle.local(
@@ -403,6 +405,135 @@ def _shape(value) -> list[int]:
     return [int(dim) for dim in value.shape]
 
 
+def _adm3_support_paths() -> tuple[Path, Path]:
+    mapping = BLENDING_ROOT / "Monsoon_Data" / "grid_to_district_mapping.csv"
+    dissemination = BLENDING_ROOT / "Monsoon_Data" / "dissemination_cells.csv"
+    missing = [str(path) for path in (mapping, dissemination) if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "ADM3 domain support files are missing from the blending checkout: "
+            + ", ".join(missing)
+        )
+    return mapping, dissemination
+
+
+def _should_use_adm3_domain(region_id: str | None, use_adm3_domain: bool | None) -> bool:
+    if use_adm3_domain is not None:
+        return bool(use_adm3_domain)
+    return (region_id or "").strip().lower() in ADM3_DOMAIN_REGIONS
+
+
+def _normalize_grid_dims(src: Path, dst: Path) -> Path:
+    import xarray as xr
+
+    with xr.open_dataset(src, mask_and_scale=True) as ds:
+        rename = {}
+        for name in ds.dims:
+            lower = str(name).lower()
+            if lower in {"latitude", "lat"} and name != "lat":
+                rename[name] = "lat"
+            elif lower in {"longitude", "lon"} and name != "lon":
+                rename[name] = "lon"
+        for name in ds.coords:
+            lower = str(name).lower()
+            if lower in {"latitude", "lat"} and name != "lat":
+                rename[name] = "lat"
+            elif lower in {"longitude", "lon"} and name != "lon":
+                rename[name] = "lon"
+        normalized = ds.rename(rename) if rename else ds
+        normalized.to_netcdf(dst)
+    return dst
+
+
+def _has_adm3_dimension(path: Path) -> bool:
+    import xarray as xr
+
+    with xr.open_dataset(path, decode_times=False) as ds:
+        names = {str(name).lower() for name in [*ds.dims, *ds.coords]}
+    return bool(names & {"adm3", "adm3_name"})
+
+
+def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
+    import sys
+
+    sys.path.insert(0, str(BLENDING_ROOT))
+    from utils.remap_nc import batch_aggregate_to_adm3_matrix
+
+    mapping_path, _ = _adm3_support_paths()
+    input_dir = _extract_bundle(bundle)
+    remap_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-input-"))
+    out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
+    output_paths: list[Path] = []
+
+    for src in sorted(input_dir.glob("*.nc")):
+        if _has_adm3_dimension(src):
+            target = out_dir / src.name
+            target.write_bytes(src.read_bytes())
+            output_paths.append(target)
+            continue
+
+        normalized = _normalize_grid_dims(src, remap_dir / src.name)
+        batch_aggregate_to_adm3_matrix(
+            str(remap_dir),
+            str(mapping_path),
+            input_file=str(normalized),
+        )
+        remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
+        if not remapped.is_file():
+            raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
+        target = out_dir / src.name
+        shutil.move(str(remapped), target)
+        output_paths.append(target)
+
+    if not output_paths:
+        raise ValueError(f"No NetCDF files found while remapping {label} to ADM3")
+    return _bundle_files(output_paths)
+
+
+def _adm3_centroids():
+    import pandas as pd
+
+    mapping_path, _ = _adm3_support_paths()
+    mapping = pd.read_csv(mapping_path).rename(
+        columns={"latitude": "lat", "longitude": "lon"}
+    )
+    required = {"adm3_name", "lat", "lon", "weight"}
+    missing = required - set(mapping.columns)
+    if missing:
+        raise ValueError(
+            f"ADM3 mapping is missing required columns: {', '.join(sorted(missing))}"
+        )
+
+    mapping["weight"] = mapping["weight"].astype(float)
+    mapping["weighted_lat"] = mapping["lat"].astype(float) * mapping["weight"]
+    mapping["weighted_lon"] = mapping["lon"].astype(float) * mapping["weight"]
+    grouped = (
+        mapping.groupby("adm3_name", as_index=False)[["weight", "weighted_lat", "weighted_lon"]]
+        .sum()
+    )
+    grouped["lat"] = grouped["weighted_lat"] / grouped["weight"]
+    grouped["lon"] = grouped["weighted_lon"] / grouped["weight"]
+    return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
+
+
+def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
+    import pandas as pd
+
+    rows = pd.read_csv(io.BytesIO(csv_bytes))
+    if {"lat", "lon"}.issubset(rows.columns):
+        return csv_bytes
+    if "id" not in rows.columns:
+        raise ValueError("Cannot attach ADM3 centroids: prediction CSV has no id column")
+
+    centroids = _adm3_centroids()
+    out = rows.merge(centroids, on="id", how="left", validate="many_to_one")
+    missing = out[out["lat"].isna() | out["lon"].isna()]["id"].drop_duplicates()
+    if not missing.empty:
+        sample = ", ".join(missing.astype(str).head(10).tolist())
+        raise ValueError(f"ADM3 centroid mapping is missing prediction ids: {sample}")
+    return out.to_csv(index=False).encode("utf-8")
+
+
 def _add_lat_lon_id(df, precision: int):
     if "id" in df.columns:
         return df
@@ -411,7 +542,7 @@ def _add_lat_lon_id(df, precision: int):
     df = df.copy()
     df["id"] = [
         f"{float(lat):.{precision}f}_{float(lon):.{precision}f}"
-        for lat, lon in zip(df["lat"], df["lon"])
+        for lat, lon in zip(df["lat"], df["lon"], strict=True)
     ]
     return df
 
@@ -576,6 +707,7 @@ def probe_lat_lon_onset_bundle(
     """Create lat_lon ids and run the forecast onset processing step."""
     import sys
     import traceback
+
     import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -741,6 +873,7 @@ def probe_lat_lon_ground_truth_bundle(
     """Create lat_lon ids and run the ground-truth onset processing step."""
     import sys
     import traceback
+
     import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -890,6 +1023,8 @@ def build_lat_lon_intermediates_bundle(
     issue_end_month_day: str = "07-31",
     combine_join: str = "inner",
     trim_forecasts_after_true_onset: bool = True,
+    region_id: str | None = None,
+    use_adm3_domain: bool | None = None,
     return_outputs: bool = True,
 ) -> dict:
     """Build real blending intermediate pickle files from staged NetCDF bundles."""
@@ -905,6 +1040,20 @@ def build_lat_lon_intermediates_bundle(
         process_ground_truth_rainfall_id,
         process_rainfall_forecast_id,
     )
+
+    adm3_domain = _should_use_adm3_domain(region_id, use_adm3_domain)
+    dissemination_path = None
+    if adm3_domain:
+        _, dissemination_path = _adm3_support_paths()
+        print(
+            f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
+            flush=True,
+        )
+        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs")
+        forecast_bundles = {
+            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}")
+            for model_name, bundle in forecast_bundles.items()
+        }
 
     output_dir = Path(tempfile.mkdtemp(prefix="blend-intermediates-"))
     obs_dir = _extract_bundle(obs_bundle)
@@ -938,12 +1087,18 @@ def build_lat_lon_intermediates_bundle(
                 "day": "day",
                 "lat": "lat",
                 "lon": "lon",
+                "adm3_name": "adm3_name",
+                "adm3": "adm3_name",
                 "number": "number",
                 "sample": "number",
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {},
+        "filter": {
+            "dissemination_cells_file": str(dissemination_path)
+            if dissemination_path
+            else None
+        },
     }
     obs_spec = {
         "input": {"value_col": obs_value_col},
@@ -957,10 +1112,17 @@ def build_lat_lon_intermediates_bundle(
                 "LONGITUDE": "lon",
                 "longitude": "lon",
                 "lon": "lon",
+                "ADM3_NAME": "adm3_name",
+                "adm3_name": "adm3_name",
+                "adm3": "adm3_name",
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {},
+        "filter": {
+            "dissemination_cells_file": str(dissemination_path)
+            if dissemination_path
+            else None
+        },
     }
 
     def mok_for(df) -> pd.DataFrame | None:
@@ -981,6 +1143,8 @@ def build_lat_lon_intermediates_bundle(
         "id_precision": int(id_precision),
         "cutoff_month_day": cutoff_month_day,
         "mok_month_day": mok_month_day,
+        "region_id": region_id,
+        "adm3_domain": bool(adm3_domain),
         "climatology": {},
         "combined": {},
         "outputs": {},
@@ -1609,10 +1773,8 @@ def train_blending_model_bundle(
                 check=False,
             )
     finally:
-        try:
+        with suppress(FileNotFoundError):
             spec_path.unlink()
-        except FileNotFoundError:
-            pass
 
     output_tag = f"{make_cutoff_tag(cutoff_mode)}"
     holdouts = sorted(set(int(year) for year in cv_holdout_years + (true_holdout_years or [])))
@@ -1783,10 +1945,8 @@ def apply_blend_coefs_bundle(
             check=False,
         )
     finally:
-        try:
+        with suppress(FileNotFoundError):
             spec_path.unlink()
-        except FileNotFoundError:
-            pass
 
     preds_csv = results_dir / f"blended_model_global_year{int(live_year)}_preds.csv"
     if completed.returncode != 0 or not preds_csv.exists():
@@ -1871,6 +2031,8 @@ def score_live_forecast(
         for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
         if blend_params.get(k) is not None
     }
+    if blend_params.get("region_id"):
+        prep_kwargs["region_id"] = blend_params["region_id"]
     intermediates = build_lat_lon_intermediates_bundle.local(
         obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
     )
@@ -1889,6 +2051,8 @@ def score_live_forecast(
             live_year=live_year,
             formula_text=blend_params.get("formula_text") or None,
         )
+        if _should_use_adm3_domain(blend_params.get("region_id"), None):
+            csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
         print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
         return csv_bytes
 
@@ -1922,7 +2086,10 @@ def score_live_forecast(
     live_rows = cv_preds[cv_preds["year"] == live_year].copy()
     if live_rows.empty:
         raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
-    return live_rows.to_csv(index=False).encode("utf-8")
+    csv_bytes = live_rows.to_csv(index=False).encode("utf-8")
+    if _should_use_adm3_domain(blend_params.get("region_id"), None):
+        csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
+    return csv_bytes
 
 
 @app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret])
@@ -1957,6 +2124,7 @@ def score_live_forecast_bundle(
             client = gcs.Client()
 
             params = blend_config.get("blend_params") or {}
+            params = {**params, "region_id": blend_config.get("region_id")}
             model_names = blend_config["model_names"]
             model_files = blend_config["model_files"]
             missing = [name for name in model_names if name not in live_forecast_bundles]

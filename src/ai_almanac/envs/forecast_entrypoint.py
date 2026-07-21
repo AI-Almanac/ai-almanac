@@ -56,7 +56,10 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
     only the Modal-side score_live_forecast_bundle wrapper does)."""
     workflow = _load_workflow()
     blend_config = config["blend_config_snapshot"]
-    params = blend_config.get("blend_params") or {}
+    params = {
+        **(blend_config.get("blend_params") or {}),
+        "region_id": blend_config.get("region_id"),
+    }
     model_names = blend_config["model_names"]
 
     obs_bundle = workflow._bundle_files(_netcdf_files(blend_config["obs_dir"]))
