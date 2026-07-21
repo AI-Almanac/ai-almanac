@@ -16,7 +16,10 @@ export type ForecastFeatureCollection = GeoJSON.FeatureCollection<
 	ForecastFeatureProperties
 >;
 
-export type FeatureStyle = (point: BlendForecastPoint) => { color: string; opacity: number };
+export type FeatureStyle = (
+	point: BlendForecastPoint,
+	idx: number
+) => { color: string; opacity: number };
 
 const NAME_FIELDS = [
 	'adm3_name',
@@ -73,7 +76,7 @@ export function buildAdm3ForecastGeoJson(
 		if (!name) return [];
 		const match = pointsByName.get(normalizeAreaName(name));
 		if (!match) return [];
-		const { color, opacity } = stylePoint(match.point);
+		const { color, opacity } = stylePoint(match.point, match.idx);
 		return [
 			{
 				type: 'Feature',

@@ -3,13 +3,14 @@
 	import {
 		WEEKS,
 		WEEK_LABELS,
-		rampColorLight,
+		rampColor,
 		argmax,
 		fmtProb,
 		fmtDate,
 		isoToDay,
 		dayToIso,
 		windowDayRange,
+		consensusOnsetDay,
 		monthLabel,
 		LATER_START_DAY
 	} from '$lib/onset';
@@ -20,9 +21,13 @@
 		issueDates: string[];
 		regionName: string | null;
 		selectedDate: string;
+		soonestColor: 'yellow' | 'purple';
 		onClose: () => void;
 	};
-	let { point, issueDates, regionName, selectedDate, onClose }: Props = $props();
+	let { point, issueDates, regionName, selectedDate, soonestColor, onClose }: Props = $props();
+
+	// Matches the map toggle: the vivid end marks the highest probability.
+	const reversed = $derived(soonestColor === 'purple');
 
 	// Season date axis: earliest Week-1 start → latest Week-4 end, across all
 	// forecasts. "Later" is open-ended so it lives off-axis in its own column.
@@ -70,20 +75,8 @@
 	// contribute little, so the estimate is driven by forecasts that actually
 	// place onset on the calendar — i.e. where the models agree.
 	const consensus = $derived.by(() => {
-		let wsum = 0;
-		let dsum = 0;
-		issueDates.forEach((d, di) => {
-			const row = point.probs[di] ?? [];
-			for (let w = 0; w < 4; w++) {
-				const p = row[w] ?? 0;
-				if (p <= 0) continue;
-				const r = windowDayRange(d, w);
-				wsum += p;
-				dsum += (p * (r.start + r.end)) / 2;
-			}
-		});
-		if (wsum <= 0) return null;
-		const mid = dsum / wsum;
+		const mid = consensusOnsetDay(issueDates, point.probs);
+		if (mid == null) return null;
 		return { start: Math.round(mid - 3), end: Math.round(mid + 3) };
 	});
 </script>
@@ -106,9 +99,9 @@
 
 	<p class="ins-hint">
 		Each row is one forecast{regionName ? ` · ${regionName}` : ''}, reading top (earliest) to bottom
-		(latest). Its colored blocks show where that forecast placed onset on the calendar — deeper color =
-		more likely, ringed = most likely. When the ringed blocks line up in a column, the forecasts
-		agree on that onset date.
+		(latest). Its colored blocks show where that forecast placed onset on the calendar — toward
+		{soonestColor} = more likely, ringed = most likely. When the ringed blocks line up in a column,
+		the forecasts agree on that onset date.
 	</p>
 
 	<div class="cal">
@@ -148,8 +141,9 @@
 						<span
 							class="cal-seg"
 							class:best={w === best}
-							style="left: {leftPct(r.start)}%; width: {widthPct(7)}%; background: {rampColorLight(
-								row[w] ?? 0
+							style="left: {leftPct(r.start)}%; width: {widthPct(7)}%; background: {rampColor(
+								row[w] ?? 0,
+								reversed
 							)}"
 							title="{WEEK_LABELS[WEEKS[w]]} · {fmtDate(dayToIso(r.start))}–{fmtDate(
 								dayToIso(r.end)
@@ -160,7 +154,7 @@
 				<span
 					class="cal-later"
 					class:best={best === 4}
-					style="background: {rampColorLight(row[4] ?? 0)}"
+					style="background: {rampColor(row[4] ?? 0, reversed)}"
 					title="Later · onset after {fmtDate(laterStartIso(d))}: {fmtProb(row[4] ?? 0)}"
 				></span>
 			</div>

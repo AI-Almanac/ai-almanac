@@ -291,6 +291,34 @@ def select_lat_lon_bounds(data_array, bounds: dict):
     return data_array.sel({lat_name: lat_slice, lon_name: slice(min(lon_bounds), max(lon_bounds))})
 
 
+_gcs_client_singleton: Any = None
+
+
+def _split_gs_uri(uri: str) -> tuple[str, str]:
+    """Split gs://bucket/some/key into ("bucket", "some/key")."""
+    without = uri[len("gs://") :] if uri.startswith("gs://") else uri
+    bucket, _, key = without.partition("/")
+    return bucket, key
+
+
+def _gcs_blob(gs_uri: str):
+    """Resolve a gs:// URI to a google-cloud-storage Blob, reusing one client.
+
+    Uses the synchronous google-cloud-storage client on purpose rather than
+    gcsfs: gcsfs runs a background asyncio loop with aiohttp sessions and DNS
+    resolver threads that are never torn down, so a mostly-cached season (many
+    quick reads, little GPU time) returns with those threads still alive and
+    Modal cannot shut the container down — it retries the whole loop instead.
+    """
+    global _gcs_client_singleton
+    from google.cloud import storage
+
+    if _gcs_client_singleton is None:
+        _gcs_client_singleton = storage.Client()
+    bucket_name, key = _split_gs_uri(gs_uri)
+    return _gcs_client_singleton.bucket(bucket_name).blob(key)
+
+
 def cached_trajectory(
     cache_dir: Path | str | None,
     model_id: str,
@@ -327,14 +355,18 @@ def cached_trajectory(
     )
 
     if cache_uri.startswith("gs://"):
-        import gcsfs
-
-        fs = gcsfs.GCSFileSystem()
+        blob = _gcs_blob(f"{cache_uri.rstrip('/')}/{rel}")
         # ponytail: no eviction — a season accumulates at most ~26 entries per
         # model; add cleanup if the bucket grows unbounded at season boundaries.
-        cache_path = f"{cache_uri.rstrip('/')}/{rel}"
-        if fs.exists(cache_path):
-            return xr.open_dataarray(cache_path, engine="h5netcdf").load(), True
+        if blob.exists():
+            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                blob.download_to_filename(str(tmp_path))
+                with xr.open_dataarray(tmp_path, engine="h5netcdf") as da:
+                    return da.load(), True
+            finally:
+                tmp_path.unlink(missing_ok=True)
         trajectory = compute()
         with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -342,7 +374,7 @@ def cached_trajectory(
             trajectory.rename("tp").to_netcdf(
                 tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
             )
-            fs.put(str(tmp_path), cache_path)
+            blob.upload_from_filename(str(tmp_path))
         finally:
             tmp_path.unlink(missing_ok=True)
         return trajectory, False
@@ -457,8 +489,18 @@ def generate_season_forecast_netcdf(
         del trajectory, traj
         gc.collect()
 
+    import dask
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds:
+    # HDF5/h5py is not thread-safe; open_mfdataset + to_netcdf under dask's
+    # default threaded scheduler deadlocks reading the slices while writing the
+    # output (hangs indefinitely, no error). Force the single-threaded scheduler
+    # — the write still streams slice-by-slice, so memory stays flat.
+    # ponytail: single-threaded reassembly, revisit if a full season's write
+    # becomes a wall-clock bottleneck (it's I/O-bound on tiny regional slices).
+    with dask.config.set(scheduler="single-threaded"), xr.open_mfdataset(
+        slice_paths, concat_dim="time", combine="nested"
+    ) as ds:
         ds.to_netcdf(out_path)
     return out_path
 

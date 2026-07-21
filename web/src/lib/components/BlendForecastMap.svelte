@@ -7,10 +7,12 @@
 	import {
 		WEEKS,
 		WEEK_LABELS,
-		PROB_RAMP,
-		legendGradient,
+		probGradient,
 		WINDOW_RAMP,
+		ONSET_PASSED_COLOR,
 		rampColor,
+		consensusOnsetDay,
+		onsetHasPassed,
 		argmax,
 		fmtProb,
 		fmtDate,
@@ -26,9 +28,12 @@
 		usesNamedAreas,
 		type ForecastFeatureCollection
 	} from './blend-map/adm3';
+	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
+	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
+	import type { BoundaryLevel, BoundaryStyleDef } from '$lib/components/metric-map/types';
 
-	type Props = { jobId: string };
-	let { jobId }: Props = $props();
+	type Props = { jobId: string; regionId?: string | null };
+	let { jobId, regionId = null }: Props = $props();
 
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
@@ -61,6 +66,20 @@
 	// collapses the distribution to each point's most-likely window (which window).
 	let colorMode = $state<'window' | 'expected'>('window');
 
+	// Which end of the ordinal ramp is the soonest window. 'yellow' (imminent =
+	// hot) is our default; 'purple' matches the science team's static legend.
+	let soonestColor = $state<'yellow' | 'purple'>('yellow');
+	// The toggle flips the whole plasma direction: the vivid end marks both the
+	// soonest window and the highest probability.
+	const reversed = $derived(soonestColor === 'purple');
+	const windowRamp = $derived(reversed ? [...WINDOW_RAMP].reverse() : WINDOW_RAMP);
+
+	// Per-cell estimated onset day (index-aligned to data.points), used to gray a
+	// cell once the shown forecast was issued after onset likely occurred.
+	const cellConsensus = $derived.by(() =>
+		data ? data.points.map((pt) => consensusOnsetDay(data!.issue_dates, pt.probs)) : []
+	);
+
 	let playing = $state(false);
 	let playTimer: ReturnType<typeof setInterval> | null = null;
 	let collapsed = $state(false);
@@ -75,25 +94,94 @@
 
 	let selectedCell = $state<BlendForecastPoint | null>(null);
 
+	// Subtler boundary styling than the benchmark map's: this map's bright plasma
+	// cells are the focus, so thin translucent lines over a soft dark halo keep
+	// the admin outlines legible without the heavy white halos flooding the grid.
+	const FORECAST_BOUNDARY_STYLES: Record<BoundaryLevel, BoundaryStyleDef> = {
+		adm1: {
+			...BOUNDARY_LEVELS.adm1,
+			strokeColor: 'rgba(236, 240, 245, 0.7)',
+			haloColor: 'rgba(10, 14, 20, 0.55)',
+			strokeWidth: 1.1,
+			haloWidth: 2.4
+		},
+		adm2: {
+			...BOUNDARY_LEVELS.adm2,
+			strokeColor: 'rgba(236, 240, 245, 0.42)',
+			haloColor: 'rgba(10, 14, 20, 0.4)',
+			strokeWidth: 0.6,
+			haloWidth: 1.5
+		}
+	};
+
+	// Optional admin-boundary overlays, reusing the benchmark map's layer
+	// manager. Keyed by the forecast's region id (from the parent), which the
+	// blend-forecast payload itself doesn't carry.
+	const boundaries = new BoundaryLayers(
+		() => map,
+		() => regionId ?? undefined,
+		FORECAST_BOUNDARY_STYLES
+	);
+	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
+
 	const EMPTY_PROBS = [0, 0, 0, 0, 0];
+
+	// Smallest positive gap between unique coordinate values — the native grid
+	// step. Using the min (not the mean) keeps cells from overlapping when the
+	// grid has occasional gaps.
+	function minPositiveDiff(values: number[]): number | null {
+		const uniq = [...new Set(values)].sort((a, b) => a - b);
+		let min = Infinity;
+		for (let i = 1; i < uniq.length; i++) {
+			const d = uniq[i] - uniq[i - 1];
+			if (d > 0 && d < min) min = d;
+		}
+		return Number.isFinite(min) ? min : null;
+	}
+
+	// Cell size inferred from the data so squares tile the native lat/lon grid
+	// instead of overlapping like fixed-radius dots — Ethiopia's grid is far
+	// finer than India's, and a pixel radius can't serve both.
+	const gridStep = $derived.by(() => {
+		const fallback = { dx: 0.25, dy: 0.25 };
+		if (!data?.points.length) return fallback;
+		return {
+			dx: minPositiveDiff(data.points.map((p) => p.lon)) ?? fallback.dx,
+			dy: minPositiveDiff(data.points.map((p) => p.lat)) ?? fallback.dy
+		};
+	});
 
 	// Precompute each dot's color + opacity in JS (functional core) so the map
 	// paint stays a static `['get', …]`; the mode logic lives here, not in the
 	// MapLibre expression.
-	function featureStyle(row: number[], week: Week): { color: string; opacity: number } {
+	function featureStyle(
+		row: number[],
+		week: Week,
+		passed: boolean
+	): { color: string; opacity: number } {
+		// Onset already occurred by this issue date: the forward outlook is stale,
+		// so drain the color to a dim gray rather than show a misleading dot.
+		if (passed) return { color: ONSET_PASSED_COLOR, opacity: 0.45 };
 		if (colorMode === 'expected') {
 			const w = argmax(row);
 			// Fainter where the timing is uncertain — a weak plurality reads as
 			// "we don't really know when," with a visible floor so no dot vanishes.
-			return { color: WINDOW_RAMP[w], opacity: 0.4 + 0.55 * Math.min(1, row[w]) };
+			return { color: windowRamp[w], opacity: 0.4 + 0.55 * Math.min(1, row[w]) };
 		}
-		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0), opacity: 0.9 };
+		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0, reversed), opacity: 0.9 };
 	}
 
-	function stylePoint(d: BlendForecastData, pt: BlendForecastPoint, date: string, week: Week) {
+	function stylePoint(
+		d: BlendForecastData,
+		pt: BlendForecastPoint,
+		idx: number,
+		date: string,
+		week: Week
+	) {
 		const dateIdx = d.issue_dates.indexOf(date);
 		const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
-		return featureStyle(row, week);
+		const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[idx] ?? null);
+		return featureStyle(row, week, passed);
 	}
 
 	function buildPointGeoJson(
@@ -102,15 +190,27 @@
 		week: Week
 	): ForecastFeatureCollection {
 		const dateIdx = d.issue_dates.indexOf(date);
+		const hx = gridStep.dx / 2;
+		const hy = gridStep.dy / 2;
 		return {
 			type: 'FeatureCollection' as const,
 			features: d.points.map((pt, i) => {
 				const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
-				const { color, opacity } = featureStyle(row, week);
+				const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[i] ?? null);
+				const { color, opacity } = featureStyle(row, week, passed);
+				// A square covering the point's grid cell, so cells tile the grid
+				// and scale with zoom (geographic units) rather than overlapping.
+				const ring = [
+					[pt.lon - hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat - hy],
+					[pt.lon + hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat + hy],
+					[pt.lon - hx, pt.lat - hy]
+				];
 				return {
 					type: 'Feature' as const,
-					geometry: { type: 'Point' as const, coordinates: [pt.lon, pt.lat] },
-					properties: { color, opacity, idx: i }
+					geometry: { type: 'Polygon' as const, coordinates: [ring] },
+					properties: { color, opacity, idx: i, passed }
 				};
 			})
 		};
@@ -118,8 +218,8 @@
 
 	function buildGeoJson(d: BlendForecastData, date: string, week: Week): ForecastFeatureCollection {
 		if (adm3Boundaries && usesAdm3Polygons(d)) {
-			const polygonGeojson = buildAdm3ForecastGeoJson(d, adm3Boundaries, (pt) =>
-				stylePoint(d, pt, date, week)
+			const polygonGeojson = buildAdm3ForecastGeoJson(d, adm3Boundaries, (pt, idx) =>
+				stylePoint(d, pt, idx, date, week)
 			);
 			if (polygonGeojson) return polygonGeojson;
 		}
@@ -158,12 +258,13 @@
 		}
 		map.addSource('blend', { type: 'geojson', data: geojson });
 		map.addLayer({
-			id: 'blend-fills',
+			id: 'blend-cells',
 			type: 'fill',
 			source: 'blend',
 			paint: {
 				'fill-color': ['get', 'color'],
-				'fill-opacity': ['*', ['get', 'opacity'], 0.82]
+				'fill-opacity': ['get', 'opacity'],
+				'fill-outline-color': dotStroke()
 			}
 		});
 		map.addLayer({
@@ -174,18 +275,6 @@
 				'line-color': dotStroke(),
 				'line-opacity': 0.7,
 				'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.45, 7, 1.2]
-			}
-		});
-		map.addLayer({
-			id: 'blend-circles',
-			type: 'circle',
-			source: 'blend',
-			paint: {
-				'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 4, 5, 10, 8, 16],
-				'circle-color': ['get', 'color'],
-				'circle-opacity': ['get', 'opacity'],
-				'circle-stroke-width': 0.75,
-				'circle-stroke-color': dotStroke()
 			}
 		});
 		if (fit) fitToData(d);
@@ -211,8 +300,8 @@
 		try {
 			const { geojson } = await getRegionBoundary(regionId, 'adm3');
 			if (!isFeatureCollection(geojson)) throw new Error('ADM3 boundary response was not GeoJSON');
-			const joined = buildAdm3ForecastGeoJson(d, geojson, (pt) =>
-				stylePoint(d, pt, selectedDate, selectedWeek)
+			const joined = buildAdm3ForecastGeoJson(d, geojson, (pt, idx) =>
+				stylePoint(d, pt, idx, selectedDate, selectedWeek)
 			);
 			if (!joined) throw new Error('ADM3 boundaries did not match forecast areas');
 			adm3Boundaries = geojson;
@@ -264,6 +353,7 @@
 		if (mapReady && data && selectedDate) {
 			selectedWeek; // track
 			colorMode; // track
+			soonestColor; // track
 			updateSource();
 		}
 	});
@@ -277,6 +367,10 @@
 		map.once('style.load', () => {
 			liftBasemap();
 			if (data) initLayer(data, { fit: false });
+			// setStyle wipes every custom layer, so drop the manager's stale layer
+			// state and re-add the visible boundary levels on top of the cells.
+			boundaries.clearFromMap();
+			boundaries.reloadVisible();
 		});
 		map.setStyle(basemapStyle().url);
 	});
@@ -369,7 +463,7 @@
 	function featurePoint(point: maplibregl.PointLike): BlendForecastPoint | null {
 		if (!map || !data) return null;
 		const features = map.queryRenderedFeatures(point, {
-			layers: ['blend-fills', 'blend-circles'].filter((id) => map?.getLayer(id))
+			layers: ['blend-cells'].filter((id) => map?.getLayer(id))
 		});
 		const idx = Number(features[0]?.properties?.idx);
 		return Number.isInteger(idx) ? (data.points[idx] ?? null) : null;
@@ -417,18 +511,11 @@
 		});
 
 		// Click a grid cell to open its season inspector.
-		map.on('click', 'blend-fills', selectFeatureCell);
-		map.on('click', 'blend-circles', selectFeatureCell);
-		map.on('mouseenter', 'blend-fills', () => {
+		map.on('click', 'blend-cells', selectFeatureCell);
+		map.on('mouseenter', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = 'pointer';
 		});
-		map.on('mouseenter', 'blend-circles', () => {
-			if (map) map.getCanvas().style.cursor = 'pointer';
-		});
-		map.on('mouseleave', 'blend-fills', () => {
-			if (map) map.getCanvas().style.cursor = '';
-		});
-		map.on('mouseleave', 'blend-circles', () => {
+		map.on('mouseleave', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = '';
 		});
 
@@ -482,6 +569,18 @@
 			</div>
 		</div>
 
+		<div class="rail-group">
+			<span class="rail-label">Soonest onset color</span>
+			<div class="mode-toggle">
+				<button class:active={soonestColor === 'yellow'} onclick={() => (soonestColor = 'yellow')}>
+					Yellow
+				</button>
+				<button class:active={soonestColor === 'purple'} onclick={() => (soonestColor = 'purple')}>
+					Purple
+				</button>
+			</div>
+		</div>
+
 		{#if colorMode === 'window'}
 			<div class="rail-group">
 				<span class="rail-label">Onset window</span>
@@ -508,11 +607,33 @@
 			</select>
 		</div>
 
+		{#if regionId}
+			<div class="rail-group">
+				<span class="rail-label">Admin boundaries</span>
+				<div class="mode-toggle">
+					{#each boundaryLevels as level (level)}
+						<button
+							class:active={boundaries.visibleLevels.has(level)}
+							disabled={boundaries.loading.has(level)}
+							onclick={() => boundaries.toggle(level)}
+						>
+							{BOUNDARY_LEVELS[level].label}
+						</button>
+					{/each}
+				</div>
+				{#each boundaryLevels as level (level)}
+					{#if boundaries.errors[level]}
+						<p class="boundary-error">{boundaries.errors[level]}</p>
+					{/if}
+				{/each}
+			</div>
+		{/if}
+
 		<div class="rail-group rail-legend">
 			<span class="rail-label">Legend</span>
 			<p class="legend-caption">{caption}</p>
 			{#if colorMode === 'window'}
-				<div class="legend-bar" style="background: {legendGradient}"></div>
+				<div class="legend-bar" style="background: {probGradient(reversed)}"></div>
 				<div class="legend-ticks">
 					<span></span>
 					<span></span>
@@ -527,11 +648,27 @@
 				<div class="window-swatches">
 					{#each WEEKS as w, i (w)}
 						<div class="swatch-item">
-							<span class="swatch" style="background: {WINDOW_RAMP[i]}"></span>
+							<span class="swatch" style="background: {windowRamp[i]}"></span>
 							<span>{WEEK_LABELS[w]}</span>
 						</div>
 					{/each}
 				</div>
+			{/if}
+			<div class="swatch-item passed-note">
+				<span class="swatch" style="background: {ONSET_PASSED_COLOR}"></span>
+				<span>Peak onset window passed</span>
+			</div>
+			<p class="legend-note">
+				Gray means this forecast was issued after the window when onset was most likely — the peak
+				probability has passed, so the outlook ahead no longer applies. This is estimated from the
+				forecasts, not a confirmation that onset occurred.
+			</p>
+			{#if boundaries.visibleLayers.length > 0}
+				<p class="legend-note">
+					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
+						.map((l) => l.label)
+						.join('; ')})
+				</p>
 			{/if}
 		</div>
 	</aside>
@@ -558,6 +695,7 @@
 				issueDates={data.issue_dates}
 				regionName={data.region_name}
 				{selectedDate}
+				{soonestColor}
 				onClose={() => (selectedCell = null)}
 			/>
 		{/if}
@@ -587,7 +725,7 @@
 										style="height: {Math.max(
 											3,
 											(tooltipProbs[i] ?? 0) * 100
-										)}%; background: {WINDOW_RAMP[i]}"
+										)}%; background: {windowRamp[i]}"
 									></div>
 								</div>
 								<span class="tt-val">{fmtProb(tooltipProbs[i] ?? 0)}</span>
@@ -1186,6 +1324,24 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.3rem 0.6rem;
+	}
+
+	.passed-note {
+		margin-top: 0.55rem;
+	}
+
+	.legend-note {
+		margin: 0.35rem 0 0;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		color: var(--color-text-muted);
+	}
+
+	.boundary-error {
+		margin: 0.35rem 0 0;
+		font-size: 0.62rem;
+		line-height: 1.4;
+		color: var(--color-danger);
 	}
 
 	.swatch-item {
