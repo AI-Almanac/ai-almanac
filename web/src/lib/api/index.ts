@@ -12,6 +12,7 @@ export * from './llm';
 export * from './account';
 export * from './regions';
 export * from './datasets';
+export * from './feedback';
 export * from './jobs';
 export * from './blends';
 export * from './forecasts';

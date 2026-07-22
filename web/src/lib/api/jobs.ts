@@ -1,5 +1,6 @@
 // ---- Jobs: submission, streaming, results, metrics ----------------------------
 import { authHeaders } from '../auth';
+import { addBreadcrumb } from '../breadcrumbs';
 import { BASE_URL, request } from './core';
 
 export type JobStatus =
@@ -204,12 +205,22 @@ export async function fetchResultBlob(resultUrl: string): Promise<string> {
 		const location = res.headers.get('Location');
 		if (!location) throw new Error('Redirect response missing Location header');
 		const gcsRes = await fetch(location);
-		if (!gcsRes.ok) throw new Error(`Failed to fetch result: ${gcsRes.status}`);
+		if (!gcsRes.ok) {
+			addBreadcrumb('api', `GET ${resultUrl} redirect fetch failed (${gcsRes.status})`, {
+				path: resultUrl,
+				status: gcsRes.status
+			});
+			throw new Error(`Failed to fetch result: ${gcsRes.status}`);
+		}
 		blob = await gcsRes.blob();
 	} else if (res.ok) {
 		// Local dev: backend served the file directly.
 		blob = await res.blob();
 	} else {
+		addBreadcrumb('api', `GET ${resultUrl} failed (${res.status})`, {
+			path: resultUrl,
+			status: res.status
+		});
 		throw new Error(`Failed to fetch result: ${res.status}`);
 	}
 

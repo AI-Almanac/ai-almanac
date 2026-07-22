@@ -8,9 +8,21 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 from ai_almanac.server.auth import CurrentUser
+from ai_almanac.server.routers.feedback import feedback_enabled
 from ai_almanac.settings import get_metric_definitions, get_romp_defaults, settings
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+def _app_version() -> str:
+    """Package version, suffixed with a build SHA when the build provides one
+    (`ALMANAC_BUILD_SHA`), so feedback reports can pinpoint the exact build."""
+    import os
+
+    from ai_almanac import __version__
+
+    sha = os.environ.get("ALMANAC_BUILD_SHA", "").strip()
+    return f"{__version__}+{sha[:12]}" if sha else __version__
 
 
 @router.get("/metrics")
@@ -53,6 +65,8 @@ def runtime_spa_config() -> Response:
         "authMode": settings.auth_mode,
         "submittedByEnabled": bool(settings.submitted_by_header),
         "submittedByHeader": settings.submitted_by_header,
+        "version": _app_version(),
+        "feedbackEnabled": feedback_enabled(),
     }
     body = f"window.__ALMANAC_CONFIG__ = {json.dumps(payload)};\n"
     return Response(
