@@ -106,3 +106,41 @@ describe('sendChatMessage', () => {
 		);
 	});
 });
+
+describe('blendModelKey', () => {
+	// Must mirror the server's blend_model_key (settings.py) — the
+	// live-forecast badge is only honest if it matches the server's gate.
+	it('normalizes data-source names the way the server does', async () => {
+		const { blendModelKey } = await import('../src/lib/api');
+		expect(blendModelKey('AIFS')).toBe('aifs');
+		expect(blendModelKey('GenCast')).toBe('gencast');
+		expect(blendModelKey('AIFS Ensemble v2')).toBe('aifs_ensemble_v2');
+		expect(blendModelKey('  FuXi--v1  ')).toBe('fuxi_v1');
+	});
+});
+
+describe('forecastModelFor', () => {
+	// Must mirror the server's resolve_forecast_model (settings.py): match by
+	// id, normalized display name, or alias.
+	const entry = (id: string, display_name: string, aliases?: string[]) => ({
+		id,
+		display_name,
+		aliases,
+		resolution: '',
+		description: ''
+	});
+	const registry = [
+		entry('aifs2', 'AIFS2', ['aifs_single_v2']),
+		entry('aifs2ens', 'AIFS2 ENS', ['aifs_ensemble_v2']),
+		entry('graphcast', 'GraphCast Small')
+	];
+
+	it('matches a source name by id, display name, or alias', async () => {
+		const { forecastModelFor } = await import('../src/lib/api');
+		expect(forecastModelFor(registry, 'AIFS2')?.id).toBe('aifs2');
+		expect(forecastModelFor(registry, 'AIFS Single v2')?.id).toBe('aifs2');
+		expect(forecastModelFor(registry, 'AIFS Ensemble v2')?.id).toBe('aifs2ens');
+		expect(forecastModelFor(registry, 'GraphCast Small')?.id).toBe('graphcast');
+		expect(forecastModelFor(registry, 'ECMWF HRES')).toBeUndefined();
+	});
+});

@@ -9,7 +9,6 @@ surface the errors to an HTTP client.
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -28,7 +27,12 @@ from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
-from ai_almanac.settings import get_packaged_forecast_models, settings
+from ai_almanac.settings import (
+    blend_model_key,
+    get_packaged_forecast_models,
+    resolve_forecast_model,
+    settings,
+)
 
 
 class RompParams(BaseModel):
@@ -275,9 +279,7 @@ class BlendOut(BaseModel):
     run_id: str | None = None
 
 
-def _blend_model_key(name: str) -> str:
-    """Filesystem/column-safe key used for a forecast model inside the blend."""
-    return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+_blend_model_key = blend_model_key
 
 
 def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
@@ -612,13 +614,12 @@ async def create_forecast_for_user(
     model_names: list[str] = blend_config.get("model_names") or []
     # Live inference runs against the forecast_models.yaml registry (earth2studio
     # model ids), not the archived data-source ids the blend was trained from
-    # (blend_config["model_source_ids"]). We require the blend's own model
-    # names to double as registry ids, since score_live_forecast_bundle joins
-    # the live model's output back into the blend's formula by that same name
-    # (the `diff_<model>_qx` terms) — a live model with no matching name can't
-    # be scored against this blend's trained weights.
+    # (blend_config["model_source_ids"]). Each blend model name must resolve to
+    # a registry entry (by id, display name, or alias — see
+    # resolve_forecast_model), while the name itself stays the key everywhere:
+    # score_live_forecast_bundle joins the live model's output back into the
+    # blend's formula by that name (the `diff_<model>_qx` terms).
     registry = get_packaged_forecast_models()
-    registry_ids = {m["id"] for m in registry.get("models") or []}
     requested = set(body.forecast_model_ids) if body.forecast_model_ids else set(model_names)
     unknown = sorted(requested - set(model_names))
     if unknown:
@@ -626,7 +627,9 @@ async def create_forecast_for_user(
             status_code=400,
             detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
         )
-    unsupported = sorted(requested - registry_ids)
+    unsupported = sorted(
+        name for name in requested if resolve_forecast_model(registry, name) is None
+    )
     if unsupported:
         raise HTTPException(
             status_code=400,

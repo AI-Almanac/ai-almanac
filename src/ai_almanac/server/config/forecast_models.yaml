@@ -15,6 +15,11 @@
 # `variables`/`default_lead_hours` are shared across all models (all are run
 # against the same GFS initial conditions) and are the single source of truth
 # for both the API's model list and the runners' inference defaults.
+#
+# A blend model can run live forecasts when its normalized data-source name
+# (settings.blend_model_key) matches an entry's id, normalized display_name,
+# or an `aliases` entry. Aliases are normalized keys; add one when a common
+# data-source name for a model doesn't reduce to its id.
 
 variables: ["t2m", "wind10m", "tcwv", "msl", "wind850m", "u850", "v850", "q850", "z500"]
 default_lead_hours: [0, 6, 12, 24, 48, 72, 120]
@@ -45,6 +50,7 @@ models:
     gpu: "A100-80GB"
     resolution: "0.25 degree"
     description: "ECMWF AIFS-Single v2."
+    aliases: ["aifs_single_v2"]
 
   - id: aifs2ens
     display_name: "AIFS2 ENS"
@@ -55,6 +61,7 @@ models:
     gpu: "A100-80GB"
     resolution: "0.25 degree"
     description: "ECMWF AIFS Ensemble v2 (reported as the ensemble mean)."
+    aliases: ["aifs_ensemble_v2"]
 
   - id: graphcast
     display_name: "GraphCast Small"

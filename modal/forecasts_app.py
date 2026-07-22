@@ -214,9 +214,18 @@ def _load_model_registry() -> dict:
 
 
 def _registry_entry(model_id: str) -> dict:
+    """Resolve a blend model name to its registry entry — by id, normalized
+    display name, or alias. Duplicates settings.resolve_forecast_model (this
+    app runs standalone in its image and doesn't import ai_almanac)."""
+    import re
+
+    key = re.sub(r"[^0-9a-z]+", "_", model_id.lower()).strip("_")
     registry = _load_model_registry()
     for entry in registry.get("models") or []:
-        if entry["id"] == model_id:
+        display_key = re.sub(
+            r"[^0-9a-z]+", "_", (entry.get("display_name") or "").lower()
+        ).strip("_")
+        if key in (entry["id"], display_key) or key in (entry.get("aliases") or []):
             return entry
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import PerModelConfig from './PerModelConfig.svelte';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
+	import { getForecastModels, forecastModelFor, type ForecastModel } from '$lib/api';
 
 	interface Props {
 		open: boolean;
@@ -37,6 +38,16 @@
 	function isSelected(modelId: string) {
 		return selectedModelIds.includes(modelId);
 	}
+
+	// Forecast registry; a model can run live forecasts when its name resolves
+	// to an entry (same gate as the blend form). Rejects (feature off) leave
+	// the list empty so no badges show.
+	let forecastModels = $state<ForecastModel[]>([]);
+	$effect(() => {
+		getForecastModels()
+			.then((list) => (forecastModels = list))
+			.catch(() => {});
+	});
 
 	function closeOnEscape(event: KeyboardEvent) {
 		if (open && event.key === 'Escape') onClose();
@@ -203,6 +214,12 @@
 											</span>
 											<span>
 												<strong>{model.display_name}</strong>
+												{#if forecastModelFor(forecastModels, model.display_name)}
+													<span
+														class="forecast-badge"
+														title="This model can also generate live forecasts.">Live forecast</span
+													>
+												{/if}
 												{#if model.probabilistic}
 													<small>Ensemble forecast</small>
 												{/if}
@@ -212,6 +229,11 @@
 										</label>
 									{/each}
 								</div>
+								<p class="forecast-legend">
+									<span class="forecast-badge">Live forecast</span> models can be extended into the
+									current season. Any model can be blended and benchmarked — those without the badge
+									are historical-only.
+								</p>
 							{/if}
 						</div>
 					</section>
@@ -515,6 +537,28 @@
 	.section-heading p,
 	.empty {
 		margin-top: 0.35rem;
+		color: var(--color-text-muted);
+	}
+
+	.forecast-badge {
+		font-size: 0.62rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding: 0.05rem 0.35rem;
+		border-radius: 0.2rem;
+		background: rgba(52, 211, 153, 0.15);
+		color: var(--color-status-complete);
+		white-space: nowrap;
+	}
+
+	.forecast-legend {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 0.5rem;
+		font-size: 0.8rem;
 		color: var(--color-text-muted);
 	}
 
