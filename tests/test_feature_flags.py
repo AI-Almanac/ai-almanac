@@ -70,14 +70,14 @@ async def test_region_create_allowed_when_enabled(
 
 
 @pytest.mark.asyncio
-async def test_forecasting_capability_defaults_disabled(
+async def test_forecasting_capability_defaults_enabled(
     client: httpx.AsyncClient,
 ) -> None:
-    # enable_forecasting defaults to False (unlike enable_data_management) so
-    # an accidental prod deploy never ships the in-development feature.
-    assert settings.enable_forecasting is False
+    # enable_forecasting is on by default now that the live-forecast workflow is
+    # finalized; admins can still turn it off from the Settings page.
+    assert settings.enable_forecasting is True
     caps = (await client.get("/auth/me")).json()["capabilities"]
-    assert caps["can_use_forecasting"] is False
+    assert caps["can_use_forecasting"] is True
 
 
 @pytest.mark.asyncio

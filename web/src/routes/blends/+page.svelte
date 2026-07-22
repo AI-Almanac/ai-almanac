@@ -6,6 +6,7 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
+		getForecastModels,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -31,6 +32,11 @@
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
 	let modelSources = $state<DataSource[]>([]);
+	// Names of models with a live-forecast counterpart (forecast_models.yaml
+	// registry ids). A blend model is forecastable only when its name exactly
+	// matches a registry id — the live rollout rejoins the blend formula by that
+	// name (see create_forecast_for_user). Empty if forecasting is disabled.
+	let forecastModelNames = $state<Set<string>>(new Set());
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -161,17 +167,22 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps] = await Promise.allSettled([
+		const [b, obs, models, caps, forecastModels] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities()
+			getCapabilities(),
+			getForecastModels()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		// Gated by the forecasting feature flag; rejects when it's off — leave the
+		// set empty so no forecast badges show.
+		if (forecastModels.status === 'fulfilled')
+			forecastModelNames = new Set(forecastModels.value.map((m) => m.id));
 		loaded = true;
 	}
 
@@ -529,9 +540,19 @@
 											onchange={() => toggleModel(source.id)}
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+										{#if forecastModelNames.has(source.name)}
+											<span class="forecast-badge" title="This model can also generate live forecasts."
+												>Live forecast</span
+											>
+										{/if}
 									</label>
 								{/each}
 							</div>
+							<p class="muted forecast-legend">
+								<span class="forecast-badge">Live forecast</span> models can be extended into the
+								current season. Any model can be blended and benchmarked — those without the badge
+								are historical-only.
+							</p>
 						{/if}
 					</fieldset>
 
@@ -934,6 +955,26 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		color: var(--color-text);
+	}
+
+	.forecast-badge {
+		font-size: 0.62rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding: 0.05rem 0.35rem;
+		border-radius: 0.2rem;
+		background: rgba(52, 211, 153, 0.15);
+		color: var(--color-status-complete);
+		white-space: nowrap;
+	}
+
+	.forecast-legend {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 0.5rem;
 	}
 
 	.field-row {
