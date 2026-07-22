@@ -3,12 +3,18 @@
 # Each entry defines an AI weather model available for live, on-demand
 # forecast generation (as opposed to `models.yaml`, which registers archived
 # benchmark/blend model data sources). Internal fields (earth2studio_class,
-# gpu) are used by the Modal forecast app only and are stripped before the
-# API returns this list to clients.
+# gpu, env, ensemble, nensemble) are used by the runners only and are stripped
+# before the API returns this list to clients.
+#
+# `env` names the execution environment that can run the model — the AIFS
+# families pin incompatible anemoi-models versions, so they live in separate
+# environments (see forecast.pixi.toml and modal/forecasts_app.py). `ensemble:
+# true` models are rolled out with earth2studio's ensemble workflow and reduced
+# to the ensemble mean; `nensemble` is the member count (a cost/accuracy knob).
 #
 # `variables`/`default_lead_hours` are shared across all models (all are run
 # against the same GFS initial conditions) and are the single source of truth
-# for both the API's model list and the Modal app's inference defaults.
+# for both the API's model list and the runners' inference defaults.
 
 variables: ["t2m", "wind10m", "tcwv", "msl", "wind850m", "u850", "v850", "q850", "z500"]
 default_lead_hours: [0, 6, 12, 24, 48, 72, 120]
@@ -17,20 +23,59 @@ models:
   - id: aifs
     display_name: "AIFS"
     earth2studio_class: "AIFS"
+    env: base
     gpu: "A100-80GB"
     resolution: "native"
-    description: "ECMWF Artificial Intelligence Forecasting System."
+    description: "ECMWF Artificial Intelligence Forecasting System (AIFS-Single v1)."
+
+  - id: aifsens
+    display_name: "AIFS ENS"
+    earth2studio_class: "AIFSENS"
+    env: base
+    ensemble: true
+    nensemble: 8
+    gpu: "A100-80GB"
+    resolution: "native"
+    description: "ECMWF AIFS Ensemble v1 (reported as the ensemble mean)."
+
+  - id: aifs2
+    display_name: "AIFS2"
+    earth2studio_class: "AIFS2"
+    env: aifs2
+    gpu: "A100-80GB"
+    resolution: "0.25 degree"
+    description: "ECMWF AIFS-Single v2."
+
+  - id: aifs2ens
+    display_name: "AIFS2 ENS"
+    earth2studio_class: "AIFS2ENS"
+    env: aifs2ens
+    ensemble: true
+    nensemble: 8
+    gpu: "A100-80GB"
+    resolution: "0.25 degree"
+    description: "ECMWF AIFS Ensemble v2 (reported as the ensemble mean)."
 
   - id: graphcast
     display_name: "GraphCast Small"
     earth2studio_class: "GraphCastSmall"
+    env: base
     gpu: "A100-80GB"
     resolution: "1 degree"
     description: "Lower-resolution GraphCast variant."
 
+  - id: graphcast_operational
+    display_name: "GraphCast Operational"
+    earth2studio_class: "GraphCastOperational"
+    env: base
+    gpu: "A100-80GB"
+    resolution: "0.25 degree"
+    description: "Operational-resolution GraphCast global forecast model."
+
   - id: gencast
     display_name: "GenCast Mini"
     earth2studio_class: "GenCastMini"
+    env: base
     gpu: "A100-80GB"
     resolution: "1 degree"
     description: "Mini stochastic GenCast variant."
@@ -38,6 +83,7 @@ models:
   - id: fuxi
     display_name: "FuXi"
     earth2studio_class: "FuXi"
+    env: base
     gpu: "A100-80GB"
     resolution: "0.25 degree"
     description: "FuXi medium-range global forecast model."

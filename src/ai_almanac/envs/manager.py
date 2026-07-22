@@ -28,6 +28,11 @@ BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 # point solving (or running) this env anywhere else.
 _FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
 
+# The forecast manifest defines one pixi environment per model group — the AIFS
+# families pin incompatible anemoi-models versions and cannot share a solve (see
+# forecast.pixi.toml). A model's `env` field in forecast_models.yaml selects one.
+FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
+
 
 def _current_pixi_platform() -> str:
     system = platform.system()
@@ -155,8 +160,18 @@ def ensure_forecast_env() -> Path | None:
             "or the Modal job runner."
         )
         return None
+    pixi = _require_pixi()
     env_dir = forecast_env_dir()
-    _install(_forecast_pixi_spec(), env_dir)
+    env_dir.mkdir(parents=True, exist_ok=True)
+    target_spec = env_dir / "pixi.toml"
+    target_spec.write_text(_forecast_pixi_spec().read_text())
+    # One solve per model-group environment (they can't share one — see
+    # FORECAST_ENVIRONMENTS). Each is heavy; expect this to take a while.
+    for environment in FORECAST_ENVIRONMENTS:
+        subprocess.run(
+            [pixi, "install", "--manifest-path", str(target_spec), "-e", environment],
+            check=True,
+        )
     return env_dir
 
 
@@ -210,8 +225,11 @@ def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subproces
     )
 
 
-def run_forecast(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
-    """Spawn a process inside the forecast environment."""
+def run_forecast(
+    cmd: list[str], env: dict[str, str] | None = None, environment: str = "base"
+) -> subprocess.Popen:
+    """Spawn a process inside one forecast model-group environment (see
+    FORECAST_ENVIRONMENTS). `environment` is the model's `env` field."""
     pixi = _require_pixi()
     env_dir = forecast_env_dir()
     full_cmd = [
@@ -219,6 +237,8 @@ def run_forecast(cmd: list[str], env: dict[str, str] | None = None) -> subproces
         "run",
         "--manifest-path",
         str(env_dir / "pixi.toml"),
+        "-e",
+        environment,
         "--",
         *cmd,
     ]

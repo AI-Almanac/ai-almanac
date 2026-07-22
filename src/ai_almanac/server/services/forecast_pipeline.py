@@ -95,6 +95,48 @@ def load_model(model_class: str):
     return cls.load_model(package)
 
 
+def ensemble_config(model_entry: dict) -> dict | None:
+    """Ensemble run settings for a model, or None for deterministic models.
+
+    Ensemble models (AIFS-ENS) carry their own initial-condition noise, so the
+    spread comes from the model, not from perturbing the input — see run_rollout.
+    ``nensemble`` members are averaged to the ensemble mean downstream (the mean
+    keeps the day×lat×lon schema the blend was trained on).
+    """
+    if not model_entry.get("ensemble"):
+        return None
+    nensemble = int(model_entry.get("nensemble") or 8)
+    # Members run in batches to bound VRAM — a global-resolution member is large,
+    # so default to one at a time and let a model override it.
+    batch_size = int(model_entry.get("nensemble_batch") or 1)
+    return {"nensemble": nensemble, "batch_size": min(batch_size, nensemble)}
+
+
+def run_rollout(model, data, init_times: list[str], nsteps: int, io_backend, model_entry: dict):
+    """Roll one model forward, writing to io_backend. Deterministic models use
+    the single-trajectory workflow; ensemble models use earth2studio's ensemble
+    workflow with a Zero perturbation (spread is the model's internal noise)."""
+    ens = ensemble_config(model_entry)
+    if ens is None:
+        from earth2studio.run import deterministic
+
+        deterministic(init_times, nsteps, model, data, io_backend)
+        return
+    from earth2studio.perturbation import Zero
+    from earth2studio.run import ensemble
+
+    ensemble(
+        init_times,
+        nsteps,
+        ens["nensemble"],
+        model,
+        data,
+        io_backend,
+        Zero(),
+        batch_size=ens["batch_size"],
+    )
+
+
 def select_latest_init_time(config: dict) -> list[str]:
     if config.get("init_time"):
         return [config["init_time"]]
@@ -118,7 +160,6 @@ def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> 
     its raw output to zarr_path (a plain local path — Modal mode points this at
     Volume-backed scratch space, local mode at a plain temp dir)."""
     from earth2studio.io import ZarrBackend
-    from earth2studio.run import deterministic
 
     model_class = model_entry["earth2studio_class"]
     model = load_model(model_class)
@@ -127,7 +168,7 @@ def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> 
     nsteps, step_hours = lead_steps(config["lead_hours"], model_class)
     zarr_path.parent.mkdir(parents=True, exist_ok=True)
     io_backend = ZarrBackend(str(zarr_path))
-    deterministic(init_time, nsteps, model, data, io_backend)
+    run_rollout(model, data, init_time, nsteps, io_backend, model_entry)
     return {"init_time": init_time[0], "native_step_hours": step_hours}
 
 
@@ -214,23 +255,31 @@ def season_covered_dates(config: dict) -> dict[str, list[str]]:
 
 
 def _daily_precip_trajectory(
-    model, data, issue_date: dt.date, max_lead_day: int, step_hours: int, scratch_root: Path
+    model,
+    data,
+    issue_date: dt.date,
+    max_lead_day: int,
+    step_hours: int,
+    scratch_root: Path,
+    model_entry: dict,
 ):
     """Run one issue date out to max_lead_day and reduce to one daily precip
     total per lead day (ROMP's `day` dimension), at the model's native grid.
+    Ensemble models are reduced to the ensemble mean (see run_rollout).
     """
     import shutil
 
     import numpy as np
     import xarray as xr
     from earth2studio.io import ZarrBackend
-    from earth2studio.run import deterministic
 
     nsteps = (max_lead_day * 24) // step_hours
     zarr_path = scratch_root / f"{issue_date.isoformat()}.zarr"
     io_backend = ZarrBackend(str(zarr_path))
     t0 = time.perf_counter()
-    deterministic([issue_date.strftime("%Y-%m-%dT%H:%M:%S")], nsteps, model, data, io_backend)
+    run_rollout(
+        model, data, [issue_date.strftime("%Y-%m-%dT%H:%M:%S")], nsteps, io_backend, model_entry
+    )
     print(f"    rollout done in {time.perf_counter() - t0:.1f}s", flush=True)
     t0 = time.perf_counter()
 
@@ -240,7 +289,13 @@ def _daily_precip_trajectory(
     # after just a few rollouts. Instead, select tp lazily and .compute() one
     # day's sum at a time so peak memory per rollout is ~tp-only.
     dataset = xr.open_zarr(zarr_path)
-    tp = select_variable(dataset, "tp").squeeze()
+    tp = select_variable(dataset, "tp")
+    # Ensemble models write a member dim; average to the ensemble mean before
+    # reducing (kept lazy, so peak memory stays ~one member). Mean and per-day
+    # sum commute, so meaning first gives the same daily totals.
+    if "ensemble" in tp.dims:
+        tp = tp.mean("ensemble")
+    tp = tp.squeeze()
     lat_name, lon_name = lat_lon_names(tp)
     # unit_cvt (from the archived data source's metadata, applied by the
     # caller) converts the model's native units to the mm/day convention
@@ -452,7 +507,13 @@ def generate_season_forecast_netcdf(
             loaded["model"] = load_model(model_class)
             loaded["data"] = resolve_data_source(init_source)
         return _daily_precip_trajectory(
-            loaded["model"], loaded["data"], issue_date, lead_day, step_hours, scratch_root
+            loaded["model"],
+            loaded["data"],
+            issue_date,
+            lead_day,
+            step_hours,
+            scratch_root,
+            model_entry,
         )
 
     print(
@@ -617,8 +678,10 @@ def grid_values(field, max_lat: int = 360, max_lon: int = 720):
     lat_name, lon_name = lat_lon_names(field)
     grid = field.squeeze()
     for dim in list(grid.dims):
-        if dim not in {lat_name, lon_name}:
-            grid = grid.isel({dim: 0})
+        if dim in {lat_name, lon_name}:
+            continue
+        # Average ensemble members; take the first index of any other stray dim.
+        grid = grid.mean(dim) if dim == "ensemble" else grid.isel({dim: 0})
     grid = grid.transpose(lat_name, lon_name)
     lat_step = max(1, int(np.ceil(grid.sizes[lat_name] / max_lat)))
     lon_step = max(1, int(np.ceil(grid.sizes[lon_name] / max_lon)))

@@ -95,6 +95,25 @@ def _run_blend(job_id: str, config: dict) -> None:
     _stream_process(process)
 
 
+def _forecast_env_by_model() -> dict[str, str]:
+    """Map each registered forecast model id to its pixi environment name."""
+    from ai_almanac.settings import get_packaged_forecast_models
+
+    registry = get_packaged_forecast_models()
+    return {m["id"]: m.get("env", "base") for m in registry.get("models") or []}
+
+
+def _group_forecast_models_by_env(model_ids: list[str]) -> dict[str, list[str]]:
+    """Group a job's models by execution environment, so each incompatible AIFS
+    family is rolled out in its own subprocess (see FORECAST_ENVIRONMENTS)."""
+    env_by_model = _forecast_env_by_model()
+    groups: dict[str, list[str]] = {}
+    for model_id in model_ids:
+        env_name = env_by_model.get(model_id, "base")
+        groups.setdefault(env_name, []).append(model_id)
+    return groups
+
+
 def _run_forecast(job_id: str, config: dict) -> None:
     storage = get_storage()
     if not storage.is_local:
@@ -103,21 +122,54 @@ def _run_forecast(job_id: str, config: dict) -> None:
     output_dir = Path(output_dir_raw)
     config_path = output_dir.parent / "forecast-config.json"
     config_path.write_text(json.dumps(config))
+    staging_dir = output_dir.parent / "season-staging"
     entrypoint = Path(__file__).parents[2] / "envs" / "forecast_entrypoint.py"
     process_env = os.environ.copy()
 
     print(f"==> Forecast config: {config_path}", flush=True)
-    print("==> Starting live forecast generation...", flush=True)
-    process = forecast_pixi_run(
+
+    # Inference: one subprocess per model-group environment (the AIFS families
+    # can't share an env). Each stages its models' season files into staging_dir.
+    groups = _group_forecast_models_by_env(config.get("forecast_model_ids") or [])
+    for env_name, model_ids in groups.items():
+        print(f"==> Season inference [{env_name}]: {model_ids}", flush=True)
+        process = forecast_pixi_run(
+            [
+                "python",
+                str(entrypoint),
+                "--phase",
+                "inference",
+                "--config",
+                str(config_path),
+                "--staging-dir",
+                str(staging_dir),
+                "--models",
+                ",".join(model_ids),
+            ],
+            env=process_env,
+            environment=env_name,
+        )
+        _stream_process(process)
+
+    # Scoring runs once, in the blending env — it only needs blending's stack,
+    # which conflicts with earth2studio's pins and so can't live in a forecast env.
+    print("==> Scoring against trained blend...", flush=True)
+    score_env = os.environ.copy()
+    score_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
+    process = blending_pixi_run(
         [
             "python",
             str(entrypoint),
+            "--phase",
+            "score",
             "--config",
             str(config_path),
+            "--staging-dir",
+            str(staging_dir),
             "--output-dir",
             str(output_dir),
         ],
-        env=process_env,
+        env=score_env,
     )
     _stream_process(process)
     # The rollout populated the shared trajectory store; record coverage so

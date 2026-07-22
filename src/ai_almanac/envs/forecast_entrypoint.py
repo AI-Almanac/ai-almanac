@@ -1,17 +1,28 @@
-"""Run the live-forecast workflow inside its managed Pixi environment.
+"""Run the live-forecast workflow inside its managed Pixi environments.
 
-Mirrors blend_entrypoint.py's shape. Unlike blending, forecast_pipeline is a
-plain module with no Modal dependency at all, so it's imported normally here
-(no stubbing needed) — see server/services/forecast_pipeline.py's docstring.
-The live-scoring step still needs blending_app.py's pure scoring function
-(score_live_forecast), so this reuses blend_entrypoint's existing
-Modal-stubbing loader for that one step only.
+Split into two phases because the model rollouts and the blend scoring run in
+different environments:
+
+  - ``inference``: roll a subset of models across the season-to-date and stage
+    each model's season NetCDF. Runs in a forecast model-group environment
+    (see envs.manager.FORECAST_ENVIRONMENTS) — the AIFS families pin
+    incompatible deps, so a job's models are grouped by `env` and this phase is
+    invoked once per group.
+  - ``score``: assemble the staged season files and score against the trained
+    blend. Runs in the *blending* environment — scoring only needs blending's
+    stack (numpy/pandas/sklearn), which conflicts with earth2studio's pins, so
+    it must not live in a forecast env.
+
+forecast_pipeline is a plain module with no Modal dependency, imported normally
+here. The scoring step reuses blend_entrypoint's Modal-stubbing loader for
+blending_app.py's pure score_live_forecast function only.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import tempfile
 import traceback
 from datetime import UTC, datetime
@@ -86,53 +97,66 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
     (output_dir / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
 
 
-def run(config: dict, output_dir: Path) -> None:
-    """Roll each blend model across the season-to-date (serving cached issue
-    dates and rolling out only misses) and score the assembled season against
-    the trained blend. The raw short-lead map deliverable was dropped (D1): it
-    re-ran a rollout already contained in the season loop's latest issue date.
-    """
-    model_ids = config["forecast_model_ids"]
+def run_inference(config: dict, model_ids: list[str], staging_dir: Path) -> None:
+    """Roll each requested model across the season-to-date (serving cached issue
+    dates and rolling out only misses) and stage its season file as
+    `<staging_dir>/<model_id>.nc` for the later scoring phase."""
+    season_model_params = config.get("season_model_params") or {}
+    staging_dir.mkdir(parents=True, exist_ok=True)
     failures: dict[str, str] = {}
 
-    blend_config = config.get("blend_config_snapshot")
-    season_model_params = config.get("season_model_params") or {}
-    if not blend_config:
-        raise RuntimeError("Forecast job config is missing its blend snapshot")
-
-    print("==> Running season-long inference for blend scoring", flush=True)
-    live_forecast_paths: dict[str, Path] = {}
+    print(f"==> Season inference for {model_ids}", flush=True)
     for model_id in model_ids:
         try:
-            live_forecast_paths[model_id] = _run_season_bundle(
+            season_path = _run_season_bundle(
                 model_id, config, season_model_params.get(model_id) or {}
             )
-        except Exception as exc:
+            shutil.copy(season_path, staging_dir / f"{model_id}.nc")
+        except Exception as exc:  # noqa: BLE001
             failures[f"{model_id} (season)"] = str(exc)
             traceback.print_exc()
 
-    missing = [m for m in model_ids if m not in live_forecast_paths]
-    if not missing:
-        try:
-            _score_live(config, live_forecast_paths, output_dir)
-        except Exception as exc:
-            failures["blend_scoring"] = str(exc)
-            traceback.print_exc()
-    else:
-        print(f"==> Skipping blend scoring; missing season data for {missing}", flush=True)
-
     if failures:
-        raise RuntimeError(f"Forecast job failed for model(s) {sorted(failures)}: {failures}")
+        raise RuntimeError(f"Forecast inference failed for {sorted(failures)}: {failures}")
+
+
+def run_scoring(config: dict, staging_dir: Path, output_dir: Path) -> None:
+    """Score the assembled season (all staged model files) against the trained
+    blend. The raw short-lead map deliverable was dropped (D1): it re-ran a
+    rollout already contained in the season loop's latest issue date."""
+    blend_config = config.get("blend_config_snapshot")
+    if not blend_config:
+        raise RuntimeError("Forecast job config is missing its blend snapshot")
+
+    model_ids = config["forecast_model_ids"]
+    live_forecast_paths = {m: staging_dir / f"{m}.nc" for m in model_ids}
+    missing = [m for m, p in live_forecast_paths.items() if not p.is_file()]
+    if missing:
+        raise RuntimeError(f"Cannot score; missing staged season data for {missing}")
+
+    _score_live(config, live_forecast_paths, output_dir)
     print("==> Forecast generation complete", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", choices=["inference", "score"], required=True)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--staging-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--models", help="Comma-separated model ids for the inference phase."
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
-    run(config, args.output_dir)
+
+    if args.phase == "inference":
+        model_ids = [m for m in (args.models or "").split(",") if m]
+        run_inference(config, model_ids, args.staging_dir)
+    else:
+        if not args.output_dir:
+            parser.error("--output-dir is required for the score phase")
+        run_scoring(config, args.staging_dir, args.output_dir)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from __future__ import annotations
 from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
 from ai_almanac.settings import get_packaged_forecast_models
 
-_INTERNAL_FIELDS = ("earth2studio_class", "gpu")
+_INTERNAL_FIELDS = ("earth2studio_class", "gpu", "env", "ensemble", "nensemble")
 
 
 async def load_forecast_model_registry() -> list[dict]:
