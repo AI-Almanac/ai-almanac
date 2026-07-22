@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ai_almanac.server.routers import (
     config,
     data_sources,
     datasets,
+    feedback,
     forecasts,
     fs,
     jobs,
@@ -180,15 +182,22 @@ tiles.add_exception_handlers(app)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    # Per-request correlation ID: echoed to the client (recorded in the SPA's
+    # feedback breadcrumbs) and logged here, so a feedback report's API trail
+    # can be matched to server logs.
+    request_id = uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-ID"] = request_id
     logger.info(
-        "%s %s %d %.1fms",
+        "%s %s %d %.1fms rid=%s",
         request.method,
         request.url.path,
         response.status_code,
         duration_ms,
+        request_id,
     )
     return response
 
@@ -257,6 +266,8 @@ app.add_middleware(
     allow_credentials=not settings.cors_allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let the cross-origin dev SPA read the correlation ID for breadcrumbs.
+    expose_headers=["X-Request-ID"],
 )
 
 # Several SvelteKit pages share a name with an API router (/blends, /forecasts,
@@ -294,6 +305,7 @@ app.include_router(config.router)
 app.include_router(config.root_router)
 app.include_router(data_sources.router)
 app.include_router(datasets.router)
+app.include_router(feedback.router)
 app.include_router(forecasts.router)
 app.include_router(fs.router)
 app.include_router(jobs.router)

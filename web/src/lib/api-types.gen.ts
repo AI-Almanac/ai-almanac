@@ -388,6 +388,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Feedback */
+        post: operations["submit_feedback_feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forecasts": {
         parameters: {
             query?: never;
@@ -2310,6 +2327,35 @@ export interface components {
             properties: components["schemas"]["Info"] | null;
             /** Id */
             id?: number | string | null;
+        };
+        /** FeedbackResult */
+        FeedbackResult: {
+            /** Issue Url */
+            issue_url: string;
+        };
+        /** FeedbackSubmission */
+        FeedbackSubmission: {
+            /** Message */
+            message: string;
+            /**
+             * Category
+             * @default other
+             * @enum {string}
+             */
+            category: "bug" | "idea" | "other";
+            /**
+             * Page
+             * @default
+             */
+            page: string;
+            /** Snapshot */
+            snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Breadcrumbs */
+            breadcrumbs?: {
+                [key: string]: unknown;
+            }[];
         };
         /** ForecastCreate */
         ForecastCreate: {
@@ -4628,6 +4674,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetOut"][];
+                };
+            };
+        };
+    };
+    submit_feedback_feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackSubmission"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

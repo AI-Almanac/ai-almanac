@@ -2,6 +2,7 @@
 // the backend's `/config.js`) so a single built SPA can target any backend.
 // Falls back to the build-time Vite env (dev), then to same-origin.
 import { authHeaders, login, refreshAuthTokens } from '../auth';
+import { addBreadcrumb } from '../breadcrumbs';
 
 declare global {
 	interface Window {
@@ -9,6 +10,8 @@ declare global {
 			apiUrl?: string;
 			authMode?: 'none' | 'proxy' | 'globus';
 			submittedByEnabled?: boolean;
+			version?: string;
+			feedbackEnabled?: boolean;
 		};
 	}
 }
@@ -62,9 +65,30 @@ export async function request<T>(
 		throw new Error('Authentication required');
 	}
 
-	const res = await fetch(`${BASE_URL}${path}`, {
-		...init,
-		headers: { 'Content-Type': 'application/json', ...headers, ...init.headers }
+	const method = init.method ?? 'GET';
+	const start = performance.now();
+	let res: Response;
+	try {
+		res = await fetch(`${BASE_URL}${path}`, {
+			...init,
+			headers: { 'Content-Type': 'application/json', ...headers, ...init.headers }
+		});
+	} catch (e) {
+		addBreadcrumb('api', `${method} ${path} network error`, {
+			method,
+			path,
+			error: e instanceof Error ? e.message : String(e)
+		});
+		throw e;
+	}
+
+	const durationMs = Math.round(performance.now() - start);
+	addBreadcrumb('api', `${method} ${path} ${res.status} (${durationMs}ms)`, {
+		method,
+		path,
+		status: res.status,
+		durationMs,
+		requestId: res.headers.get('x-request-id') ?? undefined
 	});
 
 	if (res.status === 401) {
@@ -81,7 +105,14 @@ export async function request<T>(
 
 	if (!res.ok) {
 		const body = await res.text();
-		throw new Error(`${init.method ?? 'GET'} ${path} failed (${res.status}): ${body}`);
+		addBreadcrumb('api', `${method} ${path} failed (${res.status})`, {
+			method,
+			path,
+			status: res.status,
+			body,
+			requestId: res.headers.get('x-request-id') ?? undefined
+		});
+		throw new Error(`${method} ${path} failed (${res.status}): ${body}`);
 	}
 	if (res.status === 204 || res.headers.get('content-length') === '0') {
 		return undefined as T;
