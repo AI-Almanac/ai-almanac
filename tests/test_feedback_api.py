@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+
 class _FakeGitHubClient:
     """Stands in for the router's outbound httpx client."""
 
