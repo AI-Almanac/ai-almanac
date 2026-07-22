@@ -5,6 +5,7 @@
 		refreshForecast as refreshForecastRun,
 		listBlends,
 		getForecastModels,
+		forecastModelFor,
 		getInitSources,
 		getJobArtifacts,
 		cancelJob,
@@ -109,21 +110,23 @@
 	const completedBlends = $derived(blends.filter((b) => b.status === 'complete'));
 	const selectedBlend = $derived(blends.find((b) => b.id === blendId) ?? null);
 
-	// Only a blend's own models that also have a live forecast model can be
+	// Only a blend's own models that resolve to a live forecast model can be
 	// requested — matches the validation create_forecast_for_user enforces.
+	// The blend's model NAME is what gets submitted (it keys the blend formula
+	// server-side); the registry entry is just its display/run counterpart.
 	const availableModels = $derived.by(() => {
 		if (!selectedBlend) return [];
-		const registryIds = new Set(forecastModels.map((m) => m.id));
-		return forecastModels.filter(
-			(m) => selectedBlend.model_names.includes(m.id) && registryIds.has(m.id)
-		);
+		return selectedBlend.model_names.flatMap((name) => {
+			const model = forecastModelFor(forecastModels, name);
+			return model ? [{ name, model }] : [];
+		});
 	});
 
 	// Drop any selected model that's no longer available for the chosen blend.
 	$effect(() => {
-		const ids = new Set(availableModels.map((m) => m.id));
-		if (forecastModelIds.some((id) => !ids.has(id))) {
-			forecastModelIds = forecastModelIds.filter((id) => ids.has(id));
+		const names = new Set(availableModels.map((m) => m.name));
+		if (forecastModelIds.some((id) => !names.has(id))) {
+			forecastModelIds = forecastModelIds.filter((id) => names.has(id));
 		}
 	});
 
@@ -427,14 +430,14 @@
 							<p class="muted">None of this blend's models have a live forecast model available.</p>
 						{:else}
 							<div class="model-grid">
-								{#each availableModels as model (model.id)}
+								{#each availableModels as entry (entry.name)}
 									<label class="checkbox">
 										<input
 											type="checkbox"
-											checked={forecastModelIds.includes(model.id)}
-											onchange={() => toggleModel(model.id)}
+											checked={forecastModelIds.includes(entry.name)}
+											onchange={() => toggleModel(entry.name)}
 										/>
-										<span>{model.display_name}</span>
+										<span>{entry.model.display_name}</span>
 									</label>
 								{/each}
 							</div>

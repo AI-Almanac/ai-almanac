@@ -95,22 +95,18 @@ def _run_blend(job_id: str, config: dict) -> None:
     _stream_process(process)
 
 
-def _forecast_env_by_model() -> dict[str, str]:
-    """Map each registered forecast model id to its pixi environment name."""
-    from ai_almanac.settings import get_packaged_forecast_models
-
-    registry = get_packaged_forecast_models()
-    return {m["id"]: m.get("env", "base") for m in registry.get("models") or []}
-
-
 def _group_forecast_models_by_env(model_ids: list[str]) -> dict[str, list[str]]:
     """Group a job's models by execution environment, so each incompatible AIFS
-    family is rolled out in its own subprocess (see FORECAST_ENVIRONMENTS)."""
-    env_by_model = _forecast_env_by_model()
+    family is rolled out in its own subprocess (see FORECAST_ENVIRONMENTS).
+    Model ids are blend model names — resolve them like the runners do, so an
+    alias (e.g. aifs_single_v2 → aifs2) lands in its model's env."""
+    from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+
+    registry = get_packaged_forecast_models()
     groups: dict[str, list[str]] = {}
     for model_id in model_ids:
-        env_name = env_by_model.get(model_id, "base")
-        groups.setdefault(env_name, []).append(model_id)
+        entry = resolve_forecast_model(registry, model_id) or {}
+        groups.setdefault(entry.get("env", "base"), []).append(model_id)
     return groups
 
 

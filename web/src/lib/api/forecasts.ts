@@ -39,6 +39,8 @@ export type ForecastModel = {
 	display_name: string;
 	resolution: string;
 	description: string;
+	// Extra normalized keys this model matches (see forecastModelFor).
+	aliases?: string[];
 };
 
 export async function listForecasts(): Promise<Forecast[]> {
@@ -57,6 +59,30 @@ export async function refreshForecast(forecastId: string): Promise<Forecast> {
 
 export async function getForecastModels(): Promise<ForecastModel[]> {
 	return request<ForecastModel[]>('/forecasts/models');
+}
+
+// Mirror of the server's blend_model_key (settings.py): the live-scoring
+// gate matches a data source's normalized name against forecast-registry ids,
+// so any "can this model run a live forecast?" badge must normalize the same way.
+export function blendModelKey(name: string): string {
+	return name
+		.toLowerCase()
+		.replace(/[^0-9a-z]+/g, '_')
+		.replace(/^_+|_+$/g, '');
+}
+
+// Mirror of the server's resolve_forecast_model (settings.py): the registry
+// model a blend model name can run live forecasts with, matched by id,
+// normalized display name, or alias. Undefined means historical-only.
+export function forecastModelFor(
+	models: ForecastModel[],
+	name: string
+): ForecastModel | undefined {
+	const key = blendModelKey(name);
+	return models.find(
+		(m) =>
+			key === m.id || key === blendModelKey(m.display_name) || (m.aliases ?? []).includes(key)
+	);
 }
 
 // Initialization data source a live rollout starts from (e.g. GFS, ERA5).

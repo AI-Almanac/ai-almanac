@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from importlib.resources import files
 from pathlib import Path
 
@@ -494,3 +495,32 @@ def get_packaged_forecast_models() -> list[dict]:
     if _forecast_models_cache is None:
         _forecast_models_cache = yaml.safe_load(_FORECAST_MODELS_YAML.read_text())
     return _forecast_models_cache
+
+
+def blend_model_key(name: str) -> str:
+    """Filesystem/column-safe key used for a forecast model inside a blend.
+
+    The blend pipeline keys everything on this (formula terms, file names,
+    trajectory sets), and the web client mirrors it (blendModelKey in
+    web/src/lib/api/forecasts.ts) — keep the two in sync.
+    """
+    return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+def resolve_forecast_model(registry: dict, name: str) -> dict | None:
+    """Registry entry a blend model name can run live forecasts with, or None.
+
+    A name matches by registry id, by normalized display name, or by an
+    explicit `aliases` entry — so a data source named "AIFS Single v2" or
+    "AIFS2" both reach the `aifs2` model. Mirrored by the Modal runner
+    (modal/forecasts_app.py) and the web client's forecastModelFor.
+    """
+    key = blend_model_key(name)
+    for entry in registry.get("models") or []:
+        if (
+            key == entry["id"]
+            or key == blend_model_key(entry.get("display_name") or "")
+            or key in (entry.get("aliases") or [])
+        ):
+            return entry
+    return None

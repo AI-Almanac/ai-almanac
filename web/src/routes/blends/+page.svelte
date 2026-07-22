@@ -7,6 +7,8 @@
 		listDataSources,
 		getCapabilities,
 		getForecastModels,
+		forecastModelFor,
+		type ForecastModel,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -32,11 +34,11 @@
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
 	let modelSources = $state<DataSource[]>([]);
-	// Names of models with a live-forecast counterpart (forecast_models.yaml
-	// registry ids). A blend model is forecastable only when its name exactly
-	// matches a registry id — the live rollout rejoins the blend formula by that
-	// name (see create_forecast_for_user). Empty if forecasting is disabled.
-	let forecastModelNames = $state<Set<string>>(new Set());
+	// Forecast registry (forecast_models.yaml). A blend model is forecastable
+	// only when its name resolves to a registry entry (forecastModelFor) — the
+	// server's live-scoring gate (see create_forecast_for_user). Empty if
+	// forecasting is disabled.
+	let forecastModels = $state<ForecastModel[]>([]);
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -167,7 +169,7 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps, forecastModels] = await Promise.allSettled([
+		const [b, obs, models, caps, forecastModelsRes] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
@@ -180,9 +182,8 @@
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
 		// Gated by the forecasting feature flag; rejects when it's off — leave the
-		// set empty so no forecast badges show.
-		if (forecastModels.status === 'fulfilled')
-			forecastModelNames = new Set(forecastModels.value.map((m) => m.id));
+		// list empty so no forecast badges show.
+		if (forecastModelsRes.status === 'fulfilled') forecastModels = forecastModelsRes.value;
 		loaded = true;
 	}
 
@@ -540,7 +541,7 @@
 											onchange={() => toggleModel(source.id)}
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
-										{#if forecastModelNames.has(source.name)}
+										{#if forecastModelFor(forecastModels, source.name)}
 											<span class="forecast-badge" title="This model can also generate live forecasts."
 												>Live forecast</span
 											>

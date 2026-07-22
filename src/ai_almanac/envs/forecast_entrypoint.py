@@ -31,15 +31,14 @@ from pathlib import Path
 from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
 from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
-from ai_almanac.settings import get_packaged_forecast_models
+from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
 
 
 def _registry_entry(model_id: str) -> dict:
-    registry = get_packaged_forecast_models()
-    for entry in registry.get("models") or []:
-        if entry["id"] == model_id:
-            return entry
-    raise KeyError(f"Unknown forecast model id: {model_id!r}")
+    entry = resolve_forecast_model(get_packaged_forecast_models(), model_id)
+    if entry is None:
+        raise KeyError(f"Unknown forecast model id: {model_id!r}")
+    return entry
 
 
 def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path:
