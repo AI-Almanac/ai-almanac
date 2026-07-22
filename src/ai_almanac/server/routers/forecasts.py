@@ -29,9 +29,9 @@ from ai_almanac.server.services.job_submission import (
 )
 from ai_almanac.server.tables import jobs
 
-# The whole router is gated, not just mutations (unlike data-management's
-# require_data_management usage) — this feature isn't ready for any user to
-# see yet, not just to modify.
+# The whole router is gated on the forecasting feature flag (on by default).
+# User endpoints still require an authenticated user (CurrentUser); the
+# trajectory-generation view stays admin-only (AdminUser).
 router = APIRouter(
     prefix="/forecasts", tags=["forecasts"], dependencies=[Depends(require_forecasting)]
 )

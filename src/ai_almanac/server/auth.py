@@ -244,9 +244,9 @@ async def require_data_management() -> None:
 
 
 async def require_forecasting() -> None:
-    """Gate the whole forecasting feature behind its flag — unlike
-    require_data_management, this covers reads too, since the feature isn't
-    ready to expose to any user yet, not just its mutations."""
+    """Gate the forecasting feature behind its flag. On by default; admins can
+    turn it off (e.g. an install with no GPU/Modal infra) to hide the feature
+    from all users."""
     if not settings.enable_forecasting:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 

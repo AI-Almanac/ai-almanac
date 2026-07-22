@@ -4,8 +4,11 @@ Deploy with:
     modal deploy modal/forecasts_app.py
 
 After deploying, or whenever a model's upstream weights change, warm the
-weight cache once so real forecast jobs never pay for the download inline:
-    modal run modal/forecasts_app.py::warm_model_weights
+weight cache once per model-group environment so real forecast jobs never pay
+for the download inline (each has its own image — see INFERENCE_IMAGES):
+    modal run modal/forecasts_app.py::warm_model_weights_base
+    modal run modal/forecasts_app.py::warm_model_weights_aifs2
+    modal run modal/forecasts_app.py::warm_model_weights_aifs2ens
 
 Runs one or more AI weather models (from server/config/forecast_models.yaml)
 against the latest GFS initial conditions via earth2studio, renders each
@@ -32,9 +35,9 @@ Secrets required:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import io
-import json
 import os
 import tempfile
 import time
@@ -66,28 +69,44 @@ forecast_volume = modal.Volume.from_name("earth2studio-cache", create_if_missing
 
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME)
 
-inference_image = (
-    modal.Image.from_registry("nvcr.io/nvidia/pytorch:25.12-py3")
-    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
-    .apt_install(
-        "git",
-        "make",
-        "curl",
-        "cmake",
-        "python3-dev",
-        "libeccodes-tools",
-        "libeccodes-dev",
+# One inference image per model-group environment — the AIFS families pin
+# incompatible anemoi-models versions and can't share one image (see
+# forecast.pixi.toml). A model's `env` field in forecast_models.yaml selects
+# which image runs it; keep these extras in sync with that manifest.
+_INFERENCE_EXTRAS = {
+    "base": ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"],
+    "aifs2": ["aifs2", "data"],
+    "aifs2ens": ["aifs2ens", "data"],
+}
+
+
+def _inference_image(extras: list[str]) -> modal.Image:
+    spec = ",".join(extras)
+    return (
+        modal.Image.from_registry("nvcr.io/nvidia/pytorch:25.12-py3")
+        .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+        .apt_install(
+            "git",
+            "make",
+            "curl",
+            "cmake",
+            "python3-dev",
+            "libeccodes-tools",
+            "libeccodes-dev",
+        )
+        .run_commands(
+            "python -m pip install --upgrade uv",
+            "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
+            f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git@0.16.0'",
+            "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
+            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs h5netcdf onnxruntime-gpu pyyaml",
+        )
+        .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
+        .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
     )
-    .run_commands(
-        "python -m pip install --upgrade uv",
-        "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-        "'earth2studio[aifs,data,fuxi,graphcast] @ git+https://github.com/NVIDIA/earth2studio.git@0.14.0'",
-        "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-        "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs h5netcdf onnxruntime-gpu pyyaml",
-    )
-    .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
-    .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
-)
+
+
+INFERENCE_IMAGES = {env: _inference_image(extras) for env, extras in _INFERENCE_EXTRAS.items()}
 
 render_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -141,10 +160,8 @@ class _LogTee:
 
     def flush(self):
         for stream in self._streams:
-            try:
+            with contextlib.suppress(Exception):
                 stream.flush()
-            except Exception:
-                pass
 
 
 def _write_gcp_credentials_from_secret() -> None:
@@ -204,6 +221,11 @@ def _registry_entry(model_id: str) -> dict:
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
 
 
+def _model_env(model_id: str) -> str:
+    """Execution-environment name for a model (base/aifs2/aifs2ens)."""
+    return _registry_entry(model_id).get("env", "base")
+
+
 _VOLUME_RUNS_ROOT = Path("/cache/runs")
 
 
@@ -223,16 +245,7 @@ def _cleanup_volume_scratch(job_id: str, model_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.function(
-    image=inference_image,
-    gpu="A100-80GB",
-    cpu=(8, 16),
-    memory=(32768, 65536),
-    timeout=7200,
-    secrets=[gcp_secret],
-    volumes={"/cache": forecast_volume},
-)
-def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
+def _forecast_inference_impl(job_id: str, model_id: str, config: dict) -> dict:
     """Run one AI weather model against the latest GFS conditions; write its
     raw output to scratch volume space for render_forecast_products to read."""
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
@@ -249,26 +262,38 @@ def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
     return run_info
 
 
-@app.function(
-    image=inference_image,
-    gpu="A100-80GB",
-    cpu=(8, 16),
-    memory=(32768, 65536),
-    timeout=7200,
-    volumes={"/cache": forecast_volume},
-)
-def warm_model_weights() -> None:
-    """Download every registered model's weights into the persistent volume
-    once, so run_forecast_inference/run_season_forecast_bundle never pay for
-    the download inline inside a real, timed forecast job. Re-run manually
-    after adding a model to the registry or when upstream weights change —
-    see the module docstring for the `modal run` invocation."""
+def _make_forecast_inference_fn(env_name: str, image: modal.Image):
+    @app.function(
+        name=f"run_forecast_inference_{env_name}",
+        image=image,
+        gpu="A100-80GB",
+        cpu=(8, 16),
+        memory=(32768, 65536),
+        timeout=7200,
+        secrets=[gcp_secret],
+        volumes={"/cache": forecast_volume},
+    )
+    def _fn(job_id: str, model_id: str, config: dict) -> dict:
+        return _forecast_inference_impl(job_id, model_id, config)
+
+    return _fn
+
+
+# Per-env variants; dispatch by the model's `env` (see _model_env).
+FORECAST_INFERENCE_FNS = {
+    env: _make_forecast_inference_fn(env, image) for env, image in INFERENCE_IMAGES.items()
+}
+
+
+def _warm_model_weights_impl(env_name: str) -> None:
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
 
     pipeline = _load_pipeline()
     registry = _load_model_registry()
     for entry in registry.get("models") or []:
+        if entry.get("env", "base") != env_name:
+            continue
         model_class = entry["earth2studio_class"]
         print(f"==> Warming weights: {model_class}")
         pipeline.load_model(model_class)
@@ -276,6 +301,27 @@ def warm_model_weights() -> None:
     t0 = time.perf_counter()
     forecast_volume.commit()
     print(f"==> Weight cache warmed; volume commit took {time.perf_counter() - t0:.1f}s")
+
+
+def _make_warm_fn(env_name: str, image: modal.Image):
+    @app.function(
+        name=f"warm_model_weights_{env_name}",
+        image=image,
+        gpu="A100-80GB",
+        cpu=(8, 16),
+        memory=(32768, 65536),
+        timeout=7200,
+        volumes={"/cache": forecast_volume},
+    )
+    def _fn() -> None:
+        _warm_model_weights_impl(env_name)
+
+    return _fn
+
+
+# One warm function per environment (its own image). Run manually after adding a
+# model or when upstream weights change — see the module docstring.
+WARM_FNS = {env: _make_warm_fn(env, image) for env, image in INFERENCE_IMAGES.items()}
 
 
 @app.function(
@@ -310,18 +356,7 @@ def render_forecast_products(
     _cleanup_volume_scratch(job_id, model_id)
 
 
-@app.function(
-    image=inference_image,
-    gpu="A100-80GB",
-    cpu=(8, 16),
-    memory=(32768, 65536),
-    # Many sequential issue-date runs per season, not one — a much longer
-    # ceiling than the single-run map-visualization inference function.
-    timeout=21600,
-    secrets=[gcp_secret],
-    volumes={"/cache": forecast_volume},
-)
-def run_season_forecast_bundle(
+def _season_bundle_impl(
     job_id: str, model_id: str, config: dict, season_params: dict
 ) -> bytes:
     """Loop one model across the current season's issue dates and return a
@@ -356,6 +391,31 @@ def run_season_forecast_bundle(
     forecast_volume.commit()
     print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")
     return pipeline.bundle_files([out_path])
+
+
+def _make_season_bundle_fn(env_name: str, image: modal.Image):
+    @app.function(
+        name=f"run_season_forecast_bundle_{env_name}",
+        image=image,
+        gpu="A100-80GB",
+        cpu=(8, 16),
+        memory=(32768, 65536),
+        # Many sequential issue-date runs per season, not one — a much longer
+        # ceiling than the single-run map-visualization inference function.
+        timeout=21600,
+        secrets=[gcp_secret],
+        volumes={"/cache": forecast_volume},
+    )
+    def _fn(job_id: str, model_id: str, config: dict, season_params: dict) -> bytes:
+        return _season_bundle_impl(job_id, model_id, config, season_params)
+
+    return _fn
+
+
+# Per-env variants; the orchestrator dispatches each model by its `env`.
+SEASON_BUNDLE_FNS = {
+    env: _make_season_bundle_fn(env, image) for env, image in INFERENCE_IMAGES.items()
+}
 
 
 @app.function(
@@ -406,7 +466,7 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             season_model_ids = list(model_ids)
             print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
             season_calls = {
-                model_id: run_season_forecast_bundle.spawn(
+                model_id: SEASON_BUNDLE_FNS[_model_env(model_id)].spawn(
                     job_id, model_id, config, season_model_params.get(model_id) or {}
                 )
                 for model_id in season_model_ids

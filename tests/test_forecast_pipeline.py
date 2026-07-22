@@ -2,7 +2,27 @@ from __future__ import annotations
 
 import datetime as dt
 
-from ai_almanac.server.services.forecast_pipeline import _split_gs_uri, season_issue_dates
+from ai_almanac.server.services.forecast_pipeline import (
+    _split_gs_uri,
+    ensemble_config,
+    season_issue_dates,
+)
+
+
+def test_ensemble_config_none_for_deterministic_models():
+    assert ensemble_config({"id": "aifs"}) is None
+    assert ensemble_config({"id": "aifs", "ensemble": False}) is None
+
+
+def test_ensemble_config_defaults_and_batch_clamp():
+    cfg = ensemble_config({"id": "aifsens", "ensemble": True})
+    assert cfg == {"nensemble": 8, "batch_size": 1}
+
+    # batch_size never exceeds the member count.
+    cfg = ensemble_config(
+        {"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16}
+    )
+    assert cfg == {"nensemble": 2, "batch_size": 2}
 
 
 def test_split_gs_uri_separates_bucket_from_key():
