@@ -8,6 +8,9 @@ name: claude-review
 # Auth: CLAUDE_CODE_OAUTH_TOKEN (subscription seat via `claude setup-token`).
 # Quota guardrails: drafts and docs-only diffs skipped, superseded runs
 # cancelled, turn-capped, fork PRs skipped (no secrets on forks anyway).
+# Bot-triggered synchronizes (@claude fixups, autofix commits) are skipped:
+# the action rejects bot actors outright, and re-reviewing an agent's
+# mechanical follow-up commits is noise.
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
@@ -27,6 +30,7 @@ jobs:
   claude-review:
     if: >-
       !github.event.pull_request.draft &&
+      github.event.sender.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -59,6 +63,9 @@ jobs:
                - Model initialization weekdays use Python numbering (Mon=0).
                - Data-source ownership boundaries: user-registered rows are
                  private, admin rows shared; check authz on new queries.
+               - Widening lint/format scope or changing linter config
+                 surfaces pre-existing violations in newly covered paths;
+                 flag anything that will fail CI on the widened scope.
             3. Error handling and edge cases in changed code paths.
             4. Meaningful design problems (not style — formatters and linters
                own style).

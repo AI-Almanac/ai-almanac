@@ -3,6 +3,9 @@ name: claude-security-review
 # Security-focused AI review, deliberately separate from claude-review.yml so
 # the two reviewers have independent context windows (SDLC Phase 2). Runs only
 # on PRs touching security-relevant paths to conserve seat quota.
+# Bot-triggered synchronizes (@claude fixups, autofix commits) are skipped:
+# the action rejects bot actors outright, and re-reviewing an agent's
+# mechanical follow-up commits is noise.
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
@@ -29,6 +32,7 @@ jobs:
   claude-security-review:
     if: >-
       !github.event.pull_request.draft &&
+      github.event.sender.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
