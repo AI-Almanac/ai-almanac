@@ -62,6 +62,14 @@ resource "google_service_account_iam_member" "ci_token_creator" {
   member             = "serviceAccount:${google_service_account.ci.email}"
 }
 
+# Post-deploy verification (scripts/post_deploy_check.sh) reads the new
+# revision's error logs from the deploy workflows.
+resource "google_project_iam_member" "ci_logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.ci.email}"
+}
+
 output "ci_service_account_email" {
   value = google_service_account.ci.email
 }
