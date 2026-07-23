@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 import tarfile
+import tempfile
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -561,6 +561,7 @@ def _load_arco_daily_precip_day(
     lon_bounds,
 ):
     import gc
+
     import pandas as pd
 
     day_end = day + timedelta(hours=23)
@@ -590,6 +591,7 @@ def _write_arco_month_file(
     local_obs: Path,
 ) -> Path:
     import gc
+
     import xarray as xr
 
     daily_parts = []
@@ -615,6 +617,7 @@ def _fetch_era5_daily_precip_from_arco(
     local_obs: Path,
 ) -> None:
     import gc
+
     import xarray as xr
 
     source_url = dataset_config.get(
@@ -715,9 +718,10 @@ def _fetch_cds_month(
     lat_bounds,
     lon_bounds,
     local_obs: Path,
-) -> "xr.DataArray":
+) -> xr.DataArray:
     """Download one month from CDS, load it into memory, and delete all temp files."""
     import shutil
+
     import xarray as xr
 
     request: dict = {
@@ -789,6 +793,7 @@ def _fetch_era5_daily_precip_from_cds(
 ) -> None:
     """Fetch ERA5 daily total precipitation directly from CDS daily statistics."""
     import gc
+
     import cdsapi
 
     obs_var = romp_params.get("obs_var", "RAINFALL")
@@ -1113,11 +1118,12 @@ if ENABLE_GCS_FUNCTIONS:
           gcp-service-account — SERVICE_ACCOUNT_JSON
           e2s-credentials     — CDSAPI_KEY (only needed for Earth2Studio/CDS datasets)
         """
-        from google.cloud import storage as gcs
-        from contextlib import redirect_stderr, redirect_stdout
         import io as _io
         import sys
         import traceback
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from google.cloud import storage as gcs
 
         log_buffer = _io.StringIO()
         client = None
@@ -1179,10 +1185,10 @@ def run_benchmark_local(
     datasets, into a tarball with top-level `model/` and optional `obs/`
     directories. For E2S datasets, obs are fetched inside Modal.
     """
-    from contextlib import redirect_stderr, redirect_stdout
     import io as _io
     import sys
     import traceback
+    from contextlib import redirect_stderr, redirect_stdout
 
     log_buffer = _io.StringIO()
     files: list[dict] = []
