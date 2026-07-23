@@ -47,7 +47,9 @@ def list_blend_jobs(bucket_uri: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "gcs_prefix",
         help="GCS job directory (gs://bucket/job-id) or bucket with --list",
@@ -78,9 +80,7 @@ def main() -> None:
     # Pick up the local dev user.
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
-    user = con.execute(
-        "SELECT id FROM users WHERE external_id = 'local' LIMIT 1"
-    ).fetchone()
+    user = con.execute("SELECT id FROM users WHERE external_id = 'local' LIMIT 1").fetchone()
     if not user:
         sys.exit("No 'local' user found — start the dev server once first.")
     user_id = user["id"]
@@ -122,8 +122,16 @@ def main() -> None:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            blend_id, user_id, "fixture", "blend", "complete",
-            json.dumps(blend_config), now, now, now, "private",
+            blend_id,
+            user_id,
+            "fixture",
+            "blend",
+            "complete",
+            json.dumps(blend_config),
+            now,
+            now,
+            now,
+            "private",
         ),
     )
 
@@ -135,8 +143,16 @@ def main() -> None:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            forecast_id, user_id, "fixture", "forecast", "complete",
-            json.dumps(forecast_config), now, now, now, "private",
+            forecast_id,
+            user_id,
+            "fixture",
+            "forecast",
+            "complete",
+            json.dumps(forecast_config),
+            now,
+            now,
+            now,
+            "private",
         ),
     )
 
@@ -147,9 +163,13 @@ def main() -> None:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            artifact_id, forecast_id, "output",
-            "blended_forecast_probabilities.csv", "text/csv",
-            len(csv_bytes), checksum,
+            artifact_id,
+            forecast_id,
+            "output",
+            "blended_forecast_probabilities.csv",
+            "text/csv",
+            len(csv_bytes),
+            checksum,
             f"{forecast_id}/output/blended_forecast_probabilities.csv",
             now,
         ),

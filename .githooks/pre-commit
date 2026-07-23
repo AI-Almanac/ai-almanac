@@ -25,8 +25,8 @@ fail=0
 formatted=()
 
 # --- Python ------------------------------------------------------------------
-py_files=$(echo "$staged" | grep -E '^(src|tests|modal|scripts)/.*\.py$' || true)
-for f in $py_files; do
+mapfile -t py_files < <(echo "$staged" | grep -E '^(src|tests|modal|scripts)/.*\.py$' || true)
+for f in "${py_files[@]}"; do
   if is_partially_staged "$f"; then
     if ! run_ruff format --check "$f" >/dev/null 2>&1; then
       echo "pre-commit: $f needs formatting but is partially staged." >&2
@@ -38,21 +38,20 @@ for f in $py_files; do
     formatted+=("$f")
   fi
 done
-if [ -n "$py_files" ]; then
-  # shellcheck disable=SC2086
-  if ! run_ruff check $py_files; then
+if [ ${#py_files[@]} -gt 0 ]; then
+  if ! run_ruff check "${py_files[@]}"; then
     echo "pre-commit: ruff lint failed." >&2
     fail=1
   fi
 fi
 
 # --- Web ----------------------------------------------------------------------
-web_files=$(echo "$staged" | grep -E '^web/.*\.(ts|js|svelte|css|json|md|html)$' | grep -v 'api-types\.gen\.ts' || true)
+mapfile -t web_files < <(echo "$staged" | grep -E '^web/.*\.(ts|js|svelte|css|json|md|html)$' | grep -v 'api-types\.gen\.ts' || true)
 prettier_bin="web/node_modules/.bin/prettier"
-if [ -n "$web_files" ] && [ ! -x "$prettier_bin" ]; then
+if [ ${#web_files[@]} -gt 0 ] && [ ! -x "$prettier_bin" ]; then
   echo "pre-commit: skipping prettier (web/node_modules missing; run pixi run install-web)" >&2
-elif [ -n "$web_files" ]; then
-  for f in $web_files; do
+elif [ ${#web_files[@]} -gt 0 ]; then
+  for f in "${web_files[@]}"; do
     rel=${f#web/}
     if is_partially_staged "$f"; then
       if ! (cd web && ./node_modules/.bin/prettier --check "$rel" >/dev/null 2>&1); then

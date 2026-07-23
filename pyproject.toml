@@ -88,9 +88,9 @@ dev = { features = ["dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
-lint-python = { cmd = "ruff check src tests", default-environment = "dev", description = "Lint Python sources and tests" }
-format-python = { cmd = "ruff format src tests", default-environment = "dev", description = "Format Python sources and tests" }
-format-python-check = { cmd = "ruff format --check src tests", default-environment = "dev", description = "Check Python formatting without modifying files" }
+lint-python = { cmd = "ruff check src tests modal scripts", default-environment = "dev", description = "Lint Python sources and tests" }
+format-python = { cmd = "ruff format src tests modal scripts", default-environment = "dev", description = "Format Python sources and tests" }
+format-python-check = { cmd = "ruff format --check src tests modal scripts", default-environment = "dev", description = "Check Python formatting without modifying files" }
 install-hooks = { cmd = "git config core.hooksPath .githooks", description = "Enable the repo's git hooks (pre-commit format/lint, pre-push check/test)" }
 install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
 build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }
