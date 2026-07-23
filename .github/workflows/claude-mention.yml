@@ -32,24 +32,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Give Claude the same formatters CI enforces, so pushed fixes arrive
-      # already formatted. A separate post-format commit would not retrigger
-      # CI (GITHUB_TOKEN pushes are recursion-guarded), so formatting must
-      # happen inside Claude's own commit.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install formatters
-        run: |
-          pip install --quiet ruff==0.15.16  # keep in sync with pixi.lock
-          npm ci --prefix web --no-audit --no-fund
+      # Give Claude ruff so Python fixes arrive already formatted and lint-clean
+      # (the common case), keeping the agent's own commit green on CI's Python
+      # gates. Web formatting is deliberately NOT run here: prettier executes
+      # repo-controlled JS config/plugins, so granting it to an agent that
+      # reads untrusted PR content (including fork heads it checks out) is a
+      # code-execution path. autofix.yml formats web files deterministically
+      # on the resulting synchronize instead — agent pushes trigger it.
+      - name: Install ruff
+        run: pip install --quiet ruff==0.15.16  # keep in sync with pixi.lock
 
       - uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # --allowedTools must grant the commands the system prompt asks for:
+          # the action's base allowlist only permits git. ruff reads declarative
+          # TOML and executes nothing; prettier is intentionally omitted (see above).
           claude_args: >-
             --max-turns 25
-            --append-system-prompt "Before committing any code changes: run 'ruff format' and 'ruff check' on changed Python files (fix findings), and 'web/node_modules/.bin/prettier --write' on changed files under web/. Both tools are preinstalled. CI enforces these gates, so unformatted commits fail. pixi is NOT installed here; use the tools directly."
+            --allowedTools "Bash(ruff format:*),Bash(ruff check:*)"
+            --append-system-prompt "Before committing any Python changes: run 'ruff format' and 'ruff check' on changed files under src/, tests/, modal/, or scripts/ and fix findings. ruff is preinstalled; pixi is NOT installed here, so call ruff directly. Do NOT run prettier or format web/ files — the autofix CI workflow formats those after you push. If you widen ruff's lint or format scope or change its config, run ruff over the newly covered paths and include the fixes in the same commit."

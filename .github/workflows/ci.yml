@@ -11,6 +11,10 @@ on:
     paths-ignore:
       - "docs/**"
       - "**.md"
+  # autofix.yml re-dispatches this workflow after pushing a formatting fixup
+  # commit, because GITHUB_TOKEN pushes never create pull_request runs on the
+  # new head SHA and check-and-test is a required status check.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

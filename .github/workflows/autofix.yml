@@ -1,0 +1,73 @@
+name: autofix
+
+# Deterministic formatting backstop (SDLC Phase 2): when a PR head commit
+# carries formatting or safe-fixable lint violations (hookless clones, agent
+# pushes), fix them in CI and push a fixup commit instead of failing and
+# waiting for a human to run the formatter. Because develop is gated on
+# `pixi run check`, the tree is always clean at the merge-base, so running
+# the formatters over the full CI scope can only ever touch files this PR
+# changed — no unrelated churn.
+#
+# Recursion safety: the fixup is pushed with GITHUB_TOKEN, which never
+# triggers pull_request runs, so this workflow cannot re-trigger itself.
+# The flip side is that check-and-test (a required status check) would
+# never run on the new head SHA either, so the job re-dispatches ci.yml
+# explicitly after pushing.
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+concurrency:
+  group: autofix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  autofix:
+    # Same-repo heads only: GITHUB_TOKEN cannot push to fork branches.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install formatters
+        run: |
+          pip install --quiet ruff==0.15.16  # keep in sync with pixi.lock
+          npm ci --prefix web --no-audit --no-fund
+
+      # Paths mirror the lint-python/format-python pixi tasks in
+      # pyproject.toml; keep them in sync when the lint scope changes.
+      - name: Format and apply safe lint fixes
+        run: |
+          ruff format src tests
+          ruff check --fix-only src tests
+          npm run format --prefix web
+
+      - name: Push fixup commit if anything changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet; then
+            echo "Nothing to fix."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "style: apply automatic formatting and safe lint fixes"
+          git push origin "HEAD:$HEAD_REF"
+          gh workflow run ci.yml --ref "$HEAD_REF"
