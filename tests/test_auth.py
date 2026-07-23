@@ -42,9 +42,7 @@ async def test_auth_me_personal_defaults_to_local_admin(
 async def test_auth_me_personal_honors_proxy_header(
     client: httpx.AsyncClient,
 ) -> None:
-    body = (
-        await client.get("/auth/me", headers={"X-Forwarded-User": "alice"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"X-Forwarded-User": "alice"})).json()
     assert body["subject"] == "alice"
     # Personal mode: the operator owns the box, so they are admin regardless.
     assert body["role"] == "admin"
@@ -66,9 +64,7 @@ async def test_auth_me_proxy_non_admin_is_user(
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "")
     monkeypatch.setattr(settings, "admin_emails", "")
-    body = (
-        await client.get("/auth/me", headers={"X-Forwarded-User": "bob"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"X-Forwarded-User": "bob"})).json()
     assert body["role"] == "user"
     assert body["capabilities"]["can_admin"] is False
 
@@ -79,9 +75,7 @@ async def test_auth_me_proxy_admin_by_subject(
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "carol,dave")
-    body = (
-        await client.get("/auth/me", headers={"X-Forwarded-User": "carol"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"X-Forwarded-User": "carol"})).json()
     assert body["role"] == "admin"
 
 
@@ -204,14 +198,10 @@ async def test_proxy_uses_issuer_and_subject_as_stable_identity(
         "X-Forwarded-Groups": "researchers",
     }
     first = (
-        await client.get(
-            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-a"}
-        )
+        await client.get("/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-a"})
     ).json()
     second = (
-        await client.get(
-            "/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-b"}
-        )
+        await client.get("/auth/me", headers={**base, "X-Forwarded-Issuer": "https://issuer-b"})
     ).json()
     assert first["id"] != second["id"]
 
@@ -272,9 +262,7 @@ async def test_region_delete_requires_admin_in_shared(
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.delete(
-        "/regions/anything", headers={"X-Forwarded-User": "rando"}
-    )
+    resp = await client.delete("/regions/anything", headers={"X-Forwarded-User": "rando"})
     assert resp.status_code == 403
 
 
@@ -287,9 +275,7 @@ async def test_data_source_delete_hides_unowned_sources(
     are covered in test_data_sources.py."""
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.delete(
-        "/data-sources/anything", headers={"X-Forwarded-User": "rando"}
-    )
+    resp = await client.delete("/data-sources/anything", headers={"X-Forwarded-User": "rando"})
     assert resp.status_code == 404
 
 
@@ -307,9 +293,7 @@ async def test_data_source_delete_hides_unowned_sources(
     ],
 )
 @pytest.mark.asyncio
-async def test_cors_allows_loopback_origins(
-    client: httpx.AsyncClient, origin: str
-) -> None:
+async def test_cors_allows_loopback_origins(client: httpx.AsyncClient, origin: str) -> None:
     resp = await client.get("/health", headers={"Origin": origin})
     assert resp.headers.get("access-control-allow-origin") == origin
 
@@ -331,9 +315,7 @@ async def test_auth_me_globus_uses_bearer_subject(
 ) -> None:
     # No client id configured -> stub introspection treats the token as the sub.
     monkeypatch.setattr(settings, "auth_mode", "globus")
-    body = (
-        await client.get("/auth/me", headers={"Authorization": "Bearer alice-token"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"Authorization": "Bearer alice-token"})).json()
     assert body["subject"] == "alice-token"
     assert body["role"] == "user"
 
@@ -355,9 +337,7 @@ async def test_auth_me_globus_admin_by_subject(
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "globus")
     monkeypatch.setattr(settings, "admin_subjects", "admin-sub")
-    body = (
-        await client.get("/auth/me", headers={"Authorization": "Bearer admin-sub"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"Authorization": "Bearer admin-sub"})).json()
     assert body["role"] == "admin"
 
 
@@ -374,9 +354,7 @@ async def test_auth_me_globus_admin_by_email_from_introspection(
         "_introspect_globus_token",
         lambda token: {"active": True, "sub": "u1", "email": "boss@example.com"},
     )
-    body = (
-        await client.get("/auth/me", headers={"Authorization": "Bearer tok"})
-    ).json()
+    body = (await client.get("/auth/me", headers={"Authorization": "Bearer tok"})).json()
     assert body["role"] == "admin"
     assert body["email"] == "boss@example.com"
 

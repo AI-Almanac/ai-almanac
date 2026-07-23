@@ -331,9 +331,7 @@ async def test_non_admin_source_is_private_and_invisible_to_others(
     alice = {"X-Forwarded-User": "alice"}
     bob = {"X-Forwarded-User": "bob"}
 
-    created = await client.post(
-        "/data-sources", json=_obs_body("Alice obs"), headers=alice
-    )
+    created = await client.post("/data-sources", json=_obs_body("Alice obs"), headers=alice)
     assert created.status_code == 201
     row = created.json()
     assert row["visibility"] == "private"
@@ -343,9 +341,7 @@ async def test_non_admin_source_is_private_and_invisible_to_others(
     assert row["id"] not in [s["id"] for s in bob_list.json()]
 
     for attempt in (
-        client.put(
-            f"/data-sources/{row['id']}", json=_obs_body("Steal"), headers=bob
-        ),
+        client.put(f"/data-sources/{row['id']}", json=_obs_body("Steal"), headers=bob),
         client.post(f"/data-sources/{row['id']}/revalidate", headers=bob),
         client.delete(f"/data-sources/{row['id']}", headers=bob),
     ):
@@ -369,14 +365,10 @@ async def test_admin_source_is_shared(
     row = created.json()
     assert row["visibility"] == "shared"
 
-    other = await client.get(
-        "/data-sources", headers={"X-Forwarded-User": "bob"}
-    )
+    other = await client.get("/data-sources", headers={"X-Forwarded-User": "bob"})
     assert row["id"] in [s["id"] for s in other.json()]
 
-    await client.delete(
-        f"/data-sources/{row['id']}", headers={"X-Forwarded-User": "root"}
-    )
+    await client.delete(f"/data-sources/{row['id']}", headers={"X-Forwarded-User": "root"})
 
 
 @pytest.mark.asyncio
@@ -408,9 +400,7 @@ async def test_gs_path_survives_registration_unmangled(
     fake = _FakeGcsStorage(_OBS_ROOT, gs_path)
     monkeypatch.setattr(storage_mod, "get_storage", lambda: fake)
 
-    created = await client.post(
-        "/data-sources", json=_obs_body("GCS obs", path=gs_path)
-    )
+    created = await client.post("/data-sources", json=_obs_body("GCS obs", path=gs_path))
     assert created.status_code == 201
     row = created.json()
     assert row["path"] == gs_path

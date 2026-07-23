@@ -22,9 +22,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "jobs",
-        sa.Column(
-            "job_type", sa.Text(), nullable=False, server_default="benchmark"
-        ),
+        sa.Column("job_type", sa.Text(), nullable=False, server_default="benchmark"),
     )
 
 

@@ -135,9 +135,7 @@ def _non_empty_params(params: dict[str, Any], allowed: set[str]) -> dict[str, An
     }
 
 
-def _clean_advanced_params(
-    params: dict[str, Any], model_ids: list[str]
-) -> dict[str, Any]:
+def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict[str, Any]:
     cleaned = _non_empty_params(params, SHARED_ROMP_PARAM_KEYS)
     raw_per_model = params.get("per_model_params")
     if isinstance(raw_per_model, dict):
@@ -147,9 +145,7 @@ def _clean_advanced_params(
             for model_id, model_params in raw_per_model.items()
             if model_id in selected and isinstance(model_params, dict)
         }
-        per_model = {
-            model_id: values for model_id, values in per_model.items() if values
-        }
+        per_model = {model_id: values for model_id, values in per_model.items() if values}
         if per_model:
             cleaned["per_model_params"] = per_model
     return cleaned
@@ -196,8 +192,6 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
     ]
 
 
-
-
 def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
     missing = []
     if not spec.region_id:
@@ -221,9 +215,7 @@ def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
     )
 
 
-def _validation_for_config(
-    spec: BenchmarkRunSpec, catalog: CatalogSnapshot
-) -> BenchmarkValidation:
+def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> BenchmarkValidation:
     errors = []
     warnings = []
     missing = list(spec.missing_fields)
@@ -233,13 +225,9 @@ def _validation_for_config(
     models = catalog.models_for_region(spec.region_id)
     model_map = {model["id"]: model for model in models}
     valid_model_ids = {model["id"] for model in models}
-    bad_models = [
-        model_id for model_id in spec.model_ids if model_id not in valid_model_ids
-    ]
+    bad_models = [model_id for model_id in spec.model_ids if model_id not in valid_model_ids]
     if bad_models:
-        errors.append(
-            f"Models are not available for {spec.region_id}: {', '.join(bad_models)}"
-        )
+        errors.append(f"Models are not available for {spec.region_id}: {', '.join(bad_models)}")
     if spec.forecast_window_days is not None and spec.forecast_window_days <= 0:
         errors.append("forecast_window_days must be positive")
     if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
@@ -254,18 +242,10 @@ def _validation_for_config(
                 continue
             start_date = params.get("start_date")
             end_date = params.get("end_date")
-            if (
-                isinstance(start_date, str)
-                and isinstance(end_date, str)
-                and start_date > end_date
-            ):
+            if isinstance(start_date, str) and isinstance(end_date, str) and start_date > end_date:
                 errors.append(f"{model_id}: start_date must be before end_date")
             model = model_map.get(model_id)
-            if (
-                model
-                and isinstance(start_date, str)
-                and start_date < model["start_date"]
-            ):
+            if model and isinstance(start_date, str) and start_date < model["start_date"]:
                 errors.append(
                     f"{model_id}: start_date is before available coverage ({model['start_date']})"
                 )
@@ -280,9 +260,7 @@ def _validation_for_config(
                 and isinstance(end_year_clim, int)
                 and start_year_clim > end_year_clim
             ):
-                errors.append(
-                    f"{model_id}: start_year_clim must be before end_year_clim"
-                )
+                errors.append(f"{model_id}: start_year_clim must be before end_year_clim")
     can_run = not missing and not errors
     return BenchmarkValidation(
         can_run=can_run,
@@ -381,9 +359,7 @@ async def _exec_list_datasets(args: dict, user_id: str, scope: BenchmarkScope) -
 
 async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     region = args.get("region")
-    models = await load_model_registry(
-        region if isinstance(region, str) else None, user_id=user_id
-    )
+    models = await load_model_registry(region if isinstance(region, str) else None, user_id=user_id)
     return json.dumps(
         [
             {
@@ -441,9 +417,7 @@ async def _exec_update_benchmark_config(
         region = _region_by_id(catalog, spec.region_id)
 
     model_ids = (
-        patch.get("model_ids")
-        if isinstance(patch.get("model_ids"), list)
-        else spec.model_ids
+        patch.get("model_ids") if isinstance(patch.get("model_ids"), list) else spec.model_ids
     )
     models = [
         model
@@ -453,15 +427,11 @@ async def _exec_update_benchmark_config(
     advanced_params = dict(spec.advanced_params)
     if isinstance(patch.get("advanced_params"), dict):
         advanced_params.update(patch["advanced_params"])
-    advanced_params = _clean_advanced_params(
-        advanced_params, [model["id"] for model in models]
-    )
+    advanced_params = _clean_advanced_params(advanced_params, [model["id"] for model in models])
 
     next_spec = spec.model_copy(
         update={
-            "intent": patch.get("intent")
-            if isinstance(patch.get("intent"), str)
-            else spec.intent,
+            "intent": patch.get("intent") if isinstance(patch.get("intent"), str) else spec.intent,
             "region_id": region["id"] if region else None,
             "region_name": region["display_name"] if region else None,
             "romp_region": (region.get("romp_name") or "custom") if region else None,
@@ -541,9 +511,7 @@ async def _exec_submit_benchmark(
     validation = _validation_for_config(spec, catalog)
     if not validation.can_run:
         await _save_benchmark_state(session_id, user_id, spec, validation)
-        return benchmark_payload(
-            spec, validation, error="Benchmark config is not runnable"
-        )
+        return benchmark_payload(spec, validation, error="Benchmark config is not runnable")
 
     models = [
         model
@@ -571,9 +539,7 @@ async def _exec_submit_benchmark(
         jobs.append(job.model_dump(mode="json"))
     submitted = spec.model_copy(update={"status": "running"})
     submitted_validation = validation.model_copy(update={"status": "running"})
-    await _save_benchmark_state(
-        session_id, user_id, submitted, submitted_validation, run_id
-    )
+    await _save_benchmark_state(session_id, user_id, submitted, submitted_validation, run_id)
     from ai_almanac.server.db import get_db
 
     next_scope = BenchmarkScope(
@@ -686,11 +652,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
 
     async with get_db() as conn:
         row = (
-            (
-                await conn.execute(
-                    query, {"id": job_id, "uid": user_id, **_scope_params(scope)}
-                )
-            )
+            (await conn.execute(query, {"id": job_id, "uid": user_id, **_scope_params(scope)}))
             .mappings()
             .fetchone()
         )
@@ -737,9 +699,7 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
         query = query.where(cond)
     async with get_db() as conn:
         row = (
-            await conn.execute(
-                query, {"id": job_id, "uid": user_id, **_scope_params(scope)}
-            )
+            await conn.execute(query, {"id": job_id, "uid": user_id, **_scope_params(scope)})
         ).fetchone()
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
@@ -857,9 +817,7 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope)
     return json.dumps(await asyncio.to_thread(_load))
 
 
-async def _exec_get_spatial_summary(
-    args: dict, user_id: str, scope: BenchmarkScope
-) -> str:
+async def _exec_get_spatial_summary(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     import numpy as np
 
     from ai_almanac.server.db import get_db
@@ -941,9 +899,7 @@ async def _exec_get_spatial_summary(
     return json.dumps(result)
 
 
-async def _exec_run_code_sandbox(
-    args: dict, user_id: str, scope: BenchmarkScope
-) -> dict | str:
+async def _exec_run_code_sandbox(args: dict, user_id: str, scope: BenchmarkScope) -> dict | str:
     reason = tool_unavailable_reason("run_code_sandbox")
     if reason:
         return json.dumps({"error": reason})
@@ -1025,9 +981,7 @@ async def list_regions(user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(await _exec_list_regions({}, user_id, scope))
 
 
-async def list_datasets(
-    region: str | None, user_id: str, scope: BenchmarkScope
-) -> dict:
+async def list_datasets(region: str | None, user_id: str, scope: BenchmarkScope) -> dict:
     args = {"region": region} if region else {}
     return _domain_payload(await _exec_list_datasets(args, user_id, scope))
 
@@ -1037,36 +991,22 @@ async def list_models(region: str | None, user_id: str, scope: BenchmarkScope) -
     return _domain_payload(await _exec_list_models(args, user_id, scope))
 
 
-async def get_benchmark_config(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
-    return _domain_payload(
-        await _exec_get_benchmark_config({}, user_id, scope, session_id)
-    )
+async def get_benchmark_config(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
+    return _domain_payload(await _exec_get_benchmark_config({}, user_id, scope, session_id))
 
 
 async def update_benchmark_config(
     patch: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
-    return _domain_payload(
-        await _exec_update_benchmark_config(patch, user_id, scope, session_id)
-    )
+    return _domain_payload(await _exec_update_benchmark_config(patch, user_id, scope, session_id))
 
 
-async def validate_benchmark_config(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
-    return _domain_payload(
-        await _exec_validate_benchmark_config({}, user_id, scope, session_id)
-    )
+async def validate_benchmark_config(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
+    return _domain_payload(await _exec_validate_benchmark_config({}, user_id, scope, session_id))
 
 
-async def propose_benchmark_submit(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
-    return _domain_payload(
-        await _exec_propose_benchmark_submit({}, user_id, scope, session_id)
-    )
+async def propose_benchmark_submit(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
+    return _domain_payload(await _exec_propose_benchmark_submit({}, user_id, scope, session_id))
 
 
 async def submit_benchmark_for_session(
@@ -1075,9 +1015,7 @@ async def submit_benchmark_for_session(
     return _domain_payload(await _exec_submit_benchmark({}, user_id, scope, session_id))
 
 
-async def list_jobs(
-    user_id: str, scope: BenchmarkScope, status: str | None = None
-) -> dict:
+async def list_jobs(user_id: str, scope: BenchmarkScope, status: str | None = None) -> dict:
     args = {"status": status} if status else {}
     return _domain_payload(await _exec_list_jobs(args, user_id, scope))
 
@@ -1086,51 +1024,35 @@ async def get_job_info(job_id: str, user_id: str, scope: BenchmarkScope) -> dict
     return _domain_payload(await _exec_get_job_info({"job_id": job_id}, user_id, scope))
 
 
-async def get_job_logs(
-    job_id: str, max_chars: int, user_id: str, scope: BenchmarkScope
-) -> dict:
+async def get_job_logs(job_id: str, max_chars: int, user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(
-        await _exec_get_job_logs(
-            {"job_id": job_id, "max_chars": max_chars}, user_id, scope
-        )
+        await _exec_get_job_logs({"job_id": job_id, "max_chars": max_chars}, user_id, scope)
     )
 
 
-async def rerun_job(
-    request: RerunJobRequest, user_id: str, scope: BenchmarkScope
-) -> dict:
+async def rerun_job(request: RerunJobRequest, user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(await _exec_rerun_job(request.model_dump(), user_id, scope))
 
 
 async def get_job_metrics(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
-    return _domain_payload(
-        await _exec_get_job_metrics({"job_id": job_id}, user_id, scope)
-    )
+    return _domain_payload(await _exec_get_job_metrics({"job_id": job_id}, user_id, scope))
 
 
 async def get_spatial_summary(
     request: SpatialMetricRequest, user_id: str, scope: BenchmarkScope
 ) -> dict:
-    return _domain_payload(
-        await _exec_get_spatial_summary(request.model_dump(), user_id, scope)
-    )
+    return _domain_payload(await _exec_get_spatial_summary(request.model_dump(), user_id, scope))
 
 
 async def run_code_sandbox(
     request: CodeSandboxRequest, user_id: str, scope: BenchmarkScope
 ) -> dict:
-    return _domain_payload(
-        await _exec_run_code_sandbox(request.model_dump(), user_id, scope)
-    )
+    return _domain_payload(await _exec_run_code_sandbox(request.model_dump(), user_id, scope))
 
 
-async def run_code(
-    request: JobCodeRequest, user_id: str, scope: BenchmarkScope
-) -> dict:
+async def run_code(request: JobCodeRequest, user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(await _exec_run_code(request.model_dump(), user_id, scope))
 
 
-async def get_current_benchmark_config(
-    session_id: str, user_id: str
-) -> BenchmarkRunSpec:
+async def get_current_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
     return _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))

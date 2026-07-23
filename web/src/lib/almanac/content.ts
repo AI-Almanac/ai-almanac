@@ -126,7 +126,8 @@ export const datasets: WeatherDataset[] = [
 		slug: 'era5',
 		name: 'ERA5',
 		role: 'Training',
-		summary: 'Global atmospheric reanalysis commonly used for weather-model training and validation.',
+		summary:
+			'Global atmospheric reanalysis commonly used for weather-model training and validation.',
 		source: 'ECMWF Copernicus Climate Data Store',
 		coverage: 'Global',
 		resolution: '0.25 degrees hourly source data; benchmark products may be aggregated.',
@@ -179,7 +180,9 @@ export const architectures: WeatherArchitecture[] = [
 		summary: 'Uses attention-based sequence and field modeling for weather prediction.',
 		modelFamilies: ['AIFS', 'FuXi'],
 		keyIdeas: ['Attention', 'Autoregressive rollout'],
-		notes: ['Fill in model-specific distinctions rather than treating all transformers as identical.'],
+		notes: [
+			'Fill in model-specific distinctions rather than treating all transformers as identical.'
+		],
 		references: []
 	},
 	{

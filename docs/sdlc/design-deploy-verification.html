@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-almanac · Post-Deploy Verification Design</title>
+<style>
+  :root {
+    --ink: #1a1f2e; --muted: #5b6472; --line: #dfe3ea; --bg: #f7f8fa;
+    --card: #ffffff; --accent: #2b5fd9; --accent-soft: #e8eefb;
+    --ok: #1a7f4b; --ok-soft: #e6f4ec; --warn: #b26a00; --warn-soft: #fdf3e3;
+    --fail: #b91c1c; --fail-soft: #fdeaea; --ai: #7c3aed; --ai-soft: #f1eafd;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         color: var(--ink); background: var(--bg); margin: 0; line-height: 1.55; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 28px 80px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin-bottom: 36px; font-size: 0.98rem; }
+  h2 { font-size: 1.25rem; margin: 44px 0 14px; }
+  p { margin: 8px 0; }
+  ul { margin: 6px 0; padding-left: 20px; } li { margin: 4px 0; }
+  code { background: #eef1f5; border-radius: 4px; padding: 1px 5px; font-size: 0.86em;
+         font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92rem; }
+  th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+  th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .note { background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: 6px;
+          padding: 12px 16px; margin: 14px 0; font-size: 0.94rem; }
+  .principle { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 6px;
+          padding: 12px 16px; margin: 14px 0; font-size: 0.94rem; }
+  .flow { display: flex; flex-direction: column; margin: 18px 0; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 14px 18px; position: relative; }
+  .step + .step { margin-top: 26px; }
+  .step + .step::before { content: "▼"; position: absolute; top: -22px; left: 50%;
+          transform: translateX(-50%); color: var(--muted); font-size: 0.8rem; }
+  .step-head { display: flex; align-items: center; gap: 10px; }
+  .step-num { background: var(--ink); color: #fff; border-radius: 6px; font-size: 0.75rem;
+          font-weight: 700; padding: 2px 8px; }
+  .step-title { font-weight: 650; }
+  .tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+         padding: 2px 8px; border-radius: 20px; }
+  .tag.ok { background: var(--ok-soft); color: var(--ok); }
+  .tag.fail { background: var(--fail-soft); color: var(--fail); }
+  .tag.ai { background: var(--ai-soft); color: var(--ai); }
+  .tag.portable { background: var(--accent-soft); color: var(--accent); }
+  .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 26px; position: relative; }
+  .branch::before { content: "▼"; position: absolute; top: -22px; left: 50%;
+          transform: translateX(-50%); color: var(--muted); font-size: 0.8rem; }
+  @media (max-width: 720px) { .branch { grid-template-columns: 1fr; } }
+  .outcome { border-radius: 10px; padding: 14px 18px; border: 1px solid var(--line); }
+  .outcome.pass { background: var(--ok-soft); border-color: #bfe3cf; }
+  .outcome.fail { background: var(--fail-soft); border-color: #f3c1c1; }
+  .outcome h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  pre { background: #14181f; color: #dbe2ee; padding: 16px 18px; border-radius: 8px;
+        overflow-x: auto; font-size: 0.82rem; line-height: 1.5;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Post-Deploy Verification</h1>
+<div class="sub">ai-almanac · design doc · CI-based deployment monitoring that survives a GCP→AWS migration</div>
+
+<div class="principle"><strong>Design constraint:</strong> a cloud migration may be coming, so monitoring lives in <em>GitHub Actions</em> (stays) rather than Terraform-managed GCP alerting (throwaway). Cloud-specific commands are isolated in one script. This mirrors Anthropic's watch-telemetry-then-expand rollout posture: <code>develop</code>→staging is the small-group rollout, verification is the telemetry watch, promoting to <code>main</code> is the expansion.</div>
+
+<h2>The verify job</h2>
+<p class="muted">One new job appended to both <code>deploy-staging.yml</code> and <code>deploy-prod.yml</code>, running after the Cloud Run deploy step.</p>
+
+<div class="flow">
+  <div class="step">
+    <div class="step-head"><span class="step-num">1</span><span class="step-title">Wait for revision readiness</span></div>
+    <p class="muted">Poll the service until the new revision serves 100% traffic and reports Ready (timeout 5 min). Catches image-boot and migration failures immediately rather than via user reports.</p>
+  </div>
+  <div class="step">
+    <div class="step-head"><span class="step-num">2</span><span class="step-title">Smoke tests</span><span class="tag portable">Cloud-agnostic</span></div>
+    <ul>
+      <li><code>GET /health</code> → 200 (endpoint exists in <code>server/app.py</code>)</li>
+      <li>2–3 read-only API endpoints (e.g. regions list, models list, data-sources list) → 200 + sane JSON shape</li>
+      <li>SPA root loads → 200 with expected HTML marker</li>
+    </ul>
+    <p class="muted">Plain <code>curl</code> against the public URL — nothing GCP-specific.</p>
+  </div>
+  <div class="step">
+    <div class="step-head"><span class="step-num">3</span><span class="step-title">Log scan (soak window)</span></div>
+    <p class="muted">Sleep ~5–10 min (staging only; prod can shorten), then pull ERROR-severity log entries for the new revision via <code>scripts/post_deploy_check.sh</code>. Threshold: any 5xx spike or new exception signature fails the job.</p>
+  </div>
+
+  <div class="branch">
+    <div class="outcome pass">
+      <h4><span class="tag ok">Pass</span>&nbsp; Deploy verified</h4>
+      <p class="muted">Job summary records revision, smoke results, log counts. On <code>develop</code>: staging is your soak environment before promoting to <code>main</code>.</p>
+    </div>
+    <div class="outcome fail">
+      <h4><span class="tag fail">Fail</span>&nbsp; Workflow fails → notification</h4>
+      <ul class="muted" style="padding-left:18px">
+        <li>GitHub notifies on workflow failure (email/app — free, no new vendor)</li>
+        <li><span class="tag ai">AI</span> optional triage step: Claude summarizes the deploy diff + captured error logs into the job summary — first-pass incident analysis, only spends quota on <em>failed</em> deploys</li>
+        <li>Human decision: fix-forward or rollback (runbook below)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h2>Portability boundary</h2>
+<table>
+  <tr><th>Component</th><th>Cloud-specific?</th><th>On AWS migration</th></tr>
+  <tr><td>Workflow structure, smoke tests, thresholds, AI triage</td><td>No</td><td>Unchanged</td></tr>
+  <tr><td><code>scripts/post_deploy_check.sh</code> (readiness poll + log fetch)</td><td>Yes — <code>gcloud run</code> / <code>gcloud logging</code></td><td>Rewrite one script with <code>aws ecs</code>/<code>logs</code> equivalents</td></tr>
+  <tr><td>Service URL / auth for smoke tests</td><td>Config only</td><td>Update env vars</td></tr>
+</table>
+
+<h2>Sketch</h2>
+<pre># appended to deploy-staging.yml (deploy-prod.yml identical, tighter soak)
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@&lt;sha&gt;
+      - uses: google-github-actions/auth@&lt;sha&gt;        # existing WIF setup
+        with: { workload_identity_provider: ..., service_account: ... }
+      - name: Wait for revision + smoke test + log scan
+        run: ./scripts/post_deploy_check.sh almanac-backend-staging "$BASE_URL"
+      - name: AI triage on failure
+        if: failure()
+        uses: anthropics/claude-code-action@&lt;sha&gt;
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            The staging deploy for commit ${{ github.sha }} failed verification.
+            Read logs/errors.txt and the commit diff. Summarize the most likely
+            cause and whether rollback or fix-forward is appropriate.
+            Write your analysis to the GitHub step summary.</pre>
+
+<h2>Rollback runbook (documented, not automated)</h2>
+<ul>
+  <li><strong>Traffic rollback:</strong> <code>gcloud run services update-traffic &lt;svc&gt; --to-revisions &lt;prev-revision&gt;=100</code></li>
+  <li><strong>Migration caveat:</strong> migrations run <em>before</em> deploy, so a rolled-back revision runs against the new schema. Policy: migrations must be backward-compatible one version (additive first, destructive changes in a later release).</li>
+  <li>Automated rollback is deliberately out of scope — solo project, low deploy volume; a human decision beats a flapping automation.</li>
+</ul>
+
+<h2>Rejected alternatives</h2>
+<table>
+  <tr><th>Option</th><th>Why not now</th></tr>
+  <tr><td>Terraform-managed GCP alert policies / uptime checks</td><td>Cheapest today but discarded on AWS migration; violates the portability constraint.</td></tr>
+  <tr><td>Sentry error tracking</td><td>Best long-term signal and fully portable — deferred to Phase 4 (first real users), not rejected.</td></tr>
+  <tr><td>External uptime pinger (healthchecks.io etc.)</td><td>Cheap and portable, but catches only total downtime; the verify job catches the more common bad-deploy case. Easy add later.</td></tr>
+  <tr><td>Scheduled always-on AI monitoring agent</td><td>Anthropic-grade coverage, but continuous quota burn for a low-traffic service. The failure-triggered triage step captures most of the value.</td></tr>
+</table>
+
+</div>
+</body>
+</html>

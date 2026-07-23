@@ -245,9 +245,7 @@ def season_covered_dates(config: dict) -> dict[str, list[str]]:
     for name in config.get("forecast_model_ids") or []:
         params = season_params.get(name) or {}
         weekdays = [int(d) for d in str(params.get("init_days") or "0,3").split(",")]
-        dates = season_issue_dates(
-            season_start, weekdays, season, params.get("init_month_days")
-        )
+        dates = season_issue_dates(season_start, weekdays, season, params.get("init_month_days"))
         if max_issue_dates:
             dates = dates[-int(max_issue_dates) :]
         out[name] = [d.isoformat() for d in dates]
@@ -441,9 +439,7 @@ def cached_trajectory(
     trajectory = compute()
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
-    trajectory.rename("tp").to_netcdf(
-        tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
-    )
+    trajectory.rename("tp").to_netcdf(tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}})
     os.replace(tmp_path, cache_file)
     return trajectory, False
 
@@ -492,7 +488,7 @@ def generate_season_forecast_netcdf(
         # Smoke-test knob: score against only the most recent N issue dates
         # instead of the whole season-to-date, to validate the pipeline
         # end-to-end without paying for a full season's worth of rollouts.
-        issue_dates = issue_dates[-int(max_issue_dates):]
+        issue_dates = issue_dates[-int(max_issue_dates) :]
 
     _, step_hours = lead_steps([lead_day * 24], model_class)
     nsteps = (lead_day * 24) // step_hours
@@ -559,9 +555,10 @@ def generate_season_forecast_netcdf(
     # — the write still streams slice-by-slice, so memory stays flat.
     # ponytail: single-threaded reassembly, revisit if a full season's write
     # becomes a wall-clock bottleneck (it's I/O-bound on tiny regional slices).
-    with dask.config.set(scheduler="single-threaded"), xr.open_mfdataset(
-        slice_paths, concat_dim="time", combine="nested"
-    ) as ds:
+    with (
+        dask.config.set(scheduler="single-threaded"),
+        xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds,
+    ):
         ds.to_netcdf(out_path)
     return out_path
 

@@ -51,9 +51,7 @@ def _ensure_enabled() -> None:
 
 
 @router.get("/list", response_model=FsListing)
-def list_directory(
-    _admin: AdminUser, path: str = "", include_hidden: bool = False
-) -> FsListing:
+def list_directory(_admin: AdminUser, path: str = "", include_hidden: bool = False) -> FsListing:
     _ensure_enabled()
     p = (Path(path).expanduser() if path else Path.home()).resolve()
     if not p.exists():

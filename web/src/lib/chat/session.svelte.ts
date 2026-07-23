@@ -81,8 +81,18 @@ export class ChatSessionState {
 		| null
 	>(null);
 	pendingApproval = $state<
-		| { kind: 'benchmark'; toolCallId: string; config: BenchmarkRunSpec; validation: BenchmarkValidation | null }
-		| { kind: 'blend'; toolCallId: string; config: BlendRunSpec; validation: BlendValidation | null }
+		| {
+				kind: 'benchmark';
+				toolCallId: string;
+				config: BenchmarkRunSpec;
+				validation: BenchmarkValidation | null;
+		  }
+		| {
+				kind: 'blend';
+				toolCallId: string;
+				config: BlendRunSpec;
+				validation: BlendValidation | null;
+		  }
 		| null
 	>(null);
 

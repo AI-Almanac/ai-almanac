@@ -167,9 +167,7 @@ def compute_job_metrics(
 
         model = str(ds.attrs.get("model", ""))
         window_label = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-        tolerance_days = (
-            int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
-        )
+        tolerance_days = int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
 
         metrics: dict[str, MetricStats] = {}
         for var in ds.data_vars:
@@ -305,18 +303,12 @@ def compute_job_cell(
 
         def is_numeric_grid_var(ds, var: str) -> bool:
             da = ds[var]
-            return (
-                "lat" in da.dims
-                and "lon" in da.dims
-                and np.issubdtype(da.dtype, np.number)
-            )
+            return "lat" in da.dims and "lon" in da.dims and np.issubdtype(da.dtype, np.number)
 
         def is_annual_mae(var: str) -> bool:
             return var.startswith("mae_") and var.removeprefix("mae_").isdigit()
 
-        def delta(
-            model_value: float | None, baseline_value: float | None
-        ) -> float | None:
+        def delta(model_value: float | None, baseline_value: float | None) -> float | None:
             if model_value is None or baseline_value is None:
                 return None
             return model_value - baseline_value
@@ -331,8 +323,7 @@ def compute_job_cell(
             baseline_vars = {
                 str(var)
                 for var in ds_baseline.data_vars
-                if is_numeric_grid_var(ds_baseline, str(var))
-                and not is_annual_mae(str(var))
+                if is_numeric_grid_var(ds_baseline, str(var)) and not is_annual_mae(str(var))
             }
             metric_vars = sorted(model_vars.intersection(baseline_vars))
         else:
@@ -340,9 +331,7 @@ def compute_job_cell(
 
         for metric in metric_vars:
             model_value = read_cell(ds_model, metric)
-            baseline_value = (
-                read_cell(ds_baseline, metric) if ds_baseline is not None else None
-            )
+            baseline_value = read_cell(ds_baseline, metric) if ds_baseline is not None else None
             metrics[metric] = CellMetricComparison(
                 model=model_value,
                 baseline=baseline_value,
@@ -355,17 +344,13 @@ def compute_job_cell(
         else:
             annual_vars = set(ds_model.data_vars)
         years = sorted(
-            int(str(var).removeprefix("mae_"))
-            for var in annual_vars
-            if is_annual_mae(str(var))
+            int(str(var).removeprefix("mae_")) for var in annual_vars if is_annual_mae(str(var))
         )
         mae_series = []
         for year in years:
             var = f"mae_{year}"
             model_value = read_cell(ds_model, var)
-            baseline_value = (
-                read_cell(ds_baseline, var) if ds_baseline is not None else None
-            )
+            baseline_value = read_cell(ds_baseline, var) if ds_baseline is not None else None
             mae_series.append(
                 CellMaePoint(
                     year=year,

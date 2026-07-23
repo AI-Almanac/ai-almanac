@@ -38,9 +38,7 @@ async def load_model_registry(
     Pass `user_id` to hide other users' private sources; unscoped calls (job
     display, validation of already-submitted ids) see everything.
     """
-    sources = await data_sources.get_model_sources(
-        region, user_id=user_id, is_admin=is_admin
-    )
+    sources = await data_sources.get_model_sources(region, user_id=user_id, is_admin=is_admin)
     entries = [_registry_entry(s) for s in sources if s.get("status") == "ready"]
     entries.sort(key=lambda entry: (entry["region"], entry["display_name"]))
     return entries
@@ -75,11 +73,7 @@ class CatalogSnapshot:
         if not region_id:
             return list(self.models)
         wanted = region_id.lower()
-        return [
-            model
-            for model in self.models
-            if (model.get("region") or "").lower() == wanted
-        ]
+        return [model for model in self.models if (model.get("region") or "").lower() == wanted]
 
 
 async def load_catalog() -> CatalogSnapshot:

@@ -7,3 +7,6 @@ bun.lockb
 
 # Miscellaneous
 /static/
+
+# Generated (openapi-typescript output; not prettier-formatted by the generator)
+src/lib/api-types.gen.ts

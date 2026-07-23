@@ -87,11 +87,7 @@ async def signal_cancel(job_id: str) -> dict | None:
     Returns the job row, or None if the job does not exist.
     """
     async with get_db() as conn:
-        row = (
-            (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id)))
-            .mappings()
-            .fetchone()
-        )
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id))).mappings().fetchone()
         if not row:
             return None
         row = dict(row)
@@ -111,9 +107,7 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
     async with get_db() as conn:
         owned = (
             await conn.execute(
-                sa.select(jobs.c.id).where(
-                    jobs.c.id == job_id, jobs.c.user_id == user_id
-                )
+                sa.select(jobs.c.id).where(jobs.c.id == job_id, jobs.c.user_id == user_id)
             )
         ).fetchone()
     if not owned:
@@ -224,9 +218,7 @@ async def reconcile_jobs() -> None:
                 )
             await launch_job(row["id"])
             continue
-        if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(
-            row.get("heartbeat_at")
-        ):
+        if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(row.get("heartbeat_at")):
             continue
         _terminate_process_group(row.get("process_group_id"), row.get("workload_pid"))
         final_status = "canceled" if row["status"] == "canceling" else "failed"
@@ -285,9 +277,7 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
     with engine.begin() as conn:
         lock_capacity(conn)
         row = (
-            conn.execute(
-                sa.select(jobs.c.status, jobs.c.worker_id).where(jobs.c.id == job_id)
-            )
+            conn.execute(sa.select(jobs.c.status, jobs.c.worker_id).where(jobs.c.id == job_id))
             .mappings()
             .fetchone()
         )
@@ -353,9 +343,7 @@ def execute_job(job_id: str) -> None:
             return
         while not _claim_capacity(engine, job_id, worker_id):
             with engine.begin() as conn:
-                row = conn.execute(
-                    sa.select(jobs.c.status).where(jobs.c.id == job_id)
-                ).fetchone()
+                row = conn.execute(sa.select(jobs.c.status).where(jobs.c.id == job_id)).fetchone()
                 if not row or row[0] != "queued":
                     return
                 conn.execute(

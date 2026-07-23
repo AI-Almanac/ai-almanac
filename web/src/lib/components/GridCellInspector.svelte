@@ -31,7 +31,9 @@
 	<header class="cell-header">
 		<div>
 			<p class="cell-kicker">Grid Cell Inspector</p>
-			<h3>Latitude {formatCoord(cell.lat, 'N', 'S')}, longitude {formatCoord(cell.lon, 'E', 'W')}</h3>
+			<h3>
+				Latitude {formatCoord(cell.lat, 'N', 'S')}, longitude {formatCoord(cell.lon, 'E', 'W')}
+			</h3>
 			<p class="cell-subtitle">
 				{windowLabel(forecastWindow)}, compared with climatology when available
 			</p>

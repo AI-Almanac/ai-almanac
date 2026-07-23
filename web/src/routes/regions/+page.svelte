@@ -147,64 +147,64 @@
 	{/if}
 
 	{#if account.isAdmin}
-	<section class="editor">
-		<h2>{editingId ? 'Edit region' : 'Create a region'}</h2>
-		<form onsubmit={submit}>
-			<div class="identity-fields">
-				<label>
-					<span>Name</span>
-					<input bind:value={displayName} placeholder="e.g. Greater Horn of Africa" required />
-				</label>
-				<label>
-					<span>Description <small>optional</small></span>
-					<input
-						bind:value={description}
-						placeholder="Rainy season study area across eastern Africa"
-					/>
-				</label>
-			</div>
+		<section class="editor">
+			<h2>{editingId ? 'Edit region' : 'Create a region'}</h2>
+			<form onsubmit={submit}>
+				<div class="identity-fields">
+					<label>
+						<span>Name</span>
+						<input bind:value={displayName} placeholder="e.g. Greater Horn of Africa" required />
+					</label>
+					<label>
+						<span>Description <small>optional</small></span>
+						<input
+							bind:value={description}
+							placeholder="Rainy season study area across eastern Africa"
+						/>
+					</label>
+				</div>
 
-			<div class="bounds-section">
-				<div class="bounds-heading">
-					<span>Geographic bounds</span>
-					<small>Decimal degrees; west and south values are negative.</small>
+				<div class="bounds-section">
+					<div class="bounds-heading">
+						<span>Geographic bounds</span>
+						<small>Decimal degrees; west and south values are negative.</small>
+					</div>
+					<div class="bounds-grid">
+						<label>
+							<span>South latitude</span>
+							<input type="number" bind:value={latMin} min="-90" max="90" step="any" required />
+						</label>
+						<label>
+							<span>North latitude</span>
+							<input type="number" bind:value={latMax} min="-90" max="90" step="any" required />
+						</label>
+						<label>
+							<span>West longitude</span>
+							<input type="number" bind:value={lonMin} min="-180" max="180" step="any" required />
+						</label>
+						<label>
+							<span>East longitude</span>
+							<input type="number" bind:value={lonMax} min="-180" max="180" step="any" required />
+						</label>
+					</div>
 				</div>
-				<div class="bounds-grid">
-					<label>
-						<span>South latitude</span>
-						<input type="number" bind:value={latMin} min="-90" max="90" step="any" required />
-					</label>
-					<label>
-						<span>North latitude</span>
-						<input type="number" bind:value={latMax} min="-90" max="90" step="any" required />
-					</label>
-					<label>
-						<span>West longitude</span>
-						<input type="number" bind:value={lonMin} min="-180" max="180" step="any" required />
-					</label>
-					<label>
-						<span>East longitude</span>
-						<input type="number" bind:value={lonMax} min="-180" max="180" step="any" required />
-					</label>
-				</div>
-			</div>
 
-			<div class="form-footer">
-				<label class="check">
-					<input type="checkbox" bind:checked={landOnly} />
-					<span>Restrict calculations to land grid cells</span>
-				</label>
-				<div class="actions">
-					{#if editingId}
-						<button type="button" class="secondary" onclick={resetForm}>Cancel</button>
-					{/if}
-					<button type="submit" disabled={submitting || !formComplete}>
-						{submitting ? 'Saving…' : editingId ? 'Save region' : 'Create region'}
-					</button>
+				<div class="form-footer">
+					<label class="check">
+						<input type="checkbox" bind:checked={landOnly} />
+						<span>Restrict calculations to land grid cells</span>
+					</label>
+					<div class="actions">
+						{#if editingId}
+							<button type="button" class="secondary" onclick={resetForm}>Cancel</button>
+						{/if}
+						<button type="submit" disabled={submitting || !formComplete}>
+							{submitting ? 'Saving…' : editingId ? 'Save region' : 'Create region'}
+						</button>
+					</div>
 				</div>
-			</div>
-		</form>
-	</section>
+			</form>
+		</section>
 	{/if}
 
 	<section>

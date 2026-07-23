@@ -15,8 +15,8 @@
 		<p class="eyebrow">Reference catalog</p>
 		<h1>Almanac of Weather Models</h1>
 		<p class="lede">
-			A compact guide to model families, benchmark datasets, and architecture patterns used in
-			AI weather forecasting.
+			A compact guide to model families, benchmark datasets, and architecture patterns used in AI
+			weather forecasting.
 		</p>
 	</section>
 

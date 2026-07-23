@@ -100,9 +100,7 @@ async def tool_payload(raw_result: object, session_id: str, user_id: str) -> dic
         if not isinstance(artifact_meta, dict):
             continue
         data = artifact_meta.get("data")
-        if artifact_meta.get("kind") == "figure" and isinstance(
-            data, (bytes, bytearray)
-        ):
+        if artifact_meta.get("kind") == "figure" and isinstance(data, (bytes, bytearray)):
             artifact = await create_chat_figure_artifact(
                 session_id,
                 user_id,
@@ -135,9 +133,7 @@ def _named_list_payload(payload: dict, key: str) -> dict:
 
 
 async def list_regions(user_id: str, scope: ChatScope) -> dict:
-    payload = await tool_payload(
-        await benchmark_domain.list_regions(user_id, scope), "", user_id
-    )
+    payload = await tool_payload(await benchmark_domain.list_regions(user_id, scope), "", user_id)
     return _named_list_payload(payload, "regions")
 
 
@@ -167,17 +163,13 @@ async def update_benchmark_config(
     patch: dict, user_id: str, scope: ChatScope, session_id: str
 ) -> dict:
     return await tool_payload(
-        await benchmark_domain.update_benchmark_config(
-            patch, user_id, scope, session_id
-        ),
+        await benchmark_domain.update_benchmark_config(patch, user_id, scope, session_id),
         session_id,
         user_id,
     )
 
 
-async def validate_benchmark_config(
-    user_id: str, scope: ChatScope, session_id: str
-) -> dict:
+async def validate_benchmark_config(user_id: str, scope: ChatScope, session_id: str) -> dict:
     return await tool_payload(
         await benchmark_domain.validate_benchmark_config(user_id, scope, session_id),
         session_id,
@@ -185,9 +177,7 @@ async def validate_benchmark_config(
     )
 
 
-async def propose_benchmark_submit(
-    user_id: str, scope: ChatScope, session_id: str
-) -> dict:
+async def propose_benchmark_submit(user_id: str, scope: ChatScope, session_id: str) -> dict:
     return await tool_payload(
         await benchmark_domain.propose_benchmark_submit(user_id, scope, session_id),
         session_id,
@@ -195,9 +185,7 @@ async def propose_benchmark_submit(
     )
 
 
-async def submit_benchmark_for_session(
-    user_id: str, scope: ChatScope, session_id: str
-) -> dict:
+async def submit_benchmark_for_session(user_id: str, scope: ChatScope, session_id: str) -> dict:
     return await tool_payload(
         await benchmark_domain.submit_benchmark_for_session(user_id, scope, session_id),
         session_id,
@@ -218,9 +206,7 @@ async def get_job_info(job_id: str, user_id: str, scope: ChatScope) -> dict:
     )
 
 
-async def get_job_logs(
-    job_id: str, max_chars: int, user_id: str, scope: ChatScope
-) -> dict:
+async def get_job_logs(job_id: str, max_chars: int, user_id: str, scope: ChatScope) -> dict:
     return await tool_payload(
         await benchmark_domain.get_job_logs(job_id, max_chars, user_id, scope),
         "",
@@ -268,9 +254,7 @@ async def run_code(
     )
 
 
-async def get_current_benchmark_config(
-    session_id: str, user_id: str
-) -> BenchmarkRunSpec:
+async def get_current_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
     return await benchmark_domain.get_current_benchmark_config(session_id, user_id)
 
 
@@ -297,9 +281,7 @@ async def get_blend_config(user_id: str, scope: ChatScope, session_id: str) -> d
     )
 
 
-async def update_blend_config(
-    patch: dict, user_id: str, scope: ChatScope, session_id: str
-) -> dict:
+async def update_blend_config(patch: dict, user_id: str, scope: ChatScope, session_id: str) -> dict:
     return await tool_payload(
         await blend_domain.update_blend_config(patch, user_id, scope, session_id),
         session_id,
@@ -323,9 +305,7 @@ async def propose_blend_submit(user_id: str, scope: ChatScope, session_id: str) 
     )
 
 
-async def submit_blend_for_session(
-    user_id: str, scope: ChatScope, session_id: str
-) -> dict:
+async def submit_blend_for_session(user_id: str, scope: ChatScope, session_id: str) -> dict:
     return await tool_payload(
         await blend_domain.submit_blend_for_session(user_id, scope, session_id),
         session_id,

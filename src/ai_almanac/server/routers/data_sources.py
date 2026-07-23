@@ -23,14 +23,8 @@ def _normalized_path(raw: str) -> str:
 
 def _check_path_allowed(user, path: str) -> None:
     """Non-admin sources in shared deployments must live in cloud storage."""
-    if (
-        not user.is_admin
-        and settings.deployment_mode == "shared"
-        and not path.startswith("gs://")
-    ):
-        raise HTTPException(
-            status_code=400, detail="user datasets must be gs:// URLs"
-        )
+    if not user.is_admin and settings.deployment_mode == "shared" and not path.startswith("gs://"):
+        raise HTTPException(status_code=400, detail="user datasets must be gs:// URLs")
 
 
 async def _owned_source_or_404(source_id: str, user) -> dict:
@@ -119,9 +113,7 @@ async def _parse_region(region: str | None) -> str:
 
 
 @router.get("", response_model=list[DataSourceOut])
-async def list_data_sources(
-    user: CurrentUser, kind: Literal["obs", "model"] | None = None
-):
+async def list_data_sources(user: CurrentUser, kind: Literal["obs", "model"] | None = None):
     rows = await svc.list_sources(kind=kind, user_id=user.id, is_admin=user.is_admin)
     return [_to_out(r, user) for r in rows]
 
@@ -177,9 +169,7 @@ async def create_data_source(body: DataSourceIn, user: CurrentUser):
     response_model=DataSourceOut,
     dependencies=[Depends(require_data_management)],
 )
-async def update_data_source(
-    source_id: str, body: DataSourceUpdate, user: CurrentUser
-):
+async def update_data_source(source_id: str, body: DataSourceUpdate, user: CurrentUser):
     await _owned_source_or_404(source_id, user)
     normalized = _normalized_path(body.path)
     _check_path_allowed(user, normalized)

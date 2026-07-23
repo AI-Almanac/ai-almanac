@@ -66,9 +66,7 @@ def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
         return True
     if groups & _split_csv(settings.admin_groups):
         return True
-    return bool(
-        email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)}
-    )
+    return bool(email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)})
 
 
 _globus_cache: dict[str, tuple[dict, float]] = {}
@@ -103,9 +101,7 @@ def _introspect_globus_token(token: str) -> dict:
         client = globus_sdk.ConfidentialAppAuthClient(
             settings.globus_client_id, settings.globus_client_secret
         )
-        result = dict(
-            client.oauth2_token_introspect(token, include="identity_set").data
-        )
+        result = dict(client.oauth2_token_introspect(token, include="identity_set").data)
 
     with _globus_cache_lock:
         _globus_cache[token] = (result, time.monotonic() + _GLOBUS_CACHE_TTL)
@@ -178,8 +174,7 @@ async def _resolve_identity(headers: Headers) -> AuthenticatedUser:
         subject = raw_subject
         external_id = (
             f"{issuer}\x1f{subject}"
-            if settings.deployment_mode == "shared"
-            or headers.get(settings.identity_issuer_header)
+            if settings.deployment_mode == "shared" or headers.get(settings.identity_issuer_header)
             else subject
         )
         role: Role = "admin" if _is_admin(subject, email, groups) else "user"

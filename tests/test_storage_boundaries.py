@@ -75,7 +75,8 @@ def test_open_returns_published_bytes(tmp_path: Path) -> None:
     payloads = _write_outputs(store, job_id)
 
     artifact = next(
-        a for a in store.publish(job_id, store._storage.job_dir(job_id))
+        a
+        for a in store.publish(job_id, store._storage.job_dir(job_id))
         if a.filename == "metrics.nc"
     )
     with store.open(artifact) as handle:
@@ -188,6 +189,4 @@ async def test_resolve_missing_mounted_path_raises(
 ) -> None:
     monkeypatch.setattr(settings, "dataset_mount_roots", "")
     with pytest.raises(DatasetAccessError):
-        await FilesystemDatasetResolver().resolve(
-            _source(tmp_path / "does-not-exist"), tmp_path
-        )
+        await FilesystemDatasetResolver().resolve(_source(tmp_path / "does-not-exist"), tmp_path)

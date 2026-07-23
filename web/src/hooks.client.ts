@@ -16,9 +16,13 @@ window.addEventListener('error', (event) => {
 
 window.addEventListener('unhandledrejection', (event) => {
 	const reason = event.reason;
-	addBreadcrumb('error', `Unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`, {
-		stack: reason instanceof Error ? reason.stack : undefined
-	});
+	addBreadcrumb(
+		'error',
+		`Unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`,
+		{
+			stack: reason instanceof Error ? reason.stack : undefined
+		}
+	);
 });
 
 export const handleError: HandleClientError = ({ error, event, message }) => {

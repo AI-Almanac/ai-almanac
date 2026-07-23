@@ -53,14 +53,18 @@ async def get_set(
     conn: AsyncConnection, *, model_name: str, init_source: str, season: str
 ) -> dict | None:
     row = (
-        await conn.execute(
-            sa.select(forecast_runs).where(
-                forecast_runs.c.model_name == model_name,
-                forecast_runs.c.init_source == init_source,
-                forecast_runs.c.season == season,
+        (
+            await conn.execute(
+                sa.select(forecast_runs).where(
+                    forecast_runs.c.model_name == model_name,
+                    forecast_runs.c.init_source == init_source,
+                    forecast_runs.c.season == season,
+                )
             )
         )
-    ).mappings().fetchone()
+        .mappings()
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
@@ -79,9 +83,7 @@ async def create_or_get_set(
     asset, so a second request for the same triple returns the existing row
     rather than starting a duplicate generation. The unique index backstops a
     race with a hard failure on the losing INSERT."""
-    existing = await get_set(
-        conn, model_name=model_name, init_source=init_source, season=season
-    )
+    existing = await get_set(conn, model_name=model_name, init_source=init_source, season=season)
     if existing:
         return existing
 
@@ -103,9 +105,7 @@ async def create_or_get_set(
             created_at=_now(),
         )
     )
-    created = await get_set(
-        conn, model_name=model_name, init_source=init_source, season=season
-    )
+    created = await get_set(conn, model_name=model_name, init_source=init_source, season=season)
     assert created is not None  # just inserted
     return created
 
@@ -116,10 +116,10 @@ async def mark_dates_covered(
     """Union new init dates into the set's coverage (rollouts are additive —
     the incremental 'update' path only ever adds elapsed dates)."""
     row = (
-        await conn.execute(
-            sa.select(forecast_runs).where(forecast_runs.c.id == set_id)
-        )
-    ).mappings().fetchone()
+        (await conn.execute(sa.select(forecast_runs).where(forecast_runs.c.id == set_id)))
+        .mappings()
+        .fetchone()
+    )
     if row is None:
         raise ValueError(f"unknown trajectory set {set_id!r}")
     covered = _covered(row) | {_iso(d) for d in dates}
@@ -153,9 +153,7 @@ async def set_is_ready(
 ) -> bool:
     """True iff the set exists, generation is complete, and every needed init
     date is covered. This is the gate a blend forecast checks before running."""
-    row = await get_set(
-        conn, model_name=model_name, init_source=init_source, season=season
-    )
+    row = await get_set(conn, model_name=model_name, init_source=init_source, season=season)
     if row is None or row["status"] != "complete":
         return False
     return {_iso(d) for d in needed_dates} <= _covered(row)
@@ -172,9 +170,7 @@ async def mark_coverage_from_config(conn: AsyncConnection, config: dict) -> None
     season = str(config.get("season") or datetime.now(UTC).year)
     covered = season_covered_dates(config)
     for name, dates in covered.items():
-        row = await get_set(
-            conn, model_name=name, init_source=init_source, season=season
-        )
+        row = await get_set(conn, model_name=name, init_source=init_source, season=season)
         if row is None:
             continue
         await mark_dates_covered(conn, row["id"], dates)
@@ -184,10 +180,14 @@ async def mark_coverage_from_config(conn: AsyncConnection, config: dict) -> None
 async def list_sets(conn: AsyncConnection) -> list[dict]:
     """All trajectory sets, newest first — for the admin coverage view."""
     rows = (
-        await conn.execute(
-            sa.select(forecast_runs)
-            .where(forecast_runs.c.season.isnot(None))
-            .order_by(forecast_runs.c.created_at.desc())
+        (
+            await conn.execute(
+                sa.select(forecast_runs)
+                .where(forecast_runs.c.season.isnot(None))
+                .order_by(forecast_runs.c.created_at.desc())
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return [dict(row) for row in rows]

@@ -80,6 +80,4 @@ def lock_capacity(conn: Connection) -> None:
     lock so concurrent supervisors don't both observe free capacity.
     """
     if conn.dialect.name == "postgresql":
-        conn.execute(
-            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CAPACITY_LOCK_KEY}
-        )
+        conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CAPACITY_LOCK_KEY})

@@ -85,7 +85,9 @@
 	<header class="ins-header">
 		<div>
 			<span class="ins-title">Onset outlook</span>
-			<span class="ins-coords">{formatCoord(point.lat, 'N', 'S')} {formatCoord(point.lon, 'E', 'W')}</span>
+			<span class="ins-coords"
+				>{formatCoord(point.lat, 'N', 'S')} {formatCoord(point.lon, 'E', 'W')}</span
+			>
 		</div>
 		<button class="ins-close" aria-label="Close" onclick={onClose}>×</button>
 	</header>
@@ -100,8 +102,8 @@
 	<p class="ins-hint">
 		Each row is one forecast{regionName ? ` · ${regionName}` : ''}, reading top (earliest) to bottom
 		(latest). Its colored blocks show where that forecast placed onset on the calendar — toward
-		{soonestColor} = more likely, ringed = most likely. When the ringed blocks line up in a column,
-		the forecasts agree on that onset date.
+		{soonestColor} = more likely, ringed = most likely. When the ringed blocks line up in a column, the
+		forecasts agree on that onset date.
 	</p>
 
 	<div class="cal">

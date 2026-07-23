@@ -67,7 +67,8 @@ rio_cmap.data["almanac"] = _build_almanac_colormap()
 async def _validated_cog_path(
     job_id: Annotated[str, Query(description="Job that produced this COG")],
     path: Annotated[
-        str, Query(description="Relative path under the job's output dir, e.g. aifs/rasters/t2m/24.tif")
+        str,
+        Query(description="Relative path under the job's output dir, e.g. aifs/rasters/t2m/24.tif"),
     ],
     user: CurrentUser,
 ) -> str:
