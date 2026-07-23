@@ -90,9 +90,12 @@ dev = { features = ["dev"], solve-group = "default" }
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
 lint-python = { cmd = "ruff check src tests", default-environment = "dev", description = "Lint Python sources and tests" }
 format-python = { cmd = "ruff format src tests", default-environment = "dev", description = "Format Python sources and tests" }
+format-python-check = { cmd = "ruff format --check src tests", default-environment = "dev", description = "Check Python formatting without modifying files" }
 install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
 build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }
 check-web = { cmd = "npm run check", depends-on = ["install-web"], cwd = "web", description = "Type-check the frontend" }
+lint-web = { cmd = "npm run lint", depends-on = ["install-web"], cwd = "web", description = "Check frontend formatting (prettier)" }
+format-web = { cmd = "npm run format", depends-on = ["install-web"], cwd = "web", description = "Format the frontend (prettier --write)" }
 test-web = { cmd = "npm test -- --run", depends-on = ["install-web"], cwd = "web", description = "Run frontend tests" }
 backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the FastAPI development server" }
 test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
@@ -111,7 +114,8 @@ deploy-modal = { cmd = "modal deploy modal/app.py", description = "Deploy the Mo
 deploy-blending = { cmd = "modal deploy modal/blending_app.py", description = "Deploy the Modal blending app (run_blend)" }
 deploy-forecasts = { cmd = "modal deploy modal/forecasts_app.py", description = "Deploy the Modal forecasts app (run_forecast)" }
 test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }
-check = { depends-on = [{ task = "lint-python" }, { task = "check-web" }], description = "Run backend lint and frontend type checks" }
+check = { depends-on = [{ task = "lint-python" }, { task = "format-python-check" }, { task = "check-web" }, { task = "lint-web" }], description = "Run backend lint + format checks and frontend type + format checks" }
+format = { depends-on = [{ task = "format-python" }, { task = "format-web" }], description = "Format backend and frontend sources" }
 build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
 frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_API_URL = "http://localhost:8765" }, description = "Run the Vite development server" }
 

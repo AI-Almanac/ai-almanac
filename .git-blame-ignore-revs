@@ -1,0 +1,6 @@
+# Commits to ignore in git blame. Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view picks this file up automatically.
+
+# One-time mechanical reformat (ruff format + prettier) to enable CI format checks
+700ce2f047a58813c841d3785f3a96fddd179fe7
