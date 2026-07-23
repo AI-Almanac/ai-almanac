@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Fast staged-file checks: formatting + lint. Full checks and tests run on
+# pre-push. Enable with `pixi run install-hooks`; bypass with --no-verify.
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# Prefer ruff on PATH; fall back to the pixi dev environment.
+run_ruff() {
+  if command -v ruff >/dev/null 2>&1; then ruff "$@"; else pixi run -e dev ruff "$@"; fi
+}
+
+fail=0
+
+# Python: format check + lint on staged files only.
+py_files=$(echo "$staged" | grep -E '^(src|tests|modal|scripts)/.*\.py$' || true)
+if [ -n "$py_files" ]; then
+  # shellcheck disable=SC2086
+  if ! run_ruff format --check $py_files; then
+    echo "pre-commit: Python formatting failed. Fix with: pixi run format" >&2
+    fail=1
+  fi
+  # shellcheck disable=SC2086
+  if ! run_ruff check $py_files; then
+    echo "pre-commit: ruff lint failed." >&2
+    fail=1
+  fi
+fi
+
+# Web: prettier check on staged files (generated api-types.gen.ts excluded).
+web_files=$(echo "$staged" | grep -E '^web/.*\.(ts|js|svelte|css|json|md|html)$' | grep -v 'api-types\.gen\.ts' || true)
+if [ -n "$web_files" ]; then
+  prettier_bin="web/node_modules/.bin/prettier"
+  if [ -x "$prettier_bin" ]; then
+    # Strip the web/ prefix; prettier runs from web/ so .prettierignore applies.
+    rel_files=$(echo "$web_files" | sed 's|^web/||')
+    # shellcheck disable=SC2086
+    if ! (cd web && ./node_modules/.bin/prettier --check $rel_files); then
+      echo "pre-commit: prettier check failed. Fix with: pixi run format" >&2
+      fail=1
+    fi
+  else
+    echo "pre-commit: skipping prettier (web/node_modules missing; run pixi run install-web)" >&2
+  fi
+fi
+
+exit $fail
