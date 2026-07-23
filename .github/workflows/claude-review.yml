@@ -42,7 +42,8 @@ jobs:
       - uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          use_sticky_comment: true
+          # use_sticky_comment is broken in prompt mode (action issue #1108);
+          # the prompt instructs gh pr comment --edit-last instead.
           prompt: |
             Review this pull request for ai-almanac. Read CLAUDE.md first for
             project conventions, then review the diff (gh pr diff) with the
@@ -63,10 +64,14 @@ jobs:
                own style).
 
             Verify each candidate finding against the actual code before
-            reporting it; do not speculate. Post ONE concise review comment:
+            reporting it; do not speculate. Write ONE concise review comment:
             findings ordered by severity (critical/major/minor), each with
             file:line and a concrete suggestion. If the PR looks good, say so
             in two sentences. Do not request changes for nitpicks.
+
+            Publish it with exactly this command, so re-reviews update the
+            same comment instead of stacking new ones:
+              gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."
           claude_args: >-
             --max-turns 15
-            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment"
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment"

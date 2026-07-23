@@ -27,6 +27,11 @@ process. The same codebase also deploys to GCP Cloud Run (prod and staging).
   pixi run test
   ```
 
+- Git hooks enforce this locally: `pixi run install-hooks` (one-time per
+  clone) enables a fast staged-file format/lint check on commit and the full
+  `check` + `test` gate on push. Bypass only in emergencies (`--no-verify`);
+  CI enforces the same gates regardless.
+
 ## Security and agent conventions
 
 - Never read, copy, echo, or commit secrets: `.env`, `web/.env`, anything in
