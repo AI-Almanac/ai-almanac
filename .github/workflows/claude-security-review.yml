@@ -11,6 +11,7 @@ on:
       - "src/ai_almanac/server/**"
       - "terraform/**"
       - ".github/**"
+      - ".githooks/**"
       - "modal/**"
       - "deploy/**"
       - "Dockerfile"
@@ -43,7 +44,8 @@ jobs:
       - uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          use_sticky_comment: true
+          # use_sticky_comment is broken in prompt mode (action issue #1108);
+          # the prompt instructs gh pr comment instead (one comment per run).
           prompt: |
             You are a security reviewer for ai-almanac (FastAPI + SQLite +
             SvelteKit on Cloud Run; Modal jobs; OpenTofu infra). Review ONLY
@@ -69,8 +71,15 @@ jobs:
 
             False positives erode trust in this gate: report only findings you
             verified in the code, each with severity (critical/high/medium/low),
-            file:line, the attack path, and a concrete fix. Post ONE comment.
+            file:line, the attack path, and a concrete fix. Write ONE comment.
             If nothing is exploitable, say so in two sentences — do not pad.
+
+            Publish it as a new comment with exactly this command (do not
+            edit existing comments; each review posts its own):
+              gh pr comment ${{ github.event.pull_request.number }} --body "..."
+
+            Begin the comment body with the line "## Security review" so it
+            is distinguishable from the general code review.
           claude_args: >-
             --max-turns 15
-            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment"
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment"
