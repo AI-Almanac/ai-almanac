@@ -45,7 +45,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # use_sticky_comment is broken in prompt mode (action issue #1108);
-          # the prompt instructs gh pr comment --edit-last instead.
+          # the prompt instructs gh pr comment instead (one comment per run).
           prompt: |
             You are a security reviewer for ai-almanac (FastAPI + SQLite +
             SvelteKit on Cloud Run; Modal jobs; OpenTofu infra). Review ONLY
