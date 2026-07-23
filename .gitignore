@@ -16,6 +16,11 @@ web/.svelte-kit/
 web/node_modules/
 src/ai_almanac/server/static/
 
+# Claude Code: shared settings.json and hooks/ are committed; personal
+# overrides and session state are not.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Data
 .env
 scripts/backend-env.yaml

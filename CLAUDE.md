@@ -27,6 +27,27 @@ process. The same codebase also deploys to GCP Cloud Run (prod and staging).
   pixi run test
   ```
 
+## Security and agent conventions
+
+- Never read, copy, echo, or commit secrets: `.env`, `web/.env`, anything in
+  `~/.config/gcloud/`, service-account JSONs, or GCP Secret Manager values.
+  Shared `.claude/settings.json` denies these; do not work around it.
+- `web/src/lib/api-types.gen.ts` is generated. Never edit it directly; run
+  `pixi run generate-api-types` (a PreToolUse hook enforces this).
+- Lockfiles (`pixi.lock`, `uv.lock`, `web/package-lock.json`) are tool-owned;
+  change them only via `pixi`/`uv`/`npm`.
+- Database migrations must be backward-compatible one version: deploys run
+  migrations before routing traffic, so a rollback runs old code on the new
+  schema. Additive changes first; destructive changes in a later release.
+- Before pushing changes that touch `src/ai_almanac/server/`, `terraform/`,
+  `.github/`, `modal/`, or `deploy/`, run `/security-review` and address or
+  explicitly justify each finding.
+- GitHub Actions in workflows are pinned to commit SHAs with a `# vX` comment.
+  When bumping an action, update both the SHA and the comment.
+- Edited files are auto-formatted by a PostToolUse hook (ruff/prettier); run
+  `pixi run format` for tree-wide formatting. CI enforces format checks via
+  `pixi run check`.
+
 ## Development
 
 Pixi is the project environment and task manager. Do not use `uv` for this
