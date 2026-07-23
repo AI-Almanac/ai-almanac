@@ -74,9 +74,7 @@ def test_finalize_reports_missing_fields() -> None:
 # --- Integration: patch + validate a session's blend config ---------------
 
 
-async def _seed_source(
-    kind: str, name: str, region: str, start_year: int, end_year: int
-) -> str:
+async def _seed_source(kind: str, name: str, region: str, start_year: int, end_year: int) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())

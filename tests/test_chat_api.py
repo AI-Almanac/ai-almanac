@@ -165,9 +165,7 @@ def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> 
 def test_job_region_metadata_maps_builtin_romp_region() -> None:
     from ai_almanac.server.services.job_submission import job_region_metadata
 
-    metadata = job_region_metadata(
-        {"romp_params": {"region": "India"}}, _packaged_catalog()
-    )
+    metadata = job_region_metadata({"romp_params": {"region": "India"}}, _packaged_catalog())
 
     assert metadata == {
         "region_id": "india",
@@ -396,9 +394,7 @@ async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
 
     assert result.output == "ready"
     assert model.last_model_request_parameters is not None
-    tool_names = {
-        tool.name for tool in model.last_model_request_parameters.function_tools
-    }
+    tool_names = {tool.name for tool in model.last_model_request_parameters.function_tools}
     assert {
         "list_regions",
         "update_benchmark_config",
@@ -521,9 +517,7 @@ async def test_chat_session_lifecycle(
     assert list_response.status_code == 200
     assert [session["id"] for session in list_response.json()] == [session_id]
 
-    detail_response = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     assert detail_response.status_code == 200
     assert detail_response.json()["transcript"] == []
 
@@ -535,14 +529,10 @@ async def test_chat_session_lifecycle(
     assert rename_response.status_code == 200
     assert rename_response.json()["title"] == "Renamed"
 
-    delete_response = await client.delete(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    delete_response = await client.delete(f"/chat/sessions/{session_id}", headers=auth_headers)
     assert delete_response.status_code == 204
 
-    missing_response = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    missing_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     assert missing_response.status_code == 404
 
 
@@ -579,7 +569,9 @@ async def test_send_message_persists_user_and_assistant_turns(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -593,9 +585,7 @@ async def test_send_message_persists_user_and_assistant_turns(
     assert events[-1]["type"] == "done"
     assert events[-1]["turn"]["content"] == "It finished successfully."
 
-    detail_response = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "How did this run do?"
@@ -625,7 +615,9 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
         yield json.dumps({"type": "text_delta", "content": "Partial"})
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", failing_stream_response)
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", failing_stream_response
+    )
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -639,9 +631,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     assert events[-1]["type"] == "error"
     assert events[-1]["message"] == "Chat response failed"
 
-    detail_response = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "Summarize this failure"
@@ -707,7 +697,9 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -754,7 +746,9 @@ async def test_send_message_refreshes_scope_job_ids(
             }
         )
 
-    monkeypatch.setattr("ai_almanac.server.services.chat_turns.stream_response", fake_stream_response)
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
@@ -767,9 +761,7 @@ async def test_send_message_refreshes_scope_job_ids(
     assert response.status_code == 200
     assert _sse_events(response.text)[-1]["type"] == "done"
 
-    detail_response = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     assert detail_response.status_code == 200
     assert detail_response.json()["scope"]["job_ids"] == [job_id]
 
@@ -800,7 +792,9 @@ async def test_get_job_metrics_returns_tool_error_for_unreadable_nc(
             assert path == "/outputs/spatial_metrics_model_1-15.nc"
             raise RuntimeError("NetCDF: HDF error")
 
-    monkeypatch.setattr("ai_almanac.server.services.storage.get_storage", lambda: UnreadableStorage())
+    monkeypatch.setattr(
+        "ai_almanac.server.services.storage.get_storage", lambda: UnreadableStorage()
+    )
 
     payload = await get_job_metrics(
         job_id,

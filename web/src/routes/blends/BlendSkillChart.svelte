@@ -18,7 +18,15 @@
 	} | null>(null);
 
 	const BLEND_COLOR = '#1f2937';
-	const MODEL_COLORS = ['#0f766e', '#b2182b', '#d06f1a', '#6b5b95', '#2d7d46', '#9333ea', '#0891b2'];
+	const MODEL_COLORS = [
+		'#0f766e',
+		'#b2182b',
+		'#d06f1a',
+		'#6b5b95',
+		'#2d7d46',
+		'#9333ea',
+		'#0891b2'
+	];
 	const X = SKILL_AXES.map((_, i) => i);
 
 	type SeriesDef = {
@@ -130,7 +138,13 @@
 					width: s.width,
 					show: visibleSeries[s.key] ?? true,
 					spanGaps: true,
-					points: { show: true, size: s.isBlend ? 8 : 6, width: 1.5, stroke: s.color, fill: '#ffffff' }
+					points: {
+						show: true,
+						size: s.isBlend ? 8 : 6,
+						width: 1.5,
+						stroke: s.color,
+						fill: '#ffffff'
+					}
 				}))
 			]
 		};
@@ -257,25 +271,30 @@
 		<dl>
 			<div>
 				<dt>Raw</dt>
-				<dd>The forecast model's onset probabilities used straight from the model, with no adjustment.</dd>
+				<dd>
+					The forecast model's onset probabilities used straight from the model, with no adjustment.
+				</dd>
 			</div>
 			<div>
 				<dt>Calibrated</dt>
 				<dd>
-					The same probabilities statistically adjusted (Platt scaling) so that, e.g., a 30% forecast
-					corresponds to onset actually happening about 30% of the time.
+					The same probabilities statistically adjusted (Platt scaling) so that, e.g., a 30%
+					forecast corresponds to onset actually happening about 30% of the time.
 				</dd>
 			</div>
 			<div>
 				<dt>Climatology</dt>
 				<dd>
-					A baseline built only from historical onset frequency — no forecast model. A useful forecast
-					has to beat it.
+					A baseline built only from historical onset frequency — no forecast model. A useful
+					forecast has to beat it.
 				</dd>
 			</div>
 			<div>
 				<dt>Climatology (uncalibrated)</dt>
-				<dd>The climatology baseline before that adjustment; it's the reference the skill scores are measured against.</dd>
+				<dd>
+					The climatology baseline before that adjustment; it's the reference the skill scores are
+					measured against.
+				</dd>
 			</div>
 			<div>
 				<dt>Blend</dt>

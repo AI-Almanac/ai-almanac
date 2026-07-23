@@ -132,7 +132,10 @@ export function dayToIso(day: number): string {
 
 // Absolute [start, end] day-numbers for a bounded window (weekIndex 0..3).
 // The "later" bucket (index 4) has no bounded end and is handled separately.
-export function windowDayRange(issueIso: string, weekIndex: number): { start: number; end: number } {
+export function windowDayRange(
+	issueIso: string,
+	weekIndex: number
+): { start: number; end: number } {
 	const start = isoToDay(issueIso) + ONSET_WINDOW_DAYS * weekIndex;
 	return { start, end: start + ONSET_WINDOW_DAYS - 1 };
 }

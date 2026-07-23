@@ -74,14 +74,10 @@ export function blendModelKey(name: string): string {
 // Mirror of the server's resolve_forecast_model (settings.py): the registry
 // model a blend model name can run live forecasts with, matched by id,
 // normalized display name, or alias. Undefined means historical-only.
-export function forecastModelFor(
-	models: ForecastModel[],
-	name: string
-): ForecastModel | undefined {
+export function forecastModelFor(models: ForecastModel[], name: string): ForecastModel | undefined {
 	const key = blendModelKey(name);
 	return models.find(
-		(m) =>
-			key === m.id || key === blendModelKey(m.display_name) || (m.aliases ?? []).includes(key)
+		(m) => key === m.id || key === blendModelKey(m.display_name) || (m.aliases ?? []).includes(key)
 	);
 }
 

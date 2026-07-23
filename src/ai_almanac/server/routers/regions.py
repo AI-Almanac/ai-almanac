@@ -69,9 +69,7 @@ async def create_region(body: RegionWrite, _admin: AdminUser) -> dict:
 
 
 @router.put("/{region_id}", dependencies=[Depends(require_data_management)])
-async def update_region(
-    region_id: str, body: RegionWrite, _admin: AdminUser
-) -> dict:
+async def update_region(region_id: str, body: RegionWrite, _admin: AdminUser) -> dict:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
     if not existing:
@@ -90,9 +88,7 @@ async def update_region(
     }
 
 
-@router.delete(
-    "/{region_id}", status_code=204, dependencies=[Depends(require_data_management)]
-)
+@router.delete("/{region_id}", status_code=204, dependencies=[Depends(require_data_management)])
 async def delete_region(region_id: str, _admin: AdminUser) -> None:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
@@ -111,9 +107,7 @@ async def delete_region(region_id: str, _admin: AdminUser) -> None:
 
 
 @router.get("/{region}/boundaries/{level}")
-async def get_boundary(
-    region: str, level: str, _user: CurrentUser
-) -> dict[str, Any]:
+async def get_boundary(region: str, level: str, _user: CurrentUser) -> dict[str, Any]:
     """
     Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
 
@@ -122,16 +116,12 @@ async def get_boundary(
     """
     region_def = await region_catalog.get_region(region.strip())
     if not region_def or not region_def.get("boundary_iso"):
-        raise HTTPException(
-            status_code=404, detail=f"No boundary mapping for region {region!r}"
-        )
+        raise HTTPException(status_code=404, detail=f"No boundary mapping for region {region!r}")
     iso = region_def["boundary_iso"]
 
     boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
     if not boundary_type:
-        raise HTTPException(
-            status_code=404, detail=f"Unsupported boundary level {level!r}"
-        )
+        raise HTTPException(status_code=404, detail=f"Unsupported boundary level {level!r}")
 
     cache_key = (iso, boundary_type)
     cached = _BOUNDARY_CACHE.get(cache_key)
@@ -142,9 +132,7 @@ async def get_boundary(
     connector = aiohttp.TCPConnector(ssl=_BOUNDARY_SSL_CONTEXT)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         metadata = await _fetch_json(session, _metadata_url(iso, boundary_type))
-        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get(
-            "gjDownloadURL"
-        )
+        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
         if not geojson_url:
             raise HTTPException(
                 status_code=502,

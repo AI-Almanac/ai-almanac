@@ -104,8 +104,7 @@ def job_region_metadata(cfg: dict, catalog: CatalogSnapshot) -> dict[str, str | 
         return {
             "region_id": cfg["region_id"],
             "region_name": cfg["region_name"],
-            "romp_region": cfg.get("romp_region")
-            or (cfg.get("romp_params") or {}).get("region"),
+            "romp_region": cfg.get("romp_region") or (cfg.get("romp_params") or {}).get("region"),
         }
 
     region = catalog.region(cfg.get("region_id"))
@@ -113,9 +112,7 @@ def job_region_metadata(cfg: dict, catalog: CatalogSnapshot) -> dict[str, str | 
         dataset_config = cfg.get("dataset_config") or {}
         region = catalog.region(dataset_config.get("region"))
     if region is None:
-        region = catalog.region_by_romp_name(
-            (cfg.get("romp_params") or {}).get("region")
-        )
+        region = catalog.region_by_romp_name((cfg.get("romp_params") or {}).get("region"))
 
     if region:
         return {
@@ -132,9 +129,7 @@ def job_region_metadata(cfg: dict, catalog: CatalogSnapshot) -> dict[str, str | 
     }
 
 
-def row_to_job_out(
-    row: dict, current_user_id: str | None, catalog: CatalogSnapshot
-) -> JobOut:
+def row_to_job_out(row: dict, current_user_id: str | None, catalog: CatalogSnapshot) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
     model_config = cfg.get("model_config") or {}
     model_name = cfg.get("model_name", "")
@@ -359,10 +354,7 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
     source = await data_source_service.get_source(model_id)
     if not source or source["kind"] != "model":
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id!r}")
-    if (
-        source.get("owner_id") not in (None, user_id)
-        and source.get("visibility") != "shared"
-    ):
+    if source.get("owner_id") not in (None, user_id) and source.get("visibility") != "shared":
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id!r}")
     if source.get("status") != "ready":
         raise HTTPException(
@@ -384,9 +376,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     try:
         forecast_years = _blend_forecast_years(body.params)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid year specification: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"Invalid year specification: {exc}") from exc
     if not forecast_years:
         raise HTTPException(
             status_code=400,
@@ -428,9 +418,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
 
     async with get_db() as conn:
         await lock_for_update(conn)
-        await conn.execute(
-            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
-        )
+        await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
         active_count = (
             await conn.execute(
                 sa.select(sa.func.count())
@@ -489,9 +477,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                     error=str(exc),
                 )
             )
-        raise HTTPException(
-            status_code=400, detail=f"Blend submission failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"Blend submission failed: {exc}") from exc
 
     values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
     if handle.runner != "local":
@@ -573,9 +559,7 @@ def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
 async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
     async with get_db() as conn:
         row = (
-            (await conn.execute(sa.select(jobs).where(jobs.c.id == blend_id)))
-            .mappings()
-            .fetchone()
+            (await conn.execute(sa.select(jobs).where(jobs.c.id == blend_id))).mappings().fetchone()
         )
     if not row or row["job_type"] != "blend":
         raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
@@ -589,9 +573,7 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
     return dict(row)
 
 
-async def create_forecast_for_user(
-    body: ForecastCreate, user_id: str
-) -> ForecastOut:
+async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
     """Submit a live-forecast job: run the blend's models forward and score them.
 
     A run whose season is fully cached scores for free (GPU-free); any run that
@@ -633,10 +615,7 @@ async def create_forecast_for_user(
     if unsupported:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Blend model(s) have no live forecast model to run: "
-                f"{', '.join(unsupported)}"
-            ),
+            detail=(f"Blend model(s) have no live forecast model to run: {', '.join(unsupported)}"),
         )
     forecast_model_ids = sorted(requested)
     if not forecast_model_ids:
@@ -742,9 +721,7 @@ async def create_forecast_for_user(
 
     async with get_db() as conn:
         await lock_for_update(conn)
-        await conn.execute(
-            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
-        )
+        await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
         active_count = (
             await conn.execute(
                 sa.select(sa.func.count())
@@ -815,9 +792,7 @@ async def create_forecast_for_user(
                     error=str(exc),
                 )
             )
-        raise HTTPException(
-            status_code=400, detail=f"Forecast submission failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"Forecast submission failed: {exc}") from exc
 
     values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
     if handle.runner != "local":
@@ -827,9 +802,7 @@ async def create_forecast_for_user(
     return forecast_row_to_out(row, user_id)
 
 
-async def refresh_forecast_for_user(
-    forecast_id: str, user_id: str
-) -> ForecastOut:
+async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastOut:
     """Re-run an existing forecast with its ORIGINAL generation parameters.
 
     The season rollout is cumulative and cache-backed, so an "update" should
@@ -845,16 +818,15 @@ async def refresh_forecast_for_user(
         row = (
             (
                 await conn.execute(
-                    sa.select(jobs.c.user_id, jobs.c.config_json, jobs.c.visibility, jobs.c.run_id)
-                    .where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
+                    sa.select(
+                        jobs.c.user_id, jobs.c.config_json, jobs.c.visibility, jobs.c.run_id
+                    ).where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
                 )
             )
             .mappings()
             .fetchone()
         )
-    if not row or (
-        row["user_id"] != user_id and (row["visibility"] or "private") != "shared"
-    ):
+    if not row or (row["user_id"] != user_id and (row["visibility"] or "private") != "shared"):
         raise HTTPException(status_code=404, detail=f"Unknown forecast: {forecast_id!r}")
 
     cfg = json.loads(row["config_json"] or "{}")
@@ -887,16 +859,13 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     if observation_source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
-            detail=observation_source.get("validation_error")
-            or "Observation source is not ready",
+            detail=observation_source.get("validation_error") or "Observation source is not ready",
         )
 
     region = (body.params.region or "").lower()
     model_source = await data_source_service.get_source(body.model_name)
     if not model_source or model_source["kind"] != "model":
-        raise HTTPException(
-            status_code=400, detail=f"Unknown model: {body.model_name!r}"
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
     if model_source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
@@ -960,8 +929,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     }
 
     compute_e2s_metrics = bool(
-        model_cfg.get("compute_e2s_metrics")
-        or dataset_config.get("compute_e2s_metrics")
+        model_cfg.get("compute_e2s_metrics") or dataset_config.get("compute_e2s_metrics")
     )
 
     config = {
@@ -973,9 +941,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "model_config": model_cfg,
         "region_id": region_def["id"] if region_def else None,
         "region_name": region_def["display_name"] if region_def else None,
-        "romp_region": region_def.get("romp_name") or "custom"
-        if region_def
-        else region_id,
+        "romp_region": region_def.get("romp_name") or "custom" if region_def else region_id,
         "dataset_config": dataset_config,
         "compute_e2s_metrics": compute_e2s_metrics,
         "romp_params": romp_params,
@@ -985,9 +951,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         # On SQLite this takes the write lock up front; on PostgreSQL the
         # FOR UPDATE below serializes concurrent submissions per user.
         await lock_for_update(conn)
-        await conn.execute(
-            sa.select(users.c.id).where(users.c.id == user_id).with_for_update()
-        )
+        await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
         active_count = (
             await conn.execute(
                 sa.select(sa.func.count())
@@ -1060,9 +1024,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
                     error=str(exc),
                 )
             )
-        raise HTTPException(
-            status_code=400, detail=f"Job submission failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"Job submission failed: {exc}") from exc
 
     values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
     # The local runner's supervisor advances status itself; a remote runner is

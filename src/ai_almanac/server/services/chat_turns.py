@@ -83,10 +83,7 @@ def parse_llm_event(event: str) -> dict | None:
 
 def _replace_turn(transcript: list[dict], turn: ChatTurn) -> list[dict]:
     turn_payload = turn.model_dump(mode="json")
-    return [
-        turn_payload if existing.get("id") == turn.id else existing
-        for existing in transcript
-    ]
+    return [turn_payload if existing.get("id") == turn.id else existing for existing in transcript]
 
 
 def _stream_event(event_type: str, **payload: object) -> str:
@@ -205,12 +202,7 @@ def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
         or any(tool.status == "failed" for tool in assistant_turn.tool_calls)
     ):
         return "tool_error"
-    if (
-        "openai" in message
-        or "api" in name
-        or "rate limit" in message
-        or "timeout" in message
-    ):
+    if "openai" in message or "api" in name or "rate limit" in message or "timeout" in message:
         return "provider_error"
     return "internal_error"
 
@@ -295,9 +287,7 @@ def _approval_metadata(
     }
 
 
-async def save_provider_state(
-    session_id: str, user_id: str, provider_state: list[dict]
-) -> None:
+async def save_provider_state(session_id: str, user_id: str, provider_state: list[dict]) -> None:
     async with get_db() as conn:
         await conn.execute(
             text("""
@@ -386,9 +376,7 @@ async def stream_chat_turn(
             .fetchone()
         )
         if not row:
-            yield _stream_event(
-                "error", error_type="internal_error", message="Session not found"
-            )
+            yield _stream_event("error", error_type="internal_error", message="Session not found")
             return
 
         provider_state = _deny_unprocessed_tool_calls(
@@ -397,10 +385,7 @@ async def stream_chat_turn(
         transcript = json_list(row["transcript"])
         stored_scope = ChatScope.model_validate(json_dict(row["scope"]))
         if requested_scope is not None:
-            if (
-                requested_scope.kind != stored_scope.kind
-                or requested_scope.key != stored_scope.key
-            ):
+            if requested_scope.kind != stored_scope.kind or requested_scope.key != stored_scope.key:
                 yield _stream_event(
                     "error",
                     error_type="scope_mismatch",
@@ -459,9 +444,7 @@ async def stream_chat_turn(
                 and isinstance(data.get("jobs"), list)
             ):
                 scope = ChatScope(
-                    kind="benchmark_run_group"
-                    if data["type"] == "benchmark_config"
-                    else "job_set",
+                    kind="benchmark_run_group" if data["type"] == "benchmark_config" else "job_set",
                     key=data["run_id"],
                     title=scope.title,
                     job_ids=[
@@ -480,9 +463,7 @@ async def stream_chat_turn(
                         "error": None,
                     }
                 )
-                final_provider_state = data.get(
-                    "provider_state", pending_provider_state
-                )
+                final_provider_state = data.get("provider_state", pending_provider_state)
                 final_transcript = _replace_turn(pending_transcript, completed_turn)
                 # --- Transaction 2: persist completed state ---
                 async with get_db() as conn:
@@ -495,9 +476,7 @@ async def stream_chat_turn(
                         scope=scope,
                     )
                 hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user_id)
-                terminal_event = _stream_event(
-                    "done", turn=hydrated_turn.model_dump(mode="json")
-                )
+                terminal_event = _stream_event("done", turn=hydrated_turn.model_dump(mode="json"))
                 break
 
             _apply_stream_event(assistant_turn, data)

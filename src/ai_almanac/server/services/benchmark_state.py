@@ -35,9 +35,9 @@ class BenchmarkValidation(BaseModel):
 
 
 class BenchmarkScope(BaseModel):
-    kind: Literal[
-        "benchmark_setup", "benchmark_run_group", "blend_setup", "job_set"
-    ] = "benchmark_run_group"
+    kind: Literal["benchmark_setup", "benchmark_run_group", "blend_setup", "job_set"] = (
+        "benchmark_run_group"
+    )
     key: str
     title: str | None = None
     job_ids: list[str] = Field(default_factory=list)

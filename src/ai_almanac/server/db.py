@@ -66,12 +66,8 @@ async def wait_for_database(attempts: int = 30, delay: float = 2.0) -> None:
             return
         except Exception as e:  # noqa: BLE001 — any connection failure is retryable
             if attempt == attempts:
-                raise RuntimeError(
-                    f"database unreachable after {attempts} attempts: {e}"
-                ) from e
-            logger.warning(
-                "database not ready (attempt %d/%d): %s", attempt, attempts, e
-            )
+                raise RuntimeError(f"database unreachable after {attempts} attempts: {e}") from e
+            logger.warning("database not ready (attempt %d/%d): %s", attempt, attempts, e)
             await asyncio.sleep(delay)
 
 

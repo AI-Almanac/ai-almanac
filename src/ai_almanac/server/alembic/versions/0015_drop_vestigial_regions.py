@@ -19,14 +19,11 @@ down_revision = "0014"
 branch_labels = None
 depends_on = None
 
+
 def upgrade() -> None:
     conn = op.get_bind()
-    conn.exec_driver_sql(
-        "DELETE FROM data_sources WHERE region IN ('bangladesh', 'custom')"
-    )
-    conn.exec_driver_sql(
-        "DELETE FROM regions WHERE id IN ('bangladesh', 'custom') AND is_builtin"
-    )
+    conn.exec_driver_sql("DELETE FROM data_sources WHERE region IN ('bangladesh', 'custom')")
+    conn.exec_driver_sql("DELETE FROM regions WHERE id IN ('bangladesh', 'custom') AND is_builtin")
 
 
 def downgrade() -> None:

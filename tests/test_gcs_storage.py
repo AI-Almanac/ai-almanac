@@ -82,11 +82,16 @@ class _FakeSigningCredentials(ga_credentials.Credentials, ga_credentials.Signing
     URL signing doesn't reach for the IAM signBlob API."""
 
     def refresh(self, request) -> None: ...
-    def sign_bytes(self, message): return b""
+    def sign_bytes(self, message):
+        return b""
+
     @property
-    def signer_email(self): return "fake@local"
+    def signer_email(self):
+        return "fake@local"
+
     @property
-    def signer(self): return None
+    def signer(self):
+        return None
 
 
 class _FakeClient:

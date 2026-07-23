@@ -48,9 +48,7 @@ class JobArtifact:
 class ArtifactStore(Protocol):
     def create_workspace(self, job_id: str) -> Path: ...
 
-    def publish(
-        self, job_id: str, workspace: Path | None = None
-    ) -> list[JobArtifact]: ...
+    def publish(self, job_id: str, workspace: Path | None = None) -> list[JobArtifact]: ...
 
     def open(self, artifact: JobArtifact) -> BinaryIO: ...
 
@@ -85,9 +83,7 @@ class FilesystemArtifactStore:
         self._storage.job_output_uri(job_id)
         return self._storage.job_dir(job_id)
 
-    def publish(
-        self, job_id: str, workspace: Path | None = None
-    ) -> list[JobArtifact]:
+    def publish(self, job_id: str, workspace: Path | None = None) -> list[JobArtifact]:
         """Index every output/figure file for the job into artifact records.
         Pure: computes records, performs no database writes."""
         now = datetime.now(UTC).isoformat()
@@ -113,9 +109,7 @@ class FilesystemArtifactStore:
         return artifacts
 
     def open(self, artifact: JobArtifact) -> BinaryIO:
-        path = self._storage.result_file_path(
-            artifact.job_id, artifact.kind, artifact.filename
-        )
+        path = self._storage.result_file_path(artifact.job_id, artifact.kind, artifact.filename)
         if path is None or not path.is_file():
             raise FileNotFoundError(artifact.storage_key)
         return path.open("rb")
@@ -139,13 +133,9 @@ class GcsArtifactStore:
         self._storage = storage
 
     def create_workspace(self, job_id: str) -> Path:
-        raise NotImplementedError(
-            "GCS jobs run on a remote runner that writes to the bucket"
-        )
+        raise NotImplementedError("GCS jobs run on a remote runner that writes to the bucket")
 
-    def publish(
-        self, job_id: str, workspace: Path | None = None
-    ) -> list[JobArtifact]:
+    def publish(self, job_id: str, workspace: Path | None = None) -> list[JobArtifact]:
         now = datetime.now(UTC).isoformat()
         artifacts: list[JobArtifact] = []
         for kind, filename in self._storage.list_result_files(job_id):
@@ -166,9 +156,7 @@ class GcsArtifactStore:
         return artifacts
 
     def open(self, artifact: JobArtifact) -> BinaryIO:
-        raise NotImplementedError(
-            "GCS artifacts are served via signed URL, not opened locally"
-        )
+        raise NotImplementedError("GCS artifacts are served via signed URL, not opened locally")
 
     def delete_job(self, job_id: str) -> None:
         self._storage.delete_job(job_id)

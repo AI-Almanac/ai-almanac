@@ -153,9 +153,7 @@ async def _run_background_step(name: str, step) -> None:
         logger.warning("%s failed: %s", name, message)
         if _background_failures.get(name) != message:
             _background_failures[name] = message
-            await _record_background_event(
-                f"background.{name}.failed", metadata={"error": message}
-            )
+            await _record_background_event(f"background.{name}.failed", metadata={"error": message})
         return
     if _background_failures.pop(name, None) is not None:
         await _record_background_event(f"background.{name}.recovered")

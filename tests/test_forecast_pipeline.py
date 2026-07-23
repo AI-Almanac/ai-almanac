@@ -19,9 +19,7 @@ def test_ensemble_config_defaults_and_batch_clamp():
     assert cfg == {"nensemble": 8, "batch_size": 1}
 
     # batch_size never exceeds the member count.
-    cfg = ensemble_config(
-        {"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16}
-    )
+    cfg = ensemble_config({"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16})
     assert cfg == {"nensemble": 2, "batch_size": 2}
 
 
@@ -72,9 +70,7 @@ def test_season_issue_dates_follows_calendar_schedule_over_weekday():
 
 def test_season_issue_dates_schedule_respects_season_start_window():
     schedule = ["04-01", "04-04", "05-02", "05-06"]
-    dates = season_issue_dates(
-        "05-01", init_weekdays=[6], year=2020, schedule_month_days=schedule
-    )
+    dates = season_issue_dates("05-01", init_weekdays=[6], year=2020, schedule_month_days=schedule)
     assert dates == [dt.date(2020, 5, 2), dt.date(2020, 5, 6)]  # Apr dates trimmed
 
 

@@ -143,9 +143,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--staging-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument(
-        "--models", help="Comma-separated model ids for the inference phase."
-    )
+    parser.add_argument("--models", help="Comma-separated model ids for the inference phase.")
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
 

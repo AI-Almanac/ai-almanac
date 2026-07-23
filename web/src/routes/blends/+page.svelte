@@ -542,17 +542,17 @@
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
 										{#if forecastModelFor(forecastModels, source.name)}
-											<span class="forecast-badge" title="This model can also generate live forecasts."
-												>Live forecast</span
+											<span
+												class="forecast-badge"
+												title="This model can also generate live forecasts.">Live forecast</span
 											>
 										{/if}
 									</label>
 								{/each}
 							</div>
 							<p class="muted forecast-legend">
-								<span class="forecast-badge">Live forecast</span> models can be extended into the
-								current season. Any model can be blended and benchmarked — those without the badge
-								are historical-only.
+								<span class="forecast-badge">Live forecast</span> models can be extended into the current
+								season. Any model can be blended and benchmarked — those without the badge are historical-only.
 							</p>
 						{/if}
 					</fieldset>

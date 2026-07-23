@@ -232,11 +232,14 @@
 									<strong>{profile.provider_display_name}</strong>
 									<span class="muted">{profile.model_name}</span>
 									{#if profile.is_default}<span class="badge">default</span>{/if}
-									{#if testResult[profile.id]}<span class="muted">· {testResult[profile.id]}</span>{/if}
+									{#if testResult[profile.id]}<span class="muted">· {testResult[profile.id]}</span
+										>{/if}
 								</div>
 								<div class="row-actions">
 									{#if !profile.is_default}
-										<button disabled={busy} onclick={() => makeDefault(profile.id)}>Set default</button>
+										<button disabled={busy} onclick={() => makeDefault(profile.id)}
+											>Set default</button
+										>
 									{/if}
 									<button disabled={busy} onclick={() => test(profile.id)}>Test</button>
 									<button class="danger" disabled={busy} onclick={() => removeProfile(profile.id)}>
@@ -303,7 +306,9 @@
 								<input bind:value={draft.shared_model_name} placeholder="model id" />
 							</label>
 							<label>
-								Shared key {#if provider.has_shared_key}<span class="muted">(set — leave blank to keep)</span>{/if}
+								Shared key {#if provider.has_shared_key}<span class="muted"
+										>(set — leave blank to keep)</span
+									>{/if}
 								<input type="password" bind:value={draft.api_key} placeholder="API key" />
 							</label>
 							<div class="row-actions">
@@ -311,7 +316,11 @@
 									{provider.allow_shared ? 'Update shared' : 'Enable shared'}
 								</button>
 								{#if provider.allow_shared}
-									<button class="danger" disabled={busy} onclick={() => saveShared(provider, false)}>
+									<button
+										class="danger"
+										disabled={busy}
+										onclick={() => saveShared(provider, false)}
+									>
 										Disable shared
 									</button>
 								{/if}

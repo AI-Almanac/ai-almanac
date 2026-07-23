@@ -55,9 +55,7 @@ async def test_region_lifecycle_and_source_deletion_guard(
     assert source_response.status_code == 201
 
     regions_response = await client.get("/regions")
-    region = next(
-        item for item in regions_response.json() if item["id"] == created["id"]
-    )
+    region = next(item for item in regions_response.json() if item["id"] == created["id"])
     assert region["has_data"] is True
     assert region["source_count"] == 1
 
@@ -169,8 +167,7 @@ async def test_user_region_bounds_are_applied_to_jobs(
     assert job["region_id"] == region["id"]
     assert job["region_name"] == "Central Highlands"
     assert {
-        key: job["params"][key]
-        for key in ("region", "lat_min", "lat_max", "lon_min", "lon_max")
+        key: job["params"][key] for key in ("region", "lat_min", "lat_max", "lon_min", "lon_max")
     } == {
         "region": "custom",
         "lat_min": 8,

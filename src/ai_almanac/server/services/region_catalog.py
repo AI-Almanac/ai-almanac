@@ -100,9 +100,7 @@ async def create_region(
     suffix = 2
     async with get_db() as conn:
         while (
-            await conn.execute(
-                text("SELECT 1 FROM regions WHERE id = :id"), {"id": region_id}
-            )
+            await conn.execute(text("SELECT 1 FROM regions WHERE id = :id"), {"id": region_id})
         ).scalar_one_or_none():
             region_id = f"{base_id}-{suffix}"
             suffix += 1

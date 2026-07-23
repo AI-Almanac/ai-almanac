@@ -162,8 +162,8 @@
 			{:else}
 				<p class="lede">
 					Application configuration. Changes are persisted to
-					<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings.
-					Environment variables still override values set here.
+					<code>{configPath || 'config.yaml'}</code> and take effect immediately for most settings. Environment
+					variables still override values set here.
 				</p>
 			{/if}
 		</header>
@@ -209,7 +209,8 @@
 								<label for={`f-${field.name}`}>
 									<span class="fieldname">{field.label}</span>
 									{#if !field.editable}<span class="badge">managed by environment</span>{/if}
-									{#if field.restart_required && field.editable}<span class="badge">restart</span>{/if}
+									{#if field.restart_required && field.editable}<span class="badge">restart</span
+										>{/if}
 									{#if field.sensitive}<span class="badge">secret</span>{/if}
 								</label>
 								<p class="desc">{field.description}</p>
@@ -242,7 +243,8 @@
 												<button
 													type="button"
 													onclick={() => saveGroup(group)}
-													disabled={savingGroup === group.name || values[field.name] === original[field.name]}
+													disabled={savingGroup === group.name ||
+														values[field.name] === original[field.name]}
 												>
 													{savingGroup === group.name ? 'Saving…' : 'Save prompt'}
 												</button>

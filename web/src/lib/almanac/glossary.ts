@@ -22,7 +22,8 @@ export const glossaryTerms: GlossaryTerm[] = [
 		slug: 'ai-weather-prediction',
 		term: 'AI Weather Prediction',
 		category: 'AI weather prediction',
-		shortDefinition: 'Weather forecasting with machine-learned models trained on historical analyses.',
+		shortDefinition:
+			'Weather forecasting with machine-learned models trained on historical analyses.',
 		definition:
 			'AI weather prediction models learn forecast behavior from historical atmospheric data rather than solving the full numerical weather prediction system directly at inference time.',
 		relatedTerms: ['Numerical weather prediction', 'Reanalysis'],

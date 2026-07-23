@@ -68,8 +68,7 @@ def _chat_figure_storage_keys(storage_key: str) -> list[str]:
     if Path(key).suffix:
         return [f"chat-figures/{key}"]
     return [
-        f"chat-figures/{key}{ext}"
-        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+        f"chat-figures/{key}{ext}" for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
     ]
 
 
@@ -413,9 +412,7 @@ class GCSStorage:
 
     def chat_figure_redirect_url(self, figure_id: str) -> str | None:
         for ext in _CHAT_FIGURE_EXTS:
-            blob = self._bucket(self._outputs_bucket).blob(
-                f"chat-figures/{figure_id}{ext}"
-            )
+            blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
             if blob.exists():
                 return blob.generate_signed_url(
                     version="v4",
@@ -427,9 +424,7 @@ class GCSStorage:
 
     def read_chat_figure(self, figure_id: str) -> tuple[bytes, str] | None:
         for ext in _CHAT_FIGURE_EXTS:
-            blob = self._bucket(self._outputs_bucket).blob(
-                f"chat-figures/{figure_id}{ext}"
-            )
+            blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
             if blob.exists():
                 data = blob.download_as_bytes()
                 return data, (blob.content_type or detect_chat_figure_format(data)[1])

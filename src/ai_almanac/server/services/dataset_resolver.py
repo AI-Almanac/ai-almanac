@@ -58,9 +58,7 @@ class ResolvedDataset:
 
 
 class DatasetResolver(Protocol):
-    async def resolve(
-        self, source: DataSource, workspace: Path
-    ) -> ResolvedDataset: ...
+    async def resolve(self, source: DataSource, workspace: Path) -> ResolvedDataset: ...
 
 
 def _mount_roots() -> list[Path]:
@@ -73,17 +71,13 @@ def _mount_roots() -> list[Path]:
 
 def _assert_within(path: Path, roots: list[Path]) -> None:
     if roots and not any(path == root or path.is_relative_to(root) for root in roots):
-        raise DatasetAccessError(
-            f"path {path} is outside the configured dataset mount roots"
-        )
+        raise DatasetAccessError(f"path {path} is outside the configured dataset mount roots")
 
 
 class FilesystemDatasetResolver:
     """Resolve sources to local paths, enforcing mount-root containment."""
 
-    async def resolve(
-        self, source: DataSource, workspace: Path
-    ) -> ResolvedDataset:
+    async def resolve(self, source: DataSource, workspace: Path) -> ResolvedDataset:
         if source.origin == "upload":
             path = self._resolve_upload(source.path)
         else:

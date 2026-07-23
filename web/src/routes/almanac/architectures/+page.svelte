@@ -10,7 +10,10 @@
 
 <svelte:head>
 	<title>Architectures | Almanac of Weather Models</title>
-	<meta name="description" content="Weather model architecture families and linked model families." />
+	<meta
+		name="description"
+		content="Weather model architecture families and linked model families."
+	/>
 </svelte:head>
 
 <main class="architecture-page">

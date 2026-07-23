@@ -56,7 +56,14 @@ async def _insert_shared_provider(api_key: str, model: str) -> str:
                 "VALUES (:id, 'openai-compatible', 'Shared', 'http://shared.local', "
                 "TRUE, TRUE, :model, :v, :n, :c, :now, :now)"
             ),
-            {"id": provider_id, "model": model, "v": version, "n": nonce, "c": ciphertext, "now": _now()},
+            {
+                "id": provider_id,
+                "model": model,
+                "v": version,
+                "n": nonce,
+                "c": ciphertext,
+                "now": _now(),
+            },
         )
     return provider_id
 

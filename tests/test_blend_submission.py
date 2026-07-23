@@ -90,13 +90,7 @@ async def test_create_blend_persists_blend_routing_config(
     assert out.model_names == ["gencast", "aifs"]
 
     async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))
-            )
-            .mappings()
-            .fetchone()
-        )
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
     assert row["job_type"] == "blend"
     assert row["status"] == "running"  # remote runner is live once spawned
     assert row["runner"] == "modal"
@@ -116,9 +110,7 @@ async def test_create_blend_persists_blend_routing_config(
 
 
 @pytest.mark.asyncio
-async def test_create_blend_rejects_non_model_source(
-    client, user_id: str, _stub_runner
-) -> None:
+async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub_runner) -> None:
     from fastapi import HTTPException
 
     obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")

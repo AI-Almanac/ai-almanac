@@ -200,9 +200,7 @@ class Settings(BaseSettings):
             if self.db_password:
                 url = make_url(self.database_url)
                 if not url.password:
-                    return url.set(password=self.db_password).render_as_string(
-                        hide_password=False
-                    )
+                    return url.set(password=self.db_password).render_as_string(hide_password=False)
             return self.database_url
         ensure_layout()
         return f"sqlite+aiosqlite:///{database_path()}"
@@ -373,9 +371,7 @@ def _load_db_overlay() -> dict:
         from ai_almanac.server.tables import app_config
 
         with sync_engine().connect() as conn:
-            rows = conn.execute(
-                select(app_config.c.key, app_config.c.value)
-            ).all()
+            rows = conn.execute(select(app_config.c.key, app_config.c.value)).all()
         return {key: _unseal_secret(value) for key, value in rows}
     except Exception:
         return {}

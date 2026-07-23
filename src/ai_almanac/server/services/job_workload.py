@@ -202,9 +202,7 @@ def _mark_trajectory_coverage(config: dict) -> None:
             covered = set(dates)
             row = (
                 conn.execute(
-                    sa.select(
-                        forecast_runs.c.id, forecast_runs.c.covered_init_dates
-                    ).where(
+                    sa.select(forecast_runs.c.id, forecast_runs.c.covered_init_dates).where(
                         forecast_runs.c.model_name == name,
                         forecast_runs.c.init_source == init_source,
                         forecast_runs.c.season == season,

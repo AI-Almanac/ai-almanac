@@ -449,9 +449,7 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
     async def get_blend_results(ctx: RunContext[ChatDeps], job_id: str) -> dict:
         """Read a completed blend's pooled per-model skill summary (AUC, Brier skill
         per lead time) and the list of weight/output artifacts, to explain results."""
-        return await chat_tools.get_blend_results(
-            job_id, ctx.deps.user_id, ctx.deps.scope
-        )
+        return await chat_tools.get_blend_results(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset
 

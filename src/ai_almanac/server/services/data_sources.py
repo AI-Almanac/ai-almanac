@@ -135,9 +135,7 @@ def _initialization_schedule(dataset) -> list[str] | None:
         days = [int(day) for day in values.dt.day.values.tolist()]
     except (AttributeError, TypeError, ValueError):
         return None
-    schedule = sorted(
-        {f"{month:02d}-{day:02d}" for month, day in zip(months, days, strict=True)}
-    )
+    schedule = sorted({f"{month:02d}-{day:02d}" for month, day in zip(months, days, strict=True)})
     return schedule or None
 
 
@@ -248,9 +246,7 @@ def _finalize_inspection(
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             initialization_days = _initialization_days(dataset) if kind == "model" else None
-            initialization_schedule = (
-                _initialization_schedule(dataset) if kind == "model" else None
-            )
+            initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
     except Exception as exc:
         return (
             "invalid",
@@ -477,9 +473,7 @@ async def delete_source(source_id: str) -> bool:
         return result.rowcount > 0
 
 
-async def get_obs_sources(
-    *, user_id: str | None = None, is_admin: bool = False
-) -> list[dict]:
+async def get_obs_sources(*, user_id: str | None = None, is_admin: bool = False) -> list[dict]:
     """Return obs data sources visible to the given user (all when unscoped)."""
     return await list_sources(kind="obs", user_id=user_id, is_admin=is_admin)
 
@@ -492,4 +486,3 @@ async def get_model_sources(
     if region:
         sources = [s for s in sources if (s.get("region") or "").lower() == region.lower()]
     return sources
-

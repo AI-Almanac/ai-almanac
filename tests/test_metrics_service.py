@@ -192,9 +192,7 @@ async def test_metrics_endpoint_loads_serialized_cache_after_restart(
     }
     async with get_db() as conn:
         user_id = (
-            await conn.execute(
-                text("SELECT id FROM users WHERE external_id = 'local'")
-            )
+            await conn.execute(text("SELECT id FROM users WHERE external_id = 'local'"))
         ).scalar_one()
         await conn.execute(
             text(

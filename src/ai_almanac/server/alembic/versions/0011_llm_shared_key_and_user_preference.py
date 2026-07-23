@@ -40,9 +40,7 @@ def upgrade() -> None:
     _add_column_if_missing("llm_providers", sa.Column("shared_model_name", sa.Text()))
     _add_column_if_missing("llm_providers", sa.Column("shared_key_version", sa.Integer()))
     _add_column_if_missing("llm_providers", sa.Column("shared_key_nonce", sa.LargeBinary()))
-    _add_column_if_missing(
-        "llm_providers", sa.Column("shared_key_ciphertext", sa.LargeBinary())
-    )
+    _add_column_if_missing("llm_providers", sa.Column("shared_key_ciphertext", sa.LargeBinary()))
     _add_column_if_missing(
         "users",
         sa.Column("llm_preference", sa.Text(), nullable=False, server_default="auto"),

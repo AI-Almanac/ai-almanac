@@ -43,59 +43,127 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
         "Benchmark runner",
         [
-            ("runner_mode", "Runner", "'stub' (synthetic outputs) or 'pixi' (real ROMP via the benchmark env)"),
-            ("max_local_jobs", "Concurrent benchmarks", "Maximum number of benchmarks to run at once"),
-            ("output_dir", "Output location", "Where benchmark outputs land. Empty = default (<data dir>/jobs/)"),
+            (
+                "runner_mode",
+                "Runner",
+                "'stub' (synthetic outputs) or 'pixi' (real ROMP via the benchmark env)",
+            ),
+            (
+                "max_local_jobs",
+                "Concurrent benchmarks",
+                "Maximum number of benchmarks to run at once",
+            ),
+            (
+                "output_dir",
+                "Output location",
+                "Where benchmark outputs land. Empty = default (<data dir>/jobs/)",
+            ),
         ],
     ),
     (
         "Weather data access",
         [
             ("cdsapi_url", "Copernicus CDS endpoint", "Copernicus CDS API endpoint"),
-            ("cdsapi_key", "Copernicus CDS key", "Copernicus CDS API key (used by ARCO/CDS obs fetchers)"),
+            (
+                "cdsapi_key",
+                "Copernicus CDS key",
+                "Copernicus CDS API key (used by ARCO/CDS obs fetchers)",
+            ),
         ],
     ),
     (
         "AI assistant",
         [
-            ("llm_provider", "Provider type", "'openai-compatible' (vLLM, Ollama, OpenAI) or 'pydantic-ai' (provider-prefixed model strings)"),
+            (
+                "llm_provider",
+                "Provider type",
+                "'openai-compatible' (vLLM, Ollama, OpenAI) or 'pydantic-ai' (provider-prefixed model strings)",
+            ),
             ("llm_base_url", "Provider URL", "Base URL for OpenAI-compatible providers"),
             ("llm_model", "Model", "Model identifier"),
-            ("llm_api_key", "API key", "API key (use 'placeholder' for local servers that don't check)"),
+            (
+                "llm_api_key",
+                "API key",
+                "API key (use 'placeholder' for local servers that don't check)",
+            ),
             ("llm_timeout_seconds", "Request timeout (seconds)", "Per-request timeout"),
-            ("llm_history_max_messages", "Chat history limit", "Max messages kept in chat history sent to the assistant"),
-            ("llm_tool_result_max_chars", "Tool output limit", "Max characters of tool output forwarded to the assistant"),
-            ("llm_code_context_max_chars", "Code context limit", "Max characters of code context included per request"),
-            ("chat_system_prompt", "System prompt", "Instructions given to the assistant before every conversation. Leave empty to use the built-in default."),
+            (
+                "llm_history_max_messages",
+                "Chat history limit",
+                "Max messages kept in chat history sent to the assistant",
+            ),
+            (
+                "llm_tool_result_max_chars",
+                "Tool output limit",
+                "Max characters of tool output forwarded to the assistant",
+            ),
+            (
+                "llm_code_context_max_chars",
+                "Code context limit",
+                "Max characters of code context included per request",
+            ),
+            (
+                "chat_system_prompt",
+                "System prompt",
+                "Instructions given to the assistant before every conversation. Leave empty to use the built-in default.",
+            ),
         ],
     ),
     (
         "Assistant capabilities",
         [
             ("enable_run_code", "Allow code execution", "Let the assistant run code"),
-            ("enable_run_code_sandbox", "Allow sandboxed code execution", "Let the assistant run code in a remote sandbox (requires a sandbox runner; off in local builds)"),
+            (
+                "enable_run_code_sandbox",
+                "Allow sandboxed code execution",
+                "Let the assistant run code in a remote sandbox (requires a sandbox runner; off in local builds)",
+            ),
         ],
     ),
     (
         "Shared-host quotas",
         [
-            ("max_active_jobs_per_user", "Active jobs per user", "Maximum jobs a single user may run at once"),
+            (
+                "max_active_jobs_per_user",
+                "Active jobs per user",
+                "Maximum jobs a single user may run at once",
+            ),
         ],
     ),
     (
         "Features",
         [
-            ("enable_data_management", "Data management", "Let users create custom regions and register their own datasets"),
-            ("enable_forecasting", "Live forecasting", "Let users generate live AI weather forecasts and score them against a trained blend"),
+            (
+                "enable_data_management",
+                "Data management",
+                "Let users create custom regions and register their own datasets",
+            ),
+            (
+                "enable_forecasting",
+                "Live forecasting",
+                "Let users generate live AI weather forecasts and score them against a trained blend",
+            ),
         ],
     ),
     (
         "Advanced",
         [
-            ("submitted_by_header", "Job attribution header", "Reverse-proxy header to read for job attribution (default X-Forwarded-User)"),
-            ("frontend_url", "Allowed web origin", "Allowed origin for CORS (only relevant in Vite-dev workflow)"),
+            (
+                "submitted_by_header",
+                "Job attribution header",
+                "Reverse-proxy header to read for job attribution (default X-Forwarded-User)",
+            ),
+            (
+                "frontend_url",
+                "Allowed web origin",
+                "Allowed origin for CORS (only relevant in Vite-dev workflow)",
+            ),
             ("cors_allow_all", "Allow all origins", "Allow any CORS origin (dev only)"),
-            ("chat_figure_signing_secret", "Chat figure signing secret", "HMAC secret for chat figure URLs"),
+            (
+                "chat_figure_signing_secret",
+                "Chat figure signing secret",
+                "HMAC secret for chat figure URLs",
+            ),
             ("database_url", "Database URL", "SQLAlchemy URL. Empty = SQLite under the data dir."),
         ],
     ),

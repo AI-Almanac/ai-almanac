@@ -336,9 +336,7 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
     # Remote (GCS): proxy the bytes so the browser never reads the bucket
     # cross-origin, which has no CORS policy for the frontend origin.
     assert isinstance(storage, GCSStorage)
-    stream = await asyncio.to_thread(
-        storage.open_result_stream, job_id, kind, filename
-    )
+    stream = await asyncio.to_thread(storage.open_result_stream, job_id, kind, filename)
     if stream is None:
         raise HTTPException(status_code=404, detail="File not found")
     body, media_type, size = stream
@@ -389,9 +387,7 @@ async def get_metrics(
 
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(
-    job_id: str, job: ReadableJob, model: str, window: str, metric: str
-):
+async def get_grid(job_id: str, job: ReadableJob, model: str, window: str, metric: str):
     _require_complete(job)
     try:
         return await asyncio.to_thread(
@@ -445,15 +441,11 @@ async def get_cell(
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(job_id: str, job: ModifiableJob):
     if job["status"] in ACTIVE_STATUSES:
-        raise HTTPException(
-            status_code=409, detail="Cancel the job before deleting it."
-        )
+        raise HTTPException(status_code=409, detail="Cancel the job before deleting it.")
     async with get_db() as conn:
         # Remove indexed artifact records, then the job. (Explicit delete rather
         # than relying on SQLite FK cascade, which is off by default.)
-        await conn.execute(
-            sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id)
-        )
+        await conn.execute(sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id))
         await conn.execute(sa.delete(jobs).where(jobs.c.id == job_id))
         await audit(
             conn,

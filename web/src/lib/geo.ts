@@ -2,12 +2,7 @@
 // tooltips and inspectors reads identically across pages.
 
 // One signed axis as an absolute value + hemisphere suffix, e.g. 22.00°N.
-export function formatCoord(
-	value: number,
-	positive: string,
-	negative: string,
-	digits = 2
-): string {
+export function formatCoord(value: number, positive: string, negative: string, digits = 2): string {
 	return `${Math.abs(value).toFixed(digits)}°${value >= 0 ? positive : negative}`;
 }
 

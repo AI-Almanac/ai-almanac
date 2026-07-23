@@ -151,11 +151,7 @@
 					{/each}
 				</ul>
 				<label class="hidden-toggle">
-					<input
-						type="checkbox"
-						bind:checked={showHidden}
-						onchange={() => navigate(cwd)}
-					/>
+					<input type="checkbox" bind:checked={showHidden} onchange={() => navigate(cwd)} />
 					Show hidden
 				</label>
 			</aside>
@@ -198,7 +194,11 @@
 			<div class="cwd">
 				<label>
 					<span>Path</span>
-					<input type="text" bind:value={cwd} onkeydown={(e) => e.key === 'Enter' && navigate(cwd)} />
+					<input
+						type="text"
+						bind:value={cwd}
+						onkeydown={(e) => e.key === 'Enter' && navigate(cwd)}
+					/>
 				</label>
 			</div>
 			<div class="footer-actions">

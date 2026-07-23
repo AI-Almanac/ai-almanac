@@ -1,11 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
-	import {
-		feedbackEnabled,
-		submitFeedback,
-		type FeedbackCategory
-	} from '$lib/api';
+	import { feedbackEnabled, submitFeedback, type FeedbackCategory } from '$lib/api';
 	import { addBreadcrumb, getBreadcrumbs } from '$lib/breadcrumbs';
 
 	let open = $state(false);
@@ -110,8 +106,8 @@
 						disabled={submitting}
 					></textarea>
 					<p class="hint">
-						Your report includes your recent activity in the app (pages visited, API calls,
-						errors) to help us reproduce the issue.
+						Your report includes your recent activity in the app (pages visited, API calls, errors)
+						to help us reproduce the issue.
 					</p>
 					{#if error}<p class="error">{error}</p>{/if}
 					<div class="actions">
