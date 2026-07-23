@@ -1,0 +1,72 @@
+name: claude-review
+
+# General AI code review on every PR to develop (SDLC Phase 2).
+# Runs with a context window independent of claude-security-review.yml —
+# two gates, two contexts. Report-only: not a required check until the
+# signal is calibrated (then add the job's context to the develop ruleset).
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (subscription seat via `claude setup-token`).
+# Quota guardrails: drafts and docs-only diffs skipped, superseded runs
+# cancelled, turn-capped, fork PRs skipped (no secrets on forks anyway).
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches: [develop]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  claude-review:
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          prompt: |
+            Review this pull request for ai-almanac. Read CLAUDE.md first for
+            project conventions, then review the diff (gh pr diff) with the
+            surrounding code for context.
+
+            Focus on, in order of importance:
+            1. Correctness of changed behavior and adequacy of test coverage.
+            2. Project-specific contracts:
+               - API route changes must regenerate web/src/lib/api-types.gen.ts
+                 in the same PR.
+               - Database migrations must be backward-compatible one version
+                 (deploys migrate before routing traffic).
+               - Model initialization weekdays use Python numbering (Mon=0).
+               - Data-source ownership boundaries: user-registered rows are
+                 private, admin rows shared; check authz on new queries.
+            3. Error handling and edge cases in changed code paths.
+            4. Meaningful design problems (not style — formatters and linters
+               own style).
+
+            Verify each candidate finding against the actual code before
+            reporting it; do not speculate. Post ONE concise review comment:
+            findings ordered by severity (critical/major/minor), each with
+            file:line and a concrete suggestion. If the PR looks good, say so
+            in two sentences. Do not request changes for nitpicks.
+          claude_args: >-
+            --max-turns 15
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment"
