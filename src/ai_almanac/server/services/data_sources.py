@@ -170,7 +170,8 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     if kind == "model":
         normalized.setdefault("model_type", "AIWP")
         normalized.setdefault("unit_cvt", 1.0)
-        normalized.setdefault("probabilistic", False)
+        # probabilistic is defaulted in _finalize_inspection from the file's
+        # dims (an ensemble member dim forces the probabilistic ROMP path).
         normalized.setdefault("members", None)
         if start_year is not None and end_year is not None:
             normalized.setdefault("start_date", f"{start_year}-01-01")
@@ -229,6 +230,16 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
     )
 
 
+# Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
+_ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
+
+
+def _has_ensemble_dim(dataset) -> bool:
+    return any(
+        keyword in str(name).lower() for name in dataset.dims for keyword in _ENSEMBLE_DIM_KEYWORDS
+    )
+
+
 def _finalize_inspection(
     kind: Kind, metadata: dict, files: list[Path], open_first
 ) -> tuple[Status, str | None, dict]:
@@ -245,6 +256,7 @@ def _finalize_inspection(
         with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
+            has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
             initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
     except Exception as exc:
@@ -255,6 +267,10 @@ def _finalize_inspection(
         )
     normalized["spatial_bounds"] = spatial_bounds
     if kind == "model":
+        # An ensemble member dim can only be evaluated by ROMP's probabilistic
+        # path; the deterministic path crashes on the extra dim. The file's
+        # shape decides the mode, so this overrides any stored flag.
+        normalized["probabilistic"] = has_ensemble or bool(normalized.get("probabilistic"))
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {
