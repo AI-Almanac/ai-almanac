@@ -178,6 +178,86 @@ async def test_configured_initialization_days_override_inference(
     assert "init_time_coordinate" not in metadata
 
 
+def _write_ensemble_model_source(directory: Path) -> None:
+    """Copy the fuxi fixture into `directory` with an added ensemble member dim."""
+    import xarray as xr
+
+    source = sorted((Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi").glob("*.nc"))[0]
+    with xr.open_dataset(source) as ds:
+        ensemble = ds.expand_dims(number=3)
+        directory.mkdir(parents=True, exist_ok=True)
+        ensemble.to_netcdf(directory / "2001.nc")
+
+
+@pytest.mark.asyncio
+async def test_ensemble_member_dim_defaults_probabilistic(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = tmp_path / "aifs-ens"
+    _write_ensemble_model_source(root)
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Ensemble model",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["metadata"]["probabilistic"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensemble_dim_forces_probabilistic_over_stored_flag(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    # A stale/incorrect probabilistic=False (e.g. from a pre-detection
+    # registration) must not survive: the deterministic path crashes on the
+    # ensemble dim, so the file shape wins.
+    root = tmp_path / "aifs-ens-forced-det"
+    _write_ensemble_model_source(root)
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Ensemble model, stale deterministic flag",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp", "probabilistic": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["probabilistic"] is True
+
+
+@pytest.mark.asyncio
+async def test_deterministic_source_stays_non_probabilistic(
+    client: httpx.AsyncClient,
+) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Deterministic model",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["probabilistic"] is False
+
+
 @pytest.mark.asyncio
 async def test_invalid_initialization_days_are_rejected_during_validation(
     client: httpx.AsyncClient,
