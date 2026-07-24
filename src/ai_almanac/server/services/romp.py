@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def romp_safe_model_name(name: str) -> str:
+    """ROMP rejects model names containing whitespace; collapse runs to underscores."""
+    return "_".join(str(name).split())
+
+
 def _date_tuple(value: str) -> tuple[int, int, int]:
     year, month, day = value.split("-")
     return int(year), int(month), int(day)

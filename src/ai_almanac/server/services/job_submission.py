@@ -24,6 +24,7 @@ from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
+from ai_almanac.server.services.romp import romp_safe_model_name
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
@@ -933,7 +934,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
 
     config = {
-        "model_name": model_cfg.get("romp_name") or model_source["name"],
+        "model_name": romp_safe_model_name(model_cfg.get("romp_name") or model_source["name"]),
         "model_display_name": model_source["name"],
         "model_source_id": body.model_name,
         "obs_dir": obs_dir,
