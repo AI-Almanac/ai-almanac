@@ -130,7 +130,9 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert job["status"] == "queued"
     assert launched == [job["id"]]
     assert job["dataset_id"] == obs["id"]
-    assert job["model_name"] == "FuXi test"
+    # ROMP rejects whitespace in model names, so the internal name is sanitized
+    # while the human-facing display name is preserved.
+    assert job["model_name"] == "FuXi_test"
     assert job["model_display_name"] == "FuXi test"
     assert job["model_source_id"] == model["id"]
     assert job["obs_dir"] == str((root / "obs").resolve())
