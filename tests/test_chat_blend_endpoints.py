@@ -16,9 +16,7 @@ import pytest
 from sqlalchemy import text
 
 
-async def _seed_source(
-    kind: str, name: str, region: str, start_year: int, end_year: int
-) -> str:
+async def _seed_source(kind: str, name: str, region: str, start_year: int, end_year: int) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())
@@ -83,8 +81,6 @@ async def test_patch_blend_config_validates_and_surfaces_on_session(
     assert body["blend_validation"]["can_run"] is True
 
     # The persisted blend config is surfaced on a fresh session read.
-    fetched = await client.get(
-        f"/chat/sessions/{session_id}", headers=auth_headers
-    )
+    fetched = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
     assert fetched.status_code == 200
     assert fetched.json()["blend_config"]["name"] == "India blend"

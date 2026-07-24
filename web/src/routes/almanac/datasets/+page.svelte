@@ -100,7 +100,10 @@
 
 	.table-list a {
 		display: grid;
-		grid-template-columns: 2.2rem minmax(7rem, 10rem) minmax(6rem, 8rem) minmax(0, 1fr) minmax(7rem, 9rem);
+		grid-template-columns: 2.2rem minmax(7rem, 10rem) minmax(6rem, 8rem) minmax(0, 1fr) minmax(
+				7rem,
+				9rem
+			);
 		gap: 0.7rem;
 		align-items: baseline;
 		border-bottom: 0.0625rem solid var(--almanac-rule);

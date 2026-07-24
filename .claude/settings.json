@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(web/.env)",
+      "Read(**/*service-account*.json)",
+      "Read(**/*.pem)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Edit(web/src/lib/api-types.gen.ts)",
+      "Bash(gcloud secrets*)",
+      "Bash(cat .env*)",
+      "Bash(cat web/.env*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_files.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/format_edited.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

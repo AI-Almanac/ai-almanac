@@ -28,9 +28,7 @@ class _FakeGcsStorage:
 
     def list_dataset_files(self, path: str, glob: str) -> list[str]:
         return sorted(
-            f"{self._gcs_prefix}/{p.name}"
-            for p in self._local_dir.glob(glob)
-            if p.is_file()
+            f"{self._gcs_prefix}/{p.name}" for p in self._local_dir.glob(glob) if p.is_file()
         )
 
     def open_nc_dataset(self, identifier: str):

@@ -7,9 +7,7 @@ from ai_almanac.settings import settings
 
 
 @pytest.mark.parametrize("tool", ["run_code", "run_code_sandbox"])
-def test_enabled_with_modal_runner_is_available(
-    monkeypatch: pytest.MonkeyPatch, tool: str
-) -> None:
+def test_enabled_with_modal_runner_is_available(monkeypatch: pytest.MonkeyPatch, tool: str) -> None:
     monkeypatch.setattr(settings, f"enable_{tool}", True)
     monkeypatch.setattr(settings, "job_runner", "modal")
     assert is_tool_available(tool) is True

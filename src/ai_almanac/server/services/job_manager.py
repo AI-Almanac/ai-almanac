@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -16,6 +17,7 @@ from pathlib import Path
 import sqlalchemy as sa
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services import trajectory_sets
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.server.tables import jobs
@@ -85,11 +87,7 @@ async def signal_cancel(job_id: str) -> dict | None:
     Returns the job row, or None if the job does not exist.
     """
     async with get_db() as conn:
-        row = (
-            (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id)))
-            .mappings()
-            .fetchone()
-        )
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id))).mappings().fetchone()
         if not row:
             return None
         row = dict(row)
@@ -109,9 +107,7 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
     async with get_db() as conn:
         owned = (
             await conn.execute(
-                sa.select(jobs.c.id).where(
-                    jobs.c.id == job_id, jobs.c.user_id == user_id
-                )
+                sa.select(jobs.c.id).where(jobs.c.id == job_id, jobs.c.user_id == user_id)
             )
         ).fetchone()
     if not owned:
@@ -121,11 +117,25 @@ async def request_cancel(job_id: str, user_id: str) -> dict | None:
 
 async def _finalize_remote_job(job_id: str, status: str, error: str | None) -> None:
     async with get_db() as conn:
-        await conn.execute(
+        result = await conn.execute(
             sa.update(jobs)
             .where(jobs.c.id == job_id, jobs.c.status.in_(ACTIVE_STATUSES))
             .values(status=status, completed_at=_now(), error=error)
+            .returning(jobs.c.config_json)
         )
+        row = result.mappings().fetchone()
+        if status != "complete" or row is None:
+            return
+        config = json.loads(row["config_json"] or "{}")
+        if config.get("job_type") != "forecast":
+            return
+        # The Modal rollout populated the shared trajectory store; record
+        # coverage so later runs score against it GPU-free. Bookkeeping only —
+        # never fail an otherwise-successful forecast over it.
+        try:
+            await trajectory_sets.mark_coverage_from_config(conn, config)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to mark trajectory coverage for %s", job_id)
 
 
 async def _modal_failure_log(job_id: str) -> str:
@@ -208,9 +218,7 @@ async def reconcile_jobs() -> None:
                 )
             await launch_job(row["id"])
             continue
-        if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(
-            row.get("heartbeat_at")
-        ):
+        if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(row.get("heartbeat_at")):
             continue
         _terminate_process_group(row.get("process_group_id"), row.get("workload_pid"))
         final_status = "canceled" if row["status"] == "canceling" else "failed"
@@ -269,9 +277,7 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
     with engine.begin() as conn:
         lock_capacity(conn)
         row = (
-            conn.execute(
-                sa.select(jobs.c.status, jobs.c.worker_id).where(jobs.c.id == job_id)
-            )
+            conn.execute(sa.select(jobs.c.status, jobs.c.worker_id).where(jobs.c.id == job_id))
             .mappings()
             .fetchone()
         )
@@ -337,9 +343,7 @@ def execute_job(job_id: str) -> None:
             return
         while not _claim_capacity(engine, job_id, worker_id):
             with engine.begin() as conn:
-                row = conn.execute(
-                    sa.select(jobs.c.status).where(jobs.c.id == job_id)
-                ).fetchone()
+                row = conn.execute(sa.select(jobs.c.status).where(jobs.c.id == job_id)).fetchone()
                 if not row or row[0] != "queued":
                     return
                 conn.execute(

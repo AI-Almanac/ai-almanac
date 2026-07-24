@@ -38,19 +38,25 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tarfile
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 import modal
-
 
 APP_NAME = "almanac-blending"
 BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
 DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
-DEFAULT_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
+DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
+
+# Written by train_blending_model_bundle's final fit; applied by
+# apply_blend_coefs_bundle to score live seasons without retraining.
+FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
 GCP_SECRET_NAME = "gcp-service-account"
+ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
 
 app = modal.App(APP_NAME)
@@ -101,10 +107,8 @@ class _LogTee:
 
     def flush(self):
         for stream in self._streams:
-            try:
+            with suppress(Exception):
                 stream.flush()
-            except Exception:
-                pass
 
 
 def _write_gcp_credentials_from_secret() -> None:
@@ -132,15 +136,19 @@ def _stage_gcs_prefix(client, uri: str, local_dir: Path, label: str) -> int:
     prefix = prefix.rstrip("/") + "/"
     bucket = client.bucket(bucket_name)
     names = [
-        blob.name[len(prefix):]
+        blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] and not blob.name[len(prefix):].endswith("/")
+        if blob.name[len(prefix) :] and not blob.name[len(prefix) :].endswith("/")
     ]
     if names:
         results = transfer_manager.download_many_to_path(
-            bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
+            bucket,
+            names,
+            str(local_dir),
+            blob_name_prefix=prefix,
+            worker_type="thread",
         )
-        for name, result in zip(names, results):
+        for name, result in zip(names, results, strict=True):
             if isinstance(result, Exception):
                 print(f"  {label} FAILED: {name}: {result}")
     return len(names)
@@ -184,7 +192,7 @@ def _upload_output_dir_to_gcs(client, outputs_bucket: str, job_id: str, local_di
         blob_name_prefix=f"{job_id}/output/",
         worker_type="thread",
     )
-    for name, result in zip(files, results):
+    for name, result in zip(files, results, strict=True):
         if isinstance(result, Exception):
             print(f"  upload FAILED: output/{name}: {result}")
         else:
@@ -232,8 +240,9 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
     client = None
     failure: Exception | None = None
 
-    with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-        _LogTee(sys.stderr, log_buffer)
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
     ):
         try:
             _write_gcp_credentials_from_secret()
@@ -271,15 +280,15 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
                 if params.get(k) is not None
             }
+            if config.get("region_id"):
+                prep_kwargs["region_id"] = config["region_id"]
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
             intermediates = build_lat_lon_intermediates_bundle.local(
                 obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-            combined = _read_tar_member_bytes(
-                intermediates["outputs_tar"], "combined_wide.pkl"
-            )
+            combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
             train_kwargs = {}
             if params.get("formula_text"):
@@ -305,9 +314,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             out_local.mkdir()
             (out_local / "combined_wide.pkl").write_bytes(combined)
             if training.get("outputs_tar"):
-                with tarfile.open(
-                    fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz"
-                ) as tar:
+                with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
                     tar.extractall(out_local)
             _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
             print("==> Done.")
@@ -317,9 +324,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
         finally:
             if client is not None:
                 try:
-                    _upload_run_log_to_gcs(
-                        client, outputs_bucket, job_id, log_buffer.getvalue()
-                    )
+                    _upload_run_log_to_gcs(client, outputs_bucket, job_id, log_buffer.getvalue())
                 except Exception:
                     traceback.print_exc()
 
@@ -399,6 +404,130 @@ def _shape(value) -> list[int]:
     return [int(dim) for dim in value.shape]
 
 
+def _adm3_support_paths() -> tuple[Path, Path]:
+    mapping = BLENDING_ROOT / "Monsoon_Data" / "grid_to_district_mapping.csv"
+    dissemination = BLENDING_ROOT / "Monsoon_Data" / "dissemination_cells.csv"
+    missing = [str(path) for path in (mapping, dissemination) if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "ADM3 domain support files are missing from the blending checkout: "
+            + ", ".join(missing)
+        )
+    return mapping, dissemination
+
+
+def _should_use_adm3_domain(region_id: str | None, use_adm3_domain: bool | None) -> bool:
+    if use_adm3_domain is not None:
+        return bool(use_adm3_domain)
+    return (region_id or "").strip().lower() in ADM3_DOMAIN_REGIONS
+
+
+def _normalize_grid_dims(src: Path, dst: Path) -> Path:
+    import xarray as xr
+
+    with xr.open_dataset(src, mask_and_scale=True) as ds:
+        rename = {}
+        for name in ds.dims:
+            lower = str(name).lower()
+            if lower in {"latitude", "lat"} and name != "lat":
+                rename[name] = "lat"
+            elif lower in {"longitude", "lon"} and name != "lon":
+                rename[name] = "lon"
+        for name in ds.coords:
+            lower = str(name).lower()
+            if lower in {"latitude", "lat"} and name != "lat":
+                rename[name] = "lat"
+            elif lower in {"longitude", "lon"} and name != "lon":
+                rename[name] = "lon"
+        normalized = ds.rename(rename) if rename else ds
+        normalized.to_netcdf(dst)
+    return dst
+
+
+def _has_adm3_dimension(path: Path) -> bool:
+    import xarray as xr
+
+    with xr.open_dataset(path, decode_times=False) as ds:
+        names = {str(name).lower() for name in [*ds.dims, *ds.coords]}
+    return bool(names & {"adm3", "adm3_name"})
+
+
+def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
+    import sys
+
+    sys.path.insert(0, str(BLENDING_ROOT))
+    from utils.remap_nc import batch_aggregate_to_adm3_matrix
+
+    mapping_path, _ = _adm3_support_paths()
+    input_dir = _extract_bundle(bundle)
+    remap_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-input-"))
+    out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
+    output_paths: list[Path] = []
+
+    for src in sorted(input_dir.glob("*.nc")):
+        if _has_adm3_dimension(src):
+            target = out_dir / src.name
+            target.write_bytes(src.read_bytes())
+            output_paths.append(target)
+            continue
+
+        normalized = _normalize_grid_dims(src, remap_dir / src.name)
+        batch_aggregate_to_adm3_matrix(
+            str(remap_dir),
+            str(mapping_path),
+            input_file=str(normalized),
+        )
+        remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
+        if not remapped.is_file():
+            raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
+        target = out_dir / src.name
+        shutil.move(str(remapped), target)
+        output_paths.append(target)
+
+    if not output_paths:
+        raise ValueError(f"No NetCDF files found while remapping {label} to ADM3")
+    return _bundle_files(output_paths)
+
+
+def _adm3_centroids():
+    import pandas as pd
+
+    mapping_path, _ = _adm3_support_paths()
+    mapping = pd.read_csv(mapping_path).rename(columns={"latitude": "lat", "longitude": "lon"})
+    required = {"adm3_name", "lat", "lon", "weight"}
+    missing = required - set(mapping.columns)
+    if missing:
+        raise ValueError(f"ADM3 mapping is missing required columns: {', '.join(sorted(missing))}")
+
+    mapping["weight"] = mapping["weight"].astype(float)
+    mapping["weighted_lat"] = mapping["lat"].astype(float) * mapping["weight"]
+    mapping["weighted_lon"] = mapping["lon"].astype(float) * mapping["weight"]
+    grouped = mapping.groupby("adm3_name", as_index=False)[
+        ["weight", "weighted_lat", "weighted_lon"]
+    ].sum()
+    grouped["lat"] = grouped["weighted_lat"] / grouped["weight"]
+    grouped["lon"] = grouped["weighted_lon"] / grouped["weight"]
+    return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
+
+
+def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
+    import pandas as pd
+
+    rows = pd.read_csv(io.BytesIO(csv_bytes))
+    if {"lat", "lon"}.issubset(rows.columns):
+        return csv_bytes
+    if "id" not in rows.columns:
+        raise ValueError("Cannot attach ADM3 centroids: prediction CSV has no id column")
+
+    centroids = _adm3_centroids()
+    out = rows.merge(centroids, on="id", how="left", validate="many_to_one")
+    missing = out[out["lat"].isna() | out["lon"].isna()]["id"].drop_duplicates()
+    if not missing.empty:
+        sample = ", ".join(missing.astype(str).head(10).tolist())
+        raise ValueError(f"ADM3 centroid mapping is missing prediction ids: {sample}")
+    return out.to_csv(index=False).encode("utf-8")
+
+
 def _add_lat_lon_id(df, precision: int):
     if "id" in df.columns:
         return df
@@ -407,7 +536,7 @@ def _add_lat_lon_id(df, precision: int):
     df = df.copy()
     df["id"] = [
         f"{float(lat):.{precision}f}_{float(lon):.{precision}f}"
-        for lat, lon in zip(df["lat"], df["lon"])
+        for lat, lon in zip(df["lat"], df["lon"], strict=True)
     ]
     return df
 
@@ -436,9 +565,7 @@ def _parse_forecast_inputs(value: str) -> dict[str, Path]:
         if not token:
             continue
         if "=" not in token:
-            raise ValueError(
-                "forecast_inputs must be comma-separated model=directory entries"
-            )
+            raise ValueError("forecast_inputs must be comma-separated model=directory entries")
         name, path = token.split("=", 1)
         model_name = name.strip()
         if not model_name:
@@ -572,6 +699,7 @@ def probe_lat_lon_onset_bundle(
     """Create lat_lon ids and run the forecast onset processing step."""
     import sys
     import traceback
+
     import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -633,8 +761,7 @@ def probe_lat_lon_onset_bundle(
                     {
                         "year": years,
                         "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date()
-                            for year in years
+                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
                         ],
                     }
                 )
@@ -655,17 +782,13 @@ def probe_lat_lon_onset_bundle(
                     "mean": float(counts.mean()),
                 }
 
-            prob_cols = [
-                col for col in processed.columns if col.startswith("predicted_prob_day_")
-            ]
+            prob_cols = [col for col in processed.columns if col.startswith("predicted_prob_day_")]
             clim_prob_cols = [
                 col
                 for col in processed.columns
                 if col.startswith("predicted_prob_clim_mok_date_day_")
             ]
-            sd_cols = [
-                col for col in processed.columns if col.startswith("forecast_rain_sd_day_")
-            ]
+            sd_cols = [col for col in processed.columns if col.startswith("forecast_rain_sd_day_")]
             sample_cols = [
                 "id",
                 "time",
@@ -691,14 +814,10 @@ def probe_lat_lon_onset_bundle(
                     "sample_ids": processed["id"].head(5).tolist()
                     if "id" in processed.columns
                     else [],
-                    "nonzero_predicted_prob_cells": int(
-                        (processed[prob_cols] > 0).sum().sum()
-                    )
+                    "nonzero_predicted_prob_cells": int((processed[prob_cols] > 0).sum().sum())
                     if prob_cols
                     else 0,
-                    "nonzero_clim_mok_prob_cells": int(
-                        (processed[clim_prob_cols] > 0).sum().sum()
-                    )
+                    "nonzero_clim_mok_prob_cells": int((processed[clim_prob_cols] > 0).sum().sum())
                     if clim_prob_cols
                     else 0,
                     "non_null_sd_cells": int(processed[sd_cols].notna().sum().sum())
@@ -737,6 +856,7 @@ def probe_lat_lon_ground_truth_bundle(
     """Create lat_lon ids and run the ground-truth onset processing step."""
     import sys
     import traceback
+
     import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -798,8 +918,7 @@ def probe_lat_lon_ground_truth_bundle(
                     {
                         "year": years,
                         "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date()
-                            for year in years
+                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
                         ],
                     }
                 )
@@ -834,15 +953,9 @@ def probe_lat_lon_ground_truth_bundle(
                     "onset_count": int(wide["mr_onset_day"].notna().sum())
                     if "mr_onset_day" in wide.columns
                     else 0,
-                    "onset_day_min": float(onset_days.min())
-                    if len(onset_days)
-                    else None,
-                    "onset_day_max": float(onset_days.max())
-                    if len(onset_days)
-                    else None,
-                    "sample_ids": wide["id"].head(5).tolist()
-                    if "id" in wide.columns
-                    else [],
+                    "onset_day_min": float(onset_days.min()) if len(onset_days) else None,
+                    "onset_day_max": float(onset_days.max()) if len(onset_days) else None,
+                    "sample_ids": wide["id"].head(5).tolist() if "id" in wide.columns else [],
                     "sample_rows": wide[sample_cols]
                     .head(sample_row_count)
                     .to_dict(orient="records")
@@ -886,6 +999,8 @@ def build_lat_lon_intermediates_bundle(
     issue_end_month_day: str = "07-31",
     combine_join: str = "inner",
     trim_forecasts_after_true_onset: bool = True,
+    region_id: str | None = None,
+    use_adm3_domain: bool | None = None,
     return_outputs: bool = True,
 ) -> dict:
     """Build real blending intermediate pickle files from staged NetCDF bundles."""
@@ -902,11 +1017,24 @@ def build_lat_lon_intermediates_bundle(
         process_rainfall_forecast_id,
     )
 
+    adm3_domain = _should_use_adm3_domain(region_id, use_adm3_domain)
+    dissemination_path = None
+    if adm3_domain:
+        _, dissemination_path = _adm3_support_paths()
+        print(
+            f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
+            flush=True,
+        )
+        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs")
+        forecast_bundles = {
+            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}")
+            for model_name, bundle in forecast_bundles.items()
+        }
+
     output_dir = Path(tempfile.mkdtemp(prefix="blend-intermediates-"))
     obs_dir = _extract_bundle(obs_bundle)
     forecast_dirs = {
-        model_name: _extract_bundle(bundle)
-        for model_name, bundle in forecast_bundles.items()
+        model_name: _extract_bundle(bundle) for model_name, bundle in forecast_bundles.items()
     }
 
     onset_options = {
@@ -934,12 +1062,16 @@ def build_lat_lon_intermediates_bundle(
                 "day": "day",
                 "lat": "lat",
                 "lon": "lon",
+                "adm3_name": "adm3_name",
+                "adm3": "adm3_name",
                 "number": "number",
                 "sample": "number",
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {},
+        "filter": {
+            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
+        },
     }
     obs_spec = {
         "input": {"value_col": obs_value_col},
@@ -953,10 +1085,15 @@ def build_lat_lon_intermediates_bundle(
                 "LONGITUDE": "lon",
                 "longitude": "lon",
                 "lon": "lon",
+                "ADM3_NAME": "adm3_name",
+                "adm3_name": "adm3_name",
+                "adm3": "adm3_name",
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {},
+        "filter": {
+            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
+        },
     }
 
     def mok_for(df) -> pd.DataFrame | None:
@@ -966,9 +1103,7 @@ def build_lat_lon_intermediates_bundle(
         return pd.DataFrame(
             {
                 "year": years,
-                "mok_date": [
-                    pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
-                ],
+                "mok_date": [pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years],
             }
         )
 
@@ -977,6 +1112,8 @@ def build_lat_lon_intermediates_bundle(
         "id_precision": int(id_precision),
         "cutoff_month_day": cutoff_month_day,
         "mok_month_day": mok_month_day,
+        "region_id": region_id,
+        "adm3_domain": bool(adm3_domain),
         "climatology": {},
         "combined": {},
         "outputs": {},
@@ -1023,9 +1160,7 @@ def build_lat_lon_intermediates_bundle(
         obs_long_path = output_dir / "ground_truth_long.pkl"
         with obs_long_path.open("wb") as f:
             pickle.dump(obs_long, f)
-        manifest["outputs"][obs_long_path.name] = {
-            "bytes": obs_long_path.stat().st_size
-        }
+        manifest["outputs"][obs_long_path.name] = {"bytes": obs_long_path.stat().st_size}
         manifest["obs"]["long_rows"] = int(len(obs_long))
 
     for model_name, input_dir in forecast_dirs.items():
@@ -1055,33 +1190,17 @@ def build_lat_lon_intermediates_bundle(
         forecast_path = output_dir / f"{model_name}_wide.pkl"
         with forecast_path.open("wb") as f:
             pickle.dump(forecast_wide, f)
-        manifest["outputs"][forecast_path.name] = {
-            "bytes": forecast_path.stat().st_size
-        }
-        prob_cols = [
-            col
-            for col in forecast_wide.columns
-            if col.startswith("predicted_prob_day_")
-        ]
-        sd_cols = [
-            col
-            for col in forecast_wide.columns
-            if col.startswith("forecast_rain_sd_day_")
-        ]
+        manifest["outputs"][forecast_path.name] = {"bytes": forecast_path.stat().st_size}
+        prob_cols = [col for col in forecast_wide.columns if col.startswith("predicted_prob_day_")]
+        sd_cols = [col for col in forecast_wide.columns if col.startswith("forecast_rain_sd_day_")]
         manifest["forecasts"][model_name] = {
             "wide_rows": int(len(forecast_wide)),
-            "years": sorted(
-                int(year) for year in forecast_wide["year"].dropna().unique()
-            ),
+            "years": sorted(int(year) for year in forecast_wide["year"].dropna().unique()),
             "sample_ids": forecast_wide["id"].head(5).tolist(),
-            "nonzero_predicted_prob_cells": int(
-                (forecast_wide[prob_cols] > 0).sum().sum()
-            )
+            "nonzero_predicted_prob_cells": int((forecast_wide[prob_cols] > 0).sum().sum())
             if prob_cols
             else 0,
-            "non_null_sd_cells": int(forecast_wide[sd_cols].notna().sum().sum())
-            if sd_cols
-            else 0,
+            "non_null_sd_cells": int(forecast_wide[sd_cols].notna().sum().sum()) if sd_cols else 0,
             "member_counts_per_id_time": {
                 "min": int(min(member_counts_all)),
                 "max": int(max(member_counts_all)),
@@ -1092,8 +1211,7 @@ def build_lat_lon_intermediates_bundle(
         }
 
     forecast_paths = {
-        model_name: output_dir / f"{model_name}_wide.pkl"
-        for model_name in forecast_dirs
+        model_name: output_dir / f"{model_name}_wide.pkl" for model_name in forecast_dirs
     }
 
     if build_climatology:
@@ -1185,9 +1303,7 @@ def build_lat_lon_intermediates_bundle(
         with clim_unc_path.open("wb") as f:
             pickle.dump(clim_unc, f)
         manifest["outputs"][clim_path.name] = {"bytes": clim_path.stat().st_size}
-        manifest["outputs"][clim_unc_path.name] = {
-            "bytes": clim_unc_path.stat().st_size
-        }
+        manifest["outputs"][clim_unc_path.name] = {"bytes": clim_unc_path.stat().st_size}
         manifest["climatology"] = {
             "train_year_min": train_year_min,
             "train_year_max": train_year_max,
@@ -1220,8 +1336,7 @@ def build_lat_lon_intermediates_bundle(
         )
 
         forecast_years_by_model = {
-            model_name: manifest["forecasts"][model_name]["years"]
-            for model_name in forecast_dirs
+            model_name: manifest["forecasts"][model_name]["years"] for model_name in forecast_dirs
         }
         forecast_parts = {}
         for model_name, forecast_path in forecast_paths.items():
@@ -1294,8 +1409,7 @@ def build_lat_lon_intermediates_bundle(
         combined = daily_wide.merge(truth, on=["id", "year"], how="left")
         if trim_forecasts_after_true_onset:
             mask = combined["true_onset_date"].isna() | (
-                pd.to_datetime(combined["time"])
-                <= pd.to_datetime(combined["true_onset_date"])
+                pd.to_datetime(combined["time"]) <= pd.to_datetime(combined["true_onset_date"])
             )
             combined = combined.loc[mask].copy()
 
@@ -1318,28 +1432,20 @@ def build_lat_lon_intermediates_bundle(
         combined_path = output_dir / "combined_wide.pkl"
         with combined_path.open("wb") as f:
             pickle.dump(combined, f)
-        manifest["outputs"][combined_path.name] = {
-            "bytes": combined_path.stat().st_size
-        }
+        manifest["outputs"][combined_path.name] = {"bytes": combined_path.stat().st_size}
         manifest["combined"] = {
             "rows": int(len(combined)),
             "columns": int(len(combined.columns)),
             "join": combine_join,
-            "trim_forecasts_after_true_onset": bool(
-                trim_forecasts_after_true_onset
-            ),
-            "years": sorted(
-                int(year) for year in combined["year"].dropna().unique()
-            ),
+            "trim_forecasts_after_true_onset": bool(trim_forecasts_after_true_onset),
+            "years": sorted(int(year) for year in combined["year"].dropna().unique()),
             "sample_ids": combined["id"].head(5).tolist(),
             "first_columns": list(combined.columns[:60]),
         }
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
-    manifest["outputs"][manifest_path.name] = {
-        "bytes": manifest_path.stat().st_size
-    }
+    manifest["outputs"][manifest_path.name] = {"bytes": manifest_path.stat().st_size}
 
     outputs_tar = None
     if return_outputs:
@@ -1349,46 +1455,31 @@ def build_lat_lon_intermediates_bundle(
     return {"manifest": manifest, "outputs_tar": outputs_tar}
 
 
-@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
-def train_blending_model_bundle(
+def _prepare_blend_workspace(
     combined_wide_pkl: bytes,
     model_names: list[str],
-    training_years: list[int],
-    cv_holdout_years: list[int],
-    true_holdout_years: list[int] | None = None,
-    cutoff_mode: str = "clim_mok_date",
-    day_max: int = 28,
-    days_per_week: int = 7,
-    n_weeks: int = 4,
-    rain_window: int = 3,
-    formula_text: str | None = None,
-    include_raw_forecasts: bool = True,
-    include_calibrated_forecasts: bool = True,
-    cores: int | None = None,
-    return_outputs: bool = True,
-) -> dict:
-    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    cutoff_mode: str,
+    day_max: int,
+    days_per_week: int,
+    n_weeks: int,
+    rain_window: int,
+):
+    """Materialize the workspace both training and coef-apply need: the
+    combined wide pickle on disk, the weekly connect output (the pipeline
+    input every blending script reads), and the dissemination cells CSV.
+    Returns (work_dir, combined, weekly, pipeline_input_path, dissemination_path)."""
     import pickle
-    import subprocess
     import sys
-    import uuid
 
     import pandas as pd
-    import yaml
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.blending_process.connect_utils import make_cv_rds_from_daylevel
-    from python.blending_process.blend_evaluation_utils import make_cutoff_tag
 
     if not model_names:
         raise ValueError("model_names must not be empty")
-    if not training_years:
-        raise ValueError("training_years must not be empty")
-    if not cv_holdout_years:
-        raise ValueError("cv_holdout_years must not be empty")
 
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
-    results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
     combined_path = work_dir / "combined_wide.pkl"
     pipeline_input_path = work_dir / "cv_data_clim_mok_date_new_pipeline.pkl"
     combined_path.write_bytes(combined_wide_pkl)
@@ -1399,12 +1490,13 @@ def train_blending_model_bundle(
         combined = pd.DataFrame(combined)
 
     missing_model_cols = [
-        f"{name}_onset_thresh" for name in model_names if f"{name}_onset_thresh" not in combined.columns
+        f"{name}_onset_thresh"
+        for name in model_names
+        if f"{name}_onset_thresh" not in combined.columns
     ]
     if missing_model_cols:
         raise ValueError(
-            "Combined wide file is missing model constant columns: "
-            + ", ".join(missing_model_cols)
+            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
         )
 
     connect_spec = {
@@ -1435,13 +1527,27 @@ def train_blending_model_bundle(
         dissemination_path,
         index=False,
     )
+    return work_dir, combined, weekly, pipeline_input_path, dissemination_path
 
-    if formula_text is None:
-        formula_terms = ["prob_clim_mr_qx"] + [
-            f"diff_{name}_qx" for name in model_names
-        ]
-        formula_text = "outcome ~ " + " * ".join(formula_terms)
 
+def _default_formula_text(model_names: list[str]) -> str:
+    formula_terms = ["prob_clim_mr_qx"] + [f"diff_{name}_qx" for name in model_names]
+    return "outcome ~ " + " * ".join(formula_terms)
+
+
+def _build_blend_spec(
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None,
+    cutoff_mode: str,
+    formula_text: str,
+    include_raw_forecasts: bool,
+    include_calibrated_forecasts: bool,
+    work_dir: Path,
+    results_dir: Path,
+    dissemination_path: Path,
+) -> dict:
     forecast_extras = [
         {
             "name": name,
@@ -1453,24 +1559,20 @@ def train_blending_model_bundle(
         }
         for name in model_names
     ]
-    blend_spec = {
+    return {
         "run": {
             "cutoff_mode": cutoff_mode,
             "MR": True,
             "training_years": [int(year) for year in training_years],
             "cv_holdout_years": [int(year) for year in cv_holdout_years],
-            "true_holdout_years": [
-                int(year) for year in (true_holdout_years or [])
-            ],
+            "true_holdout_years": [int(year) for year in (true_holdout_years or [])],
             "pipeline_input_dir": str(work_dir),
             "pipeline_output_dir": str(results_dir),
         },
         "cv": {"methods": ["global"]},
         "cell": {"dissemination": str(dissemination_path)},
         "models": {
-            "formulas": {
-                "blended_model": {"enabled": True, "text": formula_text}
-            },
+            "formulas": {"blended_model": {"enabled": True, "text": formula_text}},
             "window_variants": {"enabled": False},
         },
         "mme": {"enabled": False, "variants": ["clim_mok_date"], "blend_models": []},
@@ -1493,6 +1595,68 @@ def train_blending_model_bundle(
             "forecast_variants": {"base": "", "clim_mok_date": "_clim_mok_date"},
         },
     }
+
+
+@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
+def train_blending_model_bundle(
+    combined_wide_pkl: bytes,
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None = None,
+    cutoff_mode: str = "clim_mok_date",
+    day_max: int = 28,
+    days_per_week: int = 7,
+    n_weeks: int = 4,
+    rain_window: int = 3,
+    formula_text: str | None = None,
+    include_raw_forecasts: bool = True,
+    include_calibrated_forecasts: bool = True,
+    cores: int | None = None,
+    return_outputs: bool = True,
+) -> dict:
+    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    import pickle
+    import subprocess
+    import sys
+    import uuid
+
+    import pandas as pd
+    import yaml
+
+    sys.path.insert(0, str(BLENDING_ROOT))
+    from python.blending_process.blend_evaluation_utils import make_cutoff_tag
+
+    if not training_years:
+        raise ValueError("training_years must not be empty")
+    if not cv_holdout_years:
+        raise ValueError("cv_holdout_years must not be empty")
+
+    work_dir, combined, weekly, pipeline_input_path, dissemination_path = _prepare_blend_workspace(
+        combined_wide_pkl,
+        model_names,
+        cutoff_mode,
+        day_max,
+        days_per_week,
+        n_weeks,
+        rain_window,
+    )
+    results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
+
+    formula_text = formula_text or _default_formula_text(model_names)
+    blend_spec = _build_blend_spec(
+        model_names=model_names,
+        training_years=training_years,
+        cv_holdout_years=cv_holdout_years,
+        true_holdout_years=true_holdout_years,
+        cutoff_mode=cutoff_mode,
+        formula_text=formula_text,
+        include_raw_forecasts=include_raw_forecasts,
+        include_calibrated_forecasts=include_calibrated_forecasts,
+        work_dir=work_dir,
+        results_dir=results_dir,
+        dissemination_path=dissemination_path,
+    )
 
     spec_id = f"almanac_training_{uuid.uuid4().hex}"
     spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
@@ -1517,11 +1681,33 @@ def train_blending_model_bundle(
             text=True,
             check=False,
         )
+        # Fit the production model on all training years (no holdout) so the
+        # coef bundle (FINAL_COEF_FILENAME) ships with the training outputs —
+        # live forecasts apply it directly instead of retraining (see
+        # apply_blend_coefs_bundle / score_live_forecast).
+        final_fit = None
+        if completed.returncode == 0:
+            final_fit = subprocess.run(
+                [
+                    sys.executable,
+                    "predict/3_fit_final_model.py",
+                    "--spec_id",
+                    spec_id,
+                    "--model",
+                    "blended_model",
+                    "--dissem_file",
+                    str(work_dir / "dissemination_cells.csv"),
+                    "--out_dir",
+                    str(results_dir),
+                ],
+                cwd=str(BLENDING_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
     finally:
-        try:
+        with suppress(FileNotFoundError):
             spec_path.unlink()
-        except FileNotFoundError:
-            pass
 
     output_tag = f"{make_cutoff_tag(cutoff_mode)}"
     holdouts = sorted(set(int(year) for year in cv_holdout_years + (true_holdout_years or [])))
@@ -1535,8 +1721,9 @@ def train_blending_model_bundle(
         summary_rows = pd.read_csv(summary_csv).head(20).to_dict(orient="records")
 
     manifest = {
-        "ok": completed.returncode == 0,
+        "ok": completed.returncode == 0 and (final_fit is None or final_fit.returncode == 0),
         "returncode": int(completed.returncode),
+        "final_fit_returncode": int(final_fit.returncode) if final_fit is not None else None,
         "model_names": model_names,
         "training_years": sorted(int(year) for year in training_years),
         "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
@@ -1561,8 +1748,12 @@ def train_blending_model_bundle(
         },
         "result_files": result_files,
         "summary_rows": summary_rows,
-        "stdout_tail": completed.stdout.splitlines()[-80:],
-        "stderr_tail": completed.stderr.splitlines()[-80:],
+        "stdout_tail": (
+            completed.stdout.splitlines() + (final_fit.stdout.splitlines() if final_fit else [])
+        )[-80:],
+        "stderr_tail": (
+            completed.stderr.splitlines() + (final_fit.stderr.splitlines() if final_fit else [])
+        )[-80:],
     }
 
     outputs_tar = None
@@ -1577,12 +1768,362 @@ def train_blending_model_bundle(
         for path in sorted(results_dir.iterdir()):
             if path.is_file():
                 (output_dir / path.name).write_bytes(path.read_bytes())
-        (output_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, default=str)
-        )
+        (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
     return {"manifest": manifest, "outputs_tar": outputs_tar}
+
+
+@app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
+def apply_blend_coefs_bundle(
+    combined_wide_pkl: bytes,
+    coef_pkl: bytes,
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    live_year: int,
+    cutoff_mode: str = "clim_mok_date",
+    day_max: int = 28,
+    days_per_week: int = 7,
+    n_weeks: int = 4,
+    rain_window: int = 3,
+    formula_text: str | None = None,
+) -> bytes:
+    """Score one live season by applying a trained blend's saved coef bundle
+    (the FINAL_COEF_FILENAME pickle written by train_blending_model_bundle's
+    final fit) via predict/apply_blend_model.py — the fast path that skips CV
+    retraining entirely. Returns the live season's scored rows as CSV bytes."""
+    import subprocess
+    import sys
+    import uuid
+
+    import yaml
+
+    if not training_years:
+        raise ValueError("training_years must not be empty")
+    if not cv_holdout_years:
+        raise ValueError("cv_holdout_years must not be empty")
+
+    work_dir, _, weekly, _, dissemination_path = _prepare_blend_workspace(
+        combined_wide_pkl,
+        model_names,
+        cutoff_mode,
+        day_max,
+        days_per_week,
+        n_weeks,
+        rain_window,
+    )
+    results_dir = Path(tempfile.mkdtemp(prefix="blend-apply-results-"))
+
+    # Same feature-NaN filter 1_blend_evaluation.py applies before predicting,
+    # so this path scores the same rows the retrain path would have.
+    feature_cols = [
+        column
+        for column in weekly.columns
+        if column.startswith(("prob_clim_mr", "diff_", "min_", "max_"))
+    ]
+    live_rows = weekly[weekly["year"] == int(live_year)].dropna(subset=feature_cols)
+    if live_rows.empty:
+        raise RuntimeError(f"No scoreable rows for live season {live_year}")
+    live_input_path = work_dir / f"live_input_{int(live_year)}.pkl"
+    live_rows.to_pickle(live_input_path)
+
+    coef_dir = work_dir / "coefs"
+    coef_dir.mkdir()
+    (coef_dir / FINAL_COEF_FILENAME).write_bytes(coef_pkl)
+
+    blend_spec = _build_blend_spec(
+        model_names=model_names,
+        training_years=training_years,
+        cv_holdout_years=cv_holdout_years,
+        true_holdout_years=[int(live_year)],
+        cutoff_mode=cutoff_mode,
+        formula_text=formula_text or _default_formula_text(model_names),
+        include_raw_forecasts=True,
+        include_calibrated_forecasts=True,
+        work_dir=work_dir,
+        results_dir=results_dir,
+        dissemination_path=dissemination_path,
+    )
+    spec_id = f"almanac_apply_{uuid.uuid4().hex}"
+    spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
+    spec_path.write_text(yaml.dump(blend_spec, default_flow_style=False))
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "predict/apply_blend_model.py",
+                "--spec_id",
+                spec_id,
+                "--model",
+                "blended_model",
+                "--year",
+                str(int(live_year)),
+                "--coef_tag",
+                "final",
+                "--input_path",
+                str(live_input_path),
+                "--coef_dir",
+                str(coef_dir),
+                "--out_dir",
+                str(results_dir),
+                "--dissem_file",
+                str(dissemination_path),
+            ],
+            cwd=str(BLENDING_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        with suppress(FileNotFoundError):
+            spec_path.unlink()
+
+    preds_csv = results_dir / f"blended_model_global_year{int(live_year)}_preds.csv"
+    if completed.returncode != 0 or not preds_csv.exists():
+        tail = "\n".join(completed.stderr.splitlines()[-40:])
+        raise RuntimeError(
+            f"apply_blend_model.py failed (returncode {completed.returncode}):\n{tail}"
+        )
+    return preds_csv.read_bytes()
+
+
+def _merge_forecast_bundle(historical_bundle: bytes, live_bundle: bytes) -> bytes:
+    """Combine a model's historical `{year}.nc` bundle with a freshly-generated
+    live-season bundle into one bundle, so build_lat_lon_intermediates_bundle
+    processes the live season's forecast file alongside historical years
+    exactly like any other year — no special-casing in that function needed.
+    """
+    merged_dir = Path(tempfile.mkdtemp(prefix="blend-live-merge-"))
+    for bundle in (historical_bundle, live_bundle):
+        source_dir = _extract_bundle(bundle)
+        for path in sorted(source_dir.glob("*.nc")):
+            target = merged_dir / path.name
+            if target.exists():
+                raise ValueError(
+                    f"Live forecast year collides with an existing historical file: {path.name}"
+                )
+            target.write_bytes(path.read_bytes())
+    return _bundle_files(sorted(merged_dir.glob("*.nc")))
+
+
+def _find_result_file(result_files: list[str], prefix: str) -> str:
+    matches = [name for name in result_files if name.startswith(prefix)]
+    if not matches:
+        raise FileNotFoundError(
+            f"No training result file starting with {prefix!r}; found: {result_files}"
+        )
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous training result files for prefix {prefix!r}: {matches}")
+    return matches[0]
+
+
+@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600)
+def score_live_forecast(
+    obs_bundle: bytes,
+    forecast_bundles: dict[str, bytes],
+    model_names: list[str],
+    blend_params: dict,
+    live_year: int,
+    coef_pkl: bytes | None = None,
+) -> bytes:
+    """Score a live/in-progress season against an already-trained blend, given
+    already-staged bundles (no GCS or local-file knowledge here — that's the
+    caller's job, mirroring how run_blend stages before calling
+    build_lat_lon_intermediates_bundle/train_blending_model_bundle).
+
+    When coef_pkl (the blend's saved FINAL_COEF_FILENAME bundle) is provided,
+    the trained weights are applied directly via apply_blend_coefs_bundle and
+    no retraining happens. Without it, this falls back to the original
+    retrain-based scoring, which reuses build_lat_lon_intermediates_bundle and
+    train_blending_model_bundle
+    completely unchanged: the live season is just one more forecast year with
+    no matching obs year, added to the blend's own true_holdout_years so it
+    is excluded from every training fold but still gets its own scoring pass
+    (see plan §"Key finding" — compute_cv_global already predicts holdout
+    years using only their feature columns, never their outcome).
+
+    forecast_bundles: one tar.gz bundle per blend model name, each already
+    merged (historical `{year}.nc` files + the live season's file) by the
+    caller via _merge_forecast_bundle.
+
+    Returns the live season's scored rows as CSV bytes
+    (blended_forecast_probabilities.csv content).
+    """
+    import pickle
+    import time
+
+    print("==> Building blending intermediates (including live season)")
+    t0 = time.perf_counter()
+    prep_kwargs = {
+        k: blend_params[k]
+        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+        if blend_params.get(k) is not None
+    }
+    if blend_params.get("region_id"):
+        prep_kwargs["region_id"] = blend_params["region_id"]
+    intermediates = build_lat_lon_intermediates_bundle.local(
+        obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
+    )
+    print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
+    combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+
+    if coef_pkl is not None:
+        print(f"==> Applying trained blend coefficients to live season {live_year}")
+        t0 = time.perf_counter()
+        csv_bytes = apply_blend_coefs_bundle.local(
+            combined,
+            coef_pkl,
+            model_names,
+            training_years=_parse_years(blend_params.get("training_years") or "") or [],
+            cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
+            live_year=live_year,
+            formula_text=blend_params.get("formula_text") or None,
+        )
+        if _should_use_adm3_domain(blend_params.get("region_id"), None):
+            csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
+        print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
+        return csv_bytes
+
+    train_kwargs = {}
+    if blend_params.get("formula_text"):
+        train_kwargs["formula_text"] = blend_params["formula_text"]
+    true_holdout_years = _parse_years(blend_params.get("true_holdout_years") or "") or []
+    if live_year not in true_holdout_years:
+        true_holdout_years = sorted({*true_holdout_years, live_year})
+    print(f"==> Scoring live season {live_year} against trained blend")
+    t0 = time.perf_counter()
+    training = train_blending_model_bundle.local(
+        combined,
+        model_names=model_names,
+        training_years=_parse_years(blend_params.get("training_years") or "") or [],
+        cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
+        true_holdout_years=true_holdout_years,
+        return_outputs=True,
+        **train_kwargs,
+    )
+    print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
+    if not training["manifest"].get("ok"):
+        raise RuntimeError("Blend scoring pipeline failed; see manifest stderr_tail in run.log")
+
+    result_files = training["manifest"]["result_files"]
+    cv_preds_name = _find_result_file(result_files, "cv_preds_blended_model_global")
+    cv_preds_bytes = _read_tar_member_bytes(training["outputs_tar"], cv_preds_name)
+    cv_preds = pickle.loads(cv_preds_bytes)
+    live_rows = cv_preds[cv_preds["year"] == live_year].copy()
+    if live_rows.empty:
+        raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
+    csv_bytes = live_rows.to_csv(index=False).encode("utf-8")
+    if _should_use_adm3_domain(blend_params.get("region_id"), None):
+        csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
+    return csv_bytes
+
+
+@app.function(
+    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret]
+)
+def score_live_forecast_bundle(
+    job_id: str,
+    blend_config: dict,
+    live_forecast_bundles: dict[str, bytes],
+    live_year: int,
+    outputs_bucket: str,
+) -> None:
+    """GCS-staging wrapper around score_live_forecast, mirroring run_blend's
+    relationship to build_lat_lon_intermediates_bundle/train_blending_model_bundle:
+    this function only stages inputs from/publishes outputs to GCS; all the
+    actual scoring logic lives in score_live_forecast so it's reusable from a
+    local (non-GCS) execution path too.
+    """
+    import sys
+    import traceback
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from google.cloud import storage as gcs
+
+    log_buffer = io.StringIO()
+    client = None
+    failure: Exception | None = None
+
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
+    ):
+        try:
+            _write_gcp_credentials_from_secret()
+            client = gcs.Client()
+
+            params = blend_config.get("blend_params") or {}
+            params = {**params, "region_id": blend_config.get("region_id")}
+            model_names = blend_config["model_names"]
+            model_files = blend_config["model_files"]
+            missing = [name for name in model_names if name not in live_forecast_bundles]
+            if missing:
+                raise ValueError(f"No live forecast bundle provided for models: {missing}")
+
+            stage_root = Path(tempfile.mkdtemp(prefix="blend-live-"))
+            obs_local = stage_root / "obs"
+            obs_local.mkdir()
+            print(f"==> Staging obs from {blend_config['obs_dir']}")
+            _stage_gcs_prefix(client, blend_config["obs_dir"], obs_local, "obs")
+            obs_bundle = _bundle_files(sorted(obs_local.glob("*.nc")))
+
+            forecast_bundles: dict[str, bytes] = {}
+            for name in model_names:
+                model_local = stage_root / f"fc_{name}"
+                model_local.mkdir()
+                uris = model_files[name]
+                print(f"==> Staging historical forecast {name}: {len(uris)} files")
+                _stage_uris(client, uris, model_local, f"forecast {name}")
+                historical_bundle = _bundle_files(sorted(model_local.glob("*.nc")))
+                forecast_bundles[name] = _merge_forecast_bundle(
+                    historical_bundle, live_forecast_bundles[name]
+                )
+
+            coef_pkl = None
+            blend_output_uri = blend_config.get("blend_output_uri")
+            if blend_output_uri:
+                bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
+                coef_blob = client.bucket(bucket_name).blob(
+                    f"{prefix.rstrip('/')}/{FINAL_COEF_FILENAME}"
+                )
+                if coef_blob.exists():
+                    print("==> Staging trained blend coefficients (skipping CV retrain)")
+                    coef_pkl = coef_blob.download_as_bytes()
+                else:
+                    print(
+                        "==> Blend outputs have no final coef bundle; "
+                        "falling back to retrain-based scoring"
+                    )
+
+            csv_bytes = score_live_forecast.local(
+                obs_bundle,
+                forecast_bundles,
+                model_names,
+                params,
+                live_year,
+                coef_pkl=coef_pkl,
+            )
+
+            out_local = stage_root / "output"
+            out_local.mkdir()
+            (out_local / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
+            _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
+            print("==> Done.")
+        except Exception as exc:  # noqa: BLE001 — surfaced via run.log + raise
+            failure = exc
+            traceback.print_exc()
+        finally:
+            if client is not None:
+                try:
+                    _upload_run_log_to_gcs(client, outputs_bucket, job_id, log_buffer.getvalue())
+                except Exception:
+                    traceback.print_exc()
+
+    if failure is not None:
+        raise RuntimeError(
+            f"Live forecast scoring for job {job_id} failed; see run.log for details: {failure}"
+        ) from failure
 
 
 @app.local_entrypoint()
@@ -1690,9 +2231,7 @@ def probe_lat_lon_ground_truth_processing(
 @app.local_entrypoint()
 def build_lat_lon_intermediates(
     obs_dir: str = str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "obs"),
-    forecast_inputs: str = (
-        "aifs=" + str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "aifs")
-    ),
+    forecast_inputs: str = ("aifs=" + str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "aifs")),
     years: str = "2024",
     obs_years: str = "",
     forecast_years: str = "",

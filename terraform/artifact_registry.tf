@@ -1,10 +1,8 @@
 # ---------------------------------------------------------------------------
-# Artifact Registry — remote repository proxying GHCR
-# Cloud Run requires images from GCR, AR, or Docker Hub.
-# This remote repo transparently proxies ghcr.io so CI stays unchanged.
+# Artifact Registry — Docker repo for almanac service images
 #
 # Image path convention:
-#   us-central1-docker.pkg.dev/PROJECT/ghcr-proxy/hholb/IMAGE:TAG
+#   us-central1-docker.pkg.dev/PROJECT/almanac/IMAGE:TAG
 # ---------------------------------------------------------------------------
 
 resource "google_artifact_registry_repository" "images" {
@@ -22,19 +20,19 @@ resource "google_artifact_registry_repository_iam_member" "cloud_run_pull" {
   member     = "serviceAccount:service-${data.google_project.project.number}@serverless-robot-prod.iam.gserviceaccount.com"
 }
 
-# Backend SA needs AR read to validate images when calling create_job
+# Backend SAs need AR read to validate images when calling create_job
 resource "google_artifact_registry_repository_iam_member" "backend_pull" {
   location   = var.region
   repository = google_artifact_registry_repository.images.name
   role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.backend.email}"
+  member     = "serviceAccount:${module.env["prod"].backend_sa_email}"
 }
 
 resource "google_artifact_registry_repository_iam_member" "backend_staging_pull" {
   location   = var.region
   repository = google_artifact_registry_repository.images.name
   role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.backend_staging.email}"
+  member     = "serviceAccount:${module.env["staging"].backend_sa_email}"
 }
 
 # Cloud Run Jobs pulls images using the job's service account (batch_worker)
@@ -64,6 +62,14 @@ resource "google_service_account_iam_member" "ci_token_creator" {
   member             = "serviceAccount:${google_service_account.ci.email}"
 }
 
+# Post-deploy verification (scripts/post_deploy_check.sh) reads the new
+# revision's error logs from the deploy workflows.
+resource "google_project_iam_member" "ci_logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.ci.email}"
+}
+
 output "ci_service_account_email" {
   value = google_service_account.ci.email
 }
@@ -72,7 +78,7 @@ data "google_project" "project" {
   project_id = var.project_id
 }
 
-# Convenience locals — build AR proxy paths from ghcr_owner.
+# Convenience locals — default image paths in this project's AR repo.
 # cloud_run.tf and batch.tf reference these instead of raw var.*_image.
 locals {
   ar_prefix = "${var.region}-docker.pkg.dev/${var.project_id}/almanac"

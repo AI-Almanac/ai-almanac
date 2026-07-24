@@ -1,0 +1,32 @@
+%% Editable source for architecture-diagram.svg (the deck asset).
+%% Current production deployment on Google Cloud.
+flowchart LR
+  browser[Browser · runs SPA]
+  lb[Load balancer · HTTPS · host routing · GCP]
+  globus[Globus Auth · OIDC · bearer-token validation]
+
+  subgraph run[Cloud Run · single image]
+    fe[Frontend · Svelte SPA · served same-origin]
+    be[Backend API · FastAPI · job supervisor · Globus token auth]
+  end
+
+  pg[(PostgreSQL · Cloud SQL · jobs, catalog, audit)]
+
+  subgraph gcs[Object Storage · Cloud Storage]
+    data[(Data bucket · obs + model forecasts, read)]
+    uploads[(Uploads bucket · user datasets)]
+    outputs[(Outputs bucket · metrics, artifacts, figures, logs)]
+  end
+
+  modal[Modal jobs · Benchmarks CPU / Model blends CPU / Forecasts GPU]
+
+  browser -->|HTTPS| lb
+  lb --> fe
+  be -. token validation .- globus
+  be -->|job state| pg
+  be -->|read / write · signed URLs| data
+  be --> uploads
+  be --> outputs
+  be -. spawn / poll .-> modal
+  modal -->|read / write| data
+  modal --> outputs

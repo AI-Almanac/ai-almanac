@@ -28,18 +28,3 @@
   lat_max: 35.51
   lon_min: 68.11
   lon_max: 91.4
-
-- id: bangladesh
-  display_name: "Bangladesh"
-  boundary_iso: "BGD"
-  description: "Pre-monsoon and monsoon season onset over Bangladesh."
-  lat_min: 20.0
-  lat_max: 27.0
-  lon_min: 88.0
-  lon_max: 93.0
-  land_only: false
-  shp_only: false
-
-- id: custom
-  display_name: "Custom coverage"
-  description: "Use geographic bounds inferred from your observation and forecast NetCDF files."

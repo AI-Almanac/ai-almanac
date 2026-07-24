@@ -1,8 +1,10 @@
 import json
 import logging
+import ssl
 from typing import Any
 
 import aiohttp
+import certifi
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -13,9 +15,16 @@ from ai_almanac.server.services.regions import list_region_options
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
 
+# Verify the geoBoundaries TLS cert against certifi's CA bundle rather than the
+# ambient system trust store, which some environments (e.g. a bare pixi Python)
+# leave unpopulated — ssl.get_default_verify_paths() returns nothing there and
+# every HTTPS fetch fails with CERTIFICATE_VERIFY_FAILED.
+_BOUNDARY_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
     "adm2": "ADM2",
+    "adm3": "ADM3",
 }
 
 _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
@@ -60,9 +69,7 @@ async def create_region(body: RegionWrite, _admin: AdminUser) -> dict:
 
 
 @router.put("/{region_id}", dependencies=[Depends(require_data_management)])
-async def update_region(
-    region_id: str, body: RegionWrite, _admin: AdminUser
-) -> dict:
+async def update_region(region_id: str, body: RegionWrite, _admin: AdminUser) -> dict:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
     if not existing:
@@ -81,9 +88,7 @@ async def update_region(
     }
 
 
-@router.delete(
-    "/{region_id}", status_code=204, dependencies=[Depends(require_data_management)]
-)
+@router.delete("/{region_id}", status_code=204, dependencies=[Depends(require_data_management)])
 async def delete_region(region_id: str, _admin: AdminUser) -> None:
     await region_catalog.seed_packaged_regions()
     existing = await region_catalog.get_region(region_id)
@@ -102,9 +107,7 @@ async def delete_region(region_id: str, _admin: AdminUser) -> None:
 
 
 @router.get("/{region}/boundaries/{level}")
-async def get_boundary(
-    region: str, level: str, _user: CurrentUser
-) -> dict[str, Any]:
+async def get_boundary(region: str, level: str, _user: CurrentUser) -> dict[str, Any]:
     """
     Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
 
@@ -113,16 +116,12 @@ async def get_boundary(
     """
     region_def = await region_catalog.get_region(region.strip())
     if not region_def or not region_def.get("boundary_iso"):
-        raise HTTPException(
-            status_code=404, detail=f"No boundary mapping for region {region!r}"
-        )
+        raise HTTPException(status_code=404, detail=f"No boundary mapping for region {region!r}")
     iso = region_def["boundary_iso"]
 
     boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
     if not boundary_type:
-        raise HTTPException(
-            status_code=404, detail=f"Unsupported boundary level {level!r}"
-        )
+        raise HTTPException(status_code=404, detail=f"Unsupported boundary level {level!r}")
 
     cache_key = (iso, boundary_type)
     cached = _BOUNDARY_CACHE.get(cache_key)
@@ -130,11 +129,10 @@ async def get_boundary(
         return cached
 
     timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    connector = aiohttp.TCPConnector(ssl=_BOUNDARY_SSL_CONTEXT)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         metadata = await _fetch_json(session, _metadata_url(iso, boundary_type))
-        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get(
-            "gjDownloadURL"
-        )
+        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
         if not geojson_url:
             raise HTTPException(
                 status_code=502,

@@ -31,11 +31,7 @@ def can_modify(job: dict, user: JobUser) -> bool:
 
 async def fetch_job(job_id: str) -> dict | None:
     async with get_db() as conn:
-        row = (
-            (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id)))
-            .mappings()
-            .fetchone()
-        )
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == job_id))).mappings().fetchone()
     return dict(row) if row else None
 
 
@@ -43,9 +39,7 @@ async def readable_job_ids(job_ids: list[str], user: JobUser) -> set[str]:
     """The subset of ``job_ids`` the user is allowed to read."""
     if not job_ids:
         return set()
-    query = sa.select(jobs.c.id, jobs.c.user_id, jobs.c.visibility).where(
-        jobs.c.id.in_(job_ids)
-    )
+    query = sa.select(jobs.c.id, jobs.c.user_id, jobs.c.visibility).where(jobs.c.id.in_(job_ids))
     async with get_db() as conn:
         rows = (await conn.execute(query)).mappings().fetchall()
     return {row["id"] for row in rows if can_read(dict(row), user)}

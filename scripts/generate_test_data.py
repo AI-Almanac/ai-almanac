@@ -68,8 +68,8 @@ def main() -> None:
     total_kb = sum(f.stat().st_size for f in repo_root.glob("testdata/**/*.nc")) // 1024
     print(f"\nDone. Total size: {total_kb} KB")
     print("\nAdd to backend/.env:")
-    print(f'  TEST_ETHIOPIA_OBS_DIR={obs_dir}')
-    print(f'  TEST_FUXI_TEST_MODEL_DIR={fuxi_dir}')
+    print(f"  TEST_ETHIOPIA_OBS_DIR={obs_dir}")
+    print(f"  TEST_FUXI_TEST_MODEL_DIR={fuxi_dir}")
 
 
 if __name__ == "__main__":

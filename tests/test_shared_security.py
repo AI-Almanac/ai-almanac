@@ -11,57 +11,6 @@ from ai_almanac.settings import settings
 
 
 @pytest.mark.asyncio
-async def test_upload_grant_is_single_use_and_publishes_private_source(
-    client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "allowed_upload_extensions", ".nc")
-    created = await client.post(
-        "/uploads",
-        headers=auth_headers,
-        json={"name": "Observations", "filename": "observations.nc"},
-    )
-    assert created.status_code == 201
-    session = created.json()
-
-    uploaded = await client.put(session["upload_url"], content=b"netcdf-placeholder")
-    assert uploaded.status_code == 200
-    replay = await client.put(session["upload_url"], content=b"again")
-    assert replay.status_code == 409
-
-    confirmed = await client.post(
-        f"/uploads/{session['id']}/confirm", headers=auth_headers
-    )
-    assert confirmed.status_code == 200
-    async with get_db() as conn:
-        source = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM data_sources WHERE id = :id"),
-                    {"id": session["data_source_id"]},
-                )
-            )
-            .mappings()
-            .one()
-        )
-    assert source["origin"] == "upload"
-    assert source["visibility"] == "private"
-
-
-@pytest.mark.asyncio
-async def test_upload_rejects_path_filename(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
-) -> None:
-    response = await client.post(
-        "/uploads",
-        headers=auth_headers,
-        json={"name": "Traversal", "filename": "../escape.nc"},
-    )
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_llm_profile_key_is_encrypted_and_not_returned(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
@@ -99,10 +48,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT key_nonce, key_ciphertext FROM user_llm_profiles "
-                        "WHERE id = :id"
-                    ),
+                    text("SELECT key_nonce, key_ciphertext FROM user_llm_profiles WHERE id = :id"),
                     {"id": profile.json()["id"]},
                 )
             )

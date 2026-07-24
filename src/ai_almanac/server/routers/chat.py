@@ -83,8 +83,7 @@ async def _require_chat_available(user_id: str) -> None:
         if not await chat_available_for_user(user_id):
             raise HTTPException(
                 status_code=400,
-                detail="No LLM is available. Enable a shared model or add your own "
-                "in AI settings.",
+                detail="No LLM is available. Enable a shared model or add your own in AI settings.",
             )
         return
     if not llm_is_configured():
@@ -198,6 +197,7 @@ class BlendConfigOut(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -231,9 +231,7 @@ def _blend_submit_out(payload: dict) -> BlendSubmitOut:
     return BlendSubmitOut(
         run_id=payload["run_id"],
         jobs=payload["jobs"],
-        blend_config=BlendRunSpec.model_validate(
-            payload.get("blend_config") or payload["config"]
-        ),
+        blend_config=BlendRunSpec.model_validate(payload.get("blend_config") or payload["config"]),
         blend_validation=BlendValidation.model_validate(
             payload.get("blend_validation") or payload["validation"]
         ),
@@ -283,9 +281,7 @@ def _session_detail(row, user_id: str) -> SessionDetail:
 # ---------------------------------------------------------------------------
 
 
-@router.post(
-    "/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED
-)
+@router.post("/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
 async def create_session(body: SessionCreate, user: CurrentUser):
     await _require_chat_available(user.id)
 
@@ -358,9 +354,7 @@ async def get_session(session_id: str, user: CurrentUser):
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"
-                    ),
+                    text("SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"),
                     {"id": session_id, "uid": user.id},
                 )
             )
@@ -408,9 +402,7 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
     return _session_out(row)
 
 
-@router.post(
-    "/sessions/{session_id}/benchmark/submit", response_model=BenchmarkSubmitOut
-)
+@router.post("/sessions/{session_id}/benchmark/submit", response_model=BenchmarkSubmitOut)
 async def submit_session_benchmark(
     session_id: str, user: CurrentUser, body: BenchmarkSubmitIn | None = None
 ):
@@ -422,9 +414,7 @@ async def submit_session_benchmark(
             True,
         )
         if payload is None:
-            raise HTTPException(
-                status_code=400, detail="Benchmark approval did not submit a run"
-            )
+            raise HTTPException(status_code=400, detail="Benchmark approval did not submit a run")
 
         await save_provider_state(session_id, user.id, final_provider_state)
         return _benchmark_submit_out(payload)
@@ -434,17 +424,13 @@ async def submit_session_benchmark(
     payload = await submit_benchmark_for_session(user.id, scope, session_id)
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
-    if not isinstance(payload.get("run_id"), str) or not isinstance(
-        payload.get("jobs"), list
-    ):
+    if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):
         raise HTTPException(status_code=400, detail="Benchmark config is not runnable")
 
     return _benchmark_submit_out(payload)
 
 
-@router.post(
-    "/sessions/{session_id}/benchmark/approval", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.post("/sessions/{session_id}/benchmark/approval", status_code=status.HTTP_204_NO_CONTENT)
 async def deny_session_benchmark_approval(
     session_id: str, body: BenchmarkApprovalIn, user: CurrentUser
 ):
@@ -458,9 +444,7 @@ async def deny_session_benchmark_approval(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.patch(
-    "/sessions/{session_id}/benchmark/config", response_model=BenchmarkConfigOut
-)
+@router.patch("/sessions/{session_id}/benchmark/config", response_model=BenchmarkConfigOut)
 async def update_session_benchmark_config(
     session_id: str, body: BenchmarkConfigPatchIn, user: CurrentUser
 ):
@@ -468,9 +452,7 @@ async def update_session_benchmark_config(
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
-                    ),
+                    text("SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"),
                     {"id": session_id, "uid": user.id},
                 )
             )
@@ -488,17 +470,13 @@ async def update_session_benchmark_config(
         scope,
         session_id,
     )
-    if not isinstance(payload, dict) or not isinstance(
-        payload.get("benchmark_config"), dict
-    ):
+    if not isinstance(payload, dict) or not isinstance(payload.get("benchmark_config"), dict):
         raise HTTPException(
             status_code=500, detail="Benchmark config update returned invalid payload"
         )
     return BenchmarkConfigOut(
         benchmark_config=BenchmarkRunSpec.model_validate(payload["benchmark_config"]),
-        benchmark_validation=BenchmarkValidation.model_validate(
-            payload["benchmark_validation"]
-        ),
+        benchmark_validation=BenchmarkValidation.model_validate(payload["benchmark_validation"]),
     )
 
 
@@ -515,9 +493,7 @@ async def submit_session_blend(
             config_event="blend_config",
         )
         if payload is None:
-            raise HTTPException(
-                status_code=400, detail="Blend approval did not submit a run"
-            )
+            raise HTTPException(status_code=400, detail="Blend approval did not submit a run")
         await save_provider_state(session_id, user.id, final_provider_state)
         return _blend_submit_out(payload)
 
@@ -526,19 +502,13 @@ async def submit_session_blend(
     payload = await submit_blend_for_session(user.id, scope, session_id)
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
-    if not isinstance(payload.get("run_id"), str) or not isinstance(
-        payload.get("jobs"), list
-    ):
+    if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):
         raise HTTPException(status_code=400, detail="Blend config is not runnable")
     return _blend_submit_out(payload)
 
 
-@router.post(
-    "/sessions/{session_id}/blend/approval", status_code=status.HTTP_204_NO_CONTENT
-)
-async def deny_session_blend_approval(
-    session_id: str, body: BlendApprovalIn, user: CurrentUser
-):
+@router.post("/sessions/{session_id}/blend/approval", status_code=status.HTTP_204_NO_CONTENT)
+async def deny_session_blend_approval(session_id: str, body: BlendApprovalIn, user: CurrentUser):
     final_provider_state, _ = await resume_deferred_setup_tool(
         session_id,
         user.id,
@@ -551,16 +521,12 @@ async def deny_session_blend_approval(
 
 
 @router.patch("/sessions/{session_id}/blend/config", response_model=BlendConfigOut)
-async def update_session_blend_config(
-    session_id: str, body: BlendConfigPatchIn, user: CurrentUser
-):
+async def update_session_blend_config(session_id: str, body: BlendConfigPatchIn, user: CurrentUser):
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
-                    ),
+                    text("SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"),
                     {"id": session_id, "uid": user.id},
                 )
             )
@@ -578,9 +544,7 @@ async def update_session_blend_config(
         session_id,
     )
     if not isinstance(payload, dict) or not isinstance(payload.get("blend_config"), dict):
-        raise HTTPException(
-            status_code=500, detail="Blend config update returned invalid payload"
-        )
+        raise HTTPException(status_code=500, detail="Blend config update returned invalid payload")
     return BlendConfigOut(
         blend_config=BlendRunSpec.model_validate(payload["blend_config"]),
         blend_validation=BlendValidation.model_validate(payload["blend_validation"]),
@@ -641,9 +605,7 @@ async def _serve_chat_figure(figure_id: str, user_id: str):
     if local_path is not None:
         if not local_path.exists():
             raise HTTPException(status_code=404, detail="Figure not found")
-        return FileResponse(
-            local_path, media_type=guess_chat_figure_media_type(local_path)
-        )
+        return FileResponse(local_path, media_type=guess_chat_figure_media_type(local_path))
     figure = await asyncio.to_thread(storage.read_chat_figure, storage_key)
     if figure is not None:
         data, media_type = figure
@@ -662,9 +624,7 @@ async def get_chat_figure_public(figure_id: str, exp: int, sig: str):
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT user_id FROM chat_artifacts WHERE id = :id AND kind = 'figure'"
-                    ),
+                    text("SELECT user_id FROM chat_artifacts WHERE id = :id AND kind = 'figure'"),
                     {"id": figure_id},
                 )
             )
@@ -702,6 +662,4 @@ async def delete_session(session_id: str, user: CurrentUser):
         storage_keys = [row["storage_key"] for row in rows if row.get("storage_key")]
         for storage_key in storage_keys:
             await delete_chat_figure_artifact(storage_key)
-        await conn.execute(
-            text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id}
-        )
+        await conn.execute(text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id})

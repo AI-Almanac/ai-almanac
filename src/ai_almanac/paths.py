@@ -36,11 +36,6 @@ def jobs_dir() -> Path:
     return data_root() / "jobs"
 
 
-def datasets_dir() -> Path:
-    """Local ``{root}`` for the uniform dataset layout (see ``data_catalog``)."""
-    return data_root() / "datasets"
-
-
 def job_dir(job_id: str) -> Path:
     return jobs_dir() / job_id
 
@@ -51,6 +46,10 @@ def benchmark_env_dir() -> Path:
 
 def blending_env_dir() -> Path:
     return data_root() / "blending-env"
+
+
+def forecast_env_dir() -> Path:
+    return data_root() / "forecast-env"
 
 
 def cache_dir() -> Path:

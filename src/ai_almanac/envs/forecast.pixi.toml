@@ -1,0 +1,62 @@
+# Pixi spec for the ai-almanac live-forecast execution environment.
+#
+# Holds earth2studio, its PyTorch/CUDA stack, and the geo stack needed to
+# render Cloud-Optimized GeoTIFFs (rasterio/GDAL/PROJ). Separate from the
+# benchmark/blending environments since this is by far the heaviest of the
+# three — kept out of the default install so `pip install ai-almanac` and
+# `ai-almanac env prepare`'s other environments stay light.
+#
+# Multiple environments, one manifest: the AIFS model families pin mutually
+# incompatible `anemoi-models` versions (v1 needs 0.5.1, AIFS2 needs 0.9.x,
+# AIFS2-ENS needs 0.11.2), so they cannot share one solve. Each `[environments]`
+# entry below is solved independently by pixi. A forecast model's `env` field in
+# forecast_models.yaml names which one runs it; the env manager selects it with
+# `pixi run -e <env>`.
+#
+# Installed into `$AI_ALMANAC_DATA_DIR/forecast-env/` on first use via
+# `ai-almanac env prepare`. Real (non-stub) local execution requires a GPU —
+# see the `self-host-local-gpu` deployment profile.
+
+[workspace]
+name = "ai-almanac-forecast"
+description = "Live forecast execution environment for ai-almanac."
+channels = ["conda-forge"]
+# Linux only: earth2studio's GPU extras (e.g. fuxi's onnxruntime-gpu) ship no
+# macOS wheels at all, and forecast_pipeline.load_model() hard-requires CUDA
+# regardless — there's no CPU/Mac fallback to support. Real local execution
+# needs a Linux GPU host (see the `self-host-local-gpu` deployment profile).
+platforms = ["linux-64", "linux-aarch64"]
+
+# Shared conda base — the PyTorch/CUDA + geo stack every environment needs. Only
+# the earth2studio extras (with their conflicting anemoi pins) differ per group.
+[dependencies]
+python = "3.11.*"
+pip = "*"
+pytorch = "*"
+gdal = "*"
+proj = "*"
+rasterio = "*"
+netcdf4 = "<1.7.3"
+h5netcdf = "*"
+xarray = "*"
+zarr = "*"
+numpy = "*"
+pyyaml = "*"
+
+# base: everything whose deps coexist — the non-AIFS models plus AIFS v1
+# (anemoi-models 0.5.1, as proven in the 0.14.0 single-env build).
+[feature.base.pypi-dependencies]
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
+
+# aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
+[feature.aifs2.pypi-dependencies]
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs2", "data"] }
+
+# aifs2ens: AIFS-ENS v2 (anemoi-models 0.11.2).
+[feature.aifs2ens.pypi-dependencies]
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs2ens", "data"] }
+
+[environments]
+base = ["base"]
+aifs2 = ["aifs2"]
+aifs2ens = ["aifs2ens"]

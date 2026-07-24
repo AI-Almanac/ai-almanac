@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from importlib.resources import files
 from pathlib import Path
 
 import yaml
-from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -30,48 +30,9 @@ from ai_almanac.paths import (
 # ---------------------------------------------------------------------------
 
 _CONFIG_PKG = files("ai_almanac.server").joinpath("config")
-_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("models.yaml")))
-_DATASETS_YAML = Path(str(_CONFIG_PKG.joinpath("datasets.yaml")))
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
-
-
-# ---------------------------------------------------------------------------
-# Env-var lookup with .env fallback.
-# Searched paths: CWD/.env, then the repo-root .env when running from source.
-# ---------------------------------------------------------------------------
-
-_ENV_FILE_NAMES = (
-    Path.cwd() / ".env",
-    Path(__file__).resolve().parents[2] / ".env",
-)
-_env_file_cache: dict[str, str] | None = None
-
-
-def _env_file_values() -> dict[str, str]:
-    global _env_file_cache
-    if _env_file_cache is not None:
-        return _env_file_cache
-
-    values: dict[str, str] = {}
-    for env_file in dict.fromkeys(_ENV_FILE_NAMES):
-        if not env_file.exists():
-            continue
-        for key, value in dotenv_values(env_file).items():
-            if value is not None:
-                values.setdefault(key, value)
-
-    _env_file_cache = values
-    return values
-
-
-def _env_value(key: str) -> str:
-    return os.environ.get(key, _env_file_values().get(key, ""))
-
-
-def _env_key(*parts: str) -> str:
-    """Join parts into an uppercase env var name."""
-    return "_".join(p for p in parts if p).upper().replace("-", "_")
+_FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +104,10 @@ class Settings(BaseSettings):
     # Blend training runs in a separate Modal app (different image/dependencies);
     # the job config carries this app name so the shared runner can target it.
     modal_blending_app_name: str = "almanac-blending"
+    # Live forecast generation (GPU earth2studio inference) runs in its own
+    # Modal app; same targeting mechanism as modal_blending_app_name.
+    modal_forecast_app_name: str = "almanac-forecasts"
+    modal_forecast_function_name: str = "run_forecast"
 
     # Where workflow outputs live. Defaults to `<AI_ALMANAC_DATA_DIR>/jobs/`.
     # Set this to a bulk-storage path on hosts with separate fast/bulk disks.
@@ -208,32 +173,34 @@ class Settings(BaseSettings):
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
+    # Overrides the built-in chat system prompt (services/llm.py:SYSTEM_PROMPT)
+    # when non-empty. Edited from the admin Settings page.
+    chat_system_prompt: str = ""
+
     # Feature flags. Boolean gates for features still in development. Default True
     # for zero-setup local installs; managed deployments set them False in
     # config.yaml/env until the feature is ready, then flip them at runtime from
     # the admin Settings page. Name new flags `enable_<feature>` and surface them
     # in the "Features" group of routers/settings.py.
     enable_data_management: bool = True
+    # On by default now that the live-forecast workflow is finalized. Admins can
+    # still turn it off from the Settings page (e.g. an install with no
+    # GPU/Modal infra configured).
+    enable_forecasting: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
-    # Shared-host quotas and upload policy.
-    max_active_jobs_per_user: int = 2
-    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
-    max_stored_upload_bytes_per_user: int = 10 * 1024 * 1024 * 1024
+    # Shared-host quotas.
+    max_active_jobs_per_user: int = 10
     max_concurrent_llm_requests_per_user: int = 2
     max_llm_requests_per_minute: int = 30
-    upload_grant_ttl_seconds: int = 900
-    allowed_upload_extensions: str = ".nc,.zip,.tar,.gz,.tgz"
 
     def resolve_database_url(self) -> str:
         if self.database_url:
             if self.db_password:
                 url = make_url(self.database_url)
                 if not url.password:
-                    return url.set(password=self.db_password).render_as_string(
-                        hide_password=False
-                    )
+                    return url.set(password=self.db_password).render_as_string(hide_password=False)
             return self.database_url
         ensure_layout()
         return f"sqlite+aiosqlite:///{database_path()}"
@@ -404,9 +371,7 @@ def _load_db_overlay() -> dict:
         from ai_almanac.server.tables import app_config
 
         with sync_engine().connect() as conn:
-            rows = conn.execute(
-                select(app_config.c.key, app_config.c.value)
-            ).all()
+            rows = conn.execute(select(app_config.c.key, app_config.c.value)).all()
         return {key: _unseal_secret(value) for key, value in rows}
     except Exception:
         return {}
@@ -510,3 +475,48 @@ def get_metric_definitions() -> list[dict]:
 
 def get_packaged_regions() -> list[dict]:
     return yaml.safe_load(_REGIONS_YAML.read_text())
+
+
+_forecast_models_cache: list[dict] | None = None
+
+
+def get_packaged_forecast_models() -> list[dict]:
+    """Load the AI weather model registry used for live forecast generation.
+
+    Single source of truth for model id/variables/lead-hour defaults, shared
+    by the API's model list endpoint and the Modal forecast app (bundled into
+    its image), so the two never drift out of sync.
+    """
+    global _forecast_models_cache
+    if _forecast_models_cache is None:
+        _forecast_models_cache = yaml.safe_load(_FORECAST_MODELS_YAML.read_text())
+    return _forecast_models_cache
+
+
+def blend_model_key(name: str) -> str:
+    """Filesystem/column-safe key used for a forecast model inside a blend.
+
+    The blend pipeline keys everything on this (formula terms, file names,
+    trajectory sets), and the web client mirrors it (blendModelKey in
+    web/src/lib/api/forecasts.ts) — keep the two in sync.
+    """
+    return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+def resolve_forecast_model(registry: dict, name: str) -> dict | None:
+    """Registry entry a blend model name can run live forecasts with, or None.
+
+    A name matches by registry id, by normalized display name, or by an
+    explicit `aliases` entry — so a data source named "AIFS Single v2" or
+    "AIFS2" both reach the `aifs2` model. Mirrored by the Modal runner
+    (modal/forecasts_app.py) and the web client's forecastModelFor.
+    """
+    key = blend_model_key(name)
+    for entry in registry.get("models") or []:
+        if (
+            key == entry["id"]
+            or key == blend_model_key(entry.get("display_name") or "")
+            or key in (entry.get("aliases") or [])
+        ):
+            return entry
+    return None

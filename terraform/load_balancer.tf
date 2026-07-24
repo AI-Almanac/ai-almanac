@@ -39,7 +39,7 @@ resource "google_compute_region_network_endpoint_group" "prod" {
   network_endpoint_type = "SERVERLESS"
 
   cloud_run {
-    service = google_cloud_run_v2_service.backend.name
+    service = module.env["prod"].service_name
   }
 }
 
@@ -59,7 +59,7 @@ resource "google_compute_region_network_endpoint_group" "staging" {
   network_endpoint_type = "SERVERLESS"
 
   cloud_run {
-    service = google_cloud_run_v2_service.backend_staging.name
+    service = module.env["staging"].service_name
   }
 }
 

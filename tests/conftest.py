@@ -74,9 +74,13 @@ class _no_lifespan:
     async def __aenter__(self):
         from ai_almanac.paths import ensure_layout
         from ai_almanac.server.app import _apply_migrations
+        from ai_almanac.server.services.region_catalog import seed_packaged_regions
 
         ensure_layout()
         _apply_migrations()
+        # The real lifespan seeds regions at startup; without this, test files
+        # only pass when another test happens to hit GET /regions first.
+        await seed_packaged_regions()
         return self
 
     async def __aexit__(self, *args):
@@ -132,9 +136,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest_asyncio.fixture
-async def user_id(
-    auth_headers: dict[str, str], client: httpx.AsyncClient
-) -> str:
+async def user_id(auth_headers: dict[str, str], client: httpx.AsyncClient) -> str:
     """Trigger user creation via a request and return the synthetic user's DB id."""
     from sqlalchemy import text
 

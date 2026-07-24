@@ -1,10 +1,9 @@
 """Data sources catalog service.
 
-A data source is a pointer to a directory on disk (or a remote URL, for
-e.g. ARCO ERA5) that the app can use as either ground-truth observations
-or model forecasts in a benchmark. Replaces the env-var-driven YAML registry
-for runtime use; the YAML files still ship and seed an empty DB on first
-launch so testdata works without configuration.
+A data source is a pointer to a directory on disk, a gs:// prefix, or a
+remote provider URL (e.g. ARCO ERA5) that the app can use as ground-truth
+observations or model forecasts in a benchmark. Rows are registered through
+the data-sources API/UI and validated at registration; there is no seeding.
 """
 
 from __future__ import annotations
@@ -18,11 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
-from ai_almanac.settings import _DATASETS_YAML, _MODELS_YAML, _env_key, _env_value
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
@@ -117,6 +114,31 @@ def _initialization_days(dataset) -> tuple[str, str, int] | None:
     return ",".join(str(day) for day in weekdays), coordinate, int(values.size)
 
 
+def _initialization_schedule(dataset) -> list[str] | None:
+    """The archive's fixed-calendar issue-date schedule as sorted ``MM-DD``.
+
+    Archives pin issue dates to fixed calendar dates (e.g. Apr 1, 4, 8), not
+    weekdays — the weekday of an issue date drifts year to year, so a weekday
+    grid is both unstable across registrations and misaligned with training.
+    Recording the month-days lets a live forecast reproduce the archive's
+    calendar cadence (see forecast_pipeline.season_issue_dates). The month-days
+    are stable across years, so the first file is representative.
+    """
+    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
+    if coordinate is None or dataset[coordinate].ndim != 1:
+        return None
+    values = dataset[coordinate]
+    if values.size < 2:
+        return None
+    try:
+        months = [int(month) for month in values.dt.month.values.tolist()]
+        days = [int(day) for day in values.dt.day.values.tolist()]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    schedule = sorted({f"{month:02d}-{day:02d}" for month, day in zip(months, days, strict=True)})
+    return schedule or None
+
+
 def _normalized_initialization_days(value: object) -> str:
     raw_days = [day.strip() for day in str(value).split(",")]
     if not raw_days or any(not day for day in raw_days):
@@ -148,7 +170,8 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     if kind == "model":
         normalized.setdefault("model_type", "AIWP")
         normalized.setdefault("unit_cvt", 1.0)
-        normalized.setdefault("probabilistic", False)
+        # probabilistic is defaulted in _finalize_inspection from the file's
+        # dims (an ensemble member dim forces the probabilistic ROMP path).
         normalized.setdefault("members", None)
         if start_year is not None and end_year is not None:
             normalized.setdefault("start_date", f"{start_year}-01-01")
@@ -189,13 +212,31 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
 
     storage = get_storage()
     pattern = _source_file_pattern(kind, metadata)
-    identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+    try:
+        identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+    except Exception as exc:
+        return (
+            "invalid",
+            f"Cannot read {path}: {type(exc).__name__}: {exc}. "
+            "Check that the path exists and is readable by the service account.",
+            metadata,
+        )
     if not identifiers:
         return "invalid", f"No files match {pattern!r} under {path}.", metadata
 
     files = [Path(identifier) for identifier in identifiers]
     return _finalize_inspection(
         kind, metadata, files, lambda: storage.open_nc_dataset(identifiers[0])
+    )
+
+
+# Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
+_ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
+
+
+def _has_ensemble_dim(dataset) -> bool:
+    return any(
+        keyword in str(name).lower() for name in dataset.dims for keyword in _ENSEMBLE_DIM_KEYWORDS
     )
 
 
@@ -215,7 +256,9 @@ def _finalize_inspection(
         with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
+            has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
+            initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
     except Exception as exc:
         return (
             "invalid",
@@ -224,6 +267,10 @@ def _finalize_inspection(
         )
     normalized["spatial_bounds"] = spatial_bounds
     if kind == "model":
+        # An ensemble member dim can only be evaluated by ROMP's probabilistic
+        # path; the deterministic path crashes on the extra dim. The file's
+        # shape decides the mode, so this overrides any stored flag.
+        normalized["probabilistic"] = has_ensemble or bool(normalized.get("probabilistic"))
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {
@@ -249,6 +296,9 @@ def _finalize_inspection(
             normalized["init_days_source"] = "default"
             normalized.pop("init_time_coordinate", None)
             normalized.pop("init_time_sample_count", None)
+        # The calendar schedule drives live forecast issue dates; init_days
+        # weekdays remain for ROMP and as the pre-schedule fallback.
+        normalized["init_month_days"] = initialization_schedule
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (
@@ -266,6 +316,10 @@ def _finalize_inspection(
 
 
 async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+    # Remote-provider sources (e.g. era5_arco) have no file tree to inspect;
+    # their metadata (arco_url, variable, bounds) is the contract.
+    if (metadata or {}).get("provider") not in (None, "local"):
+        return "ready", None, dict(metadata)
     inspect = _inspect_gcs_source if str(path).startswith("gs://") else _inspect_local_source
     return await asyncio.to_thread(inspect, kind, path, metadata)
 
@@ -299,6 +353,8 @@ async def create_source(
     path: str,
     region: str | None = None,
     metadata: dict | None = None,
+    owner_id: str | None = None,
+    visibility: str = "shared",
 ) -> dict:
     """Insert a new data source. Returns the created row."""
     normalized_region = region.strip().lower() if region else None
@@ -312,9 +368,10 @@ async def create_source(
             text(
                 "INSERT INTO data_sources "
                 "(id, kind, name, path, region, metadata, location_type, status, "
-                "validation_error, created_at, updated_at) "
+                "validation_error, owner_id, visibility, created_at, updated_at) "
                 "VALUES (:id, :kind, :name, :path, :region, :metadata, "
-                "'local_directory', :status, :validation_error, :now, :now)"
+                ":location_type, :status, :validation_error, :owner_id, :visibility, "
+                ":now, :now)"
             ),
             {
                 "id": source_id,
@@ -324,8 +381,11 @@ async def create_source(
                 "region": normalized_region,
                 # SQLite's JSON column doesn't auto-serialize Python dicts; emit a string.
                 "metadata": json.dumps(normalized_metadata),
+                "location_type": "gcs" if path.startswith("gs://") else "local_directory",
                 "status": status,
                 "validation_error": validation_error,
+                "owner_id": owner_id,
+                "visibility": visibility,
                 "now": now,
             },
         )
@@ -429,90 +489,16 @@ async def delete_source(source_id: str) -> bool:
         return result.rowcount > 0
 
 
-async def get_obs_sources() -> list[dict]:
-    """Return all configured obs data sources (for the demo-dataset registry)."""
-    return await list_sources(kind="obs")
+async def get_obs_sources(*, user_id: str | None = None, is_admin: bool = False) -> list[dict]:
+    """Return obs data sources visible to the given user (all when unscoped)."""
+    return await list_sources(kind="obs", user_id=user_id, is_admin=is_admin)
 
 
-async def get_model_sources(region: str | None = None) -> list[dict]:
-    """Return all configured model data sources, optionally for a specific region."""
-    sources = await list_sources(kind="model")
+async def get_model_sources(
+    region: str | None = None, *, user_id: str | None = None, is_admin: bool = False
+) -> list[dict]:
+    """Return model data sources visible to the given user, optionally per region."""
+    sources = await list_sources(kind="model", user_id=user_id, is_admin=is_admin)
     if region:
         sources = [s for s in sources if (s.get("region") or "").lower() == region.lower()]
     return sources
-
-
-# ---------------------------------------------------------------------------
-# First-launch seeder.
-# ---------------------------------------------------------------------------
-
-
-async def seed_from_yaml_if_empty() -> int:
-    """Populate the data_sources table from the packaged YAMLs on first launch.
-
-    Idempotent: skips if the table already has any rows. Honors env vars from
-    the previous registry (e.g. `TEST_ETHIOPIA_OBS_DIR`) so existing testdata
-    setups continue to work without changes.
-
-    Returns the number of rows inserted (0 if already seeded).
-    """
-    async with get_db() as conn:
-        existing = (await conn.execute(text("SELECT COUNT(*) FROM data_sources"))).scalar()
-        rows = (
-            (await conn.execute(text("SELECT id FROM data_sources WHERE status != 'ready'")))
-            .mappings()
-            .fetchall()
-            if existing
-            else []
-        )
-    if existing:
-        for row in rows:
-            await revalidate_source(row["id"])
-        return 0
-
-    inserted = 0
-
-    # Seed obs datasets from datasets.yaml.
-    raw_datasets = yaml.safe_load(_DATASETS_YAML.read_text())
-    for entry in raw_datasets:
-        provider = entry.get("provider", "local")
-        if provider != "local":
-            # Remote (ARCO/e2s) sources don't fit the local-path model; skip
-            # for the POC. We'll handle remote registration separately later.
-            continue
-        env_key = _env_key(entry["id"], "obs_dir")
-        path = _env_value(env_key)
-        if not path:
-            continue
-        await create_source(
-            kind="obs",
-            name=entry.get("name", entry["id"]),
-            path=path,
-            region=entry.get("region"),
-            metadata={
-                "yaml_id": entry["id"],
-                "obs_file_pattern": entry.get("obs_file_pattern", "{}.nc"),
-                "obs_var": entry.get("obs_var", "RAINFALL"),
-            },
-        )
-        inserted += 1
-
-    # Seed model directories from models.yaml.
-    raw_models = yaml.safe_load(_MODELS_YAML.read_text())
-    for entry in raw_models:
-        env_key = _env_key(entry["region"], entry["id"], "model_dir")
-        path = _env_value(env_key)
-        if not path:
-            continue
-        meta = {k: v for k, v in entry.items() if k not in ("display_name", "region")}
-        meta["yaml_id"] = entry["id"]  # preserve the slug so existing UI URLs work
-        await create_source(
-            kind="model",
-            name=entry.get("display_name", entry["id"]),
-            path=path,
-            region=entry["region"],
-            metadata=meta,
-        )
-        inserted += 1
-
-    return inserted

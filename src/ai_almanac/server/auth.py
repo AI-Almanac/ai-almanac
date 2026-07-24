@@ -1,7 +1,7 @@
 """Request identity and authorization.
 
-Parses an `AuthenticatedUser` from each request (or WebSocket handshake) and
-exposes role-based FastAPI dependencies. Replaces the old attribution shim.
+Parses an `AuthenticatedUser` from each request and exposes role-based FastAPI
+dependencies. Replaces the old attribution shim.
 
 Two deployment modes (see `settings.deployment_mode` / `settings.auth_mode`):
 
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Annotated, Literal
 
-from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, status
 from starlette.datastructures import Headers
 
 from ai_almanac.server.db import get_db, get_or_create_user
@@ -66,9 +66,7 @@ def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
         return True
     if groups & _split_csv(settings.admin_groups):
         return True
-    return bool(
-        email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)}
-    )
+    return bool(email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)})
 
 
 _globus_cache: dict[str, tuple[dict, float]] = {}
@@ -103,9 +101,7 @@ def _introspect_globus_token(token: str) -> dict:
         client = globus_sdk.ConfidentialAppAuthClient(
             settings.globus_client_id, settings.globus_client_secret
         )
-        result = dict(
-            client.oauth2_token_introspect(token, include="identity_set").data
-        )
+        result = dict(client.oauth2_token_introspect(token, include="identity_set").data)
 
     with _globus_cache_lock:
         _globus_cache[token] = (result, time.monotonic() + _GLOBUS_CACHE_TTL)
@@ -178,8 +174,7 @@ async def _resolve_identity(headers: Headers) -> AuthenticatedUser:
         subject = raw_subject
         external_id = (
             f"{issuer}\x1f{subject}"
-            if settings.deployment_mode == "shared"
-            or headers.get(settings.identity_issuer_header)
+            if settings.deployment_mode == "shared" or headers.get(settings.identity_issuer_header)
             else subject
         )
         role: Role = "admin" if _is_admin(subject, email, groups) else "user"
@@ -243,32 +238,16 @@ async def require_data_management() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
+async def require_forecasting() -> None:
+    """Gate the forecasting feature behind its flag. On by default; admins can
+    turn it off (e.g. an install with no GPU/Modal infra) to hide the feature
+    from all users."""
+    if not settings.enable_forecasting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
-
-
-async def authenticate_websocket(websocket: WebSocket) -> AuthenticatedUser | None:
-    """Resolve identity for a WebSocket handshake.
-
-    Returns the user, or closes the handshake (policy violation) and returns
-    None when identity is required but absent. The caller must stop on None.
-    """
-    try:
-        if settings.deployment_mode == "shared":
-            origin = websocket.headers.get("origin")
-            allowed = _split_csv(settings.frontend_url)
-            if not origin or origin not in allowed:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return None
-        if settings.auth_mode == "globus":
-            return await _resolve_globus_token(
-                _bearer_token(websocket.headers)
-                or websocket.query_params.get("access_token")
-            )
-        return await _resolve_identity(websocket.headers)
-    except _MissingIdentity:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return None
 
 
 def enforce_deployment_invariants() -> None:

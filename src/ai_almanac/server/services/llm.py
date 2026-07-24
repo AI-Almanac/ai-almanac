@@ -206,7 +206,9 @@ summary and explain how the blend compares to the individual models."""
 
 
 def _instructions_for_scope(scope: ChatScope) -> str:
-    prompt = SYSTEM_PROMPT
+    # `settings` is the hot-reloaded singleton (see settings.reload_settings),
+    # so this picks up admin edits without a per-message DB read.
+    prompt = settings.chat_system_prompt.strip() or SYSTEM_PROMPT
     if scope.kind == "blend_setup":
         prompt += BLEND_GUIDANCE
     if not scope.job_ids:
@@ -447,9 +449,7 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
     async def get_blend_results(ctx: RunContext[ChatDeps], job_id: str) -> dict:
         """Read a completed blend's pooled per-model skill summary (AUC, Brier skill
         per lead time) and the list of weight/output artifacts, to explain results."""
-        return await chat_tools.get_blend_results(
-            job_id, ctx.deps.user_id, ctx.deps.scope
-        )
+        return await chat_tools.get_blend_results(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset
 

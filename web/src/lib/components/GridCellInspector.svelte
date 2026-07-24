@@ -3,6 +3,7 @@
 	import GridCellModelCard from '$lib/components/GridCellModelCard.svelte';
 	import MaeSeriesChart from '$lib/components/MaeSeriesChart.svelte';
 	import { windowLabel } from '$lib/metric-metadata';
+	import { formatCoord } from '$lib/geo';
 
 	type MetricDef = { value: string; label: string };
 
@@ -30,7 +31,9 @@
 	<header class="cell-header">
 		<div>
 			<p class="cell-kicker">Grid Cell Inspector</p>
-			<h3>Latitude {cell.lat.toFixed(2)}°N, longitude {cell.lon.toFixed(2)}°E</h3>
+			<h3>
+				Latitude {formatCoord(cell.lat, 'N', 'S')}, longitude {formatCoord(cell.lon, 'E', 'W')}
+			</h3>
 			<p class="cell-subtitle">
 				{windowLabel(forecastWindow)}, compared with climatology when available
 			</p>

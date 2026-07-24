@@ -10,16 +10,40 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 from importlib.resources import files
 from pathlib import Path
 
-from ai_almanac.paths import benchmark_env_dir, blending_env_dir
+from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
 BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
+
+# Platforms forecast.pixi.toml declares — earth2studio's GPU extras (e.g.
+# fuxi's onnxruntime-gpu) ship no macOS/Windows wheels at all, and
+# forecast_pipeline.load_model() hard-requires CUDA regardless, so there's no
+# point solving (or running) this env anywhere else.
+_FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
+
+# The forecast manifest defines one pixi environment per model group — the AIFS
+# families pin incompatible anemoi-models versions and cannot share a solve (see
+# forecast.pixi.toml). A model's `env` field in forecast_models.yaml selects one.
+FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
+
+
+def _current_pixi_platform() -> str:
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == "Linux":
+        return "linux-aarch64" if machine in ("aarch64", "arm64") else "linux-64"
+    if system == "Darwin":
+        return "osx-arm64" if machine == "arm64" else "osx-64"
+    if system == "Windows":
+        return "win-64"
+    return f"{system.lower()}-{machine}"
 
 
 def _pixi_spec() -> Path:
@@ -30,6 +54,11 @@ def _pixi_spec() -> Path:
 
 def _blending_pixi_spec() -> Path:
     spec = files("ai_almanac.envs").joinpath("blending.pixi.toml")
+    return Path(str(spec))
+
+
+def _forecast_pixi_spec() -> Path:
+    spec = files("ai_almanac.envs").joinpath("forecast.pixi.toml")
     return Path(str(spec))
 
 
@@ -110,12 +139,53 @@ def ensure_blending_env() -> Path:
     return env_dir
 
 
-def ensure_env() -> Path:
-    """Idempotently prepare all local workload environments."""
+def ensure_forecast_env() -> Path | None:
+    """Install the live-forecast dependencies (earth2studio + torch + geo stack).
+
+    By far the heaviest of the three environments (CUDA/PyTorch + AI model
+    checkpoints, downloaded lazily by earth2studio on first real run) — still
+    chained from ensure_env() for consistency with benchmark/blending, but
+    expect `ai-almanac env prepare` to take noticeably longer as a result.
+
+    Skipped (not an error) on platforms forecast.pixi.toml doesn't support —
+    a developer running `env prepare` on a Mac still gets benchmark/blending
+    installed; only a Linux GPU host (see `self-host-local-gpu`) or Modal can
+    actually run live forecasts.
+    """
+    current = _current_pixi_platform()
+    if current not in _FORECAST_PLATFORMS:
+        print(
+            f"Skipping forecast env: unsupported on {current}. Live forecast generation "
+            "needs a Linux GPU host (see the `self-host-local-gpu` deployment profile) "
+            "or the Modal job runner."
+        )
+        return None
+    pixi = _require_pixi()
+    env_dir = forecast_env_dir()
+    env_dir.mkdir(parents=True, exist_ok=True)
+    target_spec = env_dir / "pixi.toml"
+    target_spec.write_text(_forecast_pixi_spec().read_text())
+    # One solve per model-group environment (they can't share one — see
+    # FORECAST_ENVIRONMENTS). Each is heavy; expect this to take a while.
+    for environment in FORECAST_ENVIRONMENTS:
+        subprocess.run(
+            [pixi, "install", "--manifest-path", str(target_spec), "-e", environment],
+            check=True,
+        )
+    return env_dir
+
+
+def ensure_env() -> tuple[Path, Path, Path | None]:
+    """Idempotently prepare all local workload environments.
+
+    Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
+    None when skipped on an unsupported platform (see ensure_forecast_env).
+    """
     env_dir = benchmark_env_dir()
     _install(_pixi_spec(), env_dir)
-    ensure_blending_env()
-    return env_dir
+    blending_dir = ensure_blending_env()
+    forecast_dir = ensure_forecast_env()
+    return env_dir, blending_dir, forecast_dir
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
@@ -142,6 +212,33 @@ def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subproces
         "run",
         "--manifest-path",
         str(env_dir / "pixi.toml"),
+        "--",
+        *cmd,
+    ]
+    return subprocess.Popen(
+        full_cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+def run_forecast(
+    cmd: list[str], env: dict[str, str] | None = None, environment: str = "base"
+) -> subprocess.Popen:
+    """Spawn a process inside one forecast model-group environment (see
+    FORECAST_ENVIRONMENTS). `environment` is the model's `env` field."""
+    pixi = _require_pixi()
+    env_dir = forecast_env_dir()
+    full_cmd = [
+        pixi,
+        "run",
+        "--manifest-path",
+        str(env_dir / "pixi.toml"),
+        "-e",
+        environment,
         "--",
         *cmd,
     ]

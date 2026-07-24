@@ -1,45 +1,16 @@
-import uuid
-from datetime import UTC, datetime
+"""Read-only obs dataset listing for the benchmarks page.
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+Registration and management of datasets live in the data-sources router;
+this is a thin obs-shaped view over the same `data_sources` rows.
+"""
+
+from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import text
 
-from ai_almanac.server.auth import CurrentUser, require_data_management
-from ai_almanac.server.db import get_db
-from ai_almanac.server.routers.uploads import (
-    UploadSessionCreate,
-    create_upload_session,
-)
-from ai_almanac.server.routers.uploads import (
-    confirm_upload as confirm_upload_session,
-)
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.services import data_sources as data_source_service
 
-from ..services.storage import get_storage
-
 router = APIRouter(prefix="/datasets", tags=["datasets"])
-
-
-def _obs_year_range(obs_dir: str) -> tuple[int | None, int | None]:
-    """Scan obs_dir for {year}.nc files and return (min_year, max_year)."""
-    from pathlib import Path
-
-    p = Path(obs_dir)
-    if not p.is_dir():
-        return None, None
-    years = []
-    for f in p.iterdir():
-        if f.suffix == ".nc" and f.stem.isdigit():
-            years.append(int(f.stem))
-    if not years:
-        return None, None
-    return min(years), max(years)
-
-
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
 
 
 class DatasetOut(BaseModel):
@@ -58,84 +29,6 @@ class DatasetOut(BaseModel):
     obs_year_end: int | None = None
 
 
-class UploadUrlRequest(BaseModel):
-    name: str
-    filename: str
-
-
-class UploadUrlResponse(BaseModel):
-    dataset_id: str
-    upload_url: str
-    storage_key: str
-
-
-class DatasetFromPathRequest(BaseModel):
-    name: str
-    obs_dir: str  # absolute path on the server — local dev only
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/upload-url",
-    response_model=UploadUrlResponse,
-    dependencies=[Depends(require_data_management)],
-)
-async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request: Request):
-    session = await create_upload_session(
-        UploadSessionCreate(name=body.name, filename=body.filename),
-        user,
-        request,
-    )
-    return UploadUrlResponse(
-        dataset_id=session.data_source_id,
-        upload_url=session.upload_url or "",
-        storage_key=session.id,
-    )
-
-
-@router.post(
-    "/{dataset_id}/confirm",
-    response_model=DatasetOut,
-    dependencies=[Depends(require_data_management)],
-)
-async def confirm_upload(dataset_id: str, user: CurrentUser):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT id FROM upload_sessions "
-                        "WHERE data_source_id = :id AND owner_id = :uid"
-                    ),
-                    {"id": dataset_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    await confirm_upload_session(row["id"], user)
-    source = await data_source_service.get_source(dataset_id)
-    if not source:
-        raise HTTPException(status_code=500, detail="Dataset confirmation failed")
-    return DatasetOut(
-        id=source["id"],
-        name=source["name"],
-        status=source["status"],
-        region=source.get("region"),
-        created_at=source["created_at"],
-        ready_at=source.get("updated_at"),
-        error=source.get("validation_error"),
-        provider="local",
-        obs_file_pattern=source["metadata"].get("obs_file_pattern"),
-    )
-
-
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(user: CurrentUser):
     sources = await data_source_service.list_sources(
@@ -151,7 +44,7 @@ async def list_datasets(user: CurrentUser):
             ready_at=source.get("updated_at"),
             error=source.get("validation_error"),
             is_demo=False,
-            provider="local",
+            provider=source["metadata"].get("provider") or "local",
             obs_file_pattern=source["metadata"].get("obs_file_pattern"),
             obs_year_start=source["metadata"].get("start_year"),
             obs_year_end=source["metadata"].get("end_year"),
@@ -159,64 +52,3 @@ async def list_datasets(user: CurrentUser):
         for source in sources
         if source.get("status") == "ready"
     ]
-
-
-@router.post(
-    "/from-path",
-    response_model=DatasetOut,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_data_management)],
-)
-async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
-    """
-    Register a local directory as a ready dataset without an upload step.
-    Only available when STORAGE_BACKEND=local (local development).
-    """
-    storage = get_storage()
-    if not storage.is_local:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="from-path registration is only available in local development mode",
-        )
-
-    from pathlib import Path
-
-    if not Path(body.obs_dir).is_dir():
-        raise HTTPException(status_code=400, detail=f"obs_dir does not exist: {body.obs_dir}")
-
-    now = datetime.now(UTC).isoformat()
-    dataset_id = str(uuid.uuid4())
-
-    async with get_db() as conn:
-        result = await conn.execute(
-            text(
-                "INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
-                "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"
-            ),
-            {
-                "id": dataset_id,
-                "uid": user.id,
-                "name": body.name,
-                "key": body.obs_dir,
-                "now": now,
-            },
-        )
-        return DatasetOut(**dict(result.mappings().fetchone()))
-
-
-@router.get("/{dataset_id}", response_model=DatasetOut)
-async def get_dataset(dataset_id: str, user: CurrentUser):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                    {"id": dataset_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    return DatasetOut(**dict(row))

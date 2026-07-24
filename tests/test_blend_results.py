@@ -95,9 +95,7 @@ async def test_get_blend_results_reads_summary(client, user_id: str) -> None:
 
     assert result["job_id"] == job_id
     assert result["skill"][0]["is_blend"] is True
-    assert any(
-        a["filename"] == "summary_models_pooled.csv" for a in result["artifacts"]
-    )
+    assert any(a["filename"] == "summary_models_pooled.csv" for a in result["artifacts"])
 
 
 @pytest.mark.asyncio

@@ -47,13 +47,15 @@ def _source_candidate(source: dict) -> dict:
     }
 
 
-async def _ready_obs_candidates() -> list[dict]:
-    sources = await data_source_service.get_obs_sources()
+async def _ready_obs_candidates(user_id: str | None = None) -> list[dict]:
+    sources = await data_source_service.get_obs_sources(user_id=user_id)
     return [_source_candidate(s) for s in sources if s.get("status") == "ready"]
 
 
-async def _ready_model_candidates(region: str | None = None) -> list[dict]:
-    sources = await data_source_service.get_model_sources(region)
+async def _ready_model_candidates(
+    region: str | None = None, user_id: str | None = None
+) -> list[dict]:
+    sources = await data_source_service.get_model_sources(region, user_id=user_id)
     return [_source_candidate(s) for s in sources if s.get("status") == "ready"]
 
 
@@ -116,9 +118,7 @@ def _year_errors(spec: BlendRunSpec, coverage: dict | None) -> list[str]:
     errors: list[str] = []
     low, high = min(forecast_years), max(forecast_years)
     if low < coverage["start"] or high > coverage["end"]:
-        errors.append(
-            f"Chosen sources only share data for {coverage['start']}-{coverage['end']}."
-        )
+        errors.append(f"Chosen sources only share data for {coverage['start']}-{coverage['end']}.")
     if low < coverage["earliest_forecast"]:
         errors.append(
             f"Climatology needs {MIN_ONSET_YEARS} years of observations before the "
@@ -156,26 +156,22 @@ def _finalize_blend_config(spec: BlendRunSpec) -> BlendRunSpec:
     )
 
 
-async def _validation_for_config(spec: BlendRunSpec) -> BlendValidation:
+async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None) -> BlendValidation:
     errors: list[str] = []
     warnings: list[str] = []
     missing = list(spec.missing_fields)
 
-    obs_candidates = {c["id"]: c for c in await _ready_obs_candidates()}
+    obs_candidates = {c["id"]: c for c in await _ready_obs_candidates(user_id)}
     obs = obs_candidates.get(spec.obs_dataset_id) if spec.obs_dataset_id else None
     if spec.obs_dataset_id and obs is None:
         errors.append(f"Unknown or unavailable observation source: {spec.obs_dataset_id}")
 
     model_region = obs.get("region") if obs else None
-    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region)}
-    selected_models = [
-        model_candidates[mid] for mid in spec.model_ids if mid in model_candidates
-    ]
+    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region, user_id)}
+    selected_models = [model_candidates[mid] for mid in spec.model_ids if mid in model_candidates]
     bad_models = [mid for mid in spec.model_ids if mid not in model_candidates]
     if bad_models:
-        errors.append(
-            "Models are not available for this region: " + ", ".join(bad_models)
-        )
+        errors.append("Models are not available for this region: " + ", ".join(bad_models))
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
@@ -203,8 +199,7 @@ async def _load_blend_config(session_id: str, user_id: str) -> BlendRunSpec:
             (
                 await conn.execute(
                     sa.text(
-                        "SELECT blend_config FROM chat_sessions "
-                        "WHERE id = :id AND user_id = :uid"
+                        "SELECT blend_config FROM chat_sessions WHERE id = :id AND user_id = :uid"
                     ),
                     {"id": session_id, "uid": user_id},
                 )
@@ -250,9 +245,7 @@ async def _save_blend_state(
         )
 
 
-def blend_payload(
-    spec: BlendRunSpec, validation: BlendValidation, **extra: object
-) -> dict:
+def blend_payload(spec: BlendRunSpec, validation: BlendValidation, **extra: object) -> dict:
     return {
         "blend_config": spec.model_dump(mode="json"),
         "blend_validation": validation.model_dump(mode="json"),
@@ -270,12 +263,12 @@ async def validation_for_config(spec: BlendRunSpec) -> BlendValidation:
 
 
 async def list_blend_models(region: str | None, user_id: str, scope: BenchmarkScope) -> dict:
-    return {"models": await _ready_model_candidates(region)}
+    return {"models": await _ready_model_candidates(region, user_id)}
 
 
 async def get_blend_config(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
     spec = _finalize_blend_config(await _load_blend_config(session_id, user_id))
-    validation = await _validation_for_config(spec)
+    validation = await _validation_for_config(spec, user_id)
     await _save_blend_state(session_id, user_id, spec, validation)
     return blend_payload(spec, validation)
 
@@ -285,13 +278,13 @@ async def update_blend_config(
 ) -> dict:
     spec = await _load_blend_config(session_id, user_id)
 
-    obs_candidates = {c["id"]: c for c in await _ready_obs_candidates()}
+    obs_candidates = {c["id"]: c for c in await _ready_obs_candidates(user_id)}
     obs_id = patch.get("obs_dataset_id") if "obs_dataset_id" in patch else spec.obs_dataset_id
     obs = obs_candidates.get(obs_id) if isinstance(obs_id, str) else None
 
     # Models are region-scoped to the chosen observations, matching the UI.
     model_region = obs.get("region") if obs else None
-    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region)}
+    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region, user_id)}
     raw_model_ids = (
         patch["model_ids"] if isinstance(patch.get("model_ids"), list) else spec.model_ids
     )
@@ -318,25 +311,21 @@ async def update_blend_config(
         }
     )
     next_spec = _finalize_blend_config(next_spec)
-    validation = await _validation_for_config(next_spec)
+    validation = await _validation_for_config(next_spec, user_id)
     await _save_blend_state(session_id, user_id, next_spec, validation)
     return blend_payload(next_spec, validation)
 
 
-async def validate_blend_config(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
+async def validate_blend_config(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
     spec = _finalize_blend_config(await _load_blend_config(session_id, user_id))
-    validation = await _validation_for_config(spec)
+    validation = await _validation_for_config(spec, user_id)
     await _save_blend_state(session_id, user_id, spec, validation)
     return blend_payload(spec, validation)
 
 
-async def propose_blend_submit(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
+async def propose_blend_submit(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
     spec = _finalize_blend_config(await _load_blend_config(session_id, user_id))
-    validation = await _validation_for_config(spec)
+    validation = await _validation_for_config(spec, user_id)
     await _save_blend_state(session_id, user_id, spec, validation)
     payload = blend_payload(spec, validation)
     if not validation.can_run:
@@ -365,38 +354,27 @@ def _blend_create_body(spec: BlendRunSpec, run_id: str) -> job_submission.BlendC
     )
 
 
-async def submit_blend_for_session(
-    user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
+async def submit_blend_for_session(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
     spec = _finalize_blend_config(await _load_blend_config(session_id, user_id))
-    validation = await _validation_for_config(spec)
+    validation = await _validation_for_config(spec, user_id)
     if not validation.can_run:
         await _save_blend_state(session_id, user_id, spec, validation)
         return blend_payload(spec, validation, error="Blend config is not runnable")
 
     run_id = str(uuid.uuid4())
-    blend = await job_submission.create_blend_for_user(
-        _blend_create_body(spec, run_id), user_id
-    )
+    blend = await job_submission.create_blend_for_user(_blend_create_body(spec, run_id), user_id)
     job = blend.model_dump(mode="json")
 
     submitted = spec.model_copy(update={"status": "running"})
     submitted_validation = validation.model_copy(update={"status": "running"})
-    await _save_blend_state(
-        session_id, user_id, submitted, submitted_validation, run_id
-    )
+    await _save_blend_state(session_id, user_id, submitted, submitted_validation, run_id)
 
     from ai_almanac.server.db import get_db
 
-    next_scope = BenchmarkScope(
-        kind="job_set", key=run_id, title=scope.title, job_ids=[blend.id]
-    )
+    next_scope = BenchmarkScope(kind="job_set", key=run_id, title=scope.title, job_ids=[blend.id])
     async with get_db() as conn:
         await conn.execute(
-            sa.text(
-                "UPDATE chat_sessions SET scope = :scope "
-                "WHERE id = :id AND user_id = :uid"
-            ),
+            sa.text("UPDATE chat_sessions SET scope = :scope WHERE id = :id AND user_id = :uid"),
             {
                 "scope": json.dumps(next_scope.model_dump(mode="json")),
                 "id": session_id,

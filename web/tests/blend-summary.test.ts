@@ -30,8 +30,7 @@ describe('parsePooledSummary', () => {
 	it('spells out climatology baselines', () => {
 		const cal =
 			'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,fuxi_calibrated_clim_mok_date,calibrated,0,0,0';
-		const unc =
-			'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,unc_clim_raw,raw,0,0,0';
+		const unc = 'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,unc_clim_raw,raw,0,0,0';
 		const labels = parsePooledSummary([HEADER, cal, unc].join('\n')).map((r) => r.label);
 		expect(labels).toContain('FUXI (calibrated)');
 		expect(labels).toContain('Climatology (uncalibrated)');

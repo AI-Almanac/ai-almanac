@@ -45,9 +45,7 @@ def _select_metric_variable(ds: xr.Dataset, preferred: str) -> xr.DataArray:
     numeric_vars = [
         name
         for name, da in ds.data_vars.items()
-        if {"time", "lat", "lon"}.issubset(
-            set(_canonicalize_dim(dim) for dim in da.dims)
-        )
+        if {"time", "lat", "lon"}.issubset(set(_canonicalize_dim(dim) for dim in da.dims))
     ]
     if not numeric_vars:
         raise RuntimeError(f"No metric variable found; preferred {preferred!r}")
@@ -59,15 +57,11 @@ def _canonicalize_dim(dim: str) -> str:
 
 
 def _canonicalize_data_array(da: xr.DataArray) -> xr.DataArray:
-    rename = {
-        dim: _canonicalize_dim(dim) for dim in da.dims if _canonicalize_dim(dim) != dim
-    }
+    rename = {dim: _canonicalize_dim(dim) for dim in da.dims if _canonicalize_dim(dim) != dim}
     result = da.rename(rename) if rename else da
     missing = {"time", "lat", "lon"} - set(result.dims)
     if missing:
-        raise RuntimeError(
-            f"Metric variable {da.name!r} is missing dimensions: {sorted(missing)}"
-        )
+        raise RuntimeError(f"Metric variable {da.name!r} is missing dimensions: {sorted(missing)}")
     result = result.transpose("time", "lat", "lon")
     if result.lat.values[0] > result.lat.values[-1]:
         result = result.sortby("lat")
@@ -87,9 +81,7 @@ def _clip_time_range(da: xr.DataArray) -> xr.DataArray:
 def _with_e2s_variable_dim(da: xr.DataArray, variable_name: str) -> xr.DataArray:
     if "variable" in da.dims:
         return da.transpose("time", "variable", "lat", "lon")
-    return da.expand_dims(variable=[variable_name]).transpose(
-        "time", "variable", "lat", "lon"
-    )
+    return da.expand_dims(variable=[variable_name]).transpose("time", "variable", "lat", "lon")
 
 
 def _to_e2s_tensor_and_coords(da: xr.DataArray):
@@ -114,9 +106,7 @@ def _spatial_data_array_from_e2s(result, coords, metric_name: str) -> xr.DataArr
     return da.transpose("lat", "lon")
 
 
-def _compute_e2s_spatial_statistic(
-    metric_name: str, model_da: xr.DataArray, obs_da: xr.DataArray
-):
+def _compute_e2s_spatial_statistic(metric_name: str, model_da: xr.DataArray, obs_da: xr.DataArray):
     from earth2studio import statistics
 
     model_tensor, model_coords = _to_e2s_tensor_and_coords(model_da)
@@ -144,9 +134,7 @@ def main() -> None:
     obs_files = sorted(obs_dir.glob("*.nc"))
     model_files = sorted(model_dir.glob("*.nc"))
     if not obs_files or not model_files:
-        raise RuntimeError(
-            "Cannot compute Earth2Studio metrics without obs and model NetCDF files"
-        )
+        raise RuntimeError("Cannot compute Earth2Studio metrics without obs and model NetCDF files")
 
     print("==> Computing Earth2Studio metrics (RMSE, MAE, ACC, bias)...")
     obs_ds = xr.open_mfdataset(obs_files, combine="by_coords")

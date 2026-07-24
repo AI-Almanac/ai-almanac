@@ -1,14 +1,19 @@
 name: deploy-staging
 
 # Builds the single ai-almanac-web image (FastAPI + bundled SPA), runs DB
-# migrations, then rolls the staging backend to the new revision. Production is
-# still on the two-image architecture (almanac-backend/almanac-frontend) and is
-# deployed separately — do not extend this workflow to main without migrating
-# prod to the single image first.
+# migrations, then rolls the staging backend to the new revision. Production
+# runs the same single-image architecture; deploy-prod.yml is the mirror of
+# this workflow targeting almanac-backend.
 
+# Docs and terraform don't ship in the image, so they don't trigger a deploy;
+# terraform is applied manually. workflow_dispatch stays as the escape hatch.
 on:
   push:
     branches: [develop]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "terraform/**"
   workflow_dispatch:
 
 concurrency:
@@ -29,28 +34,29 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Authenticate to GCP
         id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: projects/251618530185/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: almanac-ci@ai-almanac.iam.gserviceaccount.com
           token_format: access_token
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
 
       - name: Log in to Artifact Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: us-central1-docker.pkg.dev
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
@@ -86,8 +92,54 @@ jobs:
           gcloud run jobs execute "$MIGRATE_JOB" --region "$REGION" --wait
 
       - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
+        uses: google-github-actions/deploy-cloudrun@251330ba9a8a34bfbc1622895f42e1d53fd14522 # v2
         with:
           service: ${{ env.SERVICE }}
           region: us-central1
           image: ${{ env.AR_IMAGE }}:${{ github.sha }}
+
+  # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
+  # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
+  # live in the script). On failure, Claude triages the captured errors
+  # against the deployed diff into the workflow summary.
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: projects/251618530185/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: almanac-ci@ai-almanac.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - name: Smoke test and log soak
+        run: ./scripts/post_deploy_check.sh "$SERVICE" "$REGION" "https://staging.ai-almanac.org" 300
+
+      - name: AI triage on failure
+        if: failure()
+        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            The staging deploy of commit ${{ github.sha }} failed post-deploy
+            verification. Captured error logs (if the check reached the log
+            scan) are in post-deploy-errors.txt. Inspect them and the
+            recently deployed changes (git log/diff of the last few commits)
+            and produce a concise triage: most likely root cause, the
+            specific commit/change implicated if identifiable, and a
+            recommendation — rollback (see docs/sdlc/rollback.md) or
+            fix-forward. Append your analysis in markdown to the file whose
+            path is in the GITHUB_STEP_SUMMARY environment variable.
+          claude_args: >-
+            --max-turns 12
+            --allowedTools "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Write"

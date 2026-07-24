@@ -45,13 +45,9 @@ async def test_submit_launches_and_returns_handle(
     async def fake_launch(job_id: str) -> None:
         launched["job_id"] = job_id
 
-    monkeypatch.setattr(
-        "ai_almanac.server.services.local_runner.launch_job", fake_launch
-    )
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     handle = await LocalProcessRunner().submit(
-        ExecutionRequest(
-            job_id="job-x", workspace=Path("/tmp"), bundle_path=Path("/tmp")
-        )
+        ExecutionRequest(job_id="job-x", workspace=Path("/tmp"), bundle_path=Path("/tmp"))
     )
     assert launched["job_id"] == "job-x"
     assert handle.runner == "local"
@@ -62,17 +58,13 @@ async def test_submit_launches_and_returns_handle(
 async def test_inspect_reports_durable_status(client: httpx.AsyncClient) -> None:
     job_id = str(uuid.uuid4())
     _insert_job(job_id, status="running")
-    snapshot = await LocalProcessRunner().inspect(
-        RunnerHandle(runner="local", external_id=job_id)
-    )
+    snapshot = await LocalProcessRunner().inspect(RunnerHandle(runner="local", external_id=job_id))
     assert snapshot.status == "running"
 
 
 @pytest.mark.asyncio
 async def test_inspect_unknown_for_missing_job(client: httpx.AsyncClient) -> None:
-    snapshot = await LocalProcessRunner().inspect(
-        RunnerHandle(runner="local", external_id="ghost")
-    )
+    snapshot = await LocalProcessRunner().inspect(RunnerHandle(runner="local", external_id="ghost"))
     assert snapshot.status == "unknown"
 
 

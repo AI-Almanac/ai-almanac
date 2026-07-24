@@ -9,14 +9,12 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
-    WebSocket,
-    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ai_almanac.server.auth import CurrentUser, authenticate_websocket
+from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
@@ -94,8 +92,8 @@ def _parse_metrics_cache(value: object) -> JobMetrics | None:
 
 
 @router.get("/models")
-async def list_models(region: str | None = None):
-    return await load_model_registry(region)
+async def list_models(user: CurrentUser, region: str | None = None):
+    return await load_model_registry(region, user_id=user.id, is_admin=user.is_admin)
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
@@ -151,69 +149,6 @@ def _require_complete(job: dict) -> None:
         )
 
 
-@router.websocket("/{job_id}/stream")
-async def stream_job(ws: WebSocket, job_id: str) -> None:
-    """Stream durable log additions and status changes to the job's owner."""
-    user = await authenticate_websocket(ws)
-    if user is None:
-        return  # handshake already closed (missing identity in shared mode)
-    await ws.accept()
-
-    job = await job_access.fetch_job(job_id)
-    if job is None or not job_access.can_read(job, user):
-        # Don't leak existence of other users' jobs; reject uniformly.
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    storage = get_storage()
-    sent_lines = 0
-    previous_status: str | None = None
-    try:
-        while True:
-            logs = await asyncio.to_thread(storage.read_log, job_id)
-            lines = logs.splitlines()
-            for line in lines[sent_lines:]:
-                await ws.send_json({"type": "log", "payload": {"line": line}})
-            sent_lines = len(lines)
-
-            async with get_db() as conn:
-                row = (
-                    (
-                        await conn.execute(
-                            sa.select(jobs.c.status, jobs.c.exit_code).where(
-                                jobs.c.id == job_id
-                            )
-                        )
-                    )
-                    .mappings()
-                    .fetchone()
-                )
-            if not row:
-                await ws.send_json(
-                    {"type": "done", "payload": {"status": "deleted"}}
-                )
-                break
-            if row["status"] != previous_status:
-                previous_status = row["status"]
-                await ws.send_json(
-                    {"type": "status", "payload": {"status": row["status"]}}
-                )
-            if row["status"] in ("complete", "failed", "canceled"):
-                await ws.send_json(
-                    {
-                        "type": "done",
-                        "payload": {
-                            "status": row["status"],
-                            "exit_code": row["exit_code"],
-                        },
-                    }
-                )
-                break
-            await asyncio.sleep(0.75)
-    except WebSocketDisconnect:
-        pass
-
-
 @router.post("/{job_id}/cancel", response_model=JobOut)
 async def cancel_job(job: ModifiableJob, user: CurrentUser):
     row = await signal_cancel(job["id"]) or job
@@ -254,6 +189,110 @@ async def list_artifacts(job_id: str, job: ReadableJob):
     ]
 
 
+@router.get("/{job_id}/blend-forecast")
+async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
+    """Return blended onset probabilities for all issue dates and grid points.
+
+    Parses blended_forecast_probabilities.csv server-side and returns a
+    compact structure suitable for client-side choropleth rendering.
+    """
+    import csv
+    import io
+    import json as _json
+
+    from ai_almanac.server.services.region_catalog import get_region
+
+    _require_complete(job)
+
+    # The region defines what "onset" means (e.g. India → Modified Moron–Robertson,
+    # Ethiopia → Kiremt); surface its name + definition so the UI can keep it visible.
+    config = _json.loads(job.get("config_json") or "{}")
+    region = await get_region(config["region_id"]) if config.get("region_id") else None
+    region_name = (region or {}).get("display_name")
+    onset_definition = (region or {}).get("description")
+
+    def _empty() -> dict:
+        return {
+            "issue_dates": [],
+            "points": [],
+            "onset_threshold": None,
+            "region_id": config.get("region_id"),
+            "region_name": region_name,
+            "onset_definition": onset_definition,
+        }
+
+    artifact = next(
+        (
+            a
+            for a in await list_job_artifacts(job_id)
+            if a["filename"] == "blended_forecast_probabilities.csv"
+        ),
+        None,
+    )
+    if artifact is None:
+        return _empty()
+
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, artifact["kind"], artifact["filename"]
+    )
+    if not text:
+        return _empty()
+
+    reader = csv.DictReader(io.StringIO(text))
+    # point_id → {date → [w1, w2, w3, w4, later]}
+    by_point: dict[str, dict[str, list[float]]] = {}
+    coords_by_point: dict[str, tuple[float, float]] = {}
+    # preserve insertion order for issue_dates
+    date_order: dict[str, None] = {}
+    onset_threshold: float | None = None
+    for row in reader:
+        point_id = row["id"]
+        date = row["time"]
+        date_order[date] = None
+        if onset_threshold is None:
+            try:
+                onset_threshold = float(row.get("onset_threshold") or "")
+            except ValueError:
+                onset_threshold = None
+        if point_id not in by_point:
+            by_point[point_id] = {}
+        by_point[point_id][date] = [
+            float(row.get("cv_week1") or 0),
+            float(row.get("cv_week2") or 0),
+            float(row.get("cv_week3") or 0),
+            float(row.get("cv_week4") or 0),
+            float(row.get("cv_later") or 0),
+        ]
+        if point_id not in coords_by_point and row.get("lat") and row.get("lon"):
+            coords_by_point[point_id] = (float(row["lat"]), float(row["lon"]))
+
+    issue_dates = list(date_order)
+    points = []
+    for point_id, date_map in by_point.items():
+        if point_id in coords_by_point:
+            lat, lon = coords_by_point[point_id]
+        else:
+            lat_str, lon_str = point_id.split("_", 1)
+            lat, lon = float(lat_str), float(lon_str)
+        points.append(
+            {
+                "id": point_id,
+                "lat": lat,
+                "lon": lon,
+                "probs": [date_map.get(d, [0, 0, 0, 0, 0]) for d in issue_dates],
+            }
+        )
+
+    return {
+        "issue_dates": issue_dates,
+        "points": points,
+        "onset_threshold": onset_threshold,
+        "region_id": config.get("region_id"),
+        "region_name": region_name,
+        "onset_definition": onset_definition,
+    }
+
+
 @router.get("/{job_id}/blend-summary")
 async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
     """Return the blend's pooled summary CSV, read server-side.
@@ -278,7 +317,7 @@ async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
     return {"csv": text or ""}
 
 
-@router.get("/{job_id}/results/{kind}/{filename}")
+@router.get("/{job_id}/results/{kind}/{filename:path}")
 async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJob):
     """Serve a result file from this origin — a local file or a proxied GCS stream."""
     if kind not in ("output", "figure"):
@@ -297,9 +336,7 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
     # Remote (GCS): proxy the bytes so the browser never reads the bucket
     # cross-origin, which has no CORS policy for the frontend origin.
     assert isinstance(storage, GCSStorage)
-    stream = await asyncio.to_thread(
-        storage.open_result_stream, job_id, kind, filename
-    )
+    stream = await asyncio.to_thread(storage.open_result_stream, job_id, kind, filename)
     if stream is None:
         raise HTTPException(status_code=404, detail="File not found")
     body, media_type, size = stream
@@ -350,9 +387,7 @@ async def get_metrics(
 
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(
-    job_id: str, job: ReadableJob, model: str, window: str, metric: str
-):
+async def get_grid(job_id: str, job: ReadableJob, model: str, window: str, metric: str):
     _require_complete(job)
     try:
         return await asyncio.to_thread(
@@ -406,15 +441,11 @@ async def get_cell(
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(job_id: str, job: ModifiableJob):
     if job["status"] in ACTIVE_STATUSES:
-        raise HTTPException(
-            status_code=409, detail="Cancel the job before deleting it."
-        )
+        raise HTTPException(status_code=409, detail="Cancel the job before deleting it.")
     async with get_db() as conn:
         # Remove indexed artifact records, then the job. (Explicit delete rather
         # than relying on SQLite FK cascade, which is off by default.)
-        await conn.execute(
-            sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id)
-        )
+        await conn.execute(sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id))
         await conn.execute(sa.delete(jobs).where(jobs.c.id == job_id))
         await audit(
             conn,

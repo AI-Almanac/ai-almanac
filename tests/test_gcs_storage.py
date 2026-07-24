@@ -82,11 +82,16 @@ class _FakeSigningCredentials(ga_credentials.Credentials, ga_credentials.Signing
     URL signing doesn't reach for the IAM signBlob API."""
 
     def refresh(self, request) -> None: ...
-    def sign_bytes(self, message): return b""
+    def sign_bytes(self, message):
+        return b""
+
     @property
-    def signer_email(self): return "fake@local"
+    def signer_email(self):
+        return "fake@local"
+
     @property
-    def signer(self): return None
+    def signer(self):
+        return None
 
 
 class _FakeClient:
@@ -123,19 +128,6 @@ def test_job_output_uri_points_at_outputs_bucket(store: GCSStorage) -> None:
     )
 
 
-def test_resolve_obs_path(store: GCSStorage) -> None:
-    # gs:// and absolute paths pass through unchanged
-    assert store.resolve_obs_path("gs://b/x/y.nc") == "gs://b/x/y.nc"
-    assert store.resolve_obs_path("/mnt/data/x.nc") == "/mnt/data/x.nc"
-    # relative upload key resolves to the parent prefix in the uploads bucket
-    assert store.resolve_obs_path("user/ds/file.nc") == "gs://up/user/ds"
-
-
-def test_signed_urls_route_to_the_right_bucket(store: GCSStorage) -> None:
-    upload = store.generate_upload_url("user/ds/f.nc", "https://api")
-    assert upload == "https://signed/up/user/ds/f.nc?method=PUT"
-
-
 def test_result_url_points_at_the_backend_proxy(store: GCSStorage) -> None:
     # Result files are streamed through the backend, not the bucket directly, so
     # the browser fetches them same-origin (no signed URL, no bucket CORS).
@@ -156,12 +148,6 @@ def test_open_result_stream_yields_bytes(store: GCSStorage) -> None:
     assert b"".join(body) == b"hello"
     assert size == 5
     assert store.open_result_stream("job1", "output", "missing.nc") is None
-
-
-def test_confirm_upload(store: GCSStorage) -> None:
-    assert store.confirm_upload("user/ds/f.nc") is False
-    store._bucket("up").blob("user/ds/f.nc").upload_from_string(b"x")
-    assert store.confirm_upload("user/ds/f.nc") is True
 
 
 def test_list_result_files_parses_kind_and_filename(store: GCSStorage) -> None:

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -29,11 +30,13 @@ from ai_almanac.server.routers import (
     config,
     data_sources,
     datasets,
+    feedback,
+    forecasts,
     fs,
     jobs,
     llm_profiles,
     regions,
-    uploads,
+    tiles,
 )
 from ai_almanac.server.routers import (
     settings as settings_router,
@@ -81,7 +84,6 @@ async def lifespan(app: FastAPI):
     # overlay) is reachable; the call at line ~75 only saw config.yaml + env.
     _reload_user_config()
     await _seed_regions()
-    await _seed_data_sources()
     await _reconcile_jobs()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
@@ -113,20 +115,6 @@ def _enforce_deployment() -> None:
     from ai_almanac.server.auth import enforce_deployment_invariants
 
     enforce_deployment_invariants()
-
-
-async def _seed_data_sources() -> None:
-    """Populate the data_sources table from the packaged YAMLs on first launch
-    so existing testdata setups (`*_OBS_DIR`, `*_MODEL_DIR` env vars) work
-    without the user needing to register anything manually."""
-    from ai_almanac.server.services.data_sources import seed_from_yaml_if_empty
-
-    try:
-        count = await seed_from_yaml_if_empty()
-        if count:
-            logger.info("seeded %d data source(s) from packaged YAMLs", count)
-    except Exception as e:  # noqa: BLE001 — non-fatal: keep serving
-        logger.warning("data source seeding failed: %s", e)
 
 
 async def _seed_regions() -> None:
@@ -165,20 +153,10 @@ async def _run_background_step(name: str, step) -> None:
         logger.warning("%s failed: %s", name, message)
         if _background_failures.get(name) != message:
             _background_failures[name] = message
-            await _record_background_event(
-                f"background.{name}.failed", metadata={"error": message}
-            )
+            await _record_background_event(f"background.{name}.failed", metadata={"error": message})
         return
     if _background_failures.pop(name, None) is not None:
         await _record_background_event(f"background.{name}.recovered")
-
-
-async def _cleanup_uploads() -> None:
-    from ai_almanac.server.routers.uploads import cleanup_expired_uploads
-
-    cleaned = await cleanup_expired_uploads()
-    if cleaned:
-        logger.info("expired %d abandoned upload(s)", cleaned)
 
 
 async def _reconcile_jobs() -> None:
@@ -187,7 +165,6 @@ async def _reconcile_jobs() -> None:
 
     await _run_background_step("job_reconciliation", reconcile_jobs)
     await _run_background_step("artifact_publication", publish_pending)
-    await _run_background_step("upload_cleanup", _cleanup_uploads)
 
 
 async def _job_reconciler_loop() -> None:
@@ -198,18 +175,27 @@ async def _job_reconciler_loop() -> None:
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)
 
+tiles.add_exception_handlers(app)
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    # Per-request correlation ID: echoed to the client (recorded in the SPA's
+    # feedback breadcrumbs) and logged here, so a feedback report's API trail
+    # can be matched to server logs.
+    request_id = uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-ID"] = request_id
     logger.info(
-        "%s %s %d %.1fms",
+        "%s %s %d %.1fms rid=%s",
         request.method,
         request.url.path,
         response.status_code,
         duration_ms,
+        request_id,
     )
     return response
 
@@ -278,7 +264,37 @@ app.add_middleware(
     allow_credentials=not settings.cors_allow_all,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let the cross-origin dev SPA read the correlation ID for breadcrumbs.
+    expose_headers=["X-Request-ID"],
 )
+
+# Several SvelteKit pages share a name with an API router (/blends, /forecasts,
+# /regions, /data-sources, /settings), so a hard refresh on one of those pages
+# is a real GET to this process and would otherwise be dispatched straight to
+# the API route, rendering its raw JSON instead of the SPA. A browser
+# top-level navigation is distinguishable from the SPA's own same-origin
+# fetch() calls (which never send `Sec-Fetch-Dest: document` and default to
+# `Accept: */*`), so route those to the SPA shell before the API routers ever
+# see them.
+_DOC_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
+
+def _is_page_navigation(request: Request) -> bool:
+    if request.method != "GET" or request.url.path in _DOC_PATHS:
+        return False
+    if request.headers.get("sec-fetch-dest") == "document":
+        return True
+    return request.headers.get("accept", "").startswith("text/html")
+
+
+@app.middleware("http")
+async def _spa_navigation_fallback(request: Request, call_next):
+    if _STATIC_DIR.exists() and _is_page_navigation(request):
+        response = FileResponse(_STATIC_DIR / "index.html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    return await call_next(request)
+
 
 app.include_router(auth.router)
 app.include_router(blends.router)
@@ -287,12 +303,14 @@ app.include_router(config.router)
 app.include_router(config.root_router)
 app.include_router(data_sources.router)
 app.include_router(datasets.router)
+app.include_router(feedback.router)
+app.include_router(forecasts.router)
 app.include_router(fs.router)
 app.include_router(jobs.router)
 app.include_router(llm_profiles.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
-app.include_router(uploads.router)
+app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])
 
 
 @app.get("/health")

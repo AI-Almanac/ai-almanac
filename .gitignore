@@ -16,6 +16,11 @@ web/.svelte-kit/
 web/node_modules/
 src/ai_almanac/server/static/
 
+# Claude Code: shared settings.json and hooks/ are committed; personal
+# overrides and session state are not.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Data
 .env
 scripts/backend-env.yaml
@@ -23,6 +28,7 @@ scripts/backend-env.yaml
 *.db-shm
 *.db-wal
 job_outputs/
+data/
 
 # Data archives
 *.zip
@@ -49,3 +55,6 @@ terraform/backend.hcl
 # Local tooling / scratch
 .localrag/
 __marimo__/
+node_modules/
+process-compose-dev.log
+uv.lock

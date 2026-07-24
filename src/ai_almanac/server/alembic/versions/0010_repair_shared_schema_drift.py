@@ -255,7 +255,9 @@ def _create_job_artifacts_if_missing(tables: set[str]) -> None:
     op.create_table(
         "job_artifacts",
         sa.Column("id", sa.Text(), primary_key=True),
-        sa.Column("job_id", sa.Text(), sa.ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "job_id", sa.Text(), sa.ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("kind", sa.Text(), nullable=False),
         sa.Column("filename", sa.Text(), nullable=False),
         sa.Column("media_type", sa.Text(), nullable=False),

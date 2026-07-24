@@ -81,9 +81,9 @@ src/ai_almanac/
     ├── db.py              async SQLAlchemy access and user persistence
     ├── sync_db.py         supervisor database access and capacity locking
     ├── alembic/           SQLite/PostgreSQL schema migrations
-    ├── config/            YAML registries: models.yaml, datasets.yaml,
-    │                      regions.yaml, romp.yaml
-    ├── routers/           auth, jobs, data, settings, uploads, chat
+    ├── config/            packaged defaults: regions.yaml, romp.yaml,
+    │                      forecast_models.yaml
+    ├── routers/           auth, jobs, data, settings, chat
     ├── services/
     │   ├── job_manager.py detached supervision and restart reconciliation
     │   ├── job_workload.py invokes ROMP through the managed Pixi environment
@@ -139,15 +139,16 @@ pixi run test-web     # vitest
 
 ---
 
-## Adding a model
+## Adding a dataset or model
 
-1. Add an entry to `src/ai_almanac/server/config/models.yaml`
-   (`id`, `display_name`, `region`, etc.).
-2. Set `{REGION}_{ID}_MODEL_DIR=/path/to/model/files` in your shell env or
-   a `.env` file at the repo root.
-3. Restart `ai-almanac serve`. Models without a directory get filtered out.
+Register it from the Data Sources page (or `POST /data-sources`): pick
+obs/model, point at a local directory or a `gs://` prefix, and save.
+Validation opens the first NetCDF and infers coverage years, spatial
+bounds, and initialization days; invalid sources are kept with a visible
+error and can be revalidated after fixing the data.
 
-No code changes required — the registry is YAML-driven and env-resolved.
+No code changes, env vars, or restarts required — the registry lives in
+the application database.
 
 ---
 

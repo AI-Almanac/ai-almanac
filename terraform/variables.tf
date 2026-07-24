@@ -9,11 +9,6 @@ variable "region" {
   default     = "us-central1"
 }
 
-variable "ghcr_owner" {
-  description = "GitHub user/org that owns the GHCR packages (e.g. hholb)"
-  type        = string
-}
-
 # Derived image paths — resolved at plan time via locals in artifact_registry.tf
 # Override these only if you push images to a different registry.
 variable "app_image" {
@@ -165,64 +160,4 @@ variable "job_runner" {
   description = "Job runner backend: 'modal' (production) or 'docker' (local dev)"
   type        = string
   default     = "modal"
-}
-
-variable "ethiopia_obs_dir" {
-  description = "GCS URI for the Ethiopia obs dataset (datasets.yaml id: ethiopia)"
-  type        = string
-  default     = ""
-}
-variable "imd_2p0_obs_dir" {
-  description = "GCS URI for the IMD India 2-degree obs dataset (datasets.yaml id: imd-2p0)"
-  type        = string
-  default     = ""
-}
-
-variable "india_aifs_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_aifs_daily_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_fuxi_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_fuxi_s2s_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_gencast_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_graphcast_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_ifs_model_dir" {
-  type    = string
-  default = ""
-}
-variable "india_neuralgcm_model_dir" {
-  type    = string
-  default = ""
-}
-variable "ethiopia_aifs_model_dir" {
-  type    = string
-  default = ""
-}
-variable "ethiopia_fuxi_model_dir" {
-  type    = string
-  default = ""
-}
-variable "ethiopia_gencast_model_dir" {
-  type    = string
-  default = ""
-}
-variable "ethiopia_graphcast_model_dir" {
-  type    = string
-  default = ""
 }

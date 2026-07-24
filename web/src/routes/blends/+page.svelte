@@ -1,17 +1,19 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
 	import {
 		listBlends,
 		createBlend,
 		listDataSources,
 		getCapabilities,
+		getForecastModels,
+		forecastModelFor,
+		type ForecastModel,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
 		deleteJob,
 		fetchResultBlob,
-		subscribeJob,
 		type Blend,
 		type BlendCreate,
 		type BlendRunSpec,
@@ -19,8 +21,7 @@
 		type DataSource,
 		type Job,
 		type JobArtifact,
-		type JobStatus,
-		type JobStreamEvent
+		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
@@ -33,6 +34,11 @@
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
 	let modelSources = $state<DataSource[]>([]);
+	// Forecast registry (forecast_models.yaml). A blend model is forecastable
+	// only when its name resolves to a registry entry (forecastModelFor) — the
+	// server's live-scoring gate (see create_forecast_for_user). Empty if
+	// forecasting is disabled.
+	let forecastModels = $state<ForecastModel[]>([]);
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -163,17 +169,21 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps] = await Promise.allSettled([
+		const [b, obs, models, caps, forecastModelsRes] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities()
+			getCapabilities(),
+			getForecastModels()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		// Gated by the forecasting feature flag; rejects when it's off — leave the
+		// list empty so no forecast badges show.
+		if (forecastModelsRes.status === 'fulfilled') forecastModels = forecastModelsRes.value;
 		loaded = true;
 	}
 
@@ -267,51 +277,33 @@
 	// list on a timer. Replacing the array on every poll reassigned every blend
 	// object, which remounted the detail view and made the page jump. Here only
 	// the blend whose status actually changed is rewritten.
-	const streams = new Map<string, () => void>();
-	$effect(() => {
-		const active = new Set(
-			blends.filter((b) => ACTIVE_STATUSES.includes(b.status)).map((b) => b.id)
-		);
-		for (const id of active) {
-			if (!streams.has(id))
-				streams.set(
-					id,
-					subscribeJob(id, (event) => onBlendEvent(id, event))
-				);
-		}
-		for (const [id, close] of streams) {
-			if (!active.has(id)) {
-				close();
-				streams.delete(id);
-			}
-		}
-	});
-	onDestroy(() => {
-		for (const close of streams.values()) close();
-		streams.clear();
-	});
+	// While any blend is active, re-fetch the list and replace only the blends
+	// whose status changed (a wholesale rewrite remounts the detail view and
+	// makes the page jump). Bounded by the server's ~5s reconcile cadence, so a
+	// 3s poll is as live as the data gets. Returning the stop fn lets $effect
+	// tear the timer down on unmount.
+	$effect(() =>
+		pollWhileActive(() => blends.some((b) => ACTIVE_STATUSES.includes(b.status)), syncBlendStatuses)
+	);
 
-	function onBlendEvent(id: string, event: JobStreamEvent) {
-		if (event.type !== 'status' && event.type !== 'done') return;
-		patchBlendStatus(id, event.payload.status as JobStatus);
-		// The stream only carries status; pull completed_at/error once on finish.
-		if (event.type === 'done') void refreshBlend(id);
+	async function syncBlendStatuses() {
+		let fresh: Blend[];
+		try {
+			fresh = await listBlends();
+		} catch {
+			return; // transient — next tick retries
+		}
+		const byId = new Map(fresh.map((b) => [b.id, b]));
+		blends = blends.map((b) => {
+			const updated = byId.get(b.id);
+			return updated && updated.status !== b.status ? updated : b;
+		});
 	}
 
 	function patchBlendStatus(id: string, status: JobStatus) {
 		const idx = blends.findIndex((b) => b.id === id);
 		if (idx === -1 || blends[idx].status === status) return;
 		blends[idx] = { ...blends[idx], status };
-	}
-
-	async function refreshBlend(id: string) {
-		try {
-			const fresh = (await listBlends()).find((b) => b.id === id);
-			const idx = blends.findIndex((b) => b.id === id);
-			if (fresh && idx !== -1) blends[idx] = fresh;
-		} catch {
-			/* transient — the status patch already reflects the terminal state */
-		}
 	}
 
 	$effect(() => {
@@ -549,9 +541,19 @@
 											onchange={() => toggleModel(source.id)}
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+										{#if forecastModelFor(forecastModels, source.name)}
+											<span
+												class="forecast-badge"
+												title="This model can also generate live forecasts.">Live forecast</span
+											>
+										{/if}
 									</label>
 								{/each}
 							</div>
+							<p class="muted forecast-legend">
+								<span class="forecast-badge">Live forecast</span> models can be extended into the current
+								season. Any model can be blended and benchmarked — those without the badge are historical-only.
+							</p>
 						{/if}
 					</fieldset>
 
@@ -954,6 +956,26 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		color: var(--color-text);
+	}
+
+	.forecast-badge {
+		font-size: 0.62rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding: 0.05rem 0.35rem;
+		border-radius: 0.2rem;
+		background: rgba(52, 211, 153, 0.15);
+		color: var(--color-status-complete);
+		white-space: nowrap;
+	}
+
+	.forecast-legend {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 0.5rem;
 	}
 
 	.field-row {

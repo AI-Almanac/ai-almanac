@@ -47,11 +47,7 @@ async def _job_row(job_id: str) -> dict:
 
     async with get_db() as conn:
         row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
-                )
-            )
+            (await conn.execute(text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}))
             .mappings()
             .one()
         )
@@ -76,9 +72,7 @@ async def test_cancel_job_persists_requested_state(
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT status, cancel_requested_at FROM jobs WHERE id = :id"
-                    ),
+                    text("SELECT status, cancel_requested_at FROM jobs WHERE id = :id"),
                     {"id": job_id},
                 )
             )
@@ -155,9 +149,7 @@ async def test_reconcile_fails_hung_supervisor_with_stale_heartbeat(
 
     monkeypatch.setattr(job_manager, "launch_job", _no_launch)
     stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
-    job_id = await _insert_job(
-        user_id, "running", worker_pid=os.getpid(), heartbeat_at=stale
-    )
+    job_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=stale)
     await job_manager.reconcile_jobs()
 
     row = await _job_row(job_id)
@@ -196,12 +188,8 @@ async def test_reconcile_leaves_healthy_jobs_alone(
         launched.append(candidate)
 
     monkeypatch.setattr(job_manager, "launch_job", fake_launch)
-    running_id = await _insert_job(
-        user_id, "running", worker_pid=os.getpid(), heartbeat_at=_now()
-    )
-    queued_id = await _insert_job(
-        user_id, "queued", worker_pid=os.getpid(), heartbeat_at=_now()
-    )
+    running_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=_now())
+    queued_id = await _insert_job(user_id, "queued", worker_pid=os.getpid(), heartbeat_at=_now())
     await job_manager.reconcile_jobs()
 
     assert (await _job_row(running_id))["status"] == "running"
@@ -373,9 +361,7 @@ async def test_reconcile_leaves_running_modal_job_alone(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_cancels_modal_job(
-    user_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_reconcile_cancels_modal_job(user_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_almanac.server.services import job_manager
 
     job_id = await _make_modal_job(user_id, "canceling")

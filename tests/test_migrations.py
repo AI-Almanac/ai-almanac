@@ -63,7 +63,4 @@ def test_partial_ownership_migration_resumes(tmp_path: Path, monkeypatch) -> Non
 def test_sync_database_url_uses_psycopg3() -> None:
     url = "postgresql+asyncpg://almanac:secret@postgres/almanac"
 
-    assert (
-        sync_database_url(url)
-        == "postgresql+psycopg://almanac:secret@postgres/almanac"
-    )
+    assert sync_database_url(url) == "postgresql+psycopg://almanac:secret@postgres/almanac"
