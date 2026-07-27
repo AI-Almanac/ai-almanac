@@ -14,6 +14,10 @@ FROM ghcr.io/prefix-dev/pixi:latest AS pixi
 FROM python:3.14-slim-bookworm AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
+# color-operations has no prebuilt wheel for 3.14 yet and compiles from source.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY modal ./modal
