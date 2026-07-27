@@ -1,4 +1,4 @@
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { getRegionBoundary } from '$lib/api';
 import { BOUNDARY_LEVELS } from './constants';
 import { boundaryLayerId, boundarySourceId } from './layerKeys';

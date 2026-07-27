@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy, untrack } from 'svelte';
-	import maplibregl from 'maplibre-gl';
+	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { type Job } from '$lib/api';
 	import { getCachedJobGrid } from '$lib/benchmarks.svelte';
@@ -515,7 +515,7 @@
 			cellInspector.open(lat, lon);
 		});
 
-		map.on('mouseleave', () => {
+		map.on('mouseout', () => {
 			tooltipVisible = false;
 			gridCellHover = false;
 		});
