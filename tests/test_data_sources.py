@@ -7,6 +7,14 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from ai_almanac.server.services.data_sources import _season_window
+
+
+def test_season_window_uses_schedule_bounds_else_full_year() -> None:
+    assert _season_window(["05-02", "06-01", "07-29"]) == ("05-02", "07-29")
+    assert _season_window(None) == ("01-01", "12-31")
+    assert _season_window([]) == ("01-01", "12-31")
+
 
 @pytest.mark.asyncio
 async def test_source_validation_does_not_persist_and_returns_inferred_metadata(
@@ -95,8 +103,10 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert model_response.status_code == 201
     model = model_response.json()
     assert model["status"] == "ready"
-    assert model["metadata"]["start_date"] == "1998-01-01"
-    assert model["metadata"]["end_date"] == "2000-12-31"
+    # start/end dates span the coverage years but use the init-time season
+    # month-days (fuxi is initialized 05-02..07-29), not the full calendar year.
+    assert model["metadata"]["start_date"] == "1998-05-02"
+    assert model["metadata"]["end_date"] == "2000-07-29"
     assert model["metadata"]["init_days"] == "2,5"
     assert model["metadata"]["init_days_source"] == "inferred"
     assert model["metadata"]["init_time_coordinate"] == "time"
