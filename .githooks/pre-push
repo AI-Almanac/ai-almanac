@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Full gate before anything leaves the machine: lint + type-check + format
+# checks (pixi run check) and both test suites (pixi run test). Mirrors what
+# CI enforces, so failures surface here instead of on the PR.
+# Bypass in an emergency with: git push --no-verify
+set -euo pipefail
+
+if ! command -v pixi >/dev/null 2>&1; then
+  echo "pre-push: pixi not found; skipping checks (CI will still enforce them)" >&2
+  exit 0
+fi
+
+echo "pre-push: pixi run check"
+pixi run check
+
+echo "pre-push: pixi run test"
+pixi run test

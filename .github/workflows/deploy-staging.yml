@@ -47,7 +47,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
 
       - name: Log in to Artifact Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: us-central1-docker.pkg.dev
           username: oauth2accesstoken
@@ -97,3 +97,49 @@ jobs:
           service: ${{ env.SERVICE }}
           region: us-central1
           image: ${{ env.AR_IMAGE }}:${{ github.sha }}
+
+  # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
+  # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
+  # live in the script). On failure, Claude triages the captured errors
+  # against the deployed diff into the workflow summary.
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: projects/251618530185/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: almanac-ci@ai-almanac.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - name: Smoke test and log soak
+        run: ./scripts/post_deploy_check.sh "$SERVICE" "$REGION" "https://staging.ai-almanac.org" 300
+
+      - name: AI triage on failure
+        if: failure()
+        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3 # v1.0.99
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            The staging deploy of commit ${{ github.sha }} failed post-deploy
+            verification. Captured error logs (if the check reached the log
+            scan) are in post-deploy-errors.txt. Inspect them and the
+            recently deployed changes (git log/diff of the last few commits)
+            and produce a concise triage: most likely root cause, the
+            specific commit/change implicated if identifiable, and a
+            recommendation — rollback (see docs/sdlc/rollback.md) or
+            fix-forward. Append your analysis in markdown to the file whose
+            path is in the GITHUB_STEP_SUMMARY environment variable.
+          claude_args: >-
+            --max-turns 12
+            --allowedTools "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Write"

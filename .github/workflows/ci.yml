@@ -11,6 +11,10 @@ on:
     paths-ignore:
       - "docs/**"
       - "**.md"
+  # autofix.yml re-dispatches this workflow after pushing a formatting fixup
+  # commit, because GITHUB_TOKEN pushes never create pull_request runs on the
+  # new head SHA and check-and-test is a required status check.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -27,7 +31,7 @@ jobs:
 
       # The ai-almanac wheel force-includes web/build, so the editable install
       # that `pixi install` performs needs the SPA bundle to exist first.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm

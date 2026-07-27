@@ -26,8 +26,8 @@ import pandas as pd
 import xarray as xr
 
 # Bangladesh bbox at 1° resolution
-LAT = np.arange(20.0, 28.0, 1.0, dtype=np.float32)   # 20..27, 8 points
-LON = np.arange(88.0, 94.0, 1.0, dtype=np.float32)   # 88..93, 6 points
+LAT = np.arange(20.0, 28.0, 1.0, dtype=np.float32)  # 20..27, 8 points
+LON = np.arange(88.0, 94.0, 1.0, dtype=np.float32)  # 88..93, 6 points
 
 YEARS = [2020, 2021, 2022]
 

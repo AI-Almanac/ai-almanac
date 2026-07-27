@@ -136,13 +136,17 @@ def _stage_gcs_prefix(client, uri: str, local_dir: Path, label: str) -> int:
     prefix = prefix.rstrip("/") + "/"
     bucket = client.bucket(bucket_name)
     names = [
-        blob.name[len(prefix):]
+        blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] and not blob.name[len(prefix):].endswith("/")
+        if blob.name[len(prefix) :] and not blob.name[len(prefix) :].endswith("/")
     ]
     if names:
         results = transfer_manager.download_many_to_path(
-            bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
+            bucket,
+            names,
+            str(local_dir),
+            blob_name_prefix=prefix,
+            worker_type="thread",
         )
         for name, result in zip(names, results, strict=True):
             if isinstance(result, Exception):
@@ -236,8 +240,9 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
     client = None
     failure: Exception | None = None
 
-    with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-        _LogTee(sys.stderr, log_buffer)
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
     ):
         try:
             _write_gcp_credentials_from_secret()
@@ -283,9 +288,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-            combined = _read_tar_member_bytes(
-                intermediates["outputs_tar"], "combined_wide.pkl"
-            )
+            combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
             train_kwargs = {}
             if params.get("formula_text"):
@@ -311,9 +314,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             out_local.mkdir()
             (out_local / "combined_wide.pkl").write_bytes(combined)
             if training.get("outputs_tar"):
-                with tarfile.open(
-                    fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz"
-                ) as tar:
+                with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
                     tar.extractall(out_local)
             _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
             print("==> Done.")
@@ -323,9 +324,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
         finally:
             if client is not None:
                 try:
-                    _upload_run_log_to_gcs(
-                        client, outputs_bucket, job_id, log_buffer.getvalue()
-                    )
+                    _upload_run_log_to_gcs(client, outputs_bucket, job_id, log_buffer.getvalue())
                 except Exception:
                     traceback.print_exc()
 
@@ -494,23 +493,18 @@ def _adm3_centroids():
     import pandas as pd
 
     mapping_path, _ = _adm3_support_paths()
-    mapping = pd.read_csv(mapping_path).rename(
-        columns={"latitude": "lat", "longitude": "lon"}
-    )
+    mapping = pd.read_csv(mapping_path).rename(columns={"latitude": "lat", "longitude": "lon"})
     required = {"adm3_name", "lat", "lon", "weight"}
     missing = required - set(mapping.columns)
     if missing:
-        raise ValueError(
-            f"ADM3 mapping is missing required columns: {', '.join(sorted(missing))}"
-        )
+        raise ValueError(f"ADM3 mapping is missing required columns: {', '.join(sorted(missing))}")
 
     mapping["weight"] = mapping["weight"].astype(float)
     mapping["weighted_lat"] = mapping["lat"].astype(float) * mapping["weight"]
     mapping["weighted_lon"] = mapping["lon"].astype(float) * mapping["weight"]
-    grouped = (
-        mapping.groupby("adm3_name", as_index=False)[["weight", "weighted_lat", "weighted_lon"]]
-        .sum()
-    )
+    grouped = mapping.groupby("adm3_name", as_index=False)[
+        ["weight", "weighted_lat", "weighted_lon"]
+    ].sum()
     grouped["lat"] = grouped["weighted_lat"] / grouped["weight"]
     grouped["lon"] = grouped["weighted_lon"] / grouped["weight"]
     return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
@@ -571,9 +565,7 @@ def _parse_forecast_inputs(value: str) -> dict[str, Path]:
         if not token:
             continue
         if "=" not in token:
-            raise ValueError(
-                "forecast_inputs must be comma-separated model=directory entries"
-            )
+            raise ValueError("forecast_inputs must be comma-separated model=directory entries")
         name, path = token.split("=", 1)
         model_name = name.strip()
         if not model_name:
@@ -769,8 +761,7 @@ def probe_lat_lon_onset_bundle(
                     {
                         "year": years,
                         "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date()
-                            for year in years
+                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
                         ],
                     }
                 )
@@ -791,17 +782,13 @@ def probe_lat_lon_onset_bundle(
                     "mean": float(counts.mean()),
                 }
 
-            prob_cols = [
-                col for col in processed.columns if col.startswith("predicted_prob_day_")
-            ]
+            prob_cols = [col for col in processed.columns if col.startswith("predicted_prob_day_")]
             clim_prob_cols = [
                 col
                 for col in processed.columns
                 if col.startswith("predicted_prob_clim_mok_date_day_")
             ]
-            sd_cols = [
-                col for col in processed.columns if col.startswith("forecast_rain_sd_day_")
-            ]
+            sd_cols = [col for col in processed.columns if col.startswith("forecast_rain_sd_day_")]
             sample_cols = [
                 "id",
                 "time",
@@ -827,14 +814,10 @@ def probe_lat_lon_onset_bundle(
                     "sample_ids": processed["id"].head(5).tolist()
                     if "id" in processed.columns
                     else [],
-                    "nonzero_predicted_prob_cells": int(
-                        (processed[prob_cols] > 0).sum().sum()
-                    )
+                    "nonzero_predicted_prob_cells": int((processed[prob_cols] > 0).sum().sum())
                     if prob_cols
                     else 0,
-                    "nonzero_clim_mok_prob_cells": int(
-                        (processed[clim_prob_cols] > 0).sum().sum()
-                    )
+                    "nonzero_clim_mok_prob_cells": int((processed[clim_prob_cols] > 0).sum().sum())
                     if clim_prob_cols
                     else 0,
                     "non_null_sd_cells": int(processed[sd_cols].notna().sum().sum())
@@ -935,8 +918,7 @@ def probe_lat_lon_ground_truth_bundle(
                     {
                         "year": years,
                         "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date()
-                            for year in years
+                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
                         ],
                     }
                 )
@@ -971,15 +953,9 @@ def probe_lat_lon_ground_truth_bundle(
                     "onset_count": int(wide["mr_onset_day"].notna().sum())
                     if "mr_onset_day" in wide.columns
                     else 0,
-                    "onset_day_min": float(onset_days.min())
-                    if len(onset_days)
-                    else None,
-                    "onset_day_max": float(onset_days.max())
-                    if len(onset_days)
-                    else None,
-                    "sample_ids": wide["id"].head(5).tolist()
-                    if "id" in wide.columns
-                    else [],
+                    "onset_day_min": float(onset_days.min()) if len(onset_days) else None,
+                    "onset_day_max": float(onset_days.max()) if len(onset_days) else None,
+                    "sample_ids": wide["id"].head(5).tolist() if "id" in wide.columns else [],
                     "sample_rows": wide[sample_cols]
                     .head(sample_row_count)
                     .to_dict(orient="records")
@@ -1058,8 +1034,7 @@ def build_lat_lon_intermediates_bundle(
     output_dir = Path(tempfile.mkdtemp(prefix="blend-intermediates-"))
     obs_dir = _extract_bundle(obs_bundle)
     forecast_dirs = {
-        model_name: _extract_bundle(bundle)
-        for model_name, bundle in forecast_bundles.items()
+        model_name: _extract_bundle(bundle) for model_name, bundle in forecast_bundles.items()
     }
 
     onset_options = {
@@ -1095,9 +1070,7 @@ def build_lat_lon_intermediates_bundle(
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
         "filter": {
-            "dissemination_cells_file": str(dissemination_path)
-            if dissemination_path
-            else None
+            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
         },
     }
     obs_spec = {
@@ -1119,9 +1092,7 @@ def build_lat_lon_intermediates_bundle(
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
         "filter": {
-            "dissemination_cells_file": str(dissemination_path)
-            if dissemination_path
-            else None
+            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
         },
     }
 
@@ -1132,9 +1103,7 @@ def build_lat_lon_intermediates_bundle(
         return pd.DataFrame(
             {
                 "year": years,
-                "mok_date": [
-                    pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
-                ],
+                "mok_date": [pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years],
             }
         )
 
@@ -1191,9 +1160,7 @@ def build_lat_lon_intermediates_bundle(
         obs_long_path = output_dir / "ground_truth_long.pkl"
         with obs_long_path.open("wb") as f:
             pickle.dump(obs_long, f)
-        manifest["outputs"][obs_long_path.name] = {
-            "bytes": obs_long_path.stat().st_size
-        }
+        manifest["outputs"][obs_long_path.name] = {"bytes": obs_long_path.stat().st_size}
         manifest["obs"]["long_rows"] = int(len(obs_long))
 
     for model_name, input_dir in forecast_dirs.items():
@@ -1223,33 +1190,17 @@ def build_lat_lon_intermediates_bundle(
         forecast_path = output_dir / f"{model_name}_wide.pkl"
         with forecast_path.open("wb") as f:
             pickle.dump(forecast_wide, f)
-        manifest["outputs"][forecast_path.name] = {
-            "bytes": forecast_path.stat().st_size
-        }
-        prob_cols = [
-            col
-            for col in forecast_wide.columns
-            if col.startswith("predicted_prob_day_")
-        ]
-        sd_cols = [
-            col
-            for col in forecast_wide.columns
-            if col.startswith("forecast_rain_sd_day_")
-        ]
+        manifest["outputs"][forecast_path.name] = {"bytes": forecast_path.stat().st_size}
+        prob_cols = [col for col in forecast_wide.columns if col.startswith("predicted_prob_day_")]
+        sd_cols = [col for col in forecast_wide.columns if col.startswith("forecast_rain_sd_day_")]
         manifest["forecasts"][model_name] = {
             "wide_rows": int(len(forecast_wide)),
-            "years": sorted(
-                int(year) for year in forecast_wide["year"].dropna().unique()
-            ),
+            "years": sorted(int(year) for year in forecast_wide["year"].dropna().unique()),
             "sample_ids": forecast_wide["id"].head(5).tolist(),
-            "nonzero_predicted_prob_cells": int(
-                (forecast_wide[prob_cols] > 0).sum().sum()
-            )
+            "nonzero_predicted_prob_cells": int((forecast_wide[prob_cols] > 0).sum().sum())
             if prob_cols
             else 0,
-            "non_null_sd_cells": int(forecast_wide[sd_cols].notna().sum().sum())
-            if sd_cols
-            else 0,
+            "non_null_sd_cells": int(forecast_wide[sd_cols].notna().sum().sum()) if sd_cols else 0,
             "member_counts_per_id_time": {
                 "min": int(min(member_counts_all)),
                 "max": int(max(member_counts_all)),
@@ -1260,8 +1211,7 @@ def build_lat_lon_intermediates_bundle(
         }
 
     forecast_paths = {
-        model_name: output_dir / f"{model_name}_wide.pkl"
-        for model_name in forecast_dirs
+        model_name: output_dir / f"{model_name}_wide.pkl" for model_name in forecast_dirs
     }
 
     if build_climatology:
@@ -1353,9 +1303,7 @@ def build_lat_lon_intermediates_bundle(
         with clim_unc_path.open("wb") as f:
             pickle.dump(clim_unc, f)
         manifest["outputs"][clim_path.name] = {"bytes": clim_path.stat().st_size}
-        manifest["outputs"][clim_unc_path.name] = {
-            "bytes": clim_unc_path.stat().st_size
-        }
+        manifest["outputs"][clim_unc_path.name] = {"bytes": clim_unc_path.stat().st_size}
         manifest["climatology"] = {
             "train_year_min": train_year_min,
             "train_year_max": train_year_max,
@@ -1388,8 +1336,7 @@ def build_lat_lon_intermediates_bundle(
         )
 
         forecast_years_by_model = {
-            model_name: manifest["forecasts"][model_name]["years"]
-            for model_name in forecast_dirs
+            model_name: manifest["forecasts"][model_name]["years"] for model_name in forecast_dirs
         }
         forecast_parts = {}
         for model_name, forecast_path in forecast_paths.items():
@@ -1462,8 +1409,7 @@ def build_lat_lon_intermediates_bundle(
         combined = daily_wide.merge(truth, on=["id", "year"], how="left")
         if trim_forecasts_after_true_onset:
             mask = combined["true_onset_date"].isna() | (
-                pd.to_datetime(combined["time"])
-                <= pd.to_datetime(combined["true_onset_date"])
+                pd.to_datetime(combined["time"]) <= pd.to_datetime(combined["true_onset_date"])
             )
             combined = combined.loc[mask].copy()
 
@@ -1486,28 +1432,20 @@ def build_lat_lon_intermediates_bundle(
         combined_path = output_dir / "combined_wide.pkl"
         with combined_path.open("wb") as f:
             pickle.dump(combined, f)
-        manifest["outputs"][combined_path.name] = {
-            "bytes": combined_path.stat().st_size
-        }
+        manifest["outputs"][combined_path.name] = {"bytes": combined_path.stat().st_size}
         manifest["combined"] = {
             "rows": int(len(combined)),
             "columns": int(len(combined.columns)),
             "join": combine_join,
-            "trim_forecasts_after_true_onset": bool(
-                trim_forecasts_after_true_onset
-            ),
-            "years": sorted(
-                int(year) for year in combined["year"].dropna().unique()
-            ),
+            "trim_forecasts_after_true_onset": bool(trim_forecasts_after_true_onset),
+            "years": sorted(int(year) for year in combined["year"].dropna().unique()),
             "sample_ids": combined["id"].head(5).tolist(),
             "first_columns": list(combined.columns[:60]),
         }
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
-    manifest["outputs"][manifest_path.name] = {
-        "bytes": manifest_path.stat().st_size
-    }
+    manifest["outputs"][manifest_path.name] = {"bytes": manifest_path.stat().st_size}
 
     outputs_tar = None
     if return_outputs:
@@ -1552,12 +1490,13 @@ def _prepare_blend_workspace(
         combined = pd.DataFrame(combined)
 
     missing_model_cols = [
-        f"{name}_onset_thresh" for name in model_names if f"{name}_onset_thresh" not in combined.columns
+        f"{name}_onset_thresh"
+        for name in model_names
+        if f"{name}_onset_thresh" not in combined.columns
     ]
     if missing_model_cols:
         raise ValueError(
-            "Combined wide file is missing model constant columns: "
-            + ", ".join(missing_model_cols)
+            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
         )
 
     connect_spec = {
@@ -1626,18 +1565,14 @@ def _build_blend_spec(
             "MR": True,
             "training_years": [int(year) for year in training_years],
             "cv_holdout_years": [int(year) for year in cv_holdout_years],
-            "true_holdout_years": [
-                int(year) for year in (true_holdout_years or [])
-            ],
+            "true_holdout_years": [int(year) for year in (true_holdout_years or [])],
             "pipeline_input_dir": str(work_dir),
             "pipeline_output_dir": str(results_dir),
         },
         "cv": {"methods": ["global"]},
         "cell": {"dissemination": str(dissemination_path)},
         "models": {
-            "formulas": {
-                "blended_model": {"enabled": True, "text": formula_text}
-            },
+            "formulas": {"blended_model": {"enabled": True, "text": formula_text}},
             "window_variants": {"enabled": False},
         },
         "mme": {"enabled": False, "variants": ["clim_mok_date"], "blend_models": []},
@@ -1697,16 +1632,14 @@ def train_blending_model_bundle(
     if not cv_holdout_years:
         raise ValueError("cv_holdout_years must not be empty")
 
-    work_dir, combined, weekly, pipeline_input_path, dissemination_path = (
-        _prepare_blend_workspace(
-            combined_wide_pkl,
-            model_names,
-            cutoff_mode,
-            day_max,
-            days_per_week,
-            n_weeks,
-            rain_window,
-        )
+    work_dir, combined, weekly, pipeline_input_path, dissemination_path = _prepare_blend_workspace(
+        combined_wide_pkl,
+        model_names,
+        cutoff_mode,
+        day_max,
+        days_per_week,
+        n_weeks,
+        rain_window,
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
 
@@ -1835,9 +1768,7 @@ def train_blending_model_bundle(
         for path in sorted(results_dir.iterdir()):
             if path.is_file():
                 (output_dir / path.name).write_bytes(path.read_bytes())
-        (output_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, default=str)
-        )
+        (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
     return {"manifest": manifest, "outputs_tar": outputs_tar}
@@ -1983,9 +1914,7 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
             f"No training result file starting with {prefix!r}; found: {result_files}"
         )
     if len(matches) > 1:
-        raise ValueError(
-            f"Ambiguous training result files for prefix {prefix!r}: {matches}"
-        )
+        raise ValueError(f"Ambiguous training result files for prefix {prefix!r}: {matches}")
     return matches[0]
 
 
@@ -2075,9 +2004,7 @@ def score_live_forecast(
     )
     print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
     if not training["manifest"].get("ok"):
-        raise RuntimeError(
-            "Blend scoring pipeline failed; see manifest stderr_tail in run.log"
-        )
+        raise RuntimeError("Blend scoring pipeline failed; see manifest stderr_tail in run.log")
 
     result_files = training["manifest"]["result_files"]
     cv_preds_name = _find_result_file(result_files, "cv_preds_blended_model_global")
@@ -2092,7 +2019,9 @@ def score_live_forecast(
     return csv_bytes
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret])
+@app.function(
+    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret]
+)
 def score_live_forecast_bundle(
     job_id: str,
     blend_config: dict,
@@ -2116,8 +2045,9 @@ def score_live_forecast_bundle(
     client = None
     failure: Exception | None = None
 
-    with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-        _LogTee(sys.stderr, log_buffer)
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
     ):
         try:
             _write_gcp_credentials_from_secret()
@@ -2167,7 +2097,11 @@ def score_live_forecast_bundle(
                     )
 
             csv_bytes = score_live_forecast.local(
-                obs_bundle, forecast_bundles, model_names, params, live_year,
+                obs_bundle,
+                forecast_bundles,
+                model_names,
+                params,
+                live_year,
                 coef_pkl=coef_pkl,
             )
 
@@ -2182,9 +2116,7 @@ def score_live_forecast_bundle(
         finally:
             if client is not None:
                 try:
-                    _upload_run_log_to_gcs(
-                        client, outputs_bucket, job_id, log_buffer.getvalue()
-                    )
+                    _upload_run_log_to_gcs(client, outputs_bucket, job_id, log_buffer.getvalue())
                 except Exception:
                     traceback.print_exc()
 
@@ -2299,9 +2231,7 @@ def probe_lat_lon_ground_truth_processing(
 @app.local_entrypoint()
 def build_lat_lon_intermediates(
     obs_dir: str = str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "obs"),
-    forecast_inputs: str = (
-        "aifs=" + str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "aifs")
-    ),
+    forecast_inputs: str = ("aifs=" + str(DEFAULT_LOCAL_DATA_DIR / "ethiopia" / "aifs")),
     years: str = "2024",
     obs_years: str = "",
     forecast_years: str = "",

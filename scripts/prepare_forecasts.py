@@ -29,7 +29,9 @@ def _load_regions(regions_yaml: Path) -> dict[str, dict]:
     return {r["id"]: r for r in raw}
 
 
-def clip_file(src: Path, dst: Path, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> None:
+def clip_file(
+    src: Path, dst: Path, lat_min: float, lat_max: float, lon_min: float, lon_max: float
+) -> None:
     ds = xr.open_dataset(src)
 
     lat_dim = next((d for d in ds.dims if d in ("lat", "latitude", "Latitude")), None)
@@ -61,11 +63,19 @@ def clip_file(src: Path, dst: Path, lat_min: float, lat_max: float, lon_min: flo
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--region", required=True, help="Region id from regions.yaml (e.g. bangladesh)")
-    parser.add_argument("--input", required=True, help="Directory containing annual {year}.nc forecast files")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--region", required=True, help="Region id from regions.yaml (e.g. bangladesh)"
+    )
+    parser.add_argument(
+        "--input", required=True, help="Directory containing annual {year}.nc forecast files"
+    )
     parser.add_argument("--output", required=True, help="Output directory for clipped files")
-    parser.add_argument("--buffer", type=float, default=1.0, help="Degrees to add around bbox (default: 1.0)")
+    parser.add_argument(
+        "--buffer", type=float, default=1.0, help="Degrees to add around bbox (default: 1.0)"
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
@@ -93,7 +103,9 @@ def main() -> int:
         print(f"ERROR: no .nc files found in {input_dir}", file=sys.stderr)
         return 1
 
-    print(f"Region: {region['display_name']} — lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] (buffer={args.buffer}°)")
+    print(
+        f"Region: {region['display_name']} — lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] (buffer={args.buffer}°)"
+    )
     print(f"Input:  {input_dir}  ({len(nc_files)} files)")
     print(f"Output: {output_dir}")
 

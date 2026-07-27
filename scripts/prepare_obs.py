@@ -40,7 +40,9 @@ def _load_region(regions_yaml: Path, region_id: str) -> dict:
     raise ValueError(f"Region '{region_id}' not found. Available: {available}")
 
 
-def fetch_year(year: int, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> xr.DataArray:
+def fetch_year(
+    year: int, lat_min: float, lat_max: float, lon_min: float, lon_max: float
+) -> xr.DataArray:
     """Fetch hourly ERA5 precip for one calendar year, aggregate to daily totals."""
     print(f"  Opening ARCO store for {year}...", flush=True)
     ds = xr.open_zarr(ARCO_URL, consolidated=True)
@@ -76,11 +78,17 @@ def write_obs_file(daily: xr.DataArray, year: int, output_dir: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--region", required=True, help="Region id from regions.yaml")
-    parser.add_argument("--years", nargs="+", type=int, required=True, help="Years to fetch (e.g. 2020 2021 2022)")
+    parser.add_argument(
+        "--years", nargs="+", type=int, required=True, help="Years to fetch (e.g. 2020 2021 2022)"
+    )
     parser.add_argument("--output", required=True, help="Output directory for obs files")
-    parser.add_argument("--buffer", type=float, default=1.0, help="Degrees to add around bbox (default: 1.0)")
+    parser.add_argument(
+        "--buffer", type=float, default=1.0, help="Degrees to add around bbox (default: 1.0)"
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
@@ -96,7 +104,9 @@ def main() -> int:
     lon_max = region["lon_max"] + args.buffer
 
     output_dir = Path(args.output)
-    print(f"Region: {region['display_name']} — lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] (buffer={args.buffer}°)")
+    print(
+        f"Region: {region['display_name']} — lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] (buffer={args.buffer}°)"
+    )
     print(f"Years:  {args.years}")
     print(f"Output: {output_dir}")
     print()

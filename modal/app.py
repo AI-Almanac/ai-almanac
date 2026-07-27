@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 import tarfile
+import tempfile
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -121,7 +121,9 @@ except Exception as exc:
 """
 
 
-def _run_generated_code(code: str, compute_call: str, extra_env: dict[str, str] | None = None, timeout: int = 90) -> dict:
+def _run_generated_code(
+    code: str, compute_call: str, extra_env: dict[str, str] | None = None, timeout: int = 90
+) -> dict:
     import json as _json
 
     artifact_dir = Path(tempfile.mkdtemp(prefix="chat-artifacts-"))
@@ -161,11 +163,13 @@ def _run_generated_code(code: str, compute_call: str, extra_env: dict[str, str] 
         path = artifact_dir / filename
         if not path.exists():
             return {"ok": False, "error": f"Artifact file not found: {filename}"}
-        enriched_artifacts.append({
-            **artifact,
-            "data": path.read_bytes(),
-            "media_type": artifact.get("media_type") or _media_type_for_filename(filename),
-        })
+        enriched_artifacts.append(
+            {
+                **artifact,
+                "data": path.read_bytes(),
+                "media_type": artifact.get("media_type") or _media_type_for_filename(filename),
+            }
+        )
     payload["artifacts"] = enriched_artifacts
     return payload
 
@@ -197,12 +201,11 @@ romp_image = modal.Image.from_registry(
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME) if ENABLE_GCS_FUNCTIONS else None
 e2s_secret = modal.Secret.from_name(E2S_SECRET_NAME) if E2S_SECRET_NAME else None
 
-E2S_METRICS_RUNNER = Path(__file__).resolve().parents[1] / "backend/app/services/e2s_metrics_runner.py"
+E2S_METRICS_RUNNER = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/services/e2s.py"
 
 # Extends the ROMP image with earth2studio for metrics and public data readers.
-benchmark_image = (
-    romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr")
-    .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
+benchmark_image = romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr").add_local_file(
+    E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py"
 )
 
 
@@ -231,15 +234,19 @@ def _stage_gcs_prefix(client, uri: str, local_dir: Path) -> int:
     prefix = prefix.rstrip("/") + "/"
     bucket = client.bucket(bucket_name)
     names = [
-        blob.name[len(prefix):]
+        blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] and not blob.name[len(prefix):].endswith("/")
+        if blob.name[len(prefix) :] and not blob.name[len(prefix) :].endswith("/")
     ]
     if names:
         results = transfer_manager.download_many_to_path(
-            bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
+            bucket,
+            names,
+            str(local_dir),
+            blob_name_prefix=prefix,
+            worker_type="thread",
         )
-        for name, result in zip(names, results):
+        for name, result in zip(names, results, strict=False):
             if isinstance(result, Exception):
                 print(f"  obs FAILED: {name}: {result}")
     return len(names)
@@ -254,15 +261,19 @@ def _stage_gcs_years(client, uri: str, local_dir: Path, start_year: int, end_yea
     year_names = {f"{y}.nc" for y in range(start_year, end_year + 1)}
     bucket = client.bucket(bucket_name)
     names = [
-        blob.name[len(prefix):]
+        blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
-        if blob.name[len(prefix):] in year_names
+        if blob.name[len(prefix) :] in year_names
     ]
     if names:
         results = transfer_manager.download_many_to_path(
-            bucket, names, str(local_dir), blob_name_prefix=prefix, worker_type="thread",
+            bucket,
+            names,
+            str(local_dir),
+            blob_name_prefix=prefix,
+            worker_type="thread",
         )
-        for name, result in zip(names, results):
+        for name, result in zip(names, results, strict=False):
             if isinstance(result, Exception):
                 print(f"  model FAILED: {name}: {result}")
     return len(names)
@@ -441,9 +452,7 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
     try:
         DataSource = getattr(data_module, e2s_class_name)
     except AttributeError as exc:
-        available = ", ".join(
-            sorted(name for name in dir(data_module) if name[:1].isupper())
-        )
+        available = ", ".join(sorted(name for name in dir(data_module) if name[:1].isupper()))
         raise AttributeError(
             f"Earth2Studio data source {configured_class_name!r} resolved to "
             f"{e2s_class_name!r}, but it is not available. Available sources: {available}"
@@ -504,8 +513,7 @@ def _era5_arco_variable(ds, configured_name: str) -> str:
             return name
     available = ", ".join(sorted(ds.data_vars))
     raise KeyError(
-        f"ARCO ERA5 variable {configured_name!r} is not available. "
-        f"Available variables: {available}"
+        f"ARCO ERA5 variable {configured_name!r} is not available. Available variables: {available}"
     )
 
 
@@ -561,17 +569,14 @@ def _load_arco_daily_precip_day(
     lon_bounds,
 ):
     import gc
+
     import pandas as pd
 
     day_end = day + timedelta(hours=23)
     hourly = source.sel(time=slice(day, day_end))
     hourly = _select_lat_lon_bounds(hourly, lat_bounds, lon_bounds)
     hourly = hourly.transpose("time", "lat", "lon").sortby(["lat", "lon"])
-    daily = (
-        (hourly.astype("float32").sum(dim="time") * unit_cvt)
-        .astype("float32")
-        .load()
-    )
+    daily = (hourly.astype("float32").sum(dim="time") * unit_cvt).astype("float32").load()
     daily = daily.expand_dims(time=[pd.Timestamp(day)])
     del hourly
     gc.collect()
@@ -590,6 +595,7 @@ def _write_arco_month_file(
     local_obs: Path,
 ) -> Path:
     import gc
+
     import xarray as xr
 
     daily_parts = []
@@ -615,6 +621,7 @@ def _fetch_era5_daily_precip_from_arco(
     local_obs: Path,
 ) -> None:
     import gc
+
     import xarray as xr
 
     source_url = dataset_config.get(
@@ -640,10 +647,7 @@ def _fetch_era5_daily_precip_from_arco(
     _configure_zarr_for_low_memory()
 
     for index, (start, end) in enumerate(ranges, start=1):
-        _log(
-            f"  ARCO window {index}/{len(ranges)}: "
-            f"processing {start.date()} to {end.date()}"
-        )
+        _log(f"  ARCO window {index}/{len(ranges)}: processing {start.date()} to {end.date()}")
 
         # Open a fresh store for each window so the Zarr chunk cache is bounded to
         # one season's worth of reads and is fully released when we close the store.
@@ -715,9 +719,10 @@ def _fetch_cds_month(
     lat_bounds,
     lon_bounds,
     local_obs: Path,
-) -> "xr.DataArray":
+) -> xr.DataArray:
     """Download one month from CDS, load it into memory, and delete all temp files."""
     import shutil
+
     import xarray as xr
 
     request: dict = {
@@ -740,8 +745,7 @@ def _fetch_cds_month(
     target = local_obs / f"era5_daily_precip_{year}_{month:02d}.zip"
     extract_dir = local_obs / f"era5_daily_precip_{year}_{month:02d}"
     print(
-        f"  requesting {year}-{month:02d}: {len(days)} days, "
-        f"area={request.get('area', 'global')}"
+        f"  requesting {year}-{month:02d}: {len(days)} days, area={request.get('area', 'global')}"
     )
 
     try:
@@ -758,8 +762,7 @@ def _fetch_cds_month(
 
         if not nc_files:
             raise RuntimeError(
-                f"CDS daily precipitation request for {year}-{month:02d} "
-                "returned no NetCDF files"
+                f"CDS daily precipitation request for {year}-{month:02d} returned no NetCDF files"
             )
 
         datasets = [xr.open_dataset(path) for path in nc_files]
@@ -789,6 +792,7 @@ def _fetch_era5_daily_precip_from_cds(
 ) -> None:
     """Fetch ERA5 daily total precipitation directly from CDS daily statistics."""
     import gc
+
     import cdsapi
 
     obs_var = romp_params.get("obs_var", "RAINFALL")
@@ -816,8 +820,17 @@ def _fetch_era5_daily_precip_from_cds(
         year_parts = []
         for window_start, window_end, month, days in months_by_year[year]:
             da = _fetch_cds_month(
-                client, dataset_name, year, month, days,
-                window_start, window_end, unit_cvt, lat_bounds, lon_bounds, local_obs,
+                client,
+                dataset_name,
+                year,
+                month,
+                days,
+                window_start,
+                window_end,
+                unit_cvt,
+                lat_bounds,
+                lon_bounds,
+                local_obs,
             )
             year_parts.append(da)
         _write_romp_daily_obs_files({year: year_parts}, obs_var, local_obs)
@@ -1054,7 +1067,7 @@ def _upload_outputs_to_gcs(
             blob_name_prefix=f"{job_id}/{kind}/",
             worker_type="thread",
         )
-        for name, upload_result in zip(files, results):
+        for name, upload_result in zip(files, results, strict=False):
             if isinstance(upload_result, Exception):
                 print(f"  upload FAILED: {kind}/{name}: {upload_result}")
             else:
@@ -1113,33 +1126,29 @@ if ENABLE_GCS_FUNCTIONS:
           gcp-service-account — SERVICE_ACCOUNT_JSON
           e2s-credentials     — CDSAPI_KEY (only needed for Earth2Studio/CDS datasets)
         """
-        from google.cloud import storage as gcs
-        from contextlib import redirect_stderr, redirect_stdout
         import io as _io
         import sys
         import traceback
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from google.cloud import storage as gcs
 
         log_buffer = _io.StringIO()
         client = None
         failure: Exception | None = None
 
-        with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-            _LogTee(sys.stderr, log_buffer)
+        with (
+            redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+            redirect_stderr(_LogTee(sys.stderr, log_buffer)),
         ):
             try:
                 _write_gcp_credentials_from_secret()
                 client = gcs.Client()
-                local_obs, local_model, local_out, local_fig = _stage_paths(
-                    Path("/tmp/romp_stage")
-                )
+                local_obs, local_model, local_out, local_fig = _stage_paths(Path("/tmp/romp_stage"))
 
                 _stage_gcs_benchmark_inputs(client, config, local_obs, local_model)
-                _run_staged_benchmark(
-                    job_id, config, local_obs, local_model, local_out, local_fig
-                )
-                _upload_outputs_to_gcs(
-                    client, outputs_bucket, job_id, local_out, local_fig
-                )
+                _run_staged_benchmark(job_id, config, local_obs, local_model, local_out, local_fig)
+                _upload_outputs_to_gcs(client, outputs_bucket, job_id, local_out, local_fig)
                 print("==> Done.")
             except Exception as exc:
                 failure = exc
@@ -1179,17 +1188,18 @@ def run_benchmark_local(
     datasets, into a tarball with top-level `model/` and optional `obs/`
     directories. For E2S datasets, obs are fetched inside Modal.
     """
-    from contextlib import redirect_stderr, redirect_stdout
     import io as _io
     import sys
     import traceback
+    from contextlib import redirect_stderr, redirect_stdout
 
     log_buffer = _io.StringIO()
     files: list[dict] = []
 
     try:
-        with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-            _LogTee(sys.stderr, log_buffer)
+        with (
+            redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+            redirect_stderr(_LogTee(sys.stderr, log_buffer)),
         ):
             romp_params = config.get("romp_params", {})
             dataset_config = config.get("dataset_config", {})
@@ -1232,9 +1242,8 @@ def run_benchmark_local(
 # ---------------------------------------------------------------------------
 
 # Minimal image for sandboxed code: scientific Python stack only, no GCS credentials.
-_sandbox_image = (
-    modal.Image.debian_slim()
-    .pip_install("xarray", "numpy", "h5netcdf", "scipy", "pandas", "matplotlib", "Pillow")
+_sandbox_image = modal.Image.debian_slim().pip_install(
+    "xarray", "numpy", "h5netcdf", "scipy", "pandas", "matplotlib", "Pillow"
 )
 
 
@@ -1295,7 +1304,7 @@ def run_code(job_id: str, outputs_bucket: str, code: str) -> dict:
         bucket = client.bucket(outputs_bucket)
         prefix = f"{job_id}/output/"
         nc_names = [
-            blob.name[len(prefix):]
+            blob.name[len(prefix) :]
             for blob in client.list_blobs(outputs_bucket, prefix=prefix)
             if blob.name.endswith(".nc")
         ]
@@ -1305,9 +1314,13 @@ def run_code(job_id: str, outputs_bucket: str, code: str) -> dict:
 
         if nc_names:
             results = transfer_manager.download_many_to_path(
-                bucket, nc_names, str(local_nc), blob_name_prefix=prefix, worker_type="thread",
+                bucket,
+                nc_names,
+                str(local_nc),
+                blob_name_prefix=prefix,
+                worker_type="thread",
             )
-            for name, result in zip(nc_names, results):
+            for name, result in zip(nc_names, results, strict=False):
                 if isinstance(result, Exception):
                     return {"ok": False, "error": f"Failed to download {name}: {result}"}
 
@@ -1320,12 +1333,13 @@ def run_code(job_id: str, outputs_bucket: str, code: str) -> dict:
         os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
 
     env = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         if k not in {"GOOGLE_APPLICATION_CREDENTIALS", "SERVICE_ACCOUNT_JSON"}
     }
     return _run_generated_code(
         code,
-        f'compute({str(local_nc)!r})',
+        f"compute({str(local_nc)!r})",
         extra_env=env,
         timeout=120,
     )

@@ -139,6 +139,22 @@ def _initialization_schedule(dataset) -> list[str] | None:
     return schedule or None
 
 
+def _season_window(schedule: list[str] | None) -> tuple[str, str]:
+    """Season ``MM-DD`` span (start, end) from the init-time schedule.
+
+    ROMP reads the month-day of start_date/end_date as the initialization
+    season. A full calendar year both mis-states the season and drags Feb 29
+    into the init-date candidates, which crashes non-leap target years. The
+    schedule is sorted, so its first and last entries bound the season.
+    Falls back to the full year when no schedule is available.
+    """
+    # ponytail: assumes a season within one calendar year (true for these
+    # May-Aug onset archives); a year-wrapping season would need min/max by date.
+    if schedule:
+        return schedule[0], schedule[-1]
+    return "01-01", "12-31"
+
+
 def _normalized_initialization_days(value: object) -> str:
     raw_days = [day.strip() for day in str(value).split(",")]
     if not raw_days or any(not day for day in raw_days):
@@ -170,11 +186,13 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     if kind == "model":
         normalized.setdefault("model_type", "AIWP")
         normalized.setdefault("unit_cvt", 1.0)
-        normalized.setdefault("probabilistic", False)
+        # probabilistic is defaulted in _finalize_inspection from the file's
+        # dims (an ensemble member dim forces the probabilistic ROMP path).
         normalized.setdefault("members", None)
         if start_year is not None and end_year is not None:
-            normalized.setdefault("start_date", f"{start_year}-01-01")
-            normalized.setdefault("end_date", f"{end_year}-12-31")
+            # start_date/end_date default from the init-time season window in
+            # _finalize_inspection, which has the open dataset; the clim years
+            # only need the coverage span.
             normalized.setdefault("start_year_clim", start_year)
             normalized.setdefault("end_year_clim", end_year)
     return normalized
@@ -229,6 +247,16 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
     )
 
 
+# Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
+_ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
+
+
+def _has_ensemble_dim(dataset) -> bool:
+    return any(
+        keyword in str(name).lower() for name in dataset.dims for keyword in _ENSEMBLE_DIM_KEYWORDS
+    )
+
+
 def _finalize_inspection(
     kind: Kind, metadata: dict, files: list[Path], open_first
 ) -> tuple[Status, str | None, dict]:
@@ -245,6 +273,7 @@ def _finalize_inspection(
         with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
+            has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
             initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
     except Exception as exc:
@@ -255,6 +284,10 @@ def _finalize_inspection(
         )
     normalized["spatial_bounds"] = spatial_bounds
     if kind == "model":
+        # An ensemble member dim can only be evaluated by ROMP's probabilistic
+        # path; the deterministic path crashes on the extra dim. The file's
+        # shape decides the mode, so this overrides any stored flag.
+        normalized["probabilistic"] = has_ensemble or bool(normalized.get("probabilistic"))
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {
@@ -283,6 +316,16 @@ def _finalize_inspection(
         # The calendar schedule drives live forecast issue dates; init_days
         # weekdays remain for ROMP and as the pre-schedule fallback.
         normalized["init_month_days"] = initialization_schedule
+        start_year = normalized.get("start_year")
+        end_year = normalized.get("end_year")
+        if start_year is not None and end_year is not None:
+            season_start, season_end = _season_window(initialization_schedule)
+            if initialization_schedule:
+                normalized["start_date"] = f"{start_year}-{season_start}"
+                normalized["end_date"] = f"{end_year}-{season_end}"
+            else:
+                normalized.setdefault("start_date", f"{start_year}-01-01")
+                normalized.setdefault("end_date", f"{end_year}-12-31")
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (

@@ -7,6 +7,14 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from ai_almanac.server.services.data_sources import _season_window
+
+
+def test_season_window_uses_schedule_bounds_else_full_year() -> None:
+    assert _season_window(["05-02", "06-01", "07-29"]) == ("05-02", "07-29")
+    assert _season_window(None) == ("01-01", "12-31")
+    assert _season_window([]) == ("01-01", "12-31")
+
 
 @pytest.mark.asyncio
 async def test_source_validation_does_not_persist_and_returns_inferred_metadata(
@@ -95,8 +103,10 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert model_response.status_code == 201
     model = model_response.json()
     assert model["status"] == "ready"
-    assert model["metadata"]["start_date"] == "1998-01-01"
-    assert model["metadata"]["end_date"] == "2000-12-31"
+    # start/end dates span the coverage years but use the init-time season
+    # month-days (fuxi is initialized 05-02..07-29), not the full calendar year.
+    assert model["metadata"]["start_date"] == "1998-05-02"
+    assert model["metadata"]["end_date"] == "2000-07-29"
     assert model["metadata"]["init_days"] == "2,5"
     assert model["metadata"]["init_days_source"] == "inferred"
     assert model["metadata"]["init_time_coordinate"] == "time"
@@ -130,7 +140,9 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert job["status"] == "queued"
     assert launched == [job["id"]]
     assert job["dataset_id"] == obs["id"]
-    assert job["model_name"] == "FuXi test"
+    # ROMP rejects whitespace in model names, so the internal name is sanitized
+    # while the human-facing display name is preserved.
+    assert job["model_name"] == "FuXi_test"
     assert job["model_display_name"] == "FuXi test"
     assert job["model_source_id"] == model["id"]
     assert job["obs_dir"] == str((root / "obs").resolve())
@@ -176,6 +188,86 @@ async def test_configured_initialization_days_override_inference(
     assert metadata["init_days"] == "1,4"
     assert metadata["init_days_source"] == "configured"
     assert "init_time_coordinate" not in metadata
+
+
+def _write_ensemble_model_source(directory: Path) -> None:
+    """Copy the fuxi fixture into `directory` with an added ensemble member dim."""
+    import xarray as xr
+
+    source = sorted((Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi").glob("*.nc"))[0]
+    with xr.open_dataset(source) as ds:
+        ensemble = ds.expand_dims(number=3)
+        directory.mkdir(parents=True, exist_ok=True)
+        ensemble.to_netcdf(directory / "2001.nc")
+
+
+@pytest.mark.asyncio
+async def test_ensemble_member_dim_defaults_probabilistic(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = tmp_path / "aifs-ens"
+    _write_ensemble_model_source(root)
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Ensemble model",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["metadata"]["probabilistic"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensemble_dim_forces_probabilistic_over_stored_flag(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    # A stale/incorrect probabilistic=False (e.g. from a pre-detection
+    # registration) must not survive: the deterministic path crashes on the
+    # ensemble dim, so the file shape wins.
+    root = tmp_path / "aifs-ens-forced-det"
+    _write_ensemble_model_source(root)
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Ensemble model, stale deterministic flag",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp", "probabilistic": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["probabilistic"] is True
+
+
+@pytest.mark.asyncio
+async def test_deterministic_source_stays_non_probabilistic(
+    client: httpx.AsyncClient,
+) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Deterministic model",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["probabilistic"] is False
 
 
 @pytest.mark.asyncio

@@ -222,9 +222,9 @@ def _registry_entry(model_id: str) -> dict:
     key = re.sub(r"[^0-9a-z]+", "_", model_id.lower()).strip("_")
     registry = _load_model_registry()
     for entry in registry.get("models") or []:
-        display_key = re.sub(
-            r"[^0-9a-z]+", "_", (entry.get("display_name") or "").lower()
-        ).strip("_")
+        display_key = re.sub(r"[^0-9a-z]+", "_", (entry.get("display_name") or "").lower()).strip(
+            "_"
+        )
         if key in (entry["id"], display_key) or key in (entry.get("aliases") or []):
             return entry
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
@@ -365,9 +365,7 @@ def render_forecast_products(
     _cleanup_volume_scratch(job_id, model_id)
 
 
-def _season_bundle_impl(
-    job_id: str, model_id: str, config: dict, season_params: dict
-) -> bytes:
+def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params: dict) -> bytes:
     """Loop one model across the current season's issue dates and return a
     tar.gz bundle containing one NetCDF matching the historical `{year}.nc`
     schema, the same bundle shape run_blend's forecast_bundles expect."""
@@ -455,8 +453,9 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
     log_buffer = io.StringIO()
     client = None
 
-    with redirect_stdout(_LogTee(sys.stdout, log_buffer)), redirect_stderr(
-        _LogTee(sys.stderr, log_buffer)
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
     ):
         try:
             _write_gcp_credentials_from_secret()
@@ -495,16 +494,12 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
                     live_year = datetime.now(UTC).year
                     modal.Function.from_name(
                         "almanac-blending", "score_live_forecast_bundle"
-                    ).remote(
-                        job_id, blend_config, live_forecast_bundles, live_year, outputs_bucket
-                    )
+                    ).remote(job_id, blend_config, live_forecast_bundles, live_year, outputs_bucket)
                 except Exception as exc:
                     failures["blend_scoring"] = str(exc)
                     traceback.print_exc()
             else:
-                print(
-                    f"==> Skipping blend scoring; missing season data for {missing}"
-                )
+                print(f"==> Skipping blend scoring; missing season data for {missing}")
 
         if client is not None:
             try:
