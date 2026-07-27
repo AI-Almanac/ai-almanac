@@ -320,8 +320,12 @@ def _finalize_inspection(
         end_year = normalized.get("end_year")
         if start_year is not None and end_year is not None:
             season_start, season_end = _season_window(initialization_schedule)
-            normalized.setdefault("start_date", f"{start_year}-{season_start}")
-            normalized.setdefault("end_date", f"{end_year}-{season_end}")
+            if initialization_schedule:
+                normalized["start_date"] = f"{start_year}-{season_start}"
+                normalized["end_date"] = f"{end_year}-{season_end}"
+            else:
+                normalized.setdefault("start_date", f"{start_year}-01-01")
+                normalized.setdefault("end_date", f"{end_year}-12-31")
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (
