@@ -103,8 +103,7 @@
 						rows="5"
 						maxlength="5000"
 						placeholder="What happened? What did you expect?"
-						disabled={submitting}
-					></textarea>
+						disabled={submitting}></textarea>
 					<p class="hint">
 						Your report includes your recent activity in the app (pages visited, API calls, errors)
 						to help us reproduce the issue.
