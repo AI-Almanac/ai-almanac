@@ -201,9 +201,7 @@ romp_image = modal.Image.from_registry(
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME) if ENABLE_GCS_FUNCTIONS else None
 e2s_secret = modal.Secret.from_name(E2S_SECRET_NAME) if E2S_SECRET_NAME else None
 
-E2S_METRICS_RUNNER = (
-    Path(__file__).resolve().parents[1] / "backend/app/services/e2s_metrics_runner.py"
-)
+E2S_METRICS_RUNNER = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/services/e2s.py"
 
 # Extends the ROMP image with earth2studio for metrics and public data readers.
 benchmark_image = romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr").add_local_file(
