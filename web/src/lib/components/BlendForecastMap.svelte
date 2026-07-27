@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import maplibregl from 'maplibre-gl';
+	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { getBlendForecast, type BlendForecastData, type BlendForecastPoint } from '$lib/api';
 	import { getRegionBoundary } from '$lib/api/regions';
