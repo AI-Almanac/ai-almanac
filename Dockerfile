@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS frontend
+FROM node:26-bookworm-slim AS frontend
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -11,7 +11,7 @@ RUN npm run build
 
 FROM ghcr.io/prefix-dev/pixi:latest AS pixi
 
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY pyproject.toml README.md ./
@@ -20,7 +20,7 @@ COPY modal ./modal
 COPY --from=frontend /build/web/build ./web/build
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIXI_NO_PROGRESS=1
