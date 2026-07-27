@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 from ai_almanac.server.services import job_workload
-from ai_almanac.server.services.romp import render_romp_config
+from ai_almanac.server.services.romp import render_romp_config, romp_safe_model_name
 
 
 def _job_config() -> dict:
@@ -58,6 +58,14 @@ def test_render_romp_config_propagates_job_inputs() -> None:
     assert namespace["init_days"] == (2, 5)
     assert namespace["wet_threshold"] == 25
     assert namespace["plot_spatial_far_mr_mae"] is False
+
+
+def test_romp_safe_model_name_collapses_whitespace() -> None:
+    # ROMP rejects model names with spaces; display names like "AIFS Single v2" must be sanitized.
+    assert romp_safe_model_name("AIFS Single v2") == "AIFS_Single_v2"
+    assert romp_safe_model_name("AIFS   Ensemble\tv2") == "AIFS_Ensemble_v2"
+    assert romp_safe_model_name("  fuxi  ") == "fuxi"
+    assert romp_safe_model_name("graphcast") == "graphcast"
 
 
 def test_pixi_workload_writes_config_and_invokes_momp(
