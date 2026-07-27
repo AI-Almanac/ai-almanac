@@ -139,6 +139,22 @@ def _initialization_schedule(dataset) -> list[str] | None:
     return schedule or None
 
 
+def _season_window(schedule: list[str] | None) -> tuple[str, str]:
+    """Season ``MM-DD`` span (start, end) from the init-time schedule.
+
+    ROMP reads the month-day of start_date/end_date as the initialization
+    season. A full calendar year both mis-states the season and drags Feb 29
+    into the init-date candidates, which crashes non-leap target years. The
+    schedule is sorted, so its first and last entries bound the season.
+    Falls back to the full year when no schedule is available.
+    """
+    # ponytail: assumes a season within one calendar year (true for these
+    # May-Aug onset archives); a year-wrapping season would need min/max by date.
+    if schedule:
+        return schedule[0], schedule[-1]
+    return "01-01", "12-31"
+
+
 def _normalized_initialization_days(value: object) -> str:
     raw_days = [day.strip() for day in str(value).split(",")]
     if not raw_days or any(not day for day in raw_days):
@@ -174,8 +190,9 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
         # dims (an ensemble member dim forces the probabilistic ROMP path).
         normalized.setdefault("members", None)
         if start_year is not None and end_year is not None:
-            normalized.setdefault("start_date", f"{start_year}-01-01")
-            normalized.setdefault("end_date", f"{end_year}-12-31")
+            # start_date/end_date default from the init-time season window in
+            # _finalize_inspection, which has the open dataset; the clim years
+            # only need the coverage span.
             normalized.setdefault("start_year_clim", start_year)
             normalized.setdefault("end_year_clim", end_year)
     return normalized
@@ -299,6 +316,16 @@ def _finalize_inspection(
         # The calendar schedule drives live forecast issue dates; init_days
         # weekdays remain for ROMP and as the pre-schedule fallback.
         normalized["init_month_days"] = initialization_schedule
+        start_year = normalized.get("start_year")
+        end_year = normalized.get("end_year")
+        if start_year is not None and end_year is not None:
+            season_start, season_end = _season_window(initialization_schedule)
+            if initialization_schedule:
+                normalized["start_date"] = f"{start_year}-{season_start}"
+                normalized["end_date"] = f"{end_year}-{season_end}"
+            else:
+                normalized.setdefault("start_date", f"{start_year}-01-01")
+                normalized.setdefault("end_date", f"{end_year}-12-31")
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (
