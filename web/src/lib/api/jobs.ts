@@ -4,13 +4,7 @@ import { addBreadcrumb } from '../breadcrumbs';
 import { BASE_URL, request } from './core';
 
 export type JobStatus =
-	| 'queued'
-	| 'starting'
-	| 'running'
-	| 'canceling'
-	| 'canceled'
-	| 'complete'
-	| 'failed';
+	'queued' | 'starting' | 'running' | 'canceling' | 'canceled' | 'complete' | 'failed';
 
 export type Job = {
 	id: string;
