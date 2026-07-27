@@ -1,4 +1,4 @@
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { JobGridResponse } from '$lib/api';
 import { DIVERGING_STOPS } from './constants';
 import { isHigherBetterMetric } from './mapUi';
