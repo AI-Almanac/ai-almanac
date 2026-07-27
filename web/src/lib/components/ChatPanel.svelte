@@ -228,8 +228,7 @@
 				onkeydown={handleKeydown}
 				{placeholder}
 				rows={2}
-				disabled={chat.sending}
-			></textarea>
+				disabled={chat.sending}></textarea>
 			<button
 				class="send-btn"
 				onclick={() => send()}

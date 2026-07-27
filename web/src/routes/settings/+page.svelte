@@ -234,8 +234,7 @@
 												rows="16"
 												disabled={!field.editable}
 												value={String(values[field.name] ?? '')}
-												oninput={(e) => onValueChange(field, e.currentTarget.value)}
-											></textarea>
+												oninput={(e) => onValueChange(field, e.currentTarget.value)}></textarea>
 											<div class="prompt-actions">
 												{#if savedFlash && savedFlash.startsWith(group.name)}
 													<span class="flash">✓ saved</span>
