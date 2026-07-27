@@ -1,11 +1,7 @@
 import type { AlmanacReference } from './content';
 
 export type GlossaryCategory =
-	| 'AI weather prediction'
-	| 'Climate'
-	| 'Data'
-	| 'Evaluation'
-	| 'Forecasting';
+	'AI weather prediction' | 'Climate' | 'Data' | 'Evaluation' | 'Forecasting';
 
 export type GlossaryTerm = {
 	slug: string;
