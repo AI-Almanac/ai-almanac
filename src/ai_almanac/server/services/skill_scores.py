@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import re
 
 from pydantic import BaseModel
@@ -120,7 +121,7 @@ def _parse_float(raw: str | None) -> float | None:
     except ValueError:
         return None
     # NaN and infinities are not JSON-representable; treat them as missing.
-    if value != value or value in (float("inf"), float("-inf")):
+    if math.isnan(value) or math.isinf(value):
         return None
     return value
 
