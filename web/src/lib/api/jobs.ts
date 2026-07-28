@@ -369,3 +369,42 @@ export type JobSkillScores = {
 export async function getJobSkillScores(id: string): Promise<JobSkillScores> {
 	return request<JobSkillScores>(`/jobs/${id}/skill-scores`);
 }
+
+// ---- Blend per-grid-point skill ----------------------------------------------
+
+/** One metric's per-point blend skill, indexed `values[latIndex][lonIndex]`. */
+export type BlendCellGrid = {
+	metric: string;
+	label: string;
+	lats: number[];
+	lons: number[];
+	values: (number | null)[][];
+	/** Point-years behind each value; low counts make a point noisy. */
+	counts: (number | null)[][];
+	/**
+	 * Symmetric extent of the diverging ramp, clipped to a percentile. Skill is a
+	 * ratio, so one point with a near-zero baseline would otherwise set a scale
+	 * that renders everything else neutral.
+	 */
+	scale_max_abs: number | null;
+	value_min: number | null;
+	value_max: number | null;
+	/** Points beyond the ramp, rendered at its ends. */
+	clipped: number;
+};
+
+export type BlendCellMetrics = {
+	job_id: string;
+	baseline_model: string;
+	cell_size_deg: number | null;
+	min_observations: number;
+	grids: BlendCellGrid[];
+};
+
+/**
+ * Per-grid-point blend skill. A run whose per-cell summary is missing, or which
+ * lacks the blend or baseline rows, returns empty `grids` rather than an error.
+ */
+export async function getBlendCellMetrics(id: string): Promise<BlendCellMetrics> {
+	return request<BlendCellMetrics>(`/jobs/${id}/blend-cell-metrics`);
+}

@@ -718,7 +718,7 @@
 						{#if skill.length > 0}
 							<div class="skill">
 								<h2>Forecast skill</h2>
-								<BlendSkillPanel series={skill} />
+								<BlendSkillPanel series={skill} jobId={selected.id} />
 							</div>
 						{/if}
 

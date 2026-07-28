@@ -14,6 +14,7 @@
 	import SkillCurveChart from '$lib/components/SkillCurveChart.svelte';
 	import { skillAgainstReference } from '$lib/metric-portrait';
 	import { formatSkillValue, type LeadBin, type SkillCurveSeries } from '$lib/skill-series';
+	import BlendSkillMap from './BlendSkillMap.svelte';
 	import {
 		LEAD_METRICS,
 		OVERALL_METRICS,
@@ -23,7 +24,7 @@
 		type SkillRow
 	} from './blend-summary';
 
-	let { series }: { series: SkillRow[] } = $props();
+	let { series, jobId }: { series: SkillRow[]; jobId: string } = $props();
 
 	// Diverging fill encoding exactly one quantity: skill relative to
 	// climatology. Same hues as cellStyle in MetricPortrait.svelte, but a shallower
@@ -191,6 +192,8 @@
 			/>
 		</div>
 	{/if}
+
+	<BlendSkillMap {jobId} />
 
 	<details class="glossary">
 		<summary>What do “raw”, “bias corrected” and “climatology” mean?</summary>
