@@ -5,15 +5,18 @@ name: deploy-staging
 # runs the same single-image architecture; deploy-prod.yml is the mirror of
 # this workflow targeting almanac-backend.
 
-# Docs and terraform don't ship in the image, so they don't trigger a deploy;
-# terraform is applied manually. workflow_dispatch stays as the escape hatch.
+# Only paths that actually ship in the ai-almanac-web image trigger a deploy;
+# workflow_dispatch stays as the escape hatch for everything else (docs,
+# terraform, CI config, etc.).
 on:
   push:
     branches: [develop]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - "terraform/**"
+    paths:
+      - "src/**"
+      - "modal/**"
+      - "web/**"
+      - "Dockerfile"
+      - "pyproject.toml"
   workflow_dispatch:
 
 concurrency:
