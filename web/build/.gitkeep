@@ -1,0 +1,12 @@
+Intentionally tracked, and intentionally the only tracked file in this directory.
+
+pyproject.toml force-includes `web/build` into the wheel
+(`[tool.hatch.build.targets.wheel.force-include]`), so hatchling fails with
+"Forced include not found" if the path is absent. That failure happens while the
+project is being installed editable into the pixi environment, which means a
+fresh clone cannot create its environment — and so cannot run the very task
+(`pixi run build-web`) that would have created this directory.
+
+Committing the empty directory breaks that cycle: `pixi run dev` works
+immediately after `git clone`. Everything `npm run build` writes here stays
+ignored.

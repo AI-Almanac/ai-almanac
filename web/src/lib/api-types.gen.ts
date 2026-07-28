@@ -741,6 +741,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/skill-scores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Scores
+         * @description Probabilistic skill scores parsed from ROMP's skill-score CSVs.
+         *
+         *     Deterministic jobs produce no skill CSVs, so an empty ``windows`` list is a
+         *     normal response rather than a 404 — ROMP's deterministic and probabilistic
+         *     output paths are mutually exclusive.
+         */
+        get: operations["get_skill_scores_jobs__job_id__skill_scores_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/grid": {
         parameters: {
             query?: never;
@@ -2819,6 +2843,13 @@ export interface components {
             /** Run Id */
             run_id?: string | null;
         };
+        /** JobSkillScores */
+        JobSkillScores: {
+            /** Job Id */
+            job_id: string;
+            /** Windows */
+            windows: components["schemas"]["WindowSkillScores"][];
+        };
         /**
          * LayerJSON
          * @description https://github.com/mapbox/tilejson-spec/tree/master/3.0.0#33-vector_layers
@@ -3479,6 +3510,30 @@ export interface components {
             };
         };
         /**
+         * SkillBin
+         * @description One lead-time bin's scores, from binned_skill_scores_*.csv.
+         */
+        SkillBin: {
+            /** Bin */
+            bin: string;
+            /** Label */
+            label: string;
+            /** Lead Day Min */
+            lead_day_min: number;
+            /** Lead Day Max */
+            lead_day_max: number;
+            /** Brier Skill Score */
+            brier_skill_score: number | null;
+            /** Auc */
+            auc: number | null;
+            /** Auc Ref */
+            auc_ref: number | null;
+            /** Brier Score Forecast */
+            brier_score_forecast: number | null;
+            /** Brier Score Climatology */
+            brier_score_climatology: number | null;
+        };
+        /**
          * StatisticsInGeoJSON
          * @description Statistics model in geojson response.
          */
@@ -3786,6 +3841,19 @@ export interface components {
             metrics: {
                 [key: string]: components["schemas"]["MetricStats"];
             };
+        };
+        /** WindowSkillScores */
+        WindowSkillScores: {
+            /** Model */
+            model: string;
+            /** Window */
+            window: string;
+            /** Overall */
+            overall: {
+                [key: string]: number | null;
+            };
+            /** Bins */
+            bins: components["schemas"]["SkillBin"][];
         };
         /**
          * Point
@@ -5299,6 +5367,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobMetrics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_scores_jobs__job_id__skill_scores_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSkillScores"];
                 };
             };
             /** @description Validation Error */

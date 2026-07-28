@@ -51,6 +51,15 @@ The frontend receives `VITE_API_URL=http://localhost:8765`, so HTTP and
 WebSocket requests target FastAPI while Vite serves and reloads the UI.
 Process Compose also runs `npm install` before starting the frontend.
 
+> **Do not delete `web/build/.gitkeep`.** `pyproject.toml` force-includes
+> `web/build` into the wheel, so hatchling fails with "Forced include not found"
+> if that directory is missing. That failure happens while the project is being
+> installed editable into the Pixi environment, so without the placeholder a
+> fresh clone cannot create its environment — and therefore cannot run the
+> `pixi run build-web` that would have created the directory. The empty
+> directory is tracked to break that cycle; everything `npm run build` writes
+> into it stays ignored.
+
 To test a single-process production-style serve, build the SPA first so the
 backend can serve it:
 

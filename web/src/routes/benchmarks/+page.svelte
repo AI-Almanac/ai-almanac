@@ -164,6 +164,29 @@
 		if (resolved === undefined || resolved === '') return 'Not recorded';
 		return unit ? `${resolved} ${unit}` : String(resolved);
 	}
+
+	/**
+	 * Suggest questions the run set can actually answer.
+	 *
+	 * ROMP's two output paths are mutually exclusive, so offering "how do the
+	 * models compare on false alarm rate?" for an ensemble-only run points at a
+	 * metric that was never computed.
+	 */
+	function chatSuggestions(jobs: Job[]): string[] {
+		const probabilistic = jobs.some((job) => job.params?.probabilistic);
+		const deterministic = jobs.some((job) => !job.params?.probabilistic);
+		const suggestions: string[] = [];
+		if (probabilistic) {
+			suggestions.push('Does this beat climatology, and out to what lead time?');
+			suggestions.push('Which metrics disagree about these models, and why?');
+		}
+		if (deterministic) {
+			suggestions.push('How do the models compare on false alarm rate?');
+			suggestions.push('Which model has the best mean absolute error at longer lead times?');
+		}
+		suggestions.push('Summarise the key findings from these runs.');
+		return suggestions.slice(0, 3);
+	}
 </script>
 
 <div class="workspace-page" class:is-setup={inSetupMode}>
@@ -426,6 +449,7 @@
 							<ChatPanel
 								jobs={group.jobs}
 								scopeKey={group.key}
+								suggestions={chatSuggestions(group.jobs)}
 								preferredSessionId={preferredChatSessionId}
 								onJobsCreated={handleJobsCreated}
 								onBlendSubmitted={(_runId, jobs, sessionId) =>

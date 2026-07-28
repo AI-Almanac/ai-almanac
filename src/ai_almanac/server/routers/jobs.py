@@ -41,6 +41,7 @@ from ..services.metrics import (
     compute_job_grid,
     compute_job_metrics,
 )
+from ..services.skill_scores import JobSkillScores, compute_job_skill_scores
 from ..services.storage import GCSStorage, get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -384,6 +385,22 @@ async def get_metrics(
             )
 
     return result
+
+
+@router.get("/{job_id}/skill-scores", response_model=JobSkillScores)
+async def get_skill_scores(job_id: str, job: ReadableJob):
+    """Probabilistic skill scores parsed from ROMP's skill-score CSVs.
+
+    Deterministic jobs produce no skill CSVs, so an empty ``windows`` list is a
+    normal response rather than a 404 — ROMP's deterministic and probabilistic
+    output paths are mutually exclusive.
+    """
+    _require_complete(job)
+    try:
+        return await asyncio.to_thread(compute_job_skill_scores, job_id, get_storage())
+    except Exception as e:
+        logger.exception("Error reading skill scores for job %s", job_id)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)

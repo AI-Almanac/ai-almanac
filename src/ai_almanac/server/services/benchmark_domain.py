@@ -811,8 +811,97 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: BenchmarkScope)
                 "job_id": job_id,
             }
         if not metrics.windows:
-            return {"error": f"No metric output files found for job {job_id}"}
+            # A probabilistic (ensemble) run emits skill-score CSVs instead of
+            # spatial NetCDF, so "no metrics" here is usually the wrong
+            # conclusion — point at the tool that does have the data.
+            return {
+                "error": (
+                    f"No spatial metric files found for job {job_id}. If this model ran as "
+                    "an ensemble, its results are probabilistic skill scores — call "
+                    "get_skill_scores for this job instead."
+                )
+            }
         return metrics.model_dump()
+
+    return json.dumps(await asyncio.to_thread(_load))
+
+
+async def _exec_get_skill_scores(args: dict, user_id: str, scope: BenchmarkScope) -> str:
+    """Probabilistic skill scores for a completed ensemble job.
+
+    Separate from _exec_get_job_metrics because ROMP's two output paths are
+    mutually exclusive: a deterministic run writes spatial NetCDF and no skill
+    CSVs, a probabilistic run the reverse.
+    """
+    from ai_almanac.server.db import get_db
+
+    from ..services.skill_scores import compute_job_skill_scores
+    from ..services.storage import get_storage
+
+    job_id = args["job_id"]
+
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    _job_status_query(scope),
+                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+        row = dict(row) if row else None
+    if not row:
+        return json.dumps({"error": f"Job {job_id} not found"})
+    if row["status"] != "complete":
+        return json.dumps({"error": f"Job {job_id} is not complete"})
+
+    def _load():
+        storage = get_storage()
+        try:
+            scores = compute_job_skill_scores(job_id, storage)
+        except Exception as exc:
+            logger.exception("Could not load skill scores for job %s", job_id)
+            return {
+                "error": f"Could not read skill-score outputs for job {job_id}: {exc}",
+                "job_id": job_id,
+            }
+        if not scores.windows:
+            return {
+                "error": (
+                    f"No skill-score files found for job {job_id}. These are only produced "
+                    "for probabilistic (ensemble) models; for a deterministic model call "
+                    "get_job_metrics instead."
+                )
+            }
+        payload = scores.model_dump()
+        # Interpretation the model would otherwise have to infer, and often gets
+        # wrong: every score is the fair (ensemble-size debiased) variant, all are
+        # pooled over the region, skill scores are measured against climatology,
+        # and absent metrics are unmeasured rather than passing.
+        payload["notes"] = {
+            "scores_are_fair": (
+                "All values are the fair (ensemble-size debiased) variants ROMP persists."
+            ),
+            "pooled": "Scores are pooled over the whole region, not per grid point.",
+            "reference": (
+                "Skill scores are relative to a climatology forecast: 0 means no better than "
+                "climatology and negative means worse. auc_ref is climatology's own Area "
+                "Under ROC Curve for the same window."
+            ),
+            "not_computed": (
+                "Reliability, Continuous Ranked Probability Score, ensemble spread-skill "
+                "ratio and rank histograms are NOT computed by this benchmark. Do not treat "
+                "their absence as a passing result — calibration and ensemble spread are "
+                "unmeasured."
+            ),
+            "no_lead_breakdown": (
+                "Ranked Probability Score and its skill score have no per-bin values; they "
+                "are cumulative over the whole verification window by construction."
+            ),
+        }
+        return payload
 
     return json.dumps(await asyncio.to_thread(_load))
 
@@ -1036,6 +1125,10 @@ async def rerun_job(request: RerunJobRequest, user_id: str, scope: BenchmarkScop
 
 async def get_job_metrics(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(await _exec_get_job_metrics({"job_id": job_id}, user_id, scope))
+
+
+async def get_skill_scores(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
+    return _domain_payload(await _exec_get_skill_scores({"job_id": job_id}, user_id, scope))
 
 
 async def get_spatial_summary(

@@ -490,8 +490,23 @@ def _metrics_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def get_job_metrics(ctx: RunContext[ChatDeps], job_id: str) -> dict:
-        """Get aggregate spatial statistics for a completed job."""
+        """Get aggregate spatial statistics (false alarm rate, miss rate, mean absolute
+        error) for a completed job. Deterministic models only — an ensemble model
+        produces no spatial metrics, so use get_skill_scores for those.
+        """
         return await chat_tools.get_job_metrics(job_id, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def get_skill_scores(ctx: RunContext[ChatDeps], job_id: str) -> dict:
+        """Get probabilistic verification scores for a completed ensemble job: Brier
+        Score, Brier Skill Score, Ranked Probability Score and its skill score, and
+        Area Under ROC Curve, both pooled and broken down by forecast lead-time bin.
+
+        Use this for any probabilistic (ensemble) model. Such jobs produce no spatial
+        metrics at all, so get_job_metrics will return nothing for them. Read the
+        `notes` field in the response before interpreting the numbers.
+        """
+        return await chat_tools.get_skill_scores(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
     async def get_spatial_summary(
