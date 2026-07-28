@@ -7,7 +7,7 @@
 	 * before, and colours each point by its skill against the same unconditional
 	 * climatology baseline the table uses, so a number means the same thing in both.
 	 */
-	import { onDestroy, onMount } from 'svelte';
+	import { untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
@@ -32,7 +32,9 @@
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
 	let mapReady = $state(false);
-	let resizeObserver: ResizeObserver | null = null;
+	let appliedBasemap: BasemapStyleId | null = null;
+	/** The blend the camera is currently framed on; null means it needs fitting. */
+	let fittedJob: string | null = null;
 
 	let basemap = $state<BasemapStyleId>('carto-light');
 	let metrics = $state<BlendCellMetrics | null>(null);
@@ -113,33 +115,63 @@
 		}
 	}
 
-	onMount(async () => {
-		try {
-			metrics = await getBlendCellMetrics(jobId);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not load per-point skill.';
-		} finally {
-			loading = false;
-		}
+	// Reload when the selected blend changes; the component is reused across blends.
+	$effect(() => {
+		const id = jobId;
+		let cancelled = false;
+		loading = true;
+		error = null;
+		metrics = null;
+		requested = null;
+		getBlendCellMetrics(id)
+			.then((result) => {
+				if (!cancelled) metrics = result;
+			})
+			.catch((e) => {
+				if (!cancelled) {
+					error = e instanceof Error ? e.message : 'Could not load per-point skill.';
+				}
+			})
+			.finally(() => {
+				if (!cancelled) loading = false;
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
 
-		if (!mapHost || grids.length === 0) return;
-		map = new maplibregl.Map({
-			container: mapHost,
-			style: basemapUrl(),
+	/**
+	 * Build the map when its host element appears, not on mount.
+	 *
+	 * The host sits behind an {#if} that is false while the fetch is in flight, so
+	 * during onMount it does not exist yet — constructing the map there leaves a
+	 * blank frame forever, because nothing retries once the element arrives.
+	 *
+	 * basemapUrl() is read untracked: this effect must depend on the host alone, or
+	 * changing the basemap would tear the whole map down and rebuild it.
+	 */
+	$effect(() => {
+		const host = mapHost;
+		if (!host) return;
+
+		const instance = new maplibregl.Map({
+			container: host,
+			style: untrack(() => basemapUrl()),
 			center: [20, 10],
 			zoom: 1.5,
 			attributionControl: false
 		});
-		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-		map.on('load', () => {
-			mapReady = true;
-			renderCells(true);
-		});
-		// The panel column changes width as the chat rail collapses.
-		resizeObserver = new ResizeObserver(() => map?.resize());
-		resizeObserver.observe(mapHost);
+		map = instance;
+		appliedBasemap = untrack(() => basemap);
+		// A new map opens at the default camera, so it must refit even for a blend
+		// that an earlier instance had already framed.
+		fittedJob = null;
+		instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+		// Only flip the flag; the redraw effect below owns every render, so the
+		// layers are built in one place instead of here and there.
+		instance.on('load', () => (mapReady = true));
 
-		map.on('mousemove', FILL_LAYER, (event: maplibregl.MapLayerMouseEvent) => {
+		instance.on('mousemove', FILL_LAYER, (event: maplibregl.MapLayerMouseEvent) => {
 			const feature = event.features?.[0];
 			if (!feature) return;
 			const p = feature.properties as {
@@ -160,37 +192,40 @@
 				y: event.point.y - 8
 			};
 		});
-		map.on('mouseleave', FILL_LAYER, () => (hover = null));
+		instance.on('mouseleave', FILL_LAYER, () => (hover = null));
+
+		// The panel column changes width as the chat rail collapses.
+		const observer = new ResizeObserver(() => instance.resize());
+		observer.observe(host);
+
+		return () => {
+			observer.disconnect();
+			instance.remove();
+			if (map === instance) {
+				map = null;
+				mapReady = false;
+			}
+		};
 	});
 
-	// Re-render on metric change, and re-fit only when the grid's footprint could
-	// differ — every metric here shares one grid, so fitting once is enough.
+	// Redraw on metric or blend change, refitting only when the blend changed —
+	// every metric shares one grid, so switching metric must not move the camera.
 	$effect(() => {
-		void grid;
-		renderCells(false);
+		if (!grid || !metrics || !mapReady) return;
+		const fit = fittedJob !== metrics.job_id;
+		renderCells(fit);
+		if (fit) fittedJob = metrics.job_id;
 	});
 
-	// Only restyle on an actual basemap change. Without the applied-value guard this
-	// also fires when the map first becomes ready, tearing down and re-adding the
-	// cell layers for the style they were already built against.
-	let appliedBasemap: BasemapStyleId | null = null;
+	// Only restyle on an actual change. The map is built with the current basemap
+	// already applied, so without this guard the effect's first run would tear the
+	// style down and re-add the cell layers for the style they already match.
 	$effect(() => {
 		const next = basemap;
-		if (!map || !mapReady) return;
-		if (appliedBasemap === null) {
-			appliedBasemap = next;
-			return;
-		}
-		if (appliedBasemap === next) return;
+		if (!map || !mapReady || appliedBasemap === next) return;
 		appliedBasemap = next;
 		map.setStyle(basemapUrl());
 		map.once('styledata', () => renderCells(false));
-	});
-
-	onDestroy(() => {
-		resizeObserver?.disconnect();
-		map?.remove();
-		map = null;
 	});
 
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
