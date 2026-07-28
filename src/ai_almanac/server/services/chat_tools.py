@@ -226,6 +226,12 @@ async def get_job_metrics(job_id: str, user_id: str, scope: ChatScope) -> dict:
     )
 
 
+async def get_skill_scores(job_id: str, user_id: str, scope: ChatScope) -> dict:
+    return await tool_payload(
+        await benchmark_domain.get_skill_scores(job_id, user_id, scope), "", user_id
+    )
+
+
 async def get_spatial_summary(
     request: SpatialMetricRequest, user_id: str, scope: ChatScope
 ) -> dict:

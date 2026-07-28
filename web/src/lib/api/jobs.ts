@@ -333,3 +333,39 @@ export async function getJobCell(
 	const params = new URLSearchParams({ model, window, lat: String(lat), lon: String(lon) });
 	return request<JobCellResponse>(`/jobs/${id}/cell?${params}`);
 }
+
+// ---- Job skill scores (probabilistic runs only) ------------------------------
+
+/** One lead-time bin from ROMP's binned_skill_scores_*.csv. */
+export type SkillBin = {
+	bin: string;
+	label: string;
+	lead_day_min: number;
+	lead_day_max: number;
+	brier_skill_score: number | null;
+	auc: number | null;
+	auc_ref: number | null;
+	brier_score_forecast: number | null;
+	brier_score_climatology: number | null;
+};
+
+export type WindowSkillScores = {
+	model: string;
+	window: string;
+	/** Keyed by romp.yaml metric id, plus `auc_ref` for the climatology baseline. */
+	overall: Record<string, number | null>;
+	bins: SkillBin[];
+};
+
+export type JobSkillScores = {
+	job_id: string;
+	windows: WindowSkillScores[];
+};
+
+/**
+ * Probabilistic skill scores for a job. Deterministic jobs produce no skill
+ * CSVs, so an empty `windows` array is a normal response rather than an error.
+ */
+export async function getJobSkillScores(id: string): Promise<JobSkillScores> {
+	return request<JobSkillScores>(`/jobs/${id}/skill-scores`);
+}

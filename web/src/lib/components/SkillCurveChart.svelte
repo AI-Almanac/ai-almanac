@@ -1,11 +1,37 @@
 <script lang="ts">
+	/**
+	 * A probabilistic skill score plotted against forecast lead time.
+	 *
+	 * Structurally a sibling of routes/blends/BlendSkillChart.svelte, with three
+	 * differences that matter:
+	 *
+	 * 1. The y range is not clamped to [0, 1]. The Brier Skill Score is unbounded
+	 *    below — a model worse than climatology scores negative, and hiding that
+	 *    would be the single most misleading thing this chart could do.
+	 * 2. It draws a reference line at the no-skill value (zero for skill scores,
+	 *    0.5 for the Area Under ROC Curve). Without it the curves are
+	 *    uninterpretable.
+	 * 3. The x axis is real lead days, not categorical week bins, so bins from
+	 *    both verification windows compose onto one 1-30 axis.
+	 */
 	import { onDestroy } from 'svelte';
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
-	import { BLEND_COLOR, MODEL_COLORS } from '$lib/chart-colors';
-	import { SKILL_AXES, type SkillRow } from './blend-summary';
+	import { AXIS_STROKE, GRID_STROKE, REFERENCE_STROKE } from '$lib/chart-colors';
+	import type { LeadBin, SkillCurveSeries } from '$lib/skill-series';
+	import { formatSkillValue } from '$lib/skill-series';
 
-	let { series }: { series: SkillRow[] } = $props();
+	type Props = {
+		title: string;
+		leads: LeadBin[];
+		series: SkillCurveSeries[];
+		/** Value at which the score indicates no skill. */
+		referenceValue: number;
+		referenceLabel: string;
+		caption: string;
+	};
+
+	let { title, leads, series, referenceValue, referenceLabel, caption }: Props = $props();
 
 	let chartHost = $state<HTMLDivElement | null>(null);
 	let chart: uPlot | null = null;
@@ -18,34 +44,17 @@
 		y: number;
 	} | null>(null);
 
-	const X = SKILL_AXES.map((_, i) => i);
-
-	type SeriesDef = {
-		key: string;
-		label: string;
-		color: string;
-		width: number;
-		isBlend: boolean;
-		values: number[];
-	};
-
-	const seriesDefs = $derived(buildSeriesDefs(series));
-	const hasVisibleSeries = $derived(seriesDefs.some((s) => visibleSeries[s.key]));
-
-	function buildSeriesDefs(rows: SkillRow[]): SeriesDef[] {
-		let next = 0;
-		return rows.map((row) => ({
-			key: row.model,
-			label: row.label,
-			color: row.isBlend ? BLEND_COLOR : MODEL_COLORS[next++ % MODEL_COLORS.length],
-			width: row.isBlend ? 3 : 1.75,
-			isBlend: row.isBlend,
-			values: row.aucByLead
-		}));
-	}
+	const xValues = $derived(leads.map((l) => l.day));
+	const hasVisibleSeries = $derived(series.some((s) => visibleSeries[s.key]));
 
 	function chartData(): uPlot.AlignedData {
-		return [X, ...seriesDefs.map((s) => s.values)];
+		return [
+			xValues,
+			// The reference line is a real series so it participates in the y-range
+			// calculation and can never fall outside the visible plot.
+			xValues.map(() => referenceValue),
+			...series.map((s) => s.values)
+		] as uPlot.AlignedData;
 	}
 
 	function hidePointTooltip() {
@@ -61,11 +70,16 @@
 		const plotRect = plot.over.getBoundingClientRect();
 		const rows: { label: string; color: string; value: number }[] = [];
 		let anchorY = Number.POSITIVE_INFINITY;
-		for (let s = 1; s < plot.data.length; s++) {
+		// Series index 1 is the reference line; model series start at 2.
+		for (let s = 2; s < plot.data.length; s++) {
 			if (!plot.series[s]?.show) continue;
 			const value = plot.data[s][idx];
 			if (value == null) continue;
-			rows.push({ label: seriesDefs[s - 1].label, color: seriesDefs[s - 1].color, value });
+			// Optional-chained because setCursor can fire from a pending mouse event
+			// after the series prop shrank but before the rebuild effect flushed.
+			const def = series[s - 2];
+			if (!def) continue;
+			rows.push({ label: def.label, color: def.color, value });
 			anchorY = Math.min(anchorY, plot.valToPos(value, 'y'));
 		}
 		if (rows.length === 0) {
@@ -73,9 +87,10 @@
 			return;
 		}
 		pointTooltip = {
-			axis: SKILL_AXES[idx],
+			axis: `Days ${leads[idx]?.label ?? ''}`,
+			// Higher is better for every score this chart draws, so best-first.
 			rows: rows.sort((a, b) => b.value - a.value),
-			x: plotRect.left + plot.valToPos(idx, 'x'),
+			x: plotRect.left + plot.valToPos(xValues[idx], 'x'),
 			y: plotRect.top + anchorY
 		};
 	}
@@ -93,45 +108,65 @@
 				destroy: [(plot) => plot.over.removeEventListener('mouseleave', hidePointTooltip)]
 			} as Partial<uPlot.Hooks.Arrays> as uPlot.Hooks.Arrays,
 			scales: {
-				x: { time: false, range: () => [-0.25, X.length - 1 + 0.25] },
+				x: {
+					time: false,
+					range: () => {
+						const first = xValues[0] ?? 0;
+						const last = xValues[xValues.length - 1] ?? 1;
+						const pad = Math.max((last - first) * 0.06, 1);
+						return [first - pad, last + pad];
+					}
+				},
 				y: {
+					// Deliberately unbounded: a skill score below zero means worse than
+					// climatology and must stay visible. The reference value is always
+					// included so the no-skill line never sits off-plot.
 					range: (_plot, min, max) => {
-						if (min === null || max === null) return [0.5, 1];
-						const pad = Math.max((max - min) * 0.15, 0.02);
-						return [Math.max(0, min - pad), Math.min(1, max + pad)];
+						if (min === null || max === null) return [referenceValue - 0.5, referenceValue + 0.5];
+						const lo = Math.min(min, referenceValue);
+						const hi = Math.max(max, referenceValue);
+						const pad = Math.max((hi - lo) * 0.15, 0.02);
+						return [lo - pad, hi + pad];
 					}
 				}
 			},
 			axes: [
 				{
-					stroke: '#6a7779',
+					stroke: AXIS_STROKE,
 					grid: { show: false },
 					ticks: { show: false },
-					size: 28,
-					splits: () => X,
-					values: (_plot, vals) => vals.map((v) => SKILL_AXES[v] ?? ''),
+					size: 30,
+					splits: () => xValues,
+					values: (_plot, vals) => vals.map((v) => leads.find((l) => l.day === v)?.label ?? ''),
 					gap: 8
 				},
 				{
-					stroke: '#6a7779',
-					grid: { stroke: 'rgba(31, 43, 52, 0.1)', width: 1 },
+					stroke: AXIS_STROKE,
+					grid: { stroke: GRID_STROKE, width: 1 },
 					ticks: { show: false },
-					size: 40,
+					size: 44,
 					values: (_plot, vals) => vals.map((v) => v.toFixed(2)),
 					gap: 8
 				}
 			],
 			series: [
 				{},
-				...seriesDefs.map((s) => ({
+				{
+					label: referenceLabel,
+					stroke: REFERENCE_STROKE,
+					width: 1,
+					dash: [4, 4],
+					points: { show: false }
+				},
+				...series.map((s) => ({
 					label: s.label,
 					stroke: s.color,
-					width: s.width,
+					width: 1.75,
 					show: visibleSeries[s.key] ?? true,
 					spanGaps: true,
 					points: {
 						show: true,
-						size: s.isBlend ? 8 : 6,
+						size: 6,
 						width: 1.5,
 						stroke: s.color,
 						fill: '#ffffff'
@@ -152,6 +187,9 @@
 
 	function buildChart() {
 		if (!chartHost) return;
+		// The tooltip is position: fixed and outlives the chart it describes. Without
+		// this, arriving data while the cursor is inside the plot leaves stale rows
+		// pinned at stale coordinates until the next mousemove.
 		hidePointTooltip();
 		const bounds = chartHost.getBoundingClientRect();
 		chart?.destroy();
@@ -160,10 +198,9 @@
 			chartData(),
 			chartHost
 		);
-		// Observe here rather than in onMount: chartHost is bound inside
-		// {#if hasVisibleSeries}, which is false on first render because
-		// visibleSeries starts empty. The onMount observer was therefore created
-		// but never observed anything, and this chart never resized.
+		// Observe here rather than in onMount: the host is behind an {#if}, so on
+		// first mount it does not exist yet and an onMount observe() would be
+		// silently skipped and never retried.
 		resizeObserver ??= new ResizeObserver(resizeChart);
 		resizeObserver.disconnect();
 		resizeObserver.observe(chartHost);
@@ -174,14 +211,14 @@
 	$effect(() => {
 		const next = { ...visibleSeries };
 		let changed = false;
-		for (const s of seriesDefs) {
+		for (const s of series) {
 			if (next[s.key] == null) {
 				next[s.key] = true;
 				changed = true;
 			}
 		}
 		for (const key of Object.keys(next)) {
-			if (!seriesDefs.some((s) => s.key === key)) {
+			if (!series.some((s) => s.key === key)) {
 				delete next[key];
 				changed = true;
 			}
@@ -190,7 +227,7 @@
 	});
 
 	$effect(() => {
-		if (!hasVisibleSeries || !chartHost) {
+		if (!hasVisibleSeries || !chartHost || leads.length === 0) {
 			chart?.destroy();
 			chart = null;
 			return;
@@ -210,15 +247,14 @@
 	});
 </script>
 
-<section class="skill-chart" aria-label="Forecast skill by lead time">
+<section class="skill-curve" aria-label={title}>
 	<div class="chart-topline">
-		<span>AUC by lead time</span>
+		<span>{title}</span>
 		<div class="series-toggles" aria-label="Toggle models">
-			{#each seriesDefs as s (s.key)}
+			{#each series as s (s.key)}
 				<button
 					type="button"
 					class:muted={!visibleSeries[s.key]}
-					class:blend={s.isBlend}
 					onclick={() => toggleSeries(s.key)}
 					aria-pressed={visibleSeries[s.key] ?? true}
 				>
@@ -229,8 +265,10 @@
 		</div>
 	</div>
 
-	{#if hasVisibleSeries}
-		<div class="chart-host" bind:this={chartHost} aria-label="AUC by forecast lead time"></div>
+	{#if leads.length === 0}
+		<p class="empty-series">No lead-time bins in this result.</p>
+	{:else if hasVisibleSeries}
+		<div class="chart-host" bind:this={chartHost} aria-label={title}></div>
 		{#if pointTooltip}
 			<div
 				class="chart-point-tooltip"
@@ -245,7 +283,7 @@
 								<i style={`background: ${row.color}`}></i>
 								{row.label}
 							</span>
-							<span>{row.value.toFixed(3)}</span>
+							<span>{formatSkillValue(row.value)}</span>
 						</div>
 					{/each}
 				</div>
@@ -255,51 +293,11 @@
 		<p class="empty-series">Select at least one model to show the plot.</p>
 	{/if}
 
-	<p class="caption">
-		Discrimination skill (AUC) by forecast lead time. 0.5 is no skill, 1.0 is perfect — higher is
-		better. Click a model to toggle it; hover for exact values.
-	</p>
-
-	<details class="glossary">
-		<summary>What do “raw”, “calibrated” and “climatology” mean?</summary>
-		<dl>
-			<div>
-				<dt>Raw</dt>
-				<dd>
-					The forecast model's onset probabilities used straight from the model, with no adjustment.
-				</dd>
-			</div>
-			<div>
-				<dt>Calibrated</dt>
-				<dd>
-					The same probabilities statistically adjusted (Platt scaling) so that, e.g., a 30%
-					forecast corresponds to onset actually happening about 30% of the time.
-				</dd>
-			</div>
-			<div>
-				<dt>Climatology</dt>
-				<dd>
-					A baseline built only from historical onset frequency — no forecast model. A useful
-					forecast has to beat it.
-				</dd>
-			</div>
-			<div>
-				<dt>Climatology (uncalibrated)</dt>
-				<dd>
-					The climatology baseline before that adjustment; it's the reference the skill scores are
-					measured against.
-				</dd>
-			</div>
-			<div>
-				<dt>Blend</dt>
-				<dd>The trained combination of the models above — what this job produced.</dd>
-			</div>
-		</dl>
-	</details>
+	<p class="caption">{caption}</p>
 </section>
 
 <style>
-	.skill-chart {
+	.skill-curve {
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
@@ -338,10 +336,6 @@
 		cursor: pointer;
 	}
 
-	.series-toggles button.blend {
-		color: var(--color-text);
-	}
-
 	.series-toggles button.muted {
 		opacity: 0.45;
 		background: var(--color-surface-muted);
@@ -355,8 +349,8 @@
 
 	.chart-host {
 		width: 100%;
-		height: clamp(12rem, 30vh, 18rem);
-		min-height: 12rem;
+		height: clamp(11rem, 26vh, 16rem);
+		min-height: 11rem;
 	}
 
 	.chart-host :global(.uplot) {
@@ -433,34 +427,6 @@
 		margin: 0;
 		color: var(--color-text-muted);
 		font-size: 0.8rem;
-		line-height: 1.4;
-	}
-
-	.glossary {
-		font-size: 0.8rem;
-		color: var(--color-text-muted);
-	}
-
-	.glossary summary {
-		cursor: pointer;
-		font-weight: 700;
-		color: var(--color-text);
-	}
-
-	.glossary dl {
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-		margin: 0.5rem 0 0;
-	}
-
-	.glossary dt {
-		font-weight: 700;
-		color: var(--color-text);
-	}
-
-	.glossary dd {
-		margin: 0;
 		line-height: 1.4;
 	}
 </style>

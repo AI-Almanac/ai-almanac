@@ -5,15 +5,37 @@ placeholder figures so the full UI flow (submit → status → metrics map →
 figures) works end-to-end without the benchmark environment installed. The
 output schema matches what ROMP itself produces, so downstream metrics/map/
 figure code does not distinguish stub from real.
+
+That includes ROMP's split between its two output paths: a deterministic run
+emits spatial NetCDF metrics and no skill scores, a probabilistic run emits
+skill-score CSVs and no NetCDF. The two are mutually exclusive because
+`spatial_far_mr_mae_map` and `skill_score_in_bins` each early-return on the
+other's mode (momp/app/spatial_far_mr_mae.py:33, momp/app/bin_skill_score.py:38).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-# The forecast windows ROMP normally emits; mirrored so the window picker has
-# real options to render.
-WINDOWS = ("1-7", "8-14", "15-21", "22-30")
+# The verification windows ROMP emits, matching the hardcoded
+# verification_window_list in services/romp.py so the window picker and the
+# skill-score lead axis see the same values the real runner produces.
+WINDOWS = ("1-15", "16-30")
+
+# The day bins ROMP scores within each verification window
+# (romp.py day_bins, filtered to the window by momp/lib/control.py).
+BINS_BY_WINDOW: dict[str, tuple[tuple[int, int], ...]] = {
+    "1-15": ((1, 5), (6, 10), (11, 15)),
+    "16-30": ((16, 20), (21, 25), (26, 30)),
+}
+
+_OVERALL_HEADER = (
+    "Fair_Brier_Score,Fair_Brier_Skill_Score,Fair_RPS,Fair_RPS_Skill_Score,AUC,AUC_ref"
+)
+_BINNED_HEADER = (
+    "Bin,clean_bins,Fair_Brier_Skill_Score,AUC,AUC_ref,"
+    "Fair_Brier_Score_Forecast,Fair_Brier_Score_Climatology"
+)
 
 
 def resolve_grid(config: dict) -> tuple[list[float], list[float]]:
@@ -83,6 +105,69 @@ def write_metric_nc(
         },
     )
     ds.to_netcdf(out_path)
+
+
+def write_skill_score_csvs(
+    output_dir: Path,
+    model_name: str,
+    window: str,
+) -> list[Path]:
+    """Write the pair of skill-score CSVs a probabilistic ROMP run produces.
+
+    Column names and order match momp/io/output.py:save_score_results exactly;
+    the parser in services/skill_scores.py is keyed off them.
+    """
+    import numpy as np
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(hash((model_name, window, "skill")) & 0xFFFFFFFF)
+
+    def fmt(value: float) -> str:
+        return f"{value:.4f}"
+
+    # Skill decays with lead time, so later bins score worse — otherwise the
+    # curves are flat noise and tell you nothing about whether the chart works.
+    bins = BINS_BY_WINDOW.get(window, ((1, 5),))
+    binned_rows = []
+    for index, (start, end) in enumerate(bins):
+        decay = index / max(len(bins), 1)
+        bss = float(rng.uniform(0.05, 0.35) - decay * 0.4)
+        auc = float(rng.uniform(0.72, 0.90) - decay * 0.15)
+        bs_fcst = float(rng.uniform(0.06, 0.14) + decay * 0.05)
+        binned_rows.append(
+            ",".join(
+                [
+                    f"Days {start}-{end}",
+                    f"{start}-{end}",
+                    fmt(bss),
+                    fmt(auc),
+                    fmt(float(rng.uniform(0.48, 0.54))),
+                    fmt(bs_fcst),
+                    fmt(float(rng.uniform(0.12, 0.18))),
+                ]
+            )
+        )
+
+    binned_path = output_dir / f"binned_skill_scores_{model_name}_{window}.csv"
+    binned_path.write_text(_BINNED_HEADER + "\n" + "\n".join(binned_rows) + "\n")
+
+    overall_path = output_dir / f"overall_skill_scores_{model_name}_{window}.csv"
+    overall_path.write_text(
+        _OVERALL_HEADER
+        + "\n"
+        + ",".join(
+            [
+                fmt(float(rng.uniform(0.08, 0.16))),
+                fmt(float(rng.uniform(0.05, 0.30))),
+                fmt(float(rng.uniform(0.06, 0.12))),
+                fmt(float(rng.uniform(0.05, 0.25))),
+                fmt(float(rng.uniform(0.74, 0.88))),
+                fmt(float(rng.uniform(0.48, 0.54))),
+            ]
+        )
+        + "\n"
+    )
+    return [overall_path, binned_path]
 
 
 def write_placeholder_figure(path: Path, model_name: str, figure_name: str) -> None:
