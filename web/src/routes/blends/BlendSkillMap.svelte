@@ -41,6 +41,9 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let requested = $state<string | null>(null);
+	/** The basemap style never arrived; the frame would otherwise be silently blank. */
+	let stalled = $state(false);
+	let styleTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let hover = $state<{
 		skill: number;
@@ -167,9 +170,27 @@
 		// that an earlier instance had already framed.
 		fittedJob = null;
 		instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-		// Only flip the flag; the redraw effect below owns every render, so the
-		// layers are built in one place instead of here and there.
-		instance.on('load', () => (mapReady = true));
+		// The basemaps are CARTO/OSM, whose licences require the credit.
+		instance.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+		/**
+		 * 'style.load', not 'load': the cells are local data and must not wait on the
+		 * basemap. 'load' only fires once the whole first render completes, including
+		 * the basemap's sprites and glyphs, so one stalled third-party request leaves
+		 * the frame blank with no error — indistinguishable from a blend with no
+		 * points. 'style.load' is the documented point at which sources and layers
+		 * can be added, and it depends only on the style JSON.
+		 *
+		 * Only the flag is set here; the redraw effect below owns every render.
+		 */
+		instance.on('style.load', () => (mapReady = true));
+		// A style that never arrives leaves the same empty frame, so name it.
+		instance.on('error', (event: { error?: { message?: string } }) => {
+			if (!mapReady) error = event.error?.message ?? 'The map could not be loaded.';
+		});
+		// Nothing above guarantees an error on a request that merely hangs.
+		styleTimer = setTimeout(() => {
+			if (!mapReady && !error) stalled = true;
+		}, 10_000);
 
 		instance.on('mousemove', FILL_LAYER, (event: maplibregl.MapLayerMouseEvent) => {
 			const feature = event.features?.[0];
@@ -199,11 +220,14 @@
 		observer.observe(host);
 
 		return () => {
+			if (styleTimer) clearTimeout(styleTimer);
+			styleTimer = null;
 			observer.disconnect();
 			instance.remove();
 			if (map === instance) {
 				map = null;
 				mapReady = false;
+				stalled = false;
 			}
 		};
 	});
@@ -225,7 +249,8 @@
 		if (!map || !mapReady || appliedBasemap === next) return;
 		appliedBasemap = next;
 		map.setStyle(basemapUrl());
-		map.once('styledata', () => renderCells(false));
+		// setStyle discards the cell layers, so re-add them once the new style parses.
+		map.once('style.load', () => renderCells(false));
 	});
 
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
@@ -256,6 +281,12 @@
 	{:else}
 		<div class="map-frame">
 			<div class="map-host" bind:this={mapHost}></div>
+			{#if stalled}
+				<p class="map-stalled">
+					The basemap did not load, so the grid cannot be drawn. Check the browser console for a
+					blocked request to <code>basemaps.cartocdn.com</code>.
+				</p>
+			{/if}
 			{#if hover}
 				<div class="map-tooltip" style={`left: ${hover.x}px; top: ${hover.y}px`} role="tooltip">
 					<strong>{formatSkillValue(hover.skill)}</strong>
@@ -332,17 +363,29 @@
 		color: var(--color-text);
 	}
 
+	/* A definite height, as the benchmark and forecast maps use: MapLibre measures
+	   its container on construction, and an aspect-ratio box leaves the canvas
+	   unsized, so the controls appear over an empty frame. clamp keeps it
+	   responsive rather than pinning a pixel height. */
 	.map-frame {
 		position: relative;
+		height: clamp(18rem, 45vh, 27rem);
 		border: 1px solid var(--color-border);
 		border-radius: 0.5rem;
 		overflow: hidden;
 	}
 
-	/* Aspect ratio rather than a fixed height, so the map scales with the column. */
 	.map-host {
-		width: 100%;
-		aspect-ratio: 4 / 3;
+		position: absolute;
+		inset: 0;
+	}
+
+	/* MapLibre sizes its own canvas from inline styles that do not survive this
+	   layout; both other maps in the app carry the same override. */
+	.map-frame :global(.maplibregl-canvas-container),
+	.map-frame :global(.maplibregl-canvas) {
+		width: 100% !important;
+		height: 100% !important;
 	}
 
 	.map-tooltip {
@@ -363,6 +406,19 @@
 
 	.map-tooltip .flag {
 		color: #f4a582;
+	}
+
+	.map-stalled {
+		position: absolute;
+		inset: auto 0.75rem 0.75rem 0.75rem;
+		margin: 0;
+		padding: 0.5rem 0.6rem;
+		border-radius: 0.35rem;
+		background: var(--color-surface);
+		border: 1px solid var(--color-danger-border);
+		color: var(--color-text);
+		font-size: 0.7rem;
+		line-height: 1.45;
 	}
 
 	.legend {

@@ -19,6 +19,7 @@ const maplibre = vi.hoisted(() => {
 		container: unknown;
 		style: unknown;
 		emit: (event: string) => void;
+		handlers: Map<string, unknown>;
 		addSource: ReturnType<typeof vi.fn>;
 		addLayer: ReturnType<typeof vi.fn>;
 		fitBounds: ReturnType<typeof vi.fn>;
@@ -70,7 +71,8 @@ const maplibre = vi.hoisted(() => {
 
 vi.mock('maplibre-gl', () => ({
 	Map: maplibre.FakeMap,
-	NavigationControl: class {}
+	NavigationControl: class {},
+	AttributionControl: class {}
 }));
 vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}));
 
@@ -120,20 +122,34 @@ describe('BlendSkillMap', () => {
 		expect(maplibre.instances[0].container).toBeInstanceOf(HTMLElement);
 	});
 
-	it('adds the cell layers once the style has loaded', async () => {
+	it('adds the cell layers once the style has parsed', async () => {
 		api.getBlendCellMetrics.mockResolvedValue(metrics());
 		render(BlendSkillMap, { jobId: 'job-1' });
 		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
 
 		const instance = maplibre.instances[0];
-		// Layers cannot be added before 'load'; maplibre throws if they are.
+		// Layers cannot be added before the style exists; maplibre throws if they are.
 		expect(instance.addSource).not.toHaveBeenCalled();
-		instance.emit('load');
+		instance.emit('style.load');
 		await waitFor(() => expect(instance.addSource).toHaveBeenCalledTimes(1));
 		// A fill and an outline, added exactly once between them.
 		expect(instance.addLayer).toHaveBeenCalledTimes(2);
 		// And the camera is framed on the data rather than left at the world view.
 		expect(instance.fitBounds).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not wait on the basemap finishing its first render', async () => {
+		// 'load' additionally waits for sprites and glyphs from a third-party CDN.
+		// Gating our own cells on it means one stalled request blanks the map.
+		api.getBlendCellMetrics.mockResolvedValue(metrics());
+		render(BlendSkillMap, { jobId: 'job-1' });
+		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
+
+		const instance = maplibre.instances[0];
+		instance.emit('style.load');
+		await waitFor(() => expect(instance.addSource).toHaveBeenCalled());
+		// Never needed 'load' at all.
+		expect(instance.handlers.has('load')).toBe(false);
 	});
 
 	it('never builds a map when the blend has no per-point grids', async () => {
