@@ -27,7 +27,7 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import { MIN_ONSET_YEARS, computeCoverage, defaultSplit, yearSpecError } from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
-	import BlendSkillChart from './BlendSkillChart.svelte';
+	import BlendSkillPanel from './BlendSkillPanel.svelte';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
@@ -718,7 +718,7 @@
 						{#if skill.length > 0}
 							<div class="skill">
 								<h2>Forecast skill</h2>
-								<BlendSkillChart series={skill} />
+								<BlendSkillPanel series={skill} />
 							</div>
 						{/if}
 

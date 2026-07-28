@@ -2,8 +2,8 @@
 	/**
 	 * A probabilistic skill score plotted against forecast lead time.
 	 *
-	 * Structurally a sibling of routes/blends/BlendSkillChart.svelte, with three
-	 * differences that matter:
+	 * Shared by the benchmarks results view and the blends page. Two properties
+	 * are load-bearing for both:
 	 *
 	 * 1. The y range is not clamped to [0, 1]. The Brier Skill Score is unbounded
 	 *    below — a model worse than climatology scores negative, and hiding that
@@ -11,8 +11,11 @@
 	 * 2. It draws a reference line at the no-skill value (zero for skill scores,
 	 *    0.5 for the Area Under ROC Curve). Without it the curves are
 	 *    uninterpretable.
-	 * 3. The x axis is real lead days, not categorical week bins, so bins from
-	 *    both verification windows compose onto one 1-30 axis.
+	 *
+	 * `leads[].day` is an x position, not necessarily a real day: ROMP passes bin
+	 * midpoints so both verification windows compose onto one 1-30 axis, while the
+	 * blend passes indices so its ordinal week bins — including the open-ended
+	 * "later" — sit evenly spaced without claiming to be lead days.
 	 */
 	import { onDestroy } from 'svelte';
 	import uPlot from 'uplot';
@@ -29,9 +32,29 @@
 		referenceValue: number;
 		referenceLabel: string;
 		caption: string;
+		/**
+		 * Prefixes the lead label in the tooltip heading. ROMP bins are bare day
+		 * ranges ("1-5") and need it; bins that already name themselves, like the
+		 * blend's "Week 1", pass an empty string.
+		 */
+		axisPrefix?: string;
+		/**
+		 * Hides the title text while keeping it as the section's accessible name.
+		 * For callers that already name the metric in an adjacent control.
+		 */
+		showTitle?: boolean;
 	};
 
-	let { title, leads, series, referenceValue, referenceLabel, caption }: Props = $props();
+	let {
+		title,
+		leads,
+		series,
+		referenceValue,
+		referenceLabel,
+		caption,
+		axisPrefix = 'Days ',
+		showTitle = true
+	}: Props = $props();
 
 	let chartHost = $state<HTMLDivElement | null>(null);
 	let chart: uPlot | null = null;
@@ -87,7 +110,7 @@
 			return;
 		}
 		pointTooltip = {
-			axis: `Days ${leads[idx]?.label ?? ''}`,
+			axis: `${axisPrefix}${leads[idx]?.label ?? ''}`,
 			// Higher is better for every score this chart draws, so best-first.
 			rows: rows.sort((a, b) => b.value - a.value),
 			x: plotRect.left + plot.valToPos(xValues[idx], 'x'),
@@ -113,7 +136,10 @@
 					range: () => {
 						const first = xValues[0] ?? 0;
 						const last = xValues[xValues.length - 1] ?? 1;
-						const pad = Math.max((last - first) * 0.06, 1);
+						// Proportional, with a fallback for the degenerate single-bin
+						// case. A flat minimum of one day would swallow a quarter of a
+						// short categorical axis such as the blend's five week bins.
+						const pad = (last - first) * 0.06 || 1;
 						return [first - pad, last + pad];
 					}
 				},
@@ -249,7 +275,7 @@
 
 <section class="skill-curve" aria-label={title}>
 	<div class="chart-topline">
-		<span>{title}</span>
+		{#if showTitle}<span>{title}</span>{/if}
 		<div class="series-toggles" aria-label="Toggle models">
 			{#each series as s (s.key)}
 				<button

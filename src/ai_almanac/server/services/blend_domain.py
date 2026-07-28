@@ -20,10 +20,23 @@ from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
 from ai_almanac.server.tables import jobs as _jobs
 
-# Per-lead AUC columns in the blend's pooled summary CSV, ordered week 1 → later.
-# Mirrors AUC_COLUMNS in web/src/routes/blends/blend-summary.ts.
+# Per-lead columns in the blend's pooled summary CSV, ordered week 1 → later.
+# Mirrors AUC_COLUMNS and BRIER_COLUMNS in web/src/routes/blends/blend-summary.ts.
 _SKILL_LEAD_COLUMNS = ["auc_week1", "auc_week2", "auc_week3", "auc_week4", "auc_later"]
+_BRIER_LEAD_COLUMNS = [
+    "brier_week1",
+    "brier_week2",
+    "brier_week3",
+    "brier_week4",
+    "brier_later",
+]
 _BLEND_MODEL = "blended_model"
+
+# The blend package scores every skill column against this baseline
+# (``summarize_models_pooled``, baseline_model). ``unc`` is *unconditional*, not
+# uncalibrated: it comes from ``prob_clim_mr_unc``, the climatology that does not
+# condition on onset having held off until the issue date.
+_BASELINE_MODEL = "unc_clim_raw"
 
 # Climatology needs this many observation years before the first forecast year.
 # Mirrors ``min_onset_years`` in modal/blending_app.py and the frontend
@@ -393,11 +406,27 @@ async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpe
 # --------------------------------------------------------------------------
 
 
+def _brier_skill(value: float | None, baseline: float | None) -> float | None:
+    """Skill of a Brier score against the baseline, in the lower-is-better form.
+
+    A zero or missing baseline makes the ratio meaningless, so it yields None
+    rather than raising or returning infinity.
+    """
+    if value is None or baseline is None or baseline == 0:
+        return None
+    return 1.0 - value / baseline
+
+
 def _parse_pooled_summary(csv_text: str) -> list[dict]:
     """Parse the blend's pooled per-model summary CSV into skill rows.
 
     Mirrors ``parsePooledSummary`` in web/.../blend-summary.ts: one row per model
-    with its overall AUC, Brier skill score, and per-lead AUC series.
+    with its pooled scores and its per-lead AUC and Brier series.
+
+    The Ranked Probability Skill Score matters most here — the outcome is five
+    ordinal bins (weeks 1-4, later), so a metric that credits being close beats
+    one that only asks whether the right bin won. The blend reports it pooled
+    only, so it has no per-lead series.
     """
     lines = [line for line in csv_text.strip().splitlines() if line.strip()]
     if len(lines) < 2:
@@ -414,6 +443,7 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
         try:
             return float(cells[position])
         except ValueError:
+            # pandas writes NaN as an empty string.
             return None
 
     rows: list[dict] = []
@@ -422,15 +452,35 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
         model = cells[index["model"]] if index["model"] < len(cells) else ""
         if not model:
             continue
+        observations = cell(cells, "n")
         rows.append(
             {
                 "model": model,
                 "is_blend": model == _BLEND_MODEL,
+                "is_baseline": model == _BASELINE_MODEL,
                 "auc": cell(cells, "auc"),
+                "brier": cell(cells, "brier"),
+                "rps": cell(cells, "rps"),
                 "brier_skill": cell(cells, "brier_skill"),
+                "rps_skill": cell(cells, "rps_skill"),
+                "pietra": cell(cells, "pietra"),
+                "observations": None if observations is None else int(observations),
                 "auc_by_lead": [cell(cells, col) for col in _SKILL_LEAD_COLUMNS],
+                "brier_by_lead": [cell(cells, col) for col in _BRIER_LEAD_COLUMNS],
+                "brier_skill_by_lead": [None] * len(_BRIER_LEAD_COLUMNS),
             }
         )
+
+    # The blend reports raw Brier per lead but skill only pooled, so derive the
+    # per-lead skill from the baseline row that is already in this same file.
+    baseline = next((row for row in rows if row["is_baseline"]), None)
+    if baseline is not None:
+        for row in rows:
+            row["brier_skill_by_lead"] = [
+                _brier_skill(value, base)
+                for value, base in zip(row["brier_by_lead"], baseline["brier_by_lead"], strict=True)
+            ]
+
     # Blend first so the model's own row leads any rendered comparison.
     rows.sort(key=lambda row: not row["is_blend"])
     return rows
