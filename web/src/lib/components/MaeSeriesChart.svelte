@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
 	import type { JobCellResponse } from '$lib/api';
+	import { BASELINE_COLOR, MODEL_COLORS } from '$lib/chart-colors';
 
 	type Props = {
 		results: JobCellResponse[];
@@ -20,9 +21,6 @@
 		x: number;
 		y: number;
 	} | null>(null);
-
-	const BASELINE_COLOR = '#8a6f3d';
-	const MODEL_COLORS = ['#0f766e', '#2166ac', '#b2182b', '#6b5b95', '#d06f1a', '#2d7d46'];
 
 	type SeriesDef = {
 		key: string;
@@ -214,18 +212,6 @@
 		});
 	}
 
-	onMount(() => {
-		if (!chartHost) return;
-		const bounds = chartHost.getBoundingClientRect();
-		chart = new uPlot(
-			makeOptions(Math.max(1, Math.floor(bounds.width)), Math.max(1, Math.floor(bounds.height))),
-			chartData(),
-			chartHost
-		);
-		resizeObserver = new ResizeObserver(resizeChart);
-		resizeObserver.observe(chartHost);
-	});
-
 	$effect(() => {
 		const next = { ...visibleSeries };
 		let changed = false;
@@ -251,6 +237,7 @@
 			return;
 		}
 
+		hidePointTooltip();
 		const bounds = chartHost.getBoundingClientRect();
 		chart?.destroy();
 		chart = new uPlot(
@@ -258,6 +245,13 @@
 			chartData(),
 			chartHost
 		);
+		// Observe here rather than in onMount: chartHost is bound inside
+		// {#if hasVisibleSeries}, which is false on first render because
+		// visibleSeries starts empty. An onMount observe() therefore always
+		// early-returned, and this chart never responded to container resizes.
+		resizeObserver ??= new ResizeObserver(resizeChart);
+		resizeObserver.disconnect();
+		resizeObserver.observe(chartHost);
 		resizeChart();
 	});
 

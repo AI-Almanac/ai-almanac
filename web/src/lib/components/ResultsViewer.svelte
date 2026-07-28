@@ -8,11 +8,33 @@
 		metricOptions,
 		windowLabel
 	} from '$lib/metric-metadata';
+	import { modelDisplayName } from '$lib/model-names';
 	import MetricsTable from './MetricsTable.svelte';
 	import MetricMap from './MetricMap.svelte';
+	import SegmentedTabs, { type SegmentedTabOption } from './SegmentedTabs.svelte';
+	import AllMetricsPanel from './AllMetricsPanel.svelte';
 
 	type Props = { jobs: Job[] };
 	let { jobs }: Props = $props();
+
+	// The tab boundary is map vs. everything-else, not spatial vs. probabilistic:
+	// the All Metrics panel covers both families, so no metric is hidden behind
+	// whichever tab you didn't pick. This split is interim — it keeps the new
+	// metric views decoupled from the map pending the map rewrite, after which the
+	// portrait should drive the map directly.
+	const TABS: SegmentedTabOption[] = [
+		{
+			value: 'map',
+			label: 'Map',
+			hint: 'Per-grid-point spatial metrics'
+		},
+		{
+			value: 'metrics',
+			label: 'All Metrics',
+			hint: 'Every metric by model and lead time, with skill curves'
+		}
+	];
+	let activeTab = $state('map');
 
 	let metricsByJob = $state<Record<string, JobMetrics>>({});
 	let metricDefinitions = $state<MetricDefinition[]>([]);
@@ -33,17 +55,6 @@
 			return metrics ? [metrics] : [];
 		});
 	});
-
-	function modelDisplayName(modelName: string): string {
-		const labels: Record<string, string> = {
-			fuxi: 'FuXi',
-			aifs: 'AIFS',
-			aifs_daily: 'AIFS Daily',
-			fuxi_s2s: 'FuXi S2S',
-			climatology: 'Climatology'
-		};
-		return labels[modelName.toLowerCase()] ?? modelName;
-	}
 
 	function windowSortValue(window: string): number {
 		if (window === '1-15') return 0;
@@ -126,27 +137,38 @@
 </script>
 
 <div class="viewer">
-	{#if jobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
-		<MetricMap
-			{jobs}
-			forecastWindow={windowOptions[0].value}
-			forecastWindows={windowOptions}
-			metrics={mapMetrics}
-			{metricWindowAvailability}
-			{metricWindowAvailabilityByJob}
-		/>
-	{:else}
-		<p class="empty">No spatial data available for this run set.</p>
-	{/if}
+	<SegmentedTabs
+		options={TABS}
+		value={activeTab}
+		onSelect={(value) => (activeTab = value)}
+		ariaLabel="Results view"
+	/>
 
-	<div class="tables">
-		{#each jobs as job (job.id)}
-			<div class="table-section">
-				<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
-				<MetricsTable jobId={job.id} />
-			</div>
-		{/each}
-	</div>
+	{#if activeTab === 'map'}
+		{#if jobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
+			<MetricMap
+				{jobs}
+				forecastWindow={windowOptions[0].value}
+				forecastWindows={windowOptions}
+				metrics={mapMetrics}
+				{metricWindowAvailability}
+				{metricWindowAvailabilityByJob}
+			/>
+		{:else}
+			<p class="empty">No spatial data available for this run set.</p>
+		{/if}
+
+		<div class="tables">
+			{#each jobs as job (job.id)}
+				<div class="table-section">
+					<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
+					<MetricsTable jobId={job.id} />
+				</div>
+			{/each}
+		</div>
+	{:else}
+		<AllMetricsPanel {jobs} />
+	{/if}
 </div>
 
 <style>

@@ -51,7 +51,22 @@ logger = logging.getLogger(__name__)
 
 _PACKAGED_STATIC_DIR = Path(__file__).parent / "static"
 _SOURCE_STATIC_DIR = Path(__file__).resolve().parents[3] / "web" / "build"
-_STATIC_DIR = _SOURCE_STATIC_DIR if _SOURCE_STATIC_DIR.exists() else _PACKAGED_STATIC_DIR
+
+
+def _has_spa_bundle(directory: Path) -> bool:
+    """Probe for the entrypoint, not just the directory.
+
+    `web/build/` is tracked (via .gitkeep) so that hatchling's force-include can
+    resolve on a fresh clone, which means the directory exists before anything has
+    been built. Testing the directory alone would treat an empty one as a valid
+    bundle: it would shadow the packaged static dir in a wheel install, and make
+    the navigation fallback below raise on a missing index.html.
+    """
+    return (directory / "index.html").is_file()
+
+
+_STATIC_DIR = _SOURCE_STATIC_DIR if _has_spa_bundle(_SOURCE_STATIC_DIR) else _PACKAGED_STATIC_DIR
+_STATIC_READY = _has_spa_bundle(_STATIC_DIR)
 
 
 def _apply_migrations() -> None:
@@ -289,7 +304,7 @@ def _is_page_navigation(request: Request) -> bool:
 
 @app.middleware("http")
 async def _spa_navigation_fallback(request: Request, call_next):
-    if _STATIC_DIR.exists() and _is_page_navigation(request):
+    if _STATIC_READY and _is_page_navigation(request):
         response = FileResponse(_STATIC_DIR / "index.html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -361,7 +376,7 @@ class _SPAStaticFiles(StaticFiles):
         return response
 
 
-if _STATIC_DIR.exists():
+if _STATIC_READY:
     app.mount("/", _SPAStaticFiles(directory=_STATIC_DIR, html=True), name="spa")
 else:
     logger.info(

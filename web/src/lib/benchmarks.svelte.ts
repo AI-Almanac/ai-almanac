@@ -5,6 +5,7 @@ import {
 	getJobMetrics,
 	getJobGrid,
 	getJobCell,
+	getJobSkillScores,
 	deleteJob,
 	cancelJob,
 	shareJob,
@@ -15,7 +16,8 @@ import {
 	type JobMetrics,
 	type BboxFilter,
 	type JobGridResponse,
-	type JobCellResponse
+	type JobCellResponse,
+	type JobSkillScores
 } from './api';
 
 // Module-level cache so metrics survive component unmount/remount.
@@ -25,6 +27,7 @@ const _metricsCache = new Map<string, JobMetrics>();
 /** Drop cached results for a job whose status changed or that was removed. */
 export function invalidateJobCaches(jobId: string): void {
 	_metricsCache.delete(jobId);
+	_skillCache.delete(jobId);
 	const prefix = `${jobId}||`;
 	for (const key of _gridCache.keys()) {
 		if (key.startsWith(prefix)) _gridCache.delete(key);
@@ -58,6 +61,19 @@ export async function getCachedJobGrid(
 	if (hit) return hit;
 	const data = await getJobGrid(jobId, model, window, metric);
 	_gridCache.set(key, data);
+	return data;
+}
+
+// Probabilistic skill scores. The endpoint returns an empty `windows` array for
+// deterministic jobs rather than 404ing, so a miss caches like any other result
+// and repeated tab switches don't re-request.
+const _skillCache = new Map<string, JobSkillScores>();
+
+export async function getCachedJobSkillScores(jobId: string): Promise<JobSkillScores> {
+	const hit = _skillCache.get(jobId);
+	if (hit) return hit;
+	const data = await getJobSkillScores(jobId);
+	_skillCache.set(jobId, data);
 	return data;
 }
 

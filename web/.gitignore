@@ -6,7 +6,11 @@ node_modules
 .netlify
 .wrangler
 /.svelte-kit
-/build
+# /build itself is tracked via build/.gitkeep — see that file and the root
+# .gitignore. Listing the directory rather than its contents would stop Git
+# descending into it and make the exception unreachable.
+/build/*
+!/build/.gitkeep
 
 # OS
 .DS_Store
