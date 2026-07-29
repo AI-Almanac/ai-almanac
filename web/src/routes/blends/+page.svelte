@@ -758,7 +758,6 @@
 								placeholder="Ask about this blend…"
 								suggestions={[
 									'How does the blend compare to the individual models?',
-									'Which model contributes most to the blend?',
 									'Summarise the forecast skill of this blend.'
 								]}
 								showArtifacts={false}

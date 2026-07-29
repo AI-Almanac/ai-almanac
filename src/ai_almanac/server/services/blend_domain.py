@@ -546,4 +546,35 @@ async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) ->
     )
     if text is None:
         return {"error": f"Could not read the summary file for blend {job_id}"}
-    return {"job_id": job_id, "skill": _parse_pooled_summary(text), "artifacts": artifact_list}
+    return {
+        "job_id": job_id,
+        "skill": _parse_pooled_summary(text),
+        "spatial": await _cell_coverage(job_id, artifacts),
+        "artifacts": artifact_list,
+    }
+
+
+async def _cell_coverage(job_id: str, artifacts: list[dict]) -> list[dict]:
+    """Where the blend beats climatology, alongside whether it does on average.
+
+    Pooled skill cannot distinguish a small gain everywhere from a large gain in
+    one corner, and the per-point summary is the only artifact that can. Absent or
+    unreadable, this is simply omitted: it enriches an answer about a blend rather
+    than being the answer, so failing to read it must not fail the whole tool.
+    """
+    from ai_almanac.server.services import blend_cells
+    from ai_almanac.server.services.storage import get_storage
+
+    summary = next(
+        (a for a in artifacts if blend_cells.is_per_cell_summary(a["filename"])),
+        None,
+    )
+    if summary is None:
+        return []
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
+    )
+    if text is None:
+        return []
+    metrics = blend_cells.build_cell_metrics(job_id, text)
+    return [c.model_dump() for c in blend_cells.coverage_summary(metrics)]

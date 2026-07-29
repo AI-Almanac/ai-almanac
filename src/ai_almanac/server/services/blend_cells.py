@@ -259,6 +259,51 @@ def build_cell_metrics(
     )
 
 
+class BlendCellCoverage(BaseModel):
+    """One metric's grid reduced to the numbers that fit in a sentence."""
+
+    metric: str
+    label: str
+    points: int
+    points_better: int
+    share_better: float
+    # Median rather than mean: skill is a ratio, and the same near-zero baselines
+    # that force SCALE_PERCENTILE would drag a mean around by a handful of points.
+    median_skill: float | None
+    value_min: float | None
+    value_max: float | None
+
+
+def coverage_summary(metrics: BlendCellMetrics) -> list[BlendCellCoverage]:
+    """Reduce each grid to a spatial claim that can be stated in one sentence.
+
+    A grid runs to a thousand points per metric, which is worth drawing and not
+    worth reading. The map's own caption makes exactly this claim — "the blend
+    beats climatology at 593 of 1032 points" — so summarising here is what lets a
+    reader be told the same thing the map shows, rather than a pooled average that
+    hides whether the gain is everywhere or in one corner.
+    """
+    summaries: list[BlendCellCoverage] = []
+    for grid in metrics.grids:
+        scored = [value for row in grid.values for value in row if value is not None]
+        if not scored:
+            continue
+        better = sum(1 for value in scored if value > 0)
+        summaries.append(
+            BlendCellCoverage(
+                metric=grid.metric,
+                label=grid.label,
+                points=len(scored),
+                points_better=better,
+                share_better=better / len(scored),
+                median_skill=_percentile(sorted(scored), 0.5),
+                value_min=grid.value_min,
+                value_max=grid.value_max,
+            )
+        )
+    return summaries
+
+
 def is_per_cell_summary(filename: str) -> bool:
     """True for the per-grid-point summary, not its pooled sibling.
 

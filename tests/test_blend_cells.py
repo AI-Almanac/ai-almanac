@@ -203,3 +203,45 @@ def test_negative_coordinates_parse() -> None:
 def test_distinguishes_the_per_cell_summary_from_its_pooled_sibling() -> None:
     assert blend_cells.is_per_cell_summary("summary_models_clim_mok_date_2023_2024.csv")
     assert not blend_cells.is_per_cell_summary("summary_models_pooled_clim_mok_date_2023_2024.csv")
+
+
+def test_coverage_counts_the_points_that_beat_climatology() -> None:
+    """The claim the chat tool makes about spatial skill, on the two-point fixture.
+
+    Skill there is +0.5 and -1.0, so exactly one of two points beats climatology.
+    """
+    coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job-1", _TWO_POINTS))
+    rps = next(c for c in coverage if c.metric == "ranked_probability_skill_score")
+    assert (rps.points, rps.points_better) == (2, 1)
+    assert rps.share_better == pytest.approx(0.5)
+
+
+def test_coverage_median_resists_a_single_wild_point() -> None:
+    """Why the summary reports a median and not a mean.
+
+    A point whose baseline scored near zero produces a huge skill value — the same
+    thing SCALE_PERCENTILE exists to keep off the map. A mean would let one such
+    point claim the blend is excellent everywhere; the median must not move.
+    """
+    csv_text = _csv(
+        _row("10.00_33.00", "0.50", "0.50", "0.70", "24", "blended_model"),
+        _row("10.25_33.00", "0.50", "0.50", "0.70", "24", "blended_model"),
+        _row("10.50_33.00", "0.50", "0.50", "0.70", "24", "blended_model"),
+        _row("10.00_33.00", "1.00", "1.00", "0.65", "24", "unc_clim_raw"),
+        _row("10.25_33.00", "1.00", "1.00", "0.65", "24", "unc_clim_raw"),
+        # Baseline barely above zero here: skill is about -99.
+        _row("10.50_33.00", "0.005", "0.005", "0.65", "24", "unc_clim_raw"),
+    )
+    coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job-1", csv_text))
+    rps = next(c for c in coverage if c.metric == "ranked_probability_skill_score")
+
+    assert rps.points_better == 2
+    # Two points at +0.5 and one enormous negative: the median stays on the +0.5s.
+    assert rps.median_skill == pytest.approx(0.5)
+    # And the outlier is still reported rather than smoothed away.
+    assert rps.value_min is not None and rps.value_min < -50
+
+
+def test_coverage_is_empty_without_grids() -> None:
+    coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job-1", ""))
+    assert coverage == []
