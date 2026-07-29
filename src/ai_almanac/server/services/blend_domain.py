@@ -576,5 +576,5 @@ async def _cell_coverage(job_id: str, artifacts: list[dict]) -> list[dict]:
     )
     if text is None:
         return []
-    metrics = blend_cells.build_cell_metrics(job_id, text)
+    metrics = await asyncio.to_thread(blend_cells.build_cell_metrics, job_id, text)
     return [c.model_dump() for c in blend_cells.coverage_summary(metrics)]
