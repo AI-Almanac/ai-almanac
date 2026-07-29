@@ -704,6 +704,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/blend-cell-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Blend Cell Metrics
+         * @description Return per-grid-point blend skill, reshaped into grids for the map.
+         *
+         *     Returns empty ``grids`` rather than 404 when the per-cell summary is absent or
+         *     lacks the blend and baseline rows: the frontend's request wrapper throws on
+         *     any non-OK status, so a 404 would paint an error state over a run that simply
+         *     has nothing to map.
+         */
+        get: operations["get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/results/{kind}/{filename}": {
         parameters: {
             query?: never;
@@ -1706,6 +1731,45 @@ export interface components {
              * @default The user declined to train the blend.
              */
             message: string;
+        };
+        /**
+         * BlendCellGrid
+         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         */
+        BlendCellGrid: {
+            /** Metric */
+            metric: string;
+            /** Label */
+            label: string;
+            /** Lats */
+            lats: number[];
+            /** Lons */
+            lons: number[];
+            /** Values */
+            values: (number | null)[][];
+            /** Counts */
+            counts: (number | null)[][];
+            /** Scale Max Abs */
+            scale_max_abs: number | null;
+            /** Value Min */
+            value_min: number | null;
+            /** Value Max */
+            value_max: number | null;
+            /** Clipped */
+            clipped: number;
+        };
+        /** BlendCellMetrics */
+        BlendCellMetrics: {
+            /** Job Id */
+            job_id: string;
+            /** Baseline Model */
+            baseline_model: string;
+            /** Cell Size Deg */
+            cell_size_deg: number | null;
+            /** Min Observations */
+            min_observations: number;
+            /** Grids */
+            grids: components["schemas"]["BlendCellGrid"][];
         };
         /** BlendConfigOut */
         BlendConfigOut: {
@@ -5298,6 +5362,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlendCellMetrics"];
                 };
             };
             /** @description Validation Error */

@@ -1,8 +1,8 @@
 /**
  * Shared series colors for uPlot charts.
  *
- * MaeSeriesChart and BlendSkillChart each carried their own MODEL_COLORS array
- * with divergent contents, so the same model rendered in different colors
+ * MaeSeriesChart and the blends page's chart each carried their own MODEL_COLORS
+ * array with divergent contents, so the same model rendered in different colors
  * depending on which chart you were looking at. Both now import from here.
  *
  * uPlot needs concrete color strings at construction time, so these cannot be

@@ -22,6 +22,31 @@ _SUMMARY_CSV = (
     "blended_model,0.82,0.15,0.90,0.85,0.80,0.78,0.70\n"
 )
 
+# The real column set the blend writes, so the parser is exercised against the
+# shape it actually meets. Values are the Ethiopia aifs+fuxi run, rounded.
+_FULL_HEADER = (
+    "id,brier,rps,auc,n,lat,lon,pietra,"
+    "brier_week1,brier_week2,brier_week3,brier_week4,brier_later,"
+    "auc_week1,auc_week2,auc_week3,auc_week4,auc_later,"
+    "model,cv_method,brier_skill,rps_skill,AUC diff"
+)
+_FULL_BLEND = (
+    "ALL,0.576,0.479,0.836,26622,,,0.487,"
+    "0.088,0.113,0.118,0.119,0.137,"
+    "0.890,0.787,0.737,0.716,0.881,"
+    "blended_model,global,0.037,0.129,0.62"
+)
+_FULL_BASELINE = (
+    "ALL,0.598,0.551,0.830,26622,,,0.485,"
+    "0.091,0.114,0.117,0.120,0.156,"
+    "0.886,0.783,0.735,0.714,0.878,"
+    "unc_clim_raw,global,0.0,0.0,0.0"
+)
+
+
+def _full_csv(*rows: str) -> str:
+    return "\n".join([_FULL_HEADER, *rows]) + "\n"
+
 
 def test_parse_pooled_summary_orders_blend_first() -> None:
     rows = blend_domain._parse_pooled_summary(_SUMMARY_CSV)
@@ -36,6 +61,62 @@ def test_parse_pooled_summary_orders_blend_first() -> None:
 def test_parse_pooled_summary_handles_empty() -> None:
     assert blend_domain._parse_pooled_summary("") == []
     assert blend_domain._parse_pooled_summary("model,auc\n") == []
+
+
+def test_parse_pooled_summary_keeps_pooled_scores() -> None:
+    """The Ranked Probability Skill Score is the metric that shows the blend's edge."""
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
+    blend = rows[0]
+    assert blend["rps_skill"] == 0.129
+    assert blend["rps"] == 0.479
+    assert blend["brier"] == 0.576
+    assert blend["pietra"] == 0.487
+    assert blend["observations"] == 26622
+    assert blend["brier_by_lead"] == [0.088, 0.113, 0.118, 0.119, 0.137]
+
+
+def test_parse_pooled_summary_flags_the_baseline() -> None:
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
+    assert [r["model"] for r in rows if r["is_baseline"]] == ["unc_clim_raw"]
+
+
+def test_parse_pooled_summary_derives_per_lead_brier_skill() -> None:
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
+    blend = rows[0]
+    assert blend["brier_skill_by_lead"][0] == pytest.approx(1 - 0.088 / 0.091)
+    # Week 3 is genuinely negative — the blend is slightly worse than climatology
+    # there, and the chart has to be able to show that.
+    assert blend["brier_skill_by_lead"][2] == pytest.approx(1 - 0.118 / 0.117)
+    assert blend["brier_skill_by_lead"][2] < 0
+
+
+def test_parse_pooled_summary_scores_baseline_at_zero() -> None:
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
+    baseline = next(r for r in rows if r["is_baseline"])
+    assert baseline["brier_skill_by_lead"] == [0.0, 0.0, 0.0, 0.0, 0.0]
+
+
+def test_parse_pooled_summary_without_baseline_yields_no_lead_skill() -> None:
+    """Inventing a reference would silently change what the numbers claim."""
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND))
+    assert rows[0]["brier_skill_by_lead"] == [None] * 5
+    assert rows[0]["brier_by_lead"][0] == 0.088
+
+
+def test_parse_pooled_summary_survives_zero_baseline_brier() -> None:
+    zeroed = _FULL_BASELINE.replace("0.091,0.114,0.117,0.120,0.156", "0,0,0,0,0")
+    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, zeroed))
+    assert rows[0]["brier_skill_by_lead"] == [None] * 5
+
+
+def test_parse_pooled_summary_treats_blanks_as_missing() -> None:
+    """pandas writes NaN as an empty string; float('') must not become 0.0."""
+    blanks = "ALL,,,0.7,,,,,0.1,0.1,0.1,0.1,0.1,0.7,0.6,0.55,0.54,0.6,blended_model,global,,,"
+    rows = blend_domain._parse_pooled_summary(_full_csv(blanks))
+    assert rows[0]["rps"] is None
+    assert rows[0]["rps_skill"] is None
+    assert rows[0]["pietra"] is None
+    assert rows[0]["observations"] is None
 
 
 async def _insert_blend_job(user_id: str, job_id: str, status: str = "complete") -> None:

@@ -447,8 +447,15 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def get_blend_results(ctx: RunContext[ChatDeps], job_id: str) -> dict:
-        """Read a completed blend's pooled per-model skill summary (AUC, Brier skill
-        per lead time) and the list of weight/output artifacts, to explain results."""
+        """Read a completed blend's skill, to explain its results.
+
+        Returns pooled per-model scores (Ranked Probability Skill Score, Brier Skill
+        Score, Area Under ROC Curve, and Brier skill per lead time), a per-grid-point
+        summary of where the blend beats climatology, and the weight/output artifacts.
+        All skill is against unconditional climatology: zero matches it, above zero
+        beats it. Prefer the Ranked Probability Skill Score as the headline — it is
+        the metric that accounts for how far off a forecast was, not merely whether
+        it was wrong, which is what the five ordered onset windows call for."""
         return await chat_tools.get_blend_results(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset
