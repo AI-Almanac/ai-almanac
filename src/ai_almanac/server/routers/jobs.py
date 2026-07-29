@@ -16,9 +16,10 @@ from pydantic import BaseModel
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
-from ai_almanac.server.services import job_access
+from ai_almanac.server.services import blend_cells, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
+from ai_almanac.server.services.blend_cells import BlendCellMetrics
 from ai_almanac.server.services.events import audit
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
@@ -316,6 +317,32 @@ async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
         get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
     )
     return {"csv": text or ""}
+
+
+@router.get("/{job_id}/blend-cell-metrics")
+async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetrics:
+    """Return per-grid-point blend skill, reshaped into grids for the map.
+
+    Returns empty ``grids`` rather than 404 when the per-cell summary is absent or
+    lacks the blend and baseline rows: the frontend's request wrapper throws on
+    any non-OK status, so a 404 would paint an error state over a run that simply
+    has nothing to map.
+    """
+    _require_complete(job)
+    summary = next(
+        (
+            a
+            for a in await list_job_artifacts(job_id)
+            if blend_cells.is_per_cell_summary(a["filename"])
+        ),
+        None,
+    )
+    if summary is None:
+        return blend_cells.build_cell_metrics(job_id, "")
+    text = await asyncio.to_thread(
+        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
+    )
+    return await asyncio.to_thread(blend_cells.build_cell_metrics, job_id, text or "")
 
 
 @router.get("/{job_id}/results/{kind}/{filename:path}")
