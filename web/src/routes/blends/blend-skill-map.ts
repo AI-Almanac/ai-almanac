@@ -5,18 +5,19 @@
  * real WebGL context and doesn't run under jsdom.
  */
 import type { BlendCellGrid } from '$lib/api';
+import { DIVERGING_STOPS } from '$lib/components/metric-map/constants';
 import { interpolateStops } from '$lib/components/metric-map/gridData';
 
 /**
- * ColorBrewer BrBG: brown for worse than climatology, teal for better.
+ * The benchmark map's diverging scale, reversed.
  *
- * Not the green/rust of the skill table above it. On the table a tint sits behind
- * a number the reader can always fall back on, so the hue is decoration; on a map
- * colour is the only channel, which rules out a red/green pair. BrBG keeps the
- * table's "warm is worse, cool-green is better" reading while staying legible to
- * red-green colourblind readers.
+ * Both maps answer "better or worse than climatology at this point", so they
+ * share a palette — blue is better and red is worse on either page. The reversal
+ * is what keeps that true: the benchmark map plots deltas of error metrics, where
+ * better is negative, while skill is better when positive. Same colour meanings,
+ * opposite axis direction.
  */
-export const SKILL_STOPS = ['#8c510a', '#d8b365', '#f5f5f5', '#5ab4ac', '#01665e'];
+export const SKILL_STOPS = [...DIVERGING_STOPS].reverse();
 
 export type SkillCellFeature = GeoJSON.Feature<
 	GeoJSON.Polygon,

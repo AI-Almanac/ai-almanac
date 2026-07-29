@@ -105,6 +105,34 @@ describe('buildSkillCells', () => {
 		expect(better?.properties.color).not.toBe(worse?.properties.color);
 	});
 
+	/**
+	 * The palette is the benchmark map's, reversed, because skill is better when
+	 * positive while that map's deltas are better when negative. Drop the reversal
+	 * and every skilful point turns red — a silent inversion of the whole map, which
+	 * still renders and still passes a "the two colours differ" check.
+	 */
+	it('paints better-than-climatology blue and worse red, as the benchmark map does', () => {
+		const cells = buildSkillCells(grid(), { minObservations: 10, cellSizeDeg: 0.25 });
+		// interpolateStops hands back the stop itself at the ends of the ramp, so this
+		// reads hex rather than rgb().
+		const channels = (color: string) => {
+			const hex = color.match(/^#([0-9a-f]{6})$/i);
+			if (!hex) throw new Error(`expected a hex colour, got ${color}`);
+			const n = Number.parseInt(hex[1], 16);
+			return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+		};
+
+		const [rBetter, , bBetter] = channels(
+			cells.features.find((f) => f.properties.skill === 0.4)!.properties.color
+		);
+		const [rWorse, , bWorse] = channels(
+			cells.features.find((f) => f.properties.skill === -0.4)!.properties.color
+		);
+
+		expect(bBetter).toBeGreaterThan(rBetter);
+		expect(rWorse).toBeGreaterThan(bWorse);
+	});
+
 	it('fades a point resting on few observations', () => {
 		const cells = buildSkillCells(grid(), { minObservations: 10, cellSizeDeg: 0.25 });
 		const thin = cells.features.find((f) => f.properties.observations === 4);

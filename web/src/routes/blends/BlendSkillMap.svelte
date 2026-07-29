@@ -36,7 +36,9 @@
 	/** The blend the camera is currently framed on; null means it needs fitting. */
 	let fittedJob: string | null = null;
 
-	let basemap = $state<BasemapStyleId>('carto-light');
+	// Dark, as the benchmark and forecast maps are: the diverging scale's midpoint is
+	// near-white, which reads as neutral against dark but disappears against light.
+	let basemap = $state<BasemapStyleId>('carto-dark');
 	let metrics = $state<BlendCellMetrics | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
