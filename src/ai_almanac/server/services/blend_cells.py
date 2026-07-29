@@ -14,6 +14,7 @@ the ``id``, which the blend builds as ``"{lat}_{lon}"`` on a regular grid.
 
 from __future__ import annotations
 
+import math
 import re
 from itertools import pairwise
 
@@ -99,7 +100,7 @@ def _parse_float(raw: str | None) -> float | None:
     except ValueError:
         return None
     # NaN and infinities survive float() but are not values a map can place.
-    return value if value == value and value not in (float("inf"), float("-inf")) else None
+    return value if not math.isnan(value) and not math.isinf(value) else None
 
 
 def _skill(value: float | None, reference: float | None) -> float | None:
