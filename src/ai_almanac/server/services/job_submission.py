@@ -222,6 +222,19 @@ def apply_inferred_custom_bounds(
     return bounded
 
 
+def _not_ready_detail(source: dict, user_id: str, fallback: str) -> str:
+    """Why a source isn't ready, for the caller allowed to know.
+
+    A registration failure names the source's backing path (see
+    ``data_sources._inspect_gcs_source``), so shared and built-in sources report
+    only that they aren't ready. Their owner, and an admin reading the source
+    directly, still get the real reason.
+    """
+    if source.get("owner_id") == user_id:
+        return source.get("validation_error") or fallback
+    return fallback
+
+
 async def _resolve_obs_dir(
     dataset_id: str, obs_dir_override: str | None, user_id: str
 ) -> str | None:
@@ -240,7 +253,7 @@ async def _resolve_obs_dir(
     if source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
-            detail=source.get("validation_error") or "Observation source is not ready",
+            detail=_not_ready_detail(source, user_id, "Observation source is not ready"),
         )
     return source["path"]
 
@@ -401,6 +414,18 @@ def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
     return [f"{base}/{year}.nc" for year in years]
 
 
+# Reanalysis starts in the 1940s and no forecast is staged beyond the next
+# century; the bound exists so a range spec expands to a list, not a heap.
+_EARLIEST_YEAR, _LATEST_YEAR = 1800, 2200
+
+
+def _calendar_year(text: str) -> int:
+    year = int(text)
+    if not _EARLIEST_YEAR <= year <= _LATEST_YEAR:
+        raise ValueError(f"year out of range: {year}")
+    return year
+
+
 def _parse_year_spec(value: str | None) -> list[int]:
     """Parse a year spec ('2019:2024', '2021,2022') into sorted unique years.
 
@@ -416,9 +441,9 @@ def _parse_year_spec(value: str | None) -> list[int]:
             continue
         if ":" in token:
             start_text, end_text = token.split(":", 1)
-            years.extend(range(int(start_text), int(end_text) + 1))
+            years.extend(range(_calendar_year(start_text), _calendar_year(end_text) + 1))
         else:
-            years.append(int(token))
+            years.append(_calendar_year(token))
     return sorted(dict.fromkeys(years))
 
 
@@ -474,8 +499,9 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
     if source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
-            detail=source.get("validation_error")
-            or f"Model source is not ready: {source['name']!r}",
+            detail=_not_ready_detail(
+                source, user_id, f"Model source is not ready: {source['name']!r}"
+            ),
         )
     return source
 
@@ -772,6 +798,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     season_model_params: dict[str, dict] = {}
     for name in forecast_model_ids:
         source_id = source_id_by_name.get(name)
+        # Deliberately not scoped to the caller: running someone else's shared
+        # blend needs its members' cadence and extent, or the rollout silently
+        # produces a differently shaped season than the blend was trained on.
+        # Sharing a blend therefore shares these technical parameters. Keep it
+        # to those — never copy the source's `path` or validation error here.
         source = await data_source_service.get_source(source_id) if source_id else None
         metadata = (source or {}).get("metadata") or {}
         season_model_params[name] = {
@@ -991,17 +1022,23 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     if observation_source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
-            detail=observation_source.get("validation_error") or "Observation source is not ready",
+            detail=_not_ready_detail(
+                observation_source, user_id, "Observation source is not ready"
+            ),
         )
 
     region = (body.params.region or "").lower()
     model_source = await data_source_service.get_source(body.model_name)
     if not model_source or model_source["kind"] != "model":
         raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
+    if model_source.get("owner_id") not in (None, user_id) and (
+        model_source.get("visibility") != "shared"
+    ):
+        raise HTTPException(status_code=404, detail=f"Unknown model: {body.model_name!r}")
     if model_source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
-            detail=model_source.get("validation_error") or "Model source is not ready",
+            detail=_not_ready_detail(model_source, user_id, "Model source is not ready"),
         )
     model_cfg = {
         "id": model_source["id"],

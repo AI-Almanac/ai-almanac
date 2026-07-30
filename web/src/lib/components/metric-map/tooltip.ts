@@ -28,6 +28,11 @@ export function getValueAtLatLon(data: JobGridResponse, lat: number, lon: number
 	return data.values[bestI]?.[bestJ] ?? null;
 }
 
+// Returns an HTML string rendered with {@html} in MetricMap.svelte, so nothing
+// interpolated here is escaped. Safe only because model names come from the
+// packaged registry and reach this as blend_model_key slugs ([0-9a-z_]). If
+// model names ever become user-supplied, this becomes stored XSS -- build the
+// tooltip from Svelte elements instead of a string.
 export function buildTooltipContent({
 	lat,
 	lon,

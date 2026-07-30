@@ -321,3 +321,46 @@ async def test_create_blend_hides_another_users_private_obs_source(
         )
     assert exc.value.status_code == 404
     assert "1990" not in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("spec", ["0:99999999", "1:2024", "2019:99999", "-5:5"])
+def test_parse_year_spec_rejects_years_outside_the_calendar(spec: str) -> None:
+    """A range spec expands into a list before anything else validates it, so an
+    absurd bound must fail parsing rather than allocate."""
+    with pytest.raises(ValueError, match="year out of range"):
+        job_submission._parse_year_spec(spec)
+
+
+def test_parse_year_spec_accepts_a_normal_range() -> None:
+    assert job_submission._parse_year_spec("2019:2021") == [2019, 2020, 2021]
+
+
+@pytest.mark.asyncio
+async def test_not_ready_shared_source_does_not_disclose_its_path(
+    client, user_id: str, _stub_runner
+) -> None:
+    """A registration failure names the source's gs:// path, so only its owner
+    sees the real reason -- a shared source just reports not-ready."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "Shared ERA5", "gs://private-bucket/obs/india")
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "UPDATE data_sources SET owner_id = 'another-user', visibility = 'shared', "
+                "status = 'invalid', validation_error = :err WHERE id = :id"
+            ),
+            {
+                "id": obs_id,
+                "err": "No files match '*.nc' under gs://private-bucket/obs/india.",
+            },
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission._resolve_obs_dir(obs_id, None, user_id)
+
+    assert exc.value.status_code == 409
+    assert "private-bucket" not in str(exc.value.detail)
+    assert exc.value.detail == "Observation source is not ready"
