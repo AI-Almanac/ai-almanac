@@ -19,9 +19,16 @@ const BLEND_MODEL = 'blended_model';
  * `unc` is *unconditional*, not uncalibrated: the spec builds it from
  * `prob_clim_mr_unc`, the climatology that does not condition on onset having
  * held off until the issue date. Nothing about it is Platt-scaled — only
- * forecast models carry that flag.
+ * forecast models carry that flag. Because that prefix reads as "uncalibrated",
+ * the product name for it is Traditional Climatology.
  */
 const BASELINE_MODEL = 'unc_clim_raw';
+
+/**
+ * The climatology that does condition on onset having held off until the issue
+ * date, named Conditional Climatology in the UI.
+ */
+const CONDITIONAL_CLIMATOLOGY_MODEL = 'clim_raw';
 
 export type SkillRow = {
 	model: string;
@@ -54,8 +61,8 @@ export type LeadMetric = {
 
 /**
  * Metric names are spelled out in full — house convention. Brier Skill Score
- * leads because it is a skill score: zero is climatology and negative means
- * worse, which is the honest framing. Area Under ROC Curve is offered second
+ * leads because it is a skill score: zero is Traditional Climatology and
+ * negative means worse, which is the honest framing. Area Under ROC Curve is offered second
  * because it compresses the differences between these models almost to nothing.
  */
 export const LEAD_METRICS: LeadMetric[] = [
@@ -63,9 +70,9 @@ export const LEAD_METRICS: LeadMetric[] = [
 		key: 'brierSkillByLead',
 		label: 'Brier Skill Score',
 		reference: 0,
-		referenceLabel: 'No skill (climatology)',
+		referenceLabel: 'No skill (Traditional Climatology)',
 		caption:
-			'Probability accuracy by forecast lead, measured against climatology. 0 matches climatology, 1 is perfect, below 0 is worse than climatology — higher is better. Click a model to toggle it; hover for exact values.'
+			'Probability accuracy by forecast lead, measured against Traditional Climatology. 0 matches it, 1 is perfect, below 0 is worse — higher is better. Click a model to toggle it; hover for exact values.'
 	},
 	{
 		key: 'aucByLead',
@@ -94,20 +101,20 @@ export type OverallMetric = {
  * Ranked Probability Skill Score leads: the outcome is five ordinal bins
  * (weeks 1-4, later), so a metric that credits being close beats one that only
  * asks whether the right bin won. It is also where the blend's advantage over
- * climatology actually shows up.
+ * Traditional Climatology actually shows up.
  */
 export const OVERALL_METRICS: OverallMetric[] = [
 	{
 		key: 'rpsSkill',
 		label: 'Ranked Probability Skill Score',
 		skillMetric: 'ranked_probability_skill_score',
-		hint: 'Credits forecasts that land near the observed onset week, not just on it. Measured against climatology.'
+		hint: 'Credits forecasts that land near the observed onset week, not just on it. Measured against Traditional Climatology.'
 	},
 	{
 		key: 'brierSkill',
 		label: 'Brier Skill Score',
 		skillMetric: 'brier_skill_score',
-		hint: 'Probability accuracy pooled over all leads, measured against climatology.'
+		hint: 'Probability accuracy pooled over all leads, measured against Traditional Climatology.'
 	},
 	{
 		key: 'auc',
@@ -125,20 +132,21 @@ export const OVERALL_METRICS: OverallMetric[] = [
 
 // Turn a raw model id into a reader-friendly label.
 //   blended_model                 -> "Blend"
-//   clim_raw                      -> "Climatology"
-//   unc_clim_raw                  -> "Climatology (unconditional)"
+//   clim_raw                      -> "Conditional Climatology"
+//   unc_clim_raw                  -> "Traditional Climatology"
 //   aifs_clim_mok_date_raw        -> "AIFS (raw)"
-//   aifs_calibrated_clim_mok_date -> "AIFS (bias corrected)"
+//   aifs_calibrated_clim_mok_date -> "AIFS (calibrated)"
 //
-// "bias corrected" rather than "calibrated": the underlying step is Platt
-// scaling, and the package's own column name is `_calibrated`, but the product
-// language for it is bias correction.
+// "calibrated" rather than "bias corrected": the step is Platt scaling of the
+// probabilities so they match observed frequencies. It leaves the underlying
+// rainfall biases untouched, so calling it bias correction overclaims — and the
+// package's own column name is already `_calibrated`.
 function prettyModel(model: string): string {
 	if (model === BLEND_MODEL) return 'Blend';
-	if (model === 'clim_raw') return 'Climatology';
-	if (model === BASELINE_MODEL) return 'Climatology (unconditional)';
+	if (model === CONDITIONAL_CLIMATOLOGY_MODEL) return 'Conditional Climatology';
+	if (model === BASELINE_MODEL) return 'Traditional Climatology';
 
-	const corrected = /calibrated/.test(model);
+	const calibrated = /calibrated/.test(model);
 	const name = model
 		.replace(/_calibrated/g, '')
 		.replace(/_clim_mok_date/g, '')
@@ -146,7 +154,21 @@ function prettyModel(model: string): string {
 		.replace(/_/g, ' ')
 		.trim()
 		.toUpperCase();
-	return `${name} (${corrected ? 'bias corrected' : 'raw'})`;
+	return `${name} (${calibrated ? 'calibrated' : 'raw'})`;
+}
+
+/**
+ * Series the lead-time chart shows before the reader touches the toggles.
+ *
+ * Raw forecast series score around -1 against Traditional Climatology, an order
+ * of magnitude below the blend and the two climatologies, so including them by
+ * default compresses the y range where the interesting differences live. They
+ * stay one click away.
+ */
+export function isDefaultVisibleSeries(model: string): boolean {
+	return (
+		model === BLEND_MODEL || model === CONDITIONAL_CLIMATOLOGY_MODEL || model === BASELINE_MODEL
+	);
 }
 
 function finite(value: string | undefined): number | null {

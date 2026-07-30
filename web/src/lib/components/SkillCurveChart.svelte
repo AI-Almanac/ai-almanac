@@ -43,6 +43,13 @@
 		 * For callers that already name the metric in an adjacent control.
 		 */
 		showTitle?: boolean;
+		/**
+		 * Which series are drawn before the reader touches the toggles. Omit it and
+		 * every series starts visible, which is what a caller whose series share a
+		 * y range wants. A caller with one group of series that dwarfs another
+		 * passes a predicate so the interesting group is not compressed away.
+		 */
+		defaultVisible?: (key: string) => boolean;
 	};
 
 	let {
@@ -53,8 +60,13 @@
 		referenceLabel,
 		caption,
 		axisPrefix = 'Days ',
-		showTitle = true
+		showTitle = true,
+		defaultVisible
 	}: Props = $props();
+
+	function startsVisible(key: string): boolean {
+		return defaultVisible ? defaultVisible(key) : true;
+	}
 
 	let chartHost = $state<HTMLDivElement | null>(null);
 	let chart: uPlot | null = null;
@@ -68,7 +80,13 @@
 	} | null>(null);
 
 	const xValues = $derived(leads.map((l) => l.day));
-	const hasVisibleSeries = $derived(series.some((s) => visibleSeries[s.key]));
+	/**
+	 * Read through `startsVisible` rather than off `visibleSeries` alone: the
+	 * seeding effect has not flushed on the first pass, and a bare lookup there
+	 * would report every series hidden.
+	 */
+	const isVisible = (key: string) => visibleSeries[key] ?? startsVisible(key);
+	const hasVisibleSeries = $derived(series.some((s) => isVisible(s.key)));
 
 	function chartData(): uPlot.AlignedData {
 		return [
@@ -188,7 +206,7 @@
 					label: s.label,
 					stroke: s.color,
 					width: 1.75,
-					show: visibleSeries[s.key] ?? true,
+					show: isVisible(s.key),
 					spanGaps: true,
 					points: {
 						show: true,
@@ -233,13 +251,13 @@
 		resizeChart();
 	}
 
-	// Default new series to visible, drop toggles for series that disappeared.
+	// Seed toggles for new series, drop toggles for series that disappeared.
 	$effect(() => {
 		const next = { ...visibleSeries };
 		let changed = false;
 		for (const s of series) {
 			if (next[s.key] == null) {
-				next[s.key] = true;
+				next[s.key] = startsVisible(s.key);
 				changed = true;
 			}
 		}
@@ -263,7 +281,7 @@
 
 	function toggleSeries(key: string) {
 		hidePointTooltip();
-		visibleSeries = { ...visibleSeries, [key]: !(visibleSeries[key] ?? true) };
+		visibleSeries = { ...visibleSeries, [key]: !isVisible(key) };
 	}
 
 	onDestroy(() => {
@@ -280,9 +298,9 @@
 			{#each series as s (s.key)}
 				<button
 					type="button"
-					class:muted={!visibleSeries[s.key]}
+					class:muted={!isVisible(s.key)}
 					onclick={() => toggleSeries(s.key)}
-					aria-pressed={visibleSeries[s.key] ?? true}
+					aria-pressed={isVisible(s.key)}
 				>
 					<i style={`background: ${s.color}`}></i>
 					{s.label}

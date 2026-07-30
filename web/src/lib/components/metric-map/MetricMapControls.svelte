@@ -170,7 +170,7 @@
 							onchange={(event) => onSelectReferenceJob(event.currentTarget.value)}
 						>
 							{#if activeRuns.some((run) => run.modelName === 'climatology')}
-								<option value="climatology">Climatology</option>
+								<option value="climatology">Traditional Climatology</option>
 							{/if}
 							{#each availableModelRuns as run}
 								<option value={run.jobId}>{modelRunLabel(run)}</option>

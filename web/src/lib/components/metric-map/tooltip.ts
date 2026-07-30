@@ -54,7 +54,8 @@ export function buildTooltipContent({
 	const sections: string[] = [header];
 	for (const modelName of byModelOrder) {
 		const keys = byModel[modelName];
-		const displayName = modelName === 'climatology' ? 'Climatology' : modelName.toUpperCase();
+		const displayName =
+			modelName === 'climatology' ? 'Traditional Climatology' : modelName.toUpperCase();
 		const rows = keys.map((key) => {
 			const layer = layers[key];
 			const { metric, window } = parseKey(key);

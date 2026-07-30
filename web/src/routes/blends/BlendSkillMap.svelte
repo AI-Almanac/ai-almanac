@@ -4,8 +4,8 @@
 	 *
 	 * The pooled table above says whether the blend wins on average; this says
 	 * where. It reads the blend's per-grid-point summary, which nothing consumed
-	 * before, and colours each point by its skill against the same unconditional
-	 * climatology baseline the table uses, so a number means the same thing in both.
+	 * before, and colours each point by its skill against the same Traditional
+	 * Climatology baseline the table uses, so a number means the same thing in both.
 	 */
 	import { untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
@@ -324,13 +324,13 @@
 
 		<p class="caption">
 			{#if share && share.total > 0}
-				{grid?.label} against Climatology (unconditional) at each grid point. The blend beats it at
+				{grid?.label} against Traditional Climatology at each grid point. The blend beats it at
 				<strong>{share.better} of {share.total}</strong>
 				points ({Math.round((100 * share.better) / share.total)}%).
 			{/if}
 			{#if grid && grid.clipped > 0 && grid.value_min != null && grid.value_max != null}
-				Skill is a ratio, so points where climatology scored near zero run far past the rest — the
-				scale stops at ±{formatSkillValue(extent)} and {grid.clipped}
+				Skill is a ratio, so points where Traditional Climatology scored near zero run far past the
+				rest — the scale stops at ±{formatSkillValue(extent)} and {grid.clipped}
 				{grid.clipped === 1 ? 'point' : 'points'} sit beyond it, as far as {formatSkillValue(
 					Math.abs(grid.value_min) > Math.abs(grid.value_max) ? grid.value_min : grid.value_max
 				)}.

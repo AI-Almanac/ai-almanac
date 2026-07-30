@@ -105,7 +105,7 @@
 			aifs: 'AIFS',
 			aifs_daily: 'AIFS Daily',
 			fuxi_s2s: 'FuXi S2S',
-			climatology: 'Climatology'
+			climatology: 'Traditional Climatology'
 		};
 		return labels[modelName.toLowerCase()] ?? modelName;
 	}
