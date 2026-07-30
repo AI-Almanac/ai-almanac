@@ -273,9 +273,96 @@ class BlendOut(BaseModel):
     is_owner: bool = True
     visibility: str = "private"
     run_id: str | None = None
+    # Accepted-but-limited notes recorded at submission (e.g. a member that can
+    # never run a live forecast). Frozen with the job so the limitation stays
+    # attached to the result it applies to.
+    warnings: list[str] = []
 
 
 _blend_model_key = blend_model_key
+
+# The onset climatology needs this many observation years before the first
+# forecast year to be estimable. Mirrors ``min_onset_years`` in
+# modal/blending_app.py and ``MIN_ONSET_YEARS`` in
+# web/src/routes/blends/year-coverage.ts.
+MIN_ONSET_YEARS = 10
+
+# A data source's registered ``(start_year, end_year)``, either side unknown.
+YearRange = tuple[int | None, int | None]
+
+
+def source_year_range(source: dict | None) -> YearRange:
+    metadata = (source or {}).get("metadata") or {}
+    return metadata.get("start_year"), metadata.get("end_year")
+
+
+def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> dict | None:
+    """Years the observations and every forecast model share, plus the earliest
+    forecast year whose onset climatology has enough observations behind it.
+
+    None when any source's range is unregistered: the rule is then unenforceable
+    rather than violated. Mirrored by web/src/routes/blends/year-coverage.ts.
+    """
+    obs_start, obs_end = obs_years
+    if obs_start is None or obs_end is None or not model_years:
+        return None
+    model_starts = [start for start, _ in model_years]
+    model_ends = [end for _, end in model_years]
+    if any(y is None for y in model_starts) or any(y is None for y in model_ends):
+        return None
+    return {
+        "start": max(obs_start, *model_starts),
+        "end": min(obs_end, *model_ends),
+        "earliest_forecast": max(obs_start + MIN_ONSET_YEARS, *model_starts),
+    }
+
+
+def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> list[str]:
+    """Coverage-rule violations for a blend's forecast years.
+
+    Shared by every entry point — direct submission (``create_blend_for_user``)
+    and the chat validation path (``blend_domain._year_errors``) — so a config
+    the UI rejects cannot slip in through the API.
+    """
+    if coverage is None or not forecast_years:
+        return []
+    errors: list[str] = []
+    low, high = min(forecast_years), max(forecast_years)
+    if low < coverage["start"] or high > coverage["end"]:
+        errors.append(f"Chosen sources only share data for {coverage['start']}-{coverage['end']}.")
+    if low < coverage["earliest_forecast"]:
+        errors.append(
+            f"Climatology needs {MIN_ONSET_YEARS} years of observations before the "
+            f"first forecast year — start at {coverage['earliest_forecast']} or later."
+        )
+    return errors
+
+
+def models_without_live_forecast(model_names: Iterable[str]) -> list[str]:
+    """Blend members with no entry in the live forecast model registry.
+
+    Live scoring needs a rolled-out season for *every* member of the blend, so a
+    single unmatched member makes the whole blend history-only.
+    """
+    registry = get_packaged_forecast_models()
+    return sorted(name for name in model_names if resolve_forecast_model(registry, name) is None)
+
+
+def historical_only_warning(model_names: Iterable[str]) -> list[str]:
+    """Warn, at blend submission, that a blend can never run a live forecast.
+
+    History-only blends are a legitimate research result, so this does not block
+    submission — but the limitation belongs at submission time, before training
+    is paid for, rather than surfacing as a rejection at forecast time.
+    """
+    unsupported = models_without_live_forecast(model_names)
+    if not unsupported:
+        return []
+    return [
+        f"No live forecast model is available for {', '.join(unsupported)}. "
+        "This blend can be trained and scored on past seasons, but it cannot be "
+        "run as a live forecast."
+    ]
 
 
 def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
@@ -348,6 +435,7 @@ def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
         is_owner=is_owner,
         visibility=row.get("visibility") or "private",
         run_id=row.get("run_id"),
+        warnings=cfg.get("warnings") or [],
     )
 
 
@@ -389,6 +477,10 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     # year filter and backend resolution live on the server, and run_blend just
     # downloads the files it is given.
     model_files: dict[str, list[str]] = {}
+    model_years: list[YearRange] = []
+    # The blend keys everything on the slug; warnings read better with the name
+    # the user picked the source by.
+    display_names: list[str] = []
     for model_id in body.model_ids:
         source = await _resolve_model_source(model_id, user_id)
         key = _blend_model_key(source["name"])
@@ -397,7 +489,16 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                 status_code=400, detail=f"Duplicate model in blend: {source['name']!r}"
             )
         model_names.append(key)
+        display_names.append(source["name"])
         model_files[key] = year_uris(source["path"], forecast_years)
+        model_years.append(source_year_range(source))
+
+    coverage = blend_year_coverage(source_year_range(obs_source), model_years)
+    coverage_errors = blend_coverage_errors(forecast_years, coverage)
+    if coverage_errors:
+        raise HTTPException(status_code=400, detail=" ".join(coverage_errors))
+
+    warnings = historical_only_warning(display_names)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
@@ -415,6 +516,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": body.params.model_dump(exclude_none=True),
+        "warnings": warnings,
     }
 
     async with get_db() as conn:
@@ -610,9 +712,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             status_code=400,
             detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
         )
-    unsupported = sorted(
-        name for name in requested if resolve_forecast_model(registry, name) is None
-    )
+    # Every member, not just the requested subset: live scoring applies the
+    # blend's whole formula, so it needs a rolled-out season for each member
+    # (score_live_forecast_bundle rejects a bundle set that is missing one).
+    # Without this, a request for only the runnable members is accepted and then
+    # fails during scoring, after the rollout has already been paid for.
+    unsupported = models_without_live_forecast(model_names)
     if unsupported:
         raise HTTPException(
             status_code=400,

@@ -34,21 +34,34 @@ class _FakeRunner:
         return RunnerHandle(runner="modal", external_id="fc-test")
 
 
-async def _seed_source(kind: str, name: str, path: str) -> str:
+async def _seed_source(
+    kind: str,
+    name: str,
+    path: str,
+    years: tuple[int, int] | None = None,
+) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
+    metadata = json.dumps({"start_year": years[0], "end_year": years[1]}) if years else "{}"
     async with get_db() as conn:
         await conn.execute(
             text(
                 "INSERT INTO data_sources "
                 "(id, kind, name, path, region, metadata, location_type, status, "
                 "validation_error, created_at, updated_at) "
-                "VALUES (:id, :kind, :name, :path, 'india', '{}', 'gcs', 'ready', "
+                "VALUES (:id, :kind, :name, :path, 'india', :metadata, 'gcs', 'ready', "
                 "NULL, :now, :now)"
             ),
-            {"id": source_id, "kind": kind, "name": name, "path": path, "now": now},
+            {
+                "id": source_id,
+                "kind": kind,
+                "name": name,
+                "path": path,
+                "metadata": metadata,
+                "now": now,
+            },
         )
     return source_id
 
@@ -107,6 +120,133 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
+
+
+@pytest.mark.asyncio
+async def test_post_blends_rejects_thin_climatology_coverage(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    """The API must apply the same coverage rule as the UI and the chat path:
+    the onset climatology needs MIN_ONSET_YEARS of observations before the
+    first forecast year."""
+    obs_id = await _seed_source("obs", "ERA5 thin", "gs://data/obs/thin", years=(2010, 2024))
+    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "too early",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            # Obs start 2010 → the first estimable forecast year is 2020.
+            "params": {"training_years": "2015:2024", "cv_holdout_years": "2024"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Climatology needs 10 years of observations" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_post_blends_accepts_sufficient_coverage(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source("obs", "ERA5 deep", "gs://data/obs/deep", years=(2010, 2024))
+    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "late enough",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2020:2024", "cv_holdout_years": "2024"},
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_blend_warns_when_a_member_cannot_forecast_live(
+    client, user_id: str, _stub_runner
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="history only",
+            obs_dataset_id=obs_id,
+            model_ids=[ngcm_id, aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    assert len(out.warnings) == 1
+    assert "NeuralGCM" in out.warnings[0]
+    assert "cannot be run as a live forecast" in out.warnings[0]
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["warnings"] == out.warnings
+
+
+@pytest.mark.asyncio
+async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
+    client, user_id: str, _stub_runner
+) -> None:
+    """Live scoring needs every member's season, so requesting only the runnable
+    subset of a history-only blend must fail at submission, not after rollout."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="ngcm + aifs",
+            obs_dataset_id=obs_id,
+            model_ids=[ngcm_id, aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.create_forecast_for_user(
+            job_submission.ForecastCreate(blend_id=blend.id, forecast_model_ids=["aifs"]),
+            user_id,
+        )
+    assert exc.value.status_code == 400
+    assert "no live forecast model" in exc.value.detail
+    assert "neuralgcm" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (["aifs", "neuralgcm"], ["neuralgcm"]),
+        (["ngcm", "ifs", "fuxi_s2s", "aifs_daily"], ["aifs_daily", "fuxi_s2s", "ifs", "ngcm"]),
+        (["aifs", "aifs_single_v2", "graphcast", "fuxi"], []),
+    ],
+)
+def test_models_without_live_forecast(names: list[str], expected: list[str]) -> None:
+    """Guards the alias normalization: no blendable-only model may accidentally
+    resolve to a live forecast registry entry (and vice versa)."""
+    assert job_submission.models_without_live_forecast(names) == expected
 
 
 @pytest.mark.asyncio

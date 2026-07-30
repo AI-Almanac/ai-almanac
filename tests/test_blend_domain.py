@@ -154,6 +154,65 @@ async def test_update_and_validate_blend_config_runnable(client, user_id: str) -
 
 
 @pytest.mark.asyncio
+async def test_three_models_warns_without_blocking(client, user_id: str) -> None:
+    obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
+    model_ids = [
+        await _seed_source("model", name, "india", 2000, 2024)
+        for name in ("GenCast", "Aurora", "Pangu")
+    ]
+    session_id = await _seed_session(user_id)
+    scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
+
+    patched = await blend_domain.update_blend_config(
+        {
+            "name": "India blend",
+            "obs_dataset_id": obs_id,
+            "model_ids": model_ids,
+            # Cross-validate within the training period (the form's default).
+            "training_years": "2015:2020",
+            "cv_holdout_years": "2015:2020",
+        },
+        user_id,
+        scope,
+        session_id,
+    )
+
+    validation = patched["blend_validation"]
+    assert validation["can_run"] is True
+    assert validation["errors"] == []
+    assert any("overfitting" in w for w in validation["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_two_models_do_not_warn(client, user_id: str) -> None:
+    obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
+    model_ids = [
+        await _seed_source("model", name, "india", 2000, 2024) for name in ("GenCast", "Aurora")
+    ]
+    session_id = await _seed_session(user_id)
+    scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
+
+    patched = await blend_domain.update_blend_config(
+        {
+            "name": "India blend",
+            "obs_dataset_id": obs_id,
+            "model_ids": model_ids,
+            "training_years": "2015:2020",
+            "cv_holdout_years": "2015:2020",
+        },
+        user_id,
+        scope,
+        session_id,
+    )
+
+    warnings = patched["blend_validation"]["warnings"]
+    assert not any("overfitting" in w for w in warnings)
+    # Aurora has no live forecast model, so the chat path still says the blend
+    # is history-only — a separate concern from the member-count advice.
+    assert any("cannot be run as a live forecast" in w for w in warnings)
+
+
+@pytest.mark.asyncio
 async def test_validate_blend_config_flags_bad_years(client, user_id: str) -> None:
     obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
     gencast_id = await _seed_source("model", "GenCast", "india", 2000, 2024)

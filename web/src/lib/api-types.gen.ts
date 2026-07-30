@@ -1839,6 +1839,11 @@ export interface components {
             visibility: string;
             /** Run Id */
             run_id?: string | null;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: string[];
         };
         /**
          * BlendParams
