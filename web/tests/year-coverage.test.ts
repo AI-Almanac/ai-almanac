@@ -4,6 +4,7 @@ import type { DataSource } from '../src/lib/api';
 import {
 	computeCoverage,
 	defaultSplit,
+	memberCountWarning,
 	parseYearSpec,
 	yearSpecError
 } from '../src/routes/blends/year-coverage';
@@ -34,14 +35,36 @@ describe('computeCoverage', () => {
 });
 
 describe('defaultSplit', () => {
-	it('reserves the last two years for CV holdout', () => {
+	it('cross-validates within the full training span', () => {
 		expect(defaultSplit({ start: 2000, end: 2012, earliestForecast: 2008 })).toEqual({
-			training: '2008:2010',
-			cv: '2011:2012'
+			training: '2008:2012',
+			cv: '2008:2012'
+		});
+	});
+	it('handles a single valid forecast year', () => {
+		expect(defaultSplit({ start: 2000, end: 2008, earliestForecast: 2008 })).toEqual({
+			training: '2008',
+			cv: '2008'
 		});
 	});
 	it('is null when no forecast year has enough runway', () => {
 		expect(defaultSplit({ start: 2000, end: 2007, earliestForecast: 2008 })).toBeNull();
+	});
+	it('produces a split that passes validation', () => {
+		const cov = { start: 2000, end: 2012, earliestForecast: 2008 };
+		const split = defaultSplit(cov)!;
+		expect(yearSpecError(cov, split.training, split.cv, '', '')).toBeNull();
+	});
+});
+
+describe('memberCountWarning', () => {
+	it('stays quiet for one or two models', () => {
+		expect(memberCountWarning(1)).toBeNull();
+		expect(memberCountWarning(2)).toBeNull();
+	});
+	it('warns about overfitting from three models up', () => {
+		expect(memberCountWarning(3)).toMatch(/overfitting/);
+		expect(memberCountWarning(5)).toContain('Blending 5 models');
 	});
 });
 
@@ -56,5 +79,8 @@ describe('yearSpecError', () => {
 	});
 	it('accepts the default split', () => {
 		expect(yearSpecError(cov, '2008:2010', '2011:2012', '', '')).toBeNull();
+	});
+	it('accepts identical training and CV holdout specs', () => {
+		expect(yearSpecError(cov, '2008:2012', '2008:2012', '', '')).toBeNull();
 	});
 });

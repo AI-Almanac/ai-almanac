@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { JobCellResponse, MetricDefinition } from '$lib/api';
+	import { modelDisplayName } from '$lib/model-names';
 	import YearOnsetHeatmap from '$lib/components/YearOnsetHeatmap.svelte';
 	import {
 		formatMetricDelta,
@@ -43,17 +44,6 @@
 
 	function metricLabel(metricValue: string) {
 		return displayMetricLabel(metricValue, definitionsById);
-	}
-
-	function modelDisplayName(modelName: string) {
-		const labels: Record<string, string> = {
-			fuxi: 'FuXi',
-			aifs: 'AIFS',
-			aifs_daily: 'AIFS Daily',
-			fuxi_s2s: 'FuXi S2S',
-			climatology: 'Climatology'
-		};
-		return labels[modelName.toLowerCase()] ?? modelName;
 	}
 
 	function tileUnit(metricValue: string, apiUnit: string | undefined): string {

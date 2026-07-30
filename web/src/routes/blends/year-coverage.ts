@@ -55,21 +55,31 @@ export function computeCoverage(
 	};
 }
 
-// Default split: reserve the last 1-2 forecast years for CV holdout, train on the
-// rest, all inside the valid forecast range. null when no valid forecast year
-// exists (not enough observation runway).
+// Default split: train on every valid forecast year and cross-validate within
+// that same span (each year is scored while held out of its own fit) rather than
+// reserving a short tail. null when no valid forecast year exists (not enough
+// observation runway).
 export function defaultSplit(cov: Coverage): { training: string; cv: string } | null {
 	const lo = cov.earliestForecast;
 	const hi = cov.end;
 	if (lo > hi) return null;
-	const span = hi - lo + 1;
-	if (span === 1) return { training: `${lo}`, cv: '' };
-	const holdoutStart = hi - Math.min(2, span - 1) + 1;
-	const trainEnd = holdoutStart - 1;
-	return {
-		training: lo === trainEnd ? `${lo}` : `${lo}:${trainEnd}`,
-		cv: holdoutStart === hi ? `${hi}` : `${holdoutStart}:${hi}`
-	};
+	const years = lo === hi ? `${lo}` : `${lo}:${hi}`;
+	return { training: years, cv: years };
+}
+
+// Blends with this many members start fitting noise: the weights have more
+// freedom than a handful of training years can pin down.
+export const OVERFIT_WARNING_MEMBERS = 3;
+
+// Advice, not a rule — callers must not block submission on this.
+export function memberCountWarning(modelCount: number): string | null {
+	if (modelCount < OVERFIT_WARNING_MEMBERS) return null;
+	return (
+		`Blending ${modelCount} models risks overfitting: the more models in the blend, the more ` +
+		'its weights fit the quirks of the training years instead of real skill, so the scores you ' +
+		'get back can look better than the blend will do on a new season. This matters most when ' +
+		'you have only a few training years — two models is the safer starting point.'
+	);
 }
 
 // Validate user-entered specs against coverage. Returns an error message or null.

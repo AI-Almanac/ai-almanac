@@ -19,6 +19,7 @@
 		LEAD_METRICS,
 		OVERALL_METRICS,
 		SKILL_AXES,
+		isDefaultVisibleSeries,
 		type LeadMetric,
 		type OverallMetric,
 		type SkillRow
@@ -26,9 +27,9 @@
 
 	let { series, jobId }: { series: SkillRow[]; jobId: string } = $props();
 
-	// Diverging fill encoding exactly one quantity: skill relative to
-	// climatology. Same hues as cellStyle in MetricPortrait.svelte, but a shallower
-	// ramp: a raw forecast model here scores around -1 against climatology, so the
+	// Diverging fill encoding exactly one quantity: skill relative to Traditional
+	// Climatology. Same hues as cellStyle in MetricPortrait.svelte, but a shallower
+	// ramp: a raw forecast model here scores around -1 against that baseline, so the
 	// portrait's 0.50 ceiling saturates most of this table and the eye lands on the
 	// worst row instead of on the blend. Peaks at 0.32 instead.
 	const GOOD = '47, 111, 99'; // --color-accent
@@ -90,7 +91,7 @@
 		return m.key === 'observations' ? value.toLocaleString() : formatSkillValue(value);
 	}
 
-	/** Skill on the shared scale: 0 matches climatology, negative is worse. */
+	/** Skill on the shared scale: 0 matches Traditional Climatology, negative is worse. */
 	function cellSkill(row: SkillRow, m: OverallMetric): number | null {
 		if (m.skillMetric == null) return null;
 		const value = rawValue(row, m);
@@ -132,7 +133,7 @@
 		<div class="overall-scroll">
 			<table>
 				<caption class="sr-only">
-					Pooled forecast skill by model, measured against Climatology (unconditional)
+					Pooled forecast skill by model, measured against Traditional Climatology
 				</caption>
 				<thead>
 					<tr>
@@ -160,7 +161,7 @@
 			</table>
 		</div>
 		<p class="caption">
-			Shaded by skill against Climatology (unconditional): green beats it, rust is worse.
+			Shaded by skill against Traditional Climatology: green beats it, rust is worse.
 			{#if sharedObservations != null}
 				Every model scored on the same {sharedObservations.toLocaleString()} grid-point years.
 			{/if}
@@ -189,6 +190,7 @@
 				caption={metric.caption}
 				axisPrefix=""
 				showTitle={false}
+				defaultVisible={isDefaultVisibleSeries}
 			/>
 		</div>
 	{/if}
@@ -196,7 +198,7 @@
 	<BlendSkillMap {jobId} />
 
 	<details class="glossary">
-		<summary>What do “raw”, “bias corrected” and “climatology” mean?</summary>
+		<summary>What do “raw”, “calibrated” and “climatology” mean?</summary>
 		<dl>
 			<div>
 				<dt>Raw</dt>
@@ -205,26 +207,32 @@
 				</dd>
 			</div>
 			<div>
-				<dt>Bias corrected</dt>
+				<dt>Calibrated</dt>
 				<dd>
-					The same probabilities statistically adjusted (Platt scaling) so that, e.g., a 30%
-					forecast corresponds to onset actually happening about 30% of the time.
+					The same probabilities statistically adjusted (Platt scaling) to match observed
+					frequencies, so that, e.g., a 30% forecast corresponds to onset actually happening about
+					30% of the time. Only the probabilities are adjusted — the model's underlying rainfall
+					biases are not corrected.
 				</dd>
 			</div>
 			<div>
-				<dt>Climatology</dt>
+				<dt>Traditional Climatology</dt>
 				<dd>
-					A baseline built only from historical onset frequency — no forecast model. It assumes
-					onset has not happened yet, and spreads probability over the weeks still ahead. A useful
-					forecast has to beat it.
+					A baseline built only from historical onset frequencies — no forecast model. Knowing least
+					of any baseline here, it's the reference every skill score on this page is measured
+					against.
 				</dd>
 			</div>
 			<div>
-				<dt>Climatology (unconditional)</dt>
+				<dt>Conditional Climatology</dt>
 				<dd>
-					The same historical frequency without assuming onset has held off, so some of its
-					probability sits before the forecast even starts. Knowing least of any baseline here, it's
-					the reference every skill score on this page is measured against.
+					A stronger version of climatology, which conditions the traditional climatological
+					distribution on the fact that onset has not yet occurred by the time of forecast. It was
+					introduced in
+					<a href="https://arxiv.org/abs/2603.07893" target="_blank" rel="noopener noreferrer"
+						>Aitken et al. 2026</a
+					>, which argues it is the more appropriate reference for decision-relevant onset
+					forecasts.
 				</dd>
 			</div>
 			<div>
@@ -393,5 +401,10 @@
 	.glossary dd {
 		margin: 0;
 		line-height: 1.45;
+	}
+
+	/* Citations sit inside muted body text; the default link blue fights it. */
+	.glossary a {
+		color: var(--color-accent);
 	}
 </style>

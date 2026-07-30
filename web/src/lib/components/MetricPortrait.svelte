@@ -113,7 +113,7 @@
 									{column.label}
 								</th>
 							{/each}
-							<th scope="col" class="ch refh">Climatology</th>
+							<th scope="col" class="ch refh">Traditional Climatology</th>
 						{/each}
 					</tr>
 				</thead>
@@ -275,8 +275,12 @@
 		border-bottom: 1px solid var(--color-border);
 	}
 
+	/* The reference header repeats once per window, so it wraps instead of
+	   inheriting th.ch's nowrap and widening the table by its own length. */
 	th.refh {
 		font-style: italic;
+		white-space: normal;
+		text-wrap: balance;
 	}
 
 	th.dim {

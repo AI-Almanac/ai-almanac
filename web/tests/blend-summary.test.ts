@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { parsePooledSummary } from '../src/routes/blends/blend-summary';
+import { isDefaultVisibleSeries, parsePooledSummary } from '../src/routes/blends/blend-summary';
 
 // Trimmed real header + two rows from a blend's summary_models_pooled CSV.
 const HEADER =
@@ -35,11 +35,24 @@ describe('parsePooledSummary', () => {
 		const cal =
 			'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,fuxi_calibrated_clim_mok_date,calibrated,0,0,0';
 		const unc = 'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,unc_clim_raw,raw,0,0,0';
-		const labels = parsePooledSummary([HEADER, cal, unc].join('\n')).map((r) => r.label);
-		// "bias corrected" is the product term for the package's `_calibrated`
-		// columns, and `unc_` is unconditional climatology — not uncalibrated.
-		expect(labels).toContain('FUXI (bias corrected)');
-		expect(labels).toContain('Climatology (unconditional)');
+		const cond = 'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,clim_raw,raw,0,0,0';
+		const labels = parsePooledSummary([HEADER, cal, unc, cond].join('\n')).map((r) => r.label);
+		// The package's `_calibrated` columns are Platt-scaled probabilities, not
+		// bias-corrected rainfall; `unc_` is the traditional (unconditional)
+		// climatology — not an uncalibrated one.
+		expect(labels).toContain('FUXI (calibrated)');
+		expect(labels).toContain('Traditional Climatology');
+		expect(labels).toContain('Conditional Climatology');
+	});
+
+	it('starts the lead chart on the blend and the two climatologies only', () => {
+		// Raw forecast series score an order of magnitude below these three, so
+		// they stay hidden until the reader asks for them.
+		expect(isDefaultVisibleSeries('blended_model')).toBe(true);
+		expect(isDefaultVisibleSeries('unc_clim_raw')).toBe(true);
+		expect(isDefaultVisibleSeries('clim_raw')).toBe(true);
+		expect(isDefaultVisibleSeries('aifs_clim_mok_date_raw')).toBe(false);
+		expect(isDefaultVisibleSeries('fuxi_calibrated_clim_mok_date')).toBe(false);
 	});
 
 	it('returns [] when the header lacks AUC columns', () => {

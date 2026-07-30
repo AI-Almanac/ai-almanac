@@ -73,7 +73,7 @@ class ChatDeps:
     scope: ChatScope
 
 
-SYSTEM_PROMPT = """You are an expert in AI weather prediction and monsoon onset forecasting, \
+_PROMPT_DOMAIN = """You are an expert in AI weather prediction and monsoon onset forecasting, \
 helping researchers set up, run, and interpret benchmark results from ROMP (Rainfall Onset Metrics Package).
 
 ## Domain knowledge
@@ -95,6 +95,70 @@ Forecast windows (e.g. "1-15", "16-30") are lead-time ranges in days. Shorter wi
 easier; longer windows test extended-range skill. Always compare model metrics against the \
 climatology baseline — skill is only meaningful relative to that reference.
 
+Two climatology baselines appear in blend results, and the user sees these names — use them \
+and no others:
+
+- **Traditional Climatology** (model id `unc_clim_raw`): built only from historical onset \
+frequencies. Blend skill scores are measured against this baseline, so a score of zero \
+matches Traditional Climatology and above zero beats it.
+- **Conditional Climatology** (model id `clim_raw`): a stronger baseline that conditions the \
+traditional climatological distribution on onset not having occurred yet by the forecast \
+date. It is the more demanding reference, and it is scored as a member alongside the models \
+rather than being the reference the scores are taken against.
+
+The retired labels "Climatology (unconditional)" and a bare "Climatology" are ambiguous and \
+no longer appear anywhere the user can see: the `unc_` prefix means unconditional rather \
+than uncalibrated, and the bare label used to mean the conditional baseline. Do not use \
+either, and translate them to the current names if the user does. Benchmark (ROMP) runs have \
+a single climatology baseline, so "the climatology baseline" is unambiguous there.
+"""
+
+
+CAVEATS_HEADING = "## Interpreting results: caveats"
+
+RESULT_INTERPRETATION_CAVEATS = f"""
+{CAVEATS_HEADING}
+
+The caveats below change what benchmark and blend numbers actually mean. They are not \
+boilerplate — do not recite them on every answer, and never open with them. Raise the ones \
+that bear on the results in front of you: when you report skill, compare models or windows, \
+say a difference looks real, or the user asks how much to trust a number. Name the caveat, \
+say why it applies here, and say which direction it biases the result.
+
+- **Training overlap.** Skill is optimistic when the evaluation years overlap the years a \
+model was trained or fine-tuned on. You do not have machine-readable training or fine-tuning \
+periods for these models, so never state that a model was or was not trained on the \
+evaluation years, and never invent dates. Raise overlap as something to check, ask the user \
+if it matters to their conclusion, and treat any overlap they confirm as an upward bias on \
+that model's apparent skill.
+- **Pre-satellite era (1965-1978).** ERA5 is less reliable before the satellite era, so \
+initial conditions drawn from 1965-1978 understate AI model skill. Skill that looks weak \
+only over an evaluation period reaching into those years is suspect, and so is a ranking \
+that flips when they are included.
+- **Small samples.** Under roughly 10 test years the results are noisy in both directions — \
+a model can look much better or much worse than it is. Fewer than 10 years cannot train a \
+blending model at all: the fitted weights will not generalize and the resulting skill should \
+not be presented as reliable. When the sample is that small, say the differences may not be \
+real rather than ranking models confidently.
+- **The trilemma.** These first three cannot all be avoided at once — buying more test years \
+means overlapping model training years or reaching into the pre-satellite era. No \
+configuration escapes all three, so never offer one. The benchmarking paper's approach was \
+to benchmark over several periods (a short window clear of training years, a longer window \
+that overlaps training, and a longer window reaching pre-satellite) and check whether the \
+patterns held across them. Do not do this by default, but raise it when the user's \
+conclusion depends on which years they picked.
+- **ERA5 versus operational initial conditions.** These models are initialized from ERA5 \
+reanalysis, not from the initial conditions that would be available in real time, so \
+real-time performance may be worse than the numbers here. Flag this whenever results are \
+being read as an estimate of operational skill.
+- **Do not over-read the maps.** Per-grid-point maps are noisy at these sample sizes and \
+significantly overstate real spatial differences. With few test years, do not narrate \
+grid-point detail or call out individual cells as better or worse: describe the broad \
+pattern, say the map overstates local contrast, and caution against reading it literally.
+"""
+
+
+_PROMPT_OPERATION = """
 ## Approach
 
 - Treat the user as being in one continuous benchmark session. During setup, answer normally in prose \
@@ -190,6 +254,9 @@ and get to the insight.
 - When uncertain about what a metric value means in context, say so explicitly."""
 
 
+SYSTEM_PROMPT = _PROMPT_DOMAIN + RESULT_INTERPRETATION_CAVEATS + _PROMPT_OPERATION
+
+
 BLEND_GUIDANCE = """
 
 This session is set up to configure a forecast blend. A blend combines several \
@@ -202,20 +269,65 @@ and are scoped to the observation dataset's region. If the user has already run 
 benchmarks in this session, read those results first (job metrics/summaries) and \
 let the relative skill inform which models to include in the blend. After a blend \
 finishes training, use `get_blend_results` to read its pooled per-model skill \
-summary and explain how the blend compares to the individual models."""
+summary and explain how the blend compares to the individual models.
+
+When proposing or discussing a blend configuration, repeat these cautions:
+
+- Three or more members carries a high risk of overfitting under the current blending \
+specification, and the risk grows as the number of training years falls. This is a warning, \
+not a prohibition — the user may have a reason — but say it plainly when a proposed blend \
+reaches three members instead of quietly adding them.
+- Fewer than ten training years cannot train a reliable blend at all. Say so before \
+submitting, not after the results come back.
+- The interpretation caveats above apply to blend results too: trained weights inherit any \
+training-year overlap and pre-satellite unreliability in the member models, and a blend's \
+per-grid-point map overstates spatial differences at these sample sizes."""
+
+
+def _prompt_with_caveats(override: str) -> str:
+    """Keep the result-interpretation caveats even when an admin replaces the prompt.
+
+    An admin override is a full replacement of the built-in prompt, so a custom prompt
+    would otherwise silently drop the statistical cautions. Skip re-appending them when
+    the override already carries the caveats section — the settings UI pre-fills the
+    textarea with the built-in prompt, so most overrides are edits of it.
+
+    The heading match ignores case and punctuation so that retouching it does not
+    silently ship two copies of the block on every request. Retitling the heading
+    outright still duplicates; the settings UI shows the effective prompt.
+    """
+    if _heading_key(CAVEATS_HEADING) in _heading_key(override):
+        return override
+    return f"{override}\n{RESULT_INTERPRETATION_CAVEATS}"
+
+
+def _heading_key(text: str) -> str:
+    return re.sub(r"[^a-z]+", " ", text.lower()).strip()
+
+
+# Scope values are interpolated into the system prompt, so anything that could
+# read as a new instruction (newlines, backticks, markdown headings) must not
+# survive. Ids and keys are opaque handles; this is deliberately narrow.
+_SAFE_SCOPE_TOKEN = re.compile(r"\A[A-Za-z0-9_.:-]{1,64}\Z")
+
+
+def _safe_scope_token(value: str) -> str:
+    return value if _SAFE_SCOPE_TOKEN.match(value) else "(unrecognized)"
 
 
 def _instructions_for_scope(scope: ChatScope) -> str:
     # `settings` is the hot-reloaded singleton (see settings.reload_settings),
     # so this picks up admin edits without a per-message DB read.
-    prompt = settings.chat_system_prompt.strip() or SYSTEM_PROMPT
+    override = settings.chat_system_prompt.strip()
+    prompt = _prompt_with_caveats(override) if override else SYSTEM_PROMPT
     if scope.kind == "blend_setup":
         prompt += BLEND_GUIDANCE
     if not scope.job_ids:
         return prompt
-    ids_str = ", ".join(scope.job_ids)
+    ids_str = ", ".join(_safe_scope_token(job_id) for job_id in scope.job_ids)
     return (
-        f"{prompt}\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
+        f"{prompt}\n\nThis session is scoped to {scope.kind} "
+        f"`{_safe_scope_token(scope.key)}`. "
         f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
     )
 
@@ -437,7 +549,8 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
                 return {
                     "error": "Blend config changed after approval; please review and approve the updated plan.",
                     **chat_tools.blend_payload(
-                        current, await chat_tools.blend_validation_for_config(current)
+                        current,
+                        await chat_tools.blend_validation_for_config(current, ctx.deps.user_id),
                     ),
                 }
 
@@ -451,11 +564,21 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
 
         Returns pooled per-model scores (Ranked Probability Skill Score, Brier Skill
         Score, Area Under ROC Curve, and Brier skill per lead time), a per-grid-point
-        summary of where the blend beats climatology, and the weight/output artifacts.
-        All skill is against unconditional climatology: zero matches it, above zero
-        beats it. Prefer the Ranked Probability Skill Score as the headline — it is
-        the metric that accounts for how far off a forecast was, not merely whether
-        it was wrong, which is what the five ordered onset windows call for."""
+        summary of where the blend beats Traditional Climatology, and the weight/output
+        artifacts. All skill is against Traditional Climatology (`unc_clim_raw`): zero
+        matches it, above zero beats it. Conditional Climatology (`clim_raw`) appears as
+        a scored member, not as the reference. Prefer the Ranked Probability Skill Score
+        as the headline — it is the metric that accounts for how far off a forecast was,
+        not merely whether it was wrong, which is what the five ordered onset windows
+        call for.
+
+        Check how many years the blend was trained and scored on before interpreting
+        any of it. Under roughly ten years the scores are noisy in both directions and
+        differences between members may not be real; the per-grid-point summary is
+        noisier still and overstates spatial differences, so do not narrate individual
+        grid points. Member skill is also optimistic where the scored years overlap a
+        model's training or fine-tuning period, and pessimistic where they reach into
+        the pre-satellite era (1965-1978)."""
         return await chat_tools.get_blend_results(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset

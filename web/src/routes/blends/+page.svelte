@@ -25,7 +25,13 @@
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
-	import { MIN_ONSET_YEARS, computeCoverage, defaultSplit, yearSpecError } from './year-coverage';
+	import {
+		MIN_ONSET_YEARS,
+		computeCoverage,
+		defaultSplit,
+		memberCountWarning,
+		yearSpecError
+	} from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 
@@ -157,6 +163,18 @@
 		trainingYears = split.training;
 		cvHoldoutYears = split.cv;
 	});
+
+	// Advisory only — never feeds formValid.
+	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
+
+	// Live scoring needs a rolled-out season for every member, so one historical-only
+	// member makes the whole blend historical-only. Said here, before training is paid
+	// for, rather than only as a rejection at forecast time.
+	const historicalOnlyMembers = $derived(
+		availableModels
+			.filter((s) => modelIds.includes(s.id) && !forecastModelFor(forecastModels, s.name))
+			.map((s) => s.name)
+	);
 
 	const formValid = $derived(
 		name.trim() !== '' &&
@@ -557,6 +575,18 @@
 						{/if}
 					</fieldset>
 
+					{#if modelCountWarning}
+						<p class="caution">{modelCountWarning}</p>
+					{/if}
+
+					{#if historicalOnlyMembers.length > 0}
+						<p class="caution">
+							No live forecast is available for {historicalOnlyMembers.join(', ')}. You can train
+							and score this blend on past seasons, but it can't be run as a live forecast for the
+							current season.
+						</p>
+					{/if}
+
 					{#if coverage}
 						<p class="muted coverage-hint">
 							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
@@ -580,13 +610,13 @@
 						<label class="field">
 							{@render fieldLabel(
 								'CV holdout years',
-								'Years held out of training to cross-validate the weights, e.g. "2011,2012". Usually the most recent 1–2 years of the shared range.'
+								'Years scored with the weights fitted without them, to check the blend on data it did not learn from. Defaults to the training years, so every training year gets checked in turn.'
 							)}
 							<input
 								type="text"
 								bind:value={cvHoldoutYears}
 								oninput={() => (yearsDirty = true)}
-								placeholder="2021,2022"
+								placeholder="2015:2020"
 							/>
 						</label>
 					</div>
@@ -1154,6 +1184,16 @@
 	.error,
 	.error-block {
 		color: var(--color-danger);
+		font-size: 0.85rem;
+	}
+
+	.caution {
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border: 1px solid var(--color-status-running);
+		border-radius: 0.45rem;
+		padding: 0.6rem 0.75rem;
+		margin: 0;
 		font-size: 0.85rem;
 	}
 
