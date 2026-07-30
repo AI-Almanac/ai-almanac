@@ -222,7 +222,9 @@ def apply_inferred_custom_bounds(
     return bounded
 
 
-async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str | None:
+async def _resolve_obs_dir(
+    dataset_id: str, obs_dir_override: str | None, user_id: str
+) -> str | None:
     """Resolve an observation source to the path a runner reads."""
     if obs_dir_override:
         return obs_dir_override
@@ -231,6 +233,10 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
         raise HTTPException(status_code=404, detail="Dataset not found")
     if source["kind"] != "obs":
         raise HTTPException(status_code=400, detail="Selected source is not observations")
+    # Same owner-or-shared rule _resolve_model_source applies: a source id is not
+    # a capability, and the errors below disclose the source's name and coverage.
+    if source.get("owner_id") not in (None, user_id) and source.get("visibility") != "shared":
+        raise HTTPException(status_code=404, detail="Dataset not found")
     if source.get("status") != "ready":
         raise HTTPException(
             status_code=409,
@@ -291,9 +297,24 @@ MIN_ONSET_YEARS = 10
 YearRange = tuple[int | None, int | None]
 
 
+def _registered_year(value: object) -> int | None:
+    """A registered year, or None when it isn't one.
+
+    Source metadata is a free-form caller-supplied dict, so a year can be a
+    string or anything else. Parse it here rather than letting a non-integer
+    reach the coverage arithmetic as a 500.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def source_year_range(source: dict | None) -> YearRange:
     metadata = (source or {}).get("metadata") or {}
-    return metadata.get("start_year"), metadata.get("end_year")
+    return _registered_year(metadata.get("start_year")), _registered_year(metadata.get("end_year"))
 
 
 def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> dict | None:
@@ -323,6 +344,11 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     Shared by every entry point — direct submission (``create_blend_for_user``)
     and the chat validation path (``blend_domain._year_errors``) — so a config
     the UI rejects cannot slip in through the API.
+
+    This guards the caller against their own under-determined climatology; it is
+    not a security boundary. A caller who registers a source with no year
+    metadata (or invents a wide range) makes ``coverage`` None and the rule
+    unenforceable, which costs them result quality and compute, nobody else.
     """
     if coverage is None or not forecast_years:
         return []
@@ -459,7 +485,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None)
+    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
 
     try:
@@ -989,7 +1015,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             status_code=400,
             detail=f"Model is not configured for region {region!r}",
         )
-    obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir)
+    obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()

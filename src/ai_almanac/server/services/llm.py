@@ -291,10 +291,28 @@ def _prompt_with_caveats(override: str) -> str:
     would otherwise silently drop the statistical cautions. Skip re-appending them when
     the override already carries the caveats section — the settings UI pre-fills the
     textarea with the built-in prompt, so most overrides are edits of it.
+
+    The heading match ignores case and punctuation so that retouching it does not
+    silently ship two copies of the block on every request. Retitling the heading
+    outright still duplicates; the settings UI shows the effective prompt.
     """
-    if CAVEATS_HEADING in override:
+    if _heading_key(CAVEATS_HEADING) in _heading_key(override):
         return override
     return f"{override}\n{RESULT_INTERPRETATION_CAVEATS}"
+
+
+def _heading_key(text: str) -> str:
+    return re.sub(r"[^a-z]+", " ", text.lower()).strip()
+
+
+# Scope values are interpolated into the system prompt, so anything that could
+# read as a new instruction (newlines, backticks, markdown headings) must not
+# survive. Ids and keys are opaque handles; this is deliberately narrow.
+_SAFE_SCOPE_TOKEN = re.compile(r"\A[A-Za-z0-9_.:-]{1,64}\Z")
+
+
+def _safe_scope_token(value: str) -> str:
+    return value if _SAFE_SCOPE_TOKEN.match(value) else "(unrecognized)"
 
 
 def _instructions_for_scope(scope: ChatScope) -> str:
@@ -306,9 +324,10 @@ def _instructions_for_scope(scope: ChatScope) -> str:
         prompt += BLEND_GUIDANCE
     if not scope.job_ids:
         return prompt
-    ids_str = ", ".join(scope.job_ids)
+    ids_str = ", ".join(_safe_scope_token(job_id) for job_id in scope.job_ids)
     return (
-        f"{prompt}\n\nThis session is scoped to {scope.kind} `{scope.key}`. "
+        f"{prompt}\n\nThis session is scoped to {scope.kind} "
+        f"`{_safe_scope_token(scope.key)}`. "
         f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
     )
 
@@ -530,7 +549,8 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
                 return {
                     "error": "Blend config changed after approval; please review and approve the updated plan.",
                     **chat_tools.blend_payload(
-                        current, await chat_tools.blend_validation_for_config(current)
+                        current,
+                        await chat_tools.blend_validation_for_config(current, ctx.deps.user_id),
                     ),
                 }
 

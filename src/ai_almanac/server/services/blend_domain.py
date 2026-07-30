@@ -256,8 +256,8 @@ def blend_payload(spec: BlendRunSpec, validation: BlendValidation, **extra: obje
     }
 
 
-async def validation_for_config(spec: BlendRunSpec) -> BlendValidation:
-    return await _validation_for_config(spec)
+async def validation_for_config(spec: BlendRunSpec, user_id: str) -> BlendValidation:
+    return await _validation_for_config(spec, user_id)
 
 
 # --------------------------------------------------------------------------

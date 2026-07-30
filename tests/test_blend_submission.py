@@ -266,3 +266,58 @@ async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub
             user_id,
         )
     assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"start_year": 1990, "end_year": 2020}, (1990, 2020)),
+        ({"start_year": "1990", "end_year": "2020"}, (1990, 2020)),
+        ({"start_year": "unknown", "end_year": 2020}, (None, 2020)),
+        ({"start_year": {"a": 1}, "end_year": 2020}, (None, 2020)),
+        ({"start_year": True, "end_year": 2020}, (None, 2020)),
+        ({}, (None, None)),
+    ],
+)
+def test_source_year_range_parses_registered_years(
+    metadata: dict, expected: tuple[int | None, int | None]
+) -> None:
+    """Source metadata is a free-form caller-supplied dict, so a year that isn't
+    one must read as unregistered rather than reaching the coverage arithmetic
+    and 500ing."""
+    assert job_submission.source_year_range({"metadata": metadata}) == expected
+
+
+@pytest.mark.asyncio
+async def test_create_blend_hides_another_users_private_obs_source(
+    client, user_id: str, _stub_runner
+) -> None:
+    """An obs source id is not a capability: the coverage error would otherwise
+    disclose a private source's registered years to anyone holding its id."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "Someone else's ERA5", "gs://data/obs/india", (1990, 2024))
+    gencast_id = await _seed_source("model", "GenCast", "gs://data/models/gencast", (2000, 2024))
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "UPDATE data_sources SET owner_id = 'another-user', visibility = 'private' "
+                "WHERE id = :id"
+            ),
+            {"id": obs_id},
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await create_blend_for_user(
+            BlendCreate(
+                name="peek",
+                obs_dataset_id=obs_id,
+                model_ids=[gencast_id],
+                params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+            ),
+            user_id,
+        )
+    assert exc.value.status_code == 404
+    assert "1990" not in str(exc.value.detail)
