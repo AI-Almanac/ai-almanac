@@ -284,7 +284,8 @@ export class ChatSessionState {
 			content: '',
 			created_at: new Date().toISOString(),
 			tool_calls: [],
-			artifacts: []
+			artifacts: [],
+			guardrails: []
 		};
 	}
 
@@ -325,6 +326,21 @@ export class ChatSessionState {
 						? { ...tc, artifacts: [...(tc.artifacts ?? []), event.artifact] }
 						: tc
 				)
+			};
+		} else if (event.type === 'guardrail') {
+			// Attached to the turn from the backend's validation payload, so the
+			// caution renders even when the assistant's prose omits it.
+			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
+			this.streamingTurn = {
+				...this.streamingTurn,
+				guardrails: [
+					...(this.streamingTurn.guardrails ?? []),
+					{
+						tool_call_id: event.tool_call_id,
+						errors: event.errors,
+						warnings: event.warnings
+					}
+				]
 			};
 		} else if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));

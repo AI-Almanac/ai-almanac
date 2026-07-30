@@ -91,6 +91,34 @@
 					</button>
 				{/each}
 			{/each}
+
+			<!--
+				Rendered from the backend's guardrail events, not from the assistant's
+				prose. The reply above may explain these well, badly, or not at all;
+				the user is told either way.
+			-->
+			{#each msg.guardrails ?? [] as notice}
+				{#if notice.errors.length}
+					<div class="guardrail guardrail-error">
+						<p class="guardrail-title">This configuration cannot run</p>
+						<ul>
+							{#each notice.errors as item (item)}
+								<li>{item}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+				{#if notice.warnings.length}
+					<div class="guardrail guardrail-warning">
+						<p class="guardrail-title">Read these results with care</p>
+						<ul>
+							{#each notice.warnings as item (item)}
+								<li>{item}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+			{/each}
 		{/if}
 	{/each}
 
@@ -448,6 +476,36 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
+	}
+	.guardrail {
+		border-radius: 0.45rem;
+		border: 1px solid;
+		padding: 0.6rem 0.75rem;
+		font-size: 0.8rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.guardrail ul {
+		margin: 0;
+		padding-left: 1.1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.guardrail-title {
+		margin: 0;
+		font-weight: 700;
+	}
+	.guardrail-warning {
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border-color: var(--color-status-running);
+	}
+	.guardrail-error {
+		color: var(--color-status-failed);
+		background: var(--color-status-failed-bg);
+		border-color: var(--color-status-failed);
 	}
 	.approval-run {
 		border: 0;

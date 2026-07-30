@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import FigureLightbox from '$lib/components/FigureLightbox.svelte';
 	import ChatHeader from '$lib/components/ChatHeader.svelte';
 	import ChatMessages from '$lib/components/ChatMessages.svelte';
@@ -165,6 +166,20 @@
 		}
 	}
 
+	// ponytail: localStorage, not a user preference row — this is a one-time
+	// acknowledgement, and re-showing it on a new device is the harmless failure.
+	const BETA_NOTE_KEY = 'almanac.assistantBetaNoteDismissed';
+	let showBetaNote = $state(false);
+
+	onMount(() => {
+		showBetaNote = localStorage.getItem(BETA_NOTE_KEY) !== '1';
+	});
+
+	function dismissBetaNote() {
+		showBetaNote = false;
+		localStorage.setItem(BETA_NOTE_KEY, '1');
+	}
+
 	function openArtifactInGallery(artifactId: string) {
 		const idx = galleryFigures.findIndex((f) => f.artifactId === artifactId);
 		if (idx !== -1) selectedFigureIndex = idx;
@@ -173,6 +188,17 @@
 
 <div class="chat-panel">
 	<ChatHeader {chat} />
+
+	{#if showBetaNote}
+		<div class="beta-note">
+			<p>
+				The assistant is in development and can be wrong. It reads real benchmark and blend data
+				through tools, but check any number that matters against the results pages before relying on
+				it.
+			</p>
+			<button class="beta-note-dismiss" onclick={dismissBetaNote} aria-label="Dismiss">×</button>
+		</div>
+	{/if}
 
 	<div class="panel-tabs">
 		<button
@@ -368,5 +394,30 @@
 	}
 	.send-btn:not(:disabled):hover {
 		opacity: 0.85;
+	}
+	.beta-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		padding: 0.6rem 0.75rem;
+		background: var(--color-status-running-bg);
+		border-bottom: 1px solid var(--color-status-running);
+		color: var(--color-status-running);
+		font-size: 0.78rem;
+		line-height: 1.4;
+	}
+	.beta-note p {
+		margin: 0;
+		flex: 1;
+	}
+	.beta-note-dismiss {
+		background: none;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		font-size: 1.1rem;
+		line-height: 1;
+		padding: 0 0.15rem;
+		flex-shrink: 0;
 	}
 </style>

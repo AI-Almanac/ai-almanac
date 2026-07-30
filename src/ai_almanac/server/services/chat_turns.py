@@ -29,6 +29,7 @@ from ai_almanac.server.services.chat_state import (
     ChatScope,
     ChatToolCall,
     ChatTurn,
+    GuardrailNotice,
 )
 from ai_almanac.server.services.chat_tools import (
     SubmitBenchmarkApproval,
@@ -126,6 +127,15 @@ def _apply_stream_event(turn: ChatTurn, data: dict) -> None:
         artifact_payload = data.get("artifact")
         if isinstance(artifact_payload, dict):
             _append_artifact(turn, data.get("tool_call_id"), artifact_payload)
+        return
+    if event_type == "guardrail":
+        turn.guardrails.append(
+            GuardrailNotice(
+                tool_call_id=data.get("tool_call_id"),
+                errors=[item for item in data.get("errors") or [] if isinstance(item, str)],
+                warnings=[item for item in data.get("warnings") or [] if isinstance(item, str)],
+            )
+        )
         return
     if event_type == "tool_result":
         tool_call_id = data.get("tool_call_id")

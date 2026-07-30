@@ -2153,6 +2153,8 @@ export interface components {
             tool_calls?: components["schemas"]["ChatToolCall"][];
             /** Artifacts */
             artifacts?: components["schemas"]["ChatArtifact"][];
+            /** Guardrails */
+            guardrails?: components["schemas"]["GuardrailNotice"][];
         };
         /** DataSourceIn */
         DataSourceIn: {
@@ -2729,6 +2731,22 @@ export interface components {
             lats: number[];
             /** Lons */
             lons: number[];
+        };
+        /**
+         * GuardrailNotice
+         * @description Statistical findings the platform reported during a turn.
+         *
+         *     Recorded on the turn rather than left to the assistant's prose so the
+         *     caution is shown whatever the model chose to say, and so it survives a page
+         *     reload. See ``services.guardrails`` for why enforcement lives in code.
+         */
+        GuardrailNotice: {
+            /** Tool Call Id */
+            tool_call_id?: string | null;
+            /** Errors */
+            errors?: string[];
+            /** Warnings */
+            warnings?: string[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {

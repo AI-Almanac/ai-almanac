@@ -15,7 +15,7 @@ import uuid
 import sqlalchemy as sa
 
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services import job_submission
+from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
 from ai_almanac.server.tables import jobs as _jobs
@@ -162,22 +162,25 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     if bad_models:
         errors.append("Models are not available for this region: " + ", ".join(bad_models))
 
-    # Advice, not a rule: more members means more freedom for the fitted weights
-    # than a handful of training years can pin down. Never blocks the run.
-    overfit_warning_members = 3
-    if len(selected_models) >= overfit_warning_members:
-        warnings.append(
-            f"Blending {len(selected_models)} models risks overfitting: the more models in "
-            "the blend, the more its weights fit the quirks of the training years instead of "
-            "real skill, so the scores you get back can look better than the blend will do on "
-            "a new season. This matters most when you have only a few training years — two "
-            "models is the safer starting point."
-        )
-
     warnings.extend(job_submission.historical_only_warning(m["name"] for m in selected_models))
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
+
+    # The same predicates the submission chokepoint enforces
+    # (``job_submission.create_blend_for_user``), surfaced here so the assistant
+    # and the setup form see the verdict before submitting rather than as a 400
+    # afterwards. This path only reports; it is not what makes the rules hold.
+    findings = guardrails.check_blend(
+        guardrails.BlendYears(
+            training=_parse_year_spec(spec.training_years) or [],
+            cv_holdout=_parse_year_spec(spec.cv_holdout_years) or [],
+            true_holdout=_parse_year_spec(spec.true_holdout_years) or [],
+        ),
+        len(selected_models),
+    )
+    errors.extend(guardrails.error_messages(findings))
+    warnings.extend(guardrails.warning_messages(findings))
 
     can_run = not missing and not errors
     return BlendValidation(

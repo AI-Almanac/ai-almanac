@@ -87,6 +87,9 @@
 
 <div class="chat-header">
 	<span class="ai-badge">✦ AI</span>
+	<span class="beta-badge" title="The assistant is under active development and can be wrong.">
+		Beta
+	</span>
 	<div class="session-selector">
 		{#if chat.currentSession && renamingSessionId === chat.currentSession.id}
 			<div class="session-rename-bar">
@@ -193,6 +196,18 @@
 		color: var(--color-accent);
 		background: var(--color-accent-light);
 		border: 1px solid var(--color-accent-border);
+		border-radius: 3px;
+		padding: 0.15rem 0.4rem;
+		flex-shrink: 0;
+	}
+	.beta-badge {
+		font-size: 0.6rem;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border: 1px solid var(--color-status-running);
 		border-radius: 3px;
 		padding: 0.15rem 0.4rem;
 		flex-shrink: 0;

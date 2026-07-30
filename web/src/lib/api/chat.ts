@@ -90,6 +90,18 @@ export type ChatSession = {
 	run_id?: string | null;
 };
 
+/**
+ * Statistical findings the platform reported during a turn.
+ *
+ * Emitted by the backend from the validation payload, not written by the
+ * assistant, so the caution shows whatever the model chose to say about it.
+ */
+export type GuardrailNotice = {
+	tool_call_id?: string | null;
+	errors: string[];
+	warnings: string[];
+};
+
 export type ChatMessage = {
 	id: string;
 	role: 'user' | 'assistant';
@@ -97,6 +109,7 @@ export type ChatMessage = {
 	created_at: string;
 	tool_calls?: ChatToolCall[];
 	artifacts?: ChatArtifact[];
+	guardrails?: GuardrailNotice[];
 };
 
 export type ChatArtifact = {
@@ -134,6 +147,13 @@ export type ChatEvent =
 			result: unknown;
 	  }
 	| { type: 'artifact'; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+	| {
+			type: 'guardrail';
+			turn_id: string;
+			tool_call_id: string;
+			errors: string[];
+			warnings: string[];
+	  }
 	| {
 			type: 'tool_approval_request';
 			turn_id: string;

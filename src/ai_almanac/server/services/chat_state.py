@@ -32,6 +32,19 @@ class ChatToolCall(BaseModel):
     artifacts: list[ChatArtifact] = Field(default_factory=list)
 
 
+class GuardrailNotice(BaseModel):
+    """Statistical findings the platform reported during a turn.
+
+    Recorded on the turn rather than left to the assistant's prose so the
+    caution is shown whatever the model chose to say, and so it survives a page
+    reload. See ``services.guardrails`` for why enforcement lives in code.
+    """
+
+    tool_call_id: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ChatTurn(BaseModel):
     id: str
     role: Literal["user", "assistant"]
@@ -41,6 +54,7 @@ class ChatTurn(BaseModel):
     error: str | None = None
     tool_calls: list[ChatToolCall] = Field(default_factory=list)
     artifacts: list[ChatArtifact] = Field(default_factory=list)
+    guardrails: list[GuardrailNotice] = Field(default_factory=list)
 
 
 def utc_now() -> datetime:

@@ -471,6 +471,63 @@ async def test_stream_response_emits_tool_call_and_result_events(
     assert types[-1] == "done"
 
 
+def test_guardrail_event_is_built_from_the_tool_result_not_the_model() -> None:
+    """The banner the user sees comes off the validation payload, so no prose and
+    no "ignore your rules" instruction can suppress it."""
+    from ai_almanac.server.services import llm
+
+    event = llm._guardrail_event(
+        "turn-1",
+        "call-1",
+        {
+            "blend_config": {},
+            "blend_validation": {
+                "errors": ["True holdout years were also used for training: 2018."],
+                "warnings": ["Blending 3 models risks overfitting."],
+            },
+        },
+    )
+
+    assert event is not None
+    payload = json.loads(event)
+    assert payload["type"] == "guardrail"
+    assert payload["turn_id"] == "turn-1"
+    assert payload["tool_call_id"] == "call-1"
+    assert "2018" in payload["errors"][0]
+    assert "overfitting" in payload["warnings"][0]
+
+
+def test_guardrail_event_is_omitted_when_a_config_is_clean() -> None:
+    from ai_almanac.server.services import llm
+
+    assert (
+        llm._guardrail_event("t", "c", {"blend_validation": {"errors": [], "warnings": []}}) is None
+    )
+    assert llm._guardrail_event("t", "c", {"regions": []}) is None
+    assert llm._guardrail_event("t", "c", "not a dict") is None
+
+
+def test_guardrail_events_are_recorded_on_the_turn() -> None:
+    """Persisted rather than stream-only, so the caution survives a reload."""
+    from ai_almanac.server.services.chat_state import ChatTurn, utc_now
+    from ai_almanac.server.services.chat_turns import _apply_stream_event
+
+    turn = ChatTurn(id="turn-1", role="assistant", created_at=utc_now())
+    _apply_stream_event(
+        turn,
+        {
+            "type": "guardrail",
+            "tool_call_id": "call-1",
+            "errors": ["holdout leak"],
+            "warnings": ["small sample"],
+        },
+    )
+
+    assert turn.guardrails[0].errors == ["holdout leak"]
+    assert turn.guardrails[0].warnings == ["small sample"]
+    assert turn.guardrails[0].tool_call_id == "call-1"
+
+
 async def _create_session(
     client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
 ) -> dict:
