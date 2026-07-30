@@ -39,9 +39,8 @@ _BLEND_MODEL = "blended_model"
 _BASELINE_MODEL = "unc_clim_raw"
 
 # Climatology needs this many observation years before the first forecast year.
-# Mirrors ``min_onset_years`` in modal/blending_app.py and the frontend
-# ``MIN_ONSET_YEARS`` in web/src/routes/blends/year-coverage.ts.
-MIN_ONSET_YEARS = 10
+# Owned by ``job_submission`` so submission and this chat path enforce one rule.
+MIN_ONSET_YEARS = job_submission.MIN_ONSET_YEARS
 
 
 # --------------------------------------------------------------------------
@@ -90,18 +89,10 @@ def _parse_year_spec(value: str) -> list[int] | None:
 def _coverage(obs: dict | None, models: list[dict]) -> dict | None:
     if obs is None or not models:
         return None
-    obs_start, obs_end = obs.get("start_year"), obs.get("end_year")
-    model_starts = [m.get("start_year") for m in models]
-    model_ends = [m.get("end_year") for m in models]
-    if obs_start is None or obs_end is None:
-        return None
-    if any(y is None for y in model_starts) or any(y is None for y in model_ends):
-        return None
-    return {
-        "start": max(obs_start, *model_starts),
-        "end": min(obs_end, *model_ends),
-        "earliest_forecast": max(obs_start + MIN_ONSET_YEARS, *model_starts),
-    }
+    return job_submission.blend_year_coverage(
+        (obs.get("start_year"), obs.get("end_year")),
+        [(m.get("start_year"), m.get("end_year")) for m in models],
+    )
 
 
 def _year_errors(spec: BlendRunSpec, coverage: dict | None) -> list[str]:
@@ -118,26 +109,11 @@ def _year_errors(spec: BlendRunSpec, coverage: dict | None) -> list[str]:
             return [f'{field} must look like "2005:2010" or "2011,2012".']
         parsed[field] = years
 
-    if coverage is None:
-        return []
-
     explicit = parsed["forecast_years"]
     forecast_years = explicit or (
         parsed["training_years"] + parsed["cv_holdout_years"] + parsed["true_holdout_years"]
     )
-    if not forecast_years:
-        return []
-
-    errors: list[str] = []
-    low, high = min(forecast_years), max(forecast_years)
-    if low < coverage["start"] or high > coverage["end"]:
-        errors.append(f"Chosen sources only share data for {coverage['start']}-{coverage['end']}.")
-    if low < coverage["earliest_forecast"]:
-        errors.append(
-            f"Climatology needs {MIN_ONSET_YEARS} years of observations before the "
-            f"first forecast year — start at {coverage['earliest_forecast']} or later."
-        )
-    return errors
+    return job_submission.blend_coverage_errors(forecast_years, coverage)
 
 
 # --------------------------------------------------------------------------
@@ -185,6 +161,20 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     bad_models = [mid for mid in spec.model_ids if mid not in model_candidates]
     if bad_models:
         errors.append("Models are not available for this region: " + ", ".join(bad_models))
+
+    # Advice, not a rule: more members means more freedom for the fitted weights
+    # than a handful of training years can pin down. Never blocks the run.
+    overfit_warning_members = 3
+    if len(selected_models) >= overfit_warning_members:
+        warnings.append(
+            f"Blending {len(selected_models)} models risks overfitting: the more models in "
+            "the blend, the more its weights fit the quirks of the training years instead of "
+            "real skill, so the scores you get back can look better than the blend will do on "
+            "a new season. This matters most when you have only a few training years — two "
+            "models is the safer starting point."
+        )
+
+    warnings.extend(job_submission.historical_only_warning(m["name"] for m in selected_models))
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
@@ -266,8 +256,8 @@ def blend_payload(spec: BlendRunSpec, validation: BlendValidation, **extra: obje
     }
 
 
-async def validation_for_config(spec: BlendRunSpec) -> BlendValidation:
-    return await _validation_for_config(spec)
+async def validation_for_config(spec: BlendRunSpec, user_id: str) -> BlendValidation:
+    return await _validation_for_config(spec, user_id)
 
 
 # --------------------------------------------------------------------------

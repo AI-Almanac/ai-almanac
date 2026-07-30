@@ -93,7 +93,7 @@
 				<dd>{formatDays(activePoint.model)}</dd>
 			</div>
 			<div>
-				<dt>Climatology MAE</dt>
+				<dt>Traditional Climatology MAE</dt>
 				<dd>{formatDays(activePoint.baseline)}</dd>
 			</div>
 			<div>

@@ -34,21 +34,34 @@ class _FakeRunner:
         return RunnerHandle(runner="modal", external_id="fc-test")
 
 
-async def _seed_source(kind: str, name: str, path: str) -> str:
+async def _seed_source(
+    kind: str,
+    name: str,
+    path: str,
+    years: tuple[int, int] | None = None,
+) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
+    metadata = json.dumps({"start_year": years[0], "end_year": years[1]}) if years else "{}"
     async with get_db() as conn:
         await conn.execute(
             text(
                 "INSERT INTO data_sources "
                 "(id, kind, name, path, region, metadata, location_type, status, "
                 "validation_error, created_at, updated_at) "
-                "VALUES (:id, :kind, :name, :path, 'india', '{}', 'gcs', 'ready', "
+                "VALUES (:id, :kind, :name, :path, 'india', :metadata, 'gcs', 'ready', "
                 "NULL, :now, :now)"
             ),
-            {"id": source_id, "kind": kind, "name": name, "path": path, "now": now},
+            {
+                "id": source_id,
+                "kind": kind,
+                "name": name,
+                "path": path,
+                "metadata": metadata,
+                "now": now,
+            },
         )
     return source_id
 
@@ -110,6 +123,133 @@ async def test_create_blend_persists_blend_routing_config(
 
 
 @pytest.mark.asyncio
+async def test_post_blends_rejects_thin_climatology_coverage(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    """The API must apply the same coverage rule as the UI and the chat path:
+    the onset climatology needs MIN_ONSET_YEARS of observations before the
+    first forecast year."""
+    obs_id = await _seed_source("obs", "ERA5 thin", "gs://data/obs/thin", years=(2010, 2024))
+    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "too early",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            # Obs start 2010 → the first estimable forecast year is 2020.
+            "params": {"training_years": "2015:2024", "cv_holdout_years": "2024"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Climatology needs 10 years of observations" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_post_blends_accepts_sufficient_coverage(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source("obs", "ERA5 deep", "gs://data/obs/deep", years=(2010, 2024))
+    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "late enough",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2020:2024", "cv_holdout_years": "2024"},
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_create_blend_warns_when_a_member_cannot_forecast_live(
+    client, user_id: str, _stub_runner
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="history only",
+            obs_dataset_id=obs_id,
+            model_ids=[ngcm_id, aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    assert len(out.warnings) == 1
+    assert "NeuralGCM" in out.warnings[0]
+    assert "cannot be run as a live forecast" in out.warnings[0]
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["warnings"] == out.warnings
+
+
+@pytest.mark.asyncio
+async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
+    client, user_id: str, _stub_runner
+) -> None:
+    """Live scoring needs every member's season, so requesting only the runnable
+    subset of a history-only blend must fail at submission, not after rollout."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="ngcm + aifs",
+            obs_dataset_id=obs_id,
+            model_ids=[ngcm_id, aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.create_forecast_for_user(
+            job_submission.ForecastCreate(blend_id=blend.id, forecast_model_ids=["aifs"]),
+            user_id,
+        )
+    assert exc.value.status_code == 400
+    assert "no live forecast model" in exc.value.detail
+    assert "neuralgcm" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (["aifs", "neuralgcm"], ["neuralgcm"]),
+        (["ngcm", "ifs", "fuxi_s2s", "aifs_daily"], ["aifs_daily", "fuxi_s2s", "ifs", "ngcm"]),
+        (["aifs", "aifs_single_v2", "graphcast", "fuxi"], []),
+    ],
+)
+def test_models_without_live_forecast(names: list[str], expected: list[str]) -> None:
+    """Guards the alias normalization: no blendable-only model may accidentally
+    resolve to a live forecast registry entry (and vice versa)."""
+    assert job_submission.models_without_live_forecast(names) == expected
+
+
+@pytest.mark.asyncio
 async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub_runner) -> None:
     from fastapi import HTTPException
 
@@ -126,3 +266,101 @@ async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub
             user_id,
         )
     assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"start_year": 1990, "end_year": 2020}, (1990, 2020)),
+        ({"start_year": "1990", "end_year": "2020"}, (1990, 2020)),
+        ({"start_year": "unknown", "end_year": 2020}, (None, 2020)),
+        ({"start_year": {"a": 1}, "end_year": 2020}, (None, 2020)),
+        ({"start_year": True, "end_year": 2020}, (None, 2020)),
+        ({}, (None, None)),
+    ],
+)
+def test_source_year_range_parses_registered_years(
+    metadata: dict, expected: tuple[int | None, int | None]
+) -> None:
+    """Source metadata is a free-form caller-supplied dict, so a year that isn't
+    one must read as unregistered rather than reaching the coverage arithmetic
+    and 500ing."""
+    assert job_submission.source_year_range({"metadata": metadata}) == expected
+
+
+@pytest.mark.asyncio
+async def test_create_blend_hides_another_users_private_obs_source(
+    client, user_id: str, _stub_runner
+) -> None:
+    """An obs source id is not a capability: the coverage error would otherwise
+    disclose a private source's registered years to anyone holding its id."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "Someone else's ERA5", "gs://data/obs/india", (1990, 2024))
+    gencast_id = await _seed_source("model", "GenCast", "gs://data/models/gencast", (2000, 2024))
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "UPDATE data_sources SET owner_id = 'another-user', visibility = 'private' "
+                "WHERE id = :id"
+            ),
+            {"id": obs_id},
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await create_blend_for_user(
+            BlendCreate(
+                name="peek",
+                obs_dataset_id=obs_id,
+                model_ids=[gencast_id],
+                params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+            ),
+            user_id,
+        )
+    assert exc.value.status_code == 404
+    assert "1990" not in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("spec", ["0:99999999", "1:2024", "2019:99999", "-5:5"])
+def test_parse_year_spec_rejects_years_outside_the_calendar(spec: str) -> None:
+    """A range spec expands into a list before anything else validates it, so an
+    absurd bound must fail parsing rather than allocate."""
+    with pytest.raises(ValueError, match="year out of range"):
+        job_submission._parse_year_spec(spec)
+
+
+def test_parse_year_spec_accepts_a_normal_range() -> None:
+    assert job_submission._parse_year_spec("2019:2021") == [2019, 2020, 2021]
+
+
+@pytest.mark.asyncio
+async def test_not_ready_shared_source_does_not_disclose_its_path(
+    client, user_id: str, _stub_runner
+) -> None:
+    """A registration failure names the source's gs:// path, so only its owner
+    sees the real reason -- a shared source just reports not-ready."""
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "Shared ERA5", "gs://private-bucket/obs/india")
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "UPDATE data_sources SET owner_id = 'another-user', visibility = 'shared', "
+                "status = 'invalid', validation_error = :err WHERE id = :id"
+            ),
+            {
+                "id": obs_id,
+                "err": "No files match '*.nc' under gs://private-bucket/obs/india.",
+            },
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission._resolve_obs_dir(obs_id, None, user_id)
+
+    assert exc.value.status_code == 409
+    assert "private-bucket" not in str(exc.value.detail)
+    assert exc.value.detail == "Observation source is not ready"

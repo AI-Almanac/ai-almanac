@@ -110,5 +110,5 @@ export const OVERALL_METRIC_ORDER = [
  * for display.
  */
 export const EXTRA_METRIC_LABELS: Record<string, string> = {
-	auc_ref: 'Area Under ROC Curve (climatology)'
+	auc_ref: 'Area Under ROC Curve (Traditional Climatology)'
 };

@@ -120,6 +120,13 @@
 					<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
 				</div>
 			{/if}
+			{#if approval.validation?.warnings?.length}
+				<ul class="approval-warnings">
+					{#each approval.validation.warnings as warning (warning)}
+						<li>{warning}</li>
+					{/each}
+				</ul>
+			{/if}
 		</div>
 	{/if}
 
@@ -429,6 +436,18 @@
 		display: flex;
 		gap: 0.5rem;
 		margin-top: 0.25rem;
+	}
+	.approval-warnings {
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border: 1px solid var(--color-status-running);
+		border-radius: 0.45rem;
+		margin: 0;
+		padding: 0.6rem 0.75rem 0.6rem 1.5rem;
+		font-size: 0.8rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
 	}
 	.approval-run {
 		border: 0;
