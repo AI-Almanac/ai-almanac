@@ -18,6 +18,7 @@
 		type RompDefaults
 	} from '$lib/api';
 	import { EVENT_TYPES } from '$lib/data/event-types';
+	import { modelDisplayName } from '$lib/model-names';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 
@@ -97,17 +98,6 @@
 		const runId = jobs[0]?.run_id ?? store.selectedGroupKey;
 		if (!runId) return;
 		store.acceptSubmittedJobs(runId, jobs);
-	}
-
-	function modelDisplayName(modelName: string): string {
-		const labels: Record<string, string> = {
-			fuxi: 'FuXi',
-			aifs: 'AIFS',
-			aifs_daily: 'AIFS Daily',
-			fuxi_s2s: 'FuXi S2S',
-			climatology: 'Traditional Climatology'
-		};
-		return labels[modelName.toLowerCase()] ?? modelName;
 	}
 
 	function eventTypeName(eventType: string): string {

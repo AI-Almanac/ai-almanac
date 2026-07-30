@@ -1,4 +1,8 @@
+import { modelDisplayName } from '$lib/model-names';
+
 import type { MapViewMode, RunDef } from './types';
+
+export { modelDisplayName };
 
 export function isHigherBetterMetric(metricValue: string): boolean {
 	return metricValue === 'acc';
@@ -6,17 +10,6 @@ export function isHigherBetterMetric(metricValue: string): boolean {
 
 export function isNeutralDeltaMetric(metricValue: string): boolean {
 	return metricValue === 'bias';
-}
-
-export function modelDisplayName(modelName: string) {
-	const labels: Record<string, string> = {
-		fuxi: 'FuXi',
-		aifs: 'AIFS',
-		aifs_daily: 'AIFS Daily',
-		fuxi_s2s: 'FuXi S2S',
-		climatology: 'Traditional Climatology'
-	};
-	return labels[modelName.toLowerCase()] ?? modelName;
 }
 
 export function modelRunLabel(run: RunDef) {
