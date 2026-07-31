@@ -190,6 +190,7 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
         missing_fields=missing,
         errors=errors,
         warnings=warnings,
+        finding_keys=guardrails.finding_keys(findings),
     )
 
 

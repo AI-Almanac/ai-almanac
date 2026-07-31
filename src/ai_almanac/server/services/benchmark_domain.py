@@ -338,6 +338,7 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
         missing_fields=missing,
         errors=errors,
         warnings=warnings,
+        finding_keys=guardrails.finding_keys(findings),
     )
 
 

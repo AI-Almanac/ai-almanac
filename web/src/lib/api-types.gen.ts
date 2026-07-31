@@ -331,6 +331,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/sessions/{session_id}/turns/{turn_id}/rating": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rate Chat Turn
+         * @description Rate one assistant turn.
+         *
+         *     Open to any authenticated user for their own conversation — rating your own
+         *     turn is not a privileged action, and the write is scoped by user_id. The
+         *     thumbs are only *rendered* for admins today, so opening the sample wider is a
+         *     UI change rather than an API one.
+         */
+        post: operations["rate_chat_turn_chat_sessions__session_id__turns__turn_id__rating_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/figures/{figure_id}": {
         parameters: {
             query?: never;
@@ -1837,6 +1862,8 @@ export interface components {
             errors?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
         };
         /** BlendApprovalIn */
         BlendApprovalIn: {
@@ -2083,6 +2110,8 @@ export interface components {
             errors?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
         };
         /**
          * BoundingBox
@@ -4164,6 +4193,19 @@ export interface components {
             /** Deny */
             deny?: string[];
         };
+        /**
+         * TurnRatingIn
+         * @description A thumbs up/down on one assistant turn.
+         */
+        TurnRatingIn: {
+            /**
+             * Value
+             * @enum {integer}
+             */
+            value: -1 | 1;
+            /** Note */
+            note?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -4946,6 +4988,40 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rate_chat_turn_chat_sessions__session_id__turns__turn_id__rating_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                turn_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnRatingIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

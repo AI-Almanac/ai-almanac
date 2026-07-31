@@ -16,10 +16,11 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import ToolDenied
 from sqlalchemy import text
 
@@ -68,6 +69,7 @@ from ..services.chat_turns import (
 from ..services.llm import llm_is_configured
 from ..services.llm_profiles import chat_available_for_user
 from ..services.storage import get_storage, guess_chat_figure_media_type
+from ..services.turn_log import rate_turn
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -123,6 +125,13 @@ class SessionDetail(SessionOut):
 class MessageIn(BaseModel):
     content: str
     scope: ChatScope | None = None
+
+
+class TurnRatingIn(BaseModel):
+    """A thumbs up/down on one assistant turn."""
+
+    value: Literal[-1, 1]
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class SessionUpdate(BaseModel):
@@ -578,6 +587,24 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post(
+    "/sessions/{session_id}/turns/{turn_id}/rating", status_code=status.HTTP_204_NO_CONTENT
+)
+async def rate_chat_turn(
+    session_id: str, turn_id: str, body: TurnRatingIn, user: CurrentUser
+) -> None:
+    """Rate one assistant turn.
+
+    Open to any authenticated user for their own conversation — rating your own
+    turn is not a privileged action, and the write is scoped by user_id. The
+    thumbs are only *rendered* for admins today, so opening the sample wider is a
+    UI change rather than an API one.
+    """
+    rated = await rate_turn(session_id, turn_id, user.id, body.value, body.note)
+    if not rated:
+        raise HTTPException(status_code=404, detail="Turn not found")
 
 
 async def _serve_chat_figure(figure_id: str, user_id: str):

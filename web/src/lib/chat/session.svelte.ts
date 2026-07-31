@@ -338,7 +338,8 @@ export class ChatSessionState {
 					{
 						tool_call_id: event.tool_call_id,
 						errors: event.errors,
-						warnings: event.warnings
+						warnings: event.warnings,
+						finding_keys: event.finding_keys
 					}
 				]
 			};

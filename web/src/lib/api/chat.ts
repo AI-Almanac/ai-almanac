@@ -100,6 +100,8 @@ export type GuardrailNotice = {
 	tool_call_id?: string | null;
 	errors: string[];
 	warnings: string[];
+	/** Stable rule ids behind the messages, for keying UI and telemetry. */
+	finding_keys?: string[];
 };
 
 export type ChatMessage = {
@@ -153,6 +155,7 @@ export type ChatEvent =
 			tool_call_id: string;
 			errors: string[];
 			warnings: string[];
+			finding_keys: string[];
 	  }
 	| {
 			type: 'tool_approval_request';
@@ -377,4 +380,20 @@ export async function* sendChatMessage(
 	if (!sawTerminalEvent) {
 		throw new Error('Chat stream ended before a terminal event was received.');
 	}
+}
+
+/**
+ * Rate one assistant turn. Feeds the per-turn log so ruleset changes can be
+ * compared on something other than impressions.
+ */
+export async function rateChatTurn(
+	sessionId: string,
+	turnId: string,
+	value: 1 | -1,
+	note?: string
+): Promise<void> {
+	await request<void>(
+		`/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/rating`,
+		{ method: 'POST', body: JSON.stringify({ value, note: note ?? null }) }
+	);
 }

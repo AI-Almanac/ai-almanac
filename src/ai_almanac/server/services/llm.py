@@ -58,6 +58,7 @@ from .chat_state import (
     utc_now,
 )
 from .rulesets import Ruleset
+from .turn_log import TurnRecord, record_turn
 
 _SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
 _SUPPORTED_LLM_PROVIDERS = {"openai-compatible", "pydantic-ai"}
@@ -526,6 +527,7 @@ def _guardrail_event(turn_id: str, tool_call_id: str, parsed_result: object) -> 
     warnings = [item for item in validation.get("warnings") or [] if isinstance(item, str)]
     if not errors and not warnings:
         return None
+    keys = [item for item in validation.get("finding_keys") or [] if isinstance(item, str)]
     return json.dumps(
         {
             "type": "guardrail",
@@ -533,6 +535,7 @@ def _guardrail_event(turn_id: str, tool_call_id: str, parsed_result: object) -> 
             "tool_call_id": tool_call_id,
             "errors": errors,
             "warnings": warnings,
+            "finding_keys": keys,
         }
     )
 
@@ -571,10 +574,20 @@ async def stream_response(
     latest_user_message: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
+    comparison_id: str | None = None,
 ) -> AsyncIterator[str]:
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None
+    # Filled in by the inner generator as the turn streams, written once here so
+    # the log lands on the failure path too — a turn that errored is exactly the
+    # kind a ruleset comparison needs to count.
+    record = TurnRecord(
+        session_id=session_id,
+        user_id=user_id,
+        scope_kind=session_scope.kind,
+        comparison_id=comparison_id,
+    )
     try:
         async for event in _stream_response_unlimited(
             message_history,
@@ -584,6 +597,7 @@ async def stream_response(
             latest_user_message=latest_user_message,
             deferred_tool_results=deferred_tool_results,
             active_ruleset=active_ruleset,
+            record=record,
         ):
             yield event
     except Exception as exc:
@@ -594,6 +608,10 @@ async def stream_response(
         from ai_almanac.server.db import get_db
         from ai_almanac.server.services.events import usage
 
+        record.latency_ms = int((time.perf_counter() - started) * 1000)
+        record.failure_category = failure_category
+        await record_turn(record)
+
         async with get_db() as conn:
             await usage(
                 conn,
@@ -603,7 +621,7 @@ async def stream_response(
                 resource_id=session_id,
                 quantity=1,
                 metadata={
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "latency_ms": record.latency_ms,
                     "failure_category": failure_category,
                 },
             )
@@ -618,6 +636,7 @@ async def _stream_response_unlimited(
     latest_user_message: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
+    record: TurnRecord | None = None,
 ) -> AsyncIterator[str]:
     """
     Run one turn of the conversation, yielding SSE-formatted data lines.
@@ -668,6 +687,13 @@ async def _stream_response_unlimited(
         model = ruleset.model
     agent = _build_agent(session_scope, ruleset, model)
     turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
+    if record is not None:
+        record.turn_id = turn.id
+        record.ruleset_id = ruleset.id
+        record.ruleset_version = ruleset.version
+        record.model_name = getattr(model, "model_name", None) or (
+            model if isinstance(model, str) else settings.llm_model
+        )
     tool_calls_by_id: dict[str, ChatToolCall] = {}
     final_output: str | None = None
     final_messages: list[ModelMessage] = message_history
@@ -724,6 +750,8 @@ async def _stream_response_unlimited(
             )
             tool_calls_by_id[tool_call.id] = tool_call
             turn.tool_calls.append(tool_call)
+            if record is not None:
+                record.tool_calls.append(tool_call.name)
             yield json.dumps(
                 {
                     "type": "tool_call",
@@ -774,6 +802,8 @@ async def _stream_response_unlimited(
             guardrail_event = _guardrail_event(turn.id, tool_call_id, parsed_result)
             if guardrail_event is not None:
                 yield guardrail_event
+                if record is not None:
+                    record.guardrail_keys.extend(json.loads(guardrail_event)["finding_keys"])
             if isinstance(parsed_result, dict) and parsed_result.get("benchmark_config"):
                 if parsed_result.get("approval_required"):
                     yield json.dumps(
@@ -824,6 +854,13 @@ async def _stream_response_unlimited(
         if isinstance(event, AgentRunResultEvent):
             output = event.result.output
             final_messages = event.result.all_messages()
+            if record is not None:
+                # `.usage` is the RunUsage itself on this result type, not a
+                # method as it is on AgentRunResult.
+                usage_totals = event.result.usage
+                record.input_tokens = getattr(usage_totals, "input_tokens", None)
+                record.output_tokens = getattr(usage_totals, "output_tokens", None)
+                record.requests = getattr(usage_totals, "requests", None)
             if isinstance(output, str):
                 final_output = output
             elif isinstance(output, DeferredToolRequests):
@@ -869,6 +906,8 @@ async def _stream_response_unlimited(
         yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": final_output})
 
     turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
+    if record is not None:
+        record.text = turn.content
     yield json.dumps(
         {
             "type": "done",

@@ -2,6 +2,8 @@
 	import { tick } from 'svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { codeForToolCall, copyCode, formatToolName, renderMarkdown } from '$lib/chat/format';
+	import { rateChatTurn } from '$lib/api';
+	import { account } from '$lib/account.svelte';
 
 	interface Props {
 		chat: ChatSessionState;
@@ -15,6 +17,26 @@
 
 	let messagesEl = $state<HTMLElement | null>(null);
 	let shownCode = $state<Set<string>>(new Set());
+	let ratings = $state<Record<string, 1 | -1>>({});
+
+	// Admin-only for now: the rating feeds the assistant turn log, and the
+	// sample is being gathered deliberately before it is opened to everyone.
+	// Widening it is this one condition.
+	const canRate = $derived(account.isAdmin);
+
+	async function rate(turnId: string, value: 1 | -1) {
+		const sessionId = chat.sessionId;
+		if (!sessionId || ratings[turnId] === value) return;
+		ratings = { ...ratings, [turnId]: value };
+		try {
+			await rateChatTurn(sessionId, turnId, value);
+		} catch {
+			// A rating is telemetry, not the user's work — drop the optimistic
+			// mark rather than interrupting the conversation with an error.
+			const { [turnId]: _dropped, ...rest } = ratings;
+			ratings = rest;
+		}
+	}
 
 	function toggleCode(key: string) {
 		const next = new Set(shownCode);
@@ -91,6 +113,24 @@
 					</button>
 				{/each}
 			{/each}
+
+			{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
+				<div class="rating">
+					<span class="rating-label">Was this useful?</span>
+					<button
+						class="rating-btn"
+						class:chosen={ratings[msg.id] === 1}
+						aria-label="Helpful"
+						onclick={() => void rate(msg.id, 1)}>&#128077;</button
+					>
+					<button
+						class="rating-btn"
+						class:chosen={ratings[msg.id] === -1}
+						aria-label="Not helpful"
+						onclick={() => void rate(msg.id, -1)}>&#128078;</button
+					>
+				</div>
+			{/if}
 
 			<!--
 				Rendered from the backend's guardrail events, not from the assistant's
@@ -476,6 +516,27 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
+	}
+	.rating {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+	}
+	.rating-btn {
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 0.3rem;
+		cursor: pointer;
+		padding: 0.1rem 0.25rem;
+		font-size: 0.8rem;
+		opacity: 0.55;
+	}
+	.rating-btn:hover,
+	.rating-btn.chosen {
+		opacity: 1;
+		border-color: var(--color-border);
 	}
 	.guardrail {
 		border-radius: 0.45rem;

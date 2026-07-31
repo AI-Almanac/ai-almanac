@@ -105,6 +105,24 @@ def warning_messages(findings: Iterable[Finding]) -> list[str]:
     return [f.message for f in findings if f.severity == "warning"]
 
 
+def finding_keys(findings: Iterable[Finding]) -> list[str]:
+    return [f.key for f in findings]
+
+
+# Words that count as the assistant having engaged with a finding, keyed by
+# rule. Used only to *measure* whether the model explained a caution the
+# platform already showed the user — never to decide whether to show it. A miss
+# here costs a slightly pessimistic metric, not a missing warning.
+ACKNOWLEDGEMENT_TERMS: dict[str, tuple[str, ...]] = {
+    "true_holdout_overlap": ("holdout",),
+    "training_years_below_minimum": ("training year", "generali"),
+    "blend_members_at_risk": ("overfit",),
+    "small_test_sample": ("small sample", "noisy", "noise", "few years", "sample size"),
+    "presatellite_years": ("pre-satellite", "presatellite", "satellite era", "era5"),
+    "in_sample_climatology": ("climatology", "in-sample", "in sample"),
+}
+
+
 @dataclass(frozen=True)
 class BlendYears:
     """A blend's four year sets, already parsed to concrete years."""
