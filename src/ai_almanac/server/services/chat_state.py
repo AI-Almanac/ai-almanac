@@ -43,6 +43,9 @@ class GuardrailNotice(BaseModel):
     tool_call_id: str | None = None
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Stable rule ids behind the messages, so the UI and the turn log can key on
+    # the rule rather than on its wording.
+    finding_keys: list[str] = Field(default_factory=list)
 
 
 class ChatTurn(BaseModel):

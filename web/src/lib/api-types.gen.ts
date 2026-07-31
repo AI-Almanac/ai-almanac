@@ -2891,6 +2891,8 @@ export interface components {
             errors?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
         };
         /**
          * GuardrailThresholds

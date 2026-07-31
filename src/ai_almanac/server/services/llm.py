@@ -54,6 +54,7 @@ from .chat_state import (
     ChatScope,
     ChatToolCall,
     ChatTurn,
+    GuardrailNotice,
     new_turn_id,
     utc_now,
 )
@@ -802,8 +803,21 @@ async def _stream_response_unlimited(
             guardrail_event = _guardrail_event(turn.id, tool_call_id, parsed_result)
             if guardrail_event is not None:
                 yield guardrail_event
+                payload = json.loads(guardrail_event)
+                # Also record it on the turn itself. The `done` event ships this
+                # turn as the persisted one, so a finding left only on the SSE
+                # stream would render live and then vanish the moment the turn
+                # was replaced — and be gone entirely on reload.
+                turn.guardrails.append(
+                    GuardrailNotice(
+                        tool_call_id=tool_call_id,
+                        errors=payload["errors"],
+                        warnings=payload["warnings"],
+                        finding_keys=payload["finding_keys"],
+                    )
+                )
                 if record is not None:
-                    record.guardrail_keys.extend(json.loads(guardrail_event)["finding_keys"])
+                    record.guardrail_keys.extend(payload["finding_keys"])
             if isinstance(parsed_result, dict) and parsed_result.get("benchmark_config"):
                 if parsed_result.get("approval_required"):
                     yield json.dumps(

@@ -363,3 +363,45 @@ async def test_a_failed_turn_is_still_recorded(monkeypatch: pytest.MonkeyPatch) 
     # No turn id was ever assigned (the agent never got built), so nothing is
     # attributable and nothing is written — the usage event still records it.
     assert row is None
+
+
+@pytest.mark.asyncio
+async def test_guardrails_survive_onto_the_persisted_turn() -> None:
+    """The `done` event ships llm.py's turn as the one that gets stored, so a
+    finding left only on the SSE stream renders live and then vanishes the
+    instant the streaming turn is replaced — and is gone after a reload.
+    """
+    from ai_almanac.server.services.chat_state import ChatTurn, utc_now
+    from ai_almanac.server.services.llm import _guardrail_event
+
+    turn = ChatTurn(id="t", role="assistant", created_at=utc_now())
+    event = json.loads(
+        _guardrail_event(
+            turn.id,
+            "call-1",
+            {
+                "blend_validation": {
+                    "errors": [],
+                    "warnings": ["Blending 3 models risks overfitting."],
+                    "finding_keys": ["blend_members_at_risk"],
+                }
+            },
+        )
+    )
+
+    # What the stream loop does with it.
+    from ai_almanac.server.services.chat_state import GuardrailNotice
+
+    turn.guardrails.append(
+        GuardrailNotice(
+            tool_call_id="call-1",
+            errors=event["errors"],
+            warnings=event["warnings"],
+            finding_keys=event["finding_keys"],
+        )
+    )
+
+    # The `done` payload is this turn, and it must still carry the finding.
+    dumped = turn.model_dump(mode="json")
+    assert dumped["guardrails"][0]["warnings"] == ["Blending 3 models risks overfitting."]
+    assert dumped["guardrails"][0]["finding_keys"] == ["blend_members_at_risk"]

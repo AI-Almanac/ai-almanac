@@ -156,9 +156,7 @@
 			{#if isShared}
 				<p class="lede">
 					Application configuration. Deployment-level settings (database, identity, storage) are
-					managed by the environment and shown read-only. The AI assistant has its own
-					<a href="/settings/ai">settings page</a>, and its rules and prompt live under
-					<a href="/settings/assistant">assistant behavior</a>.
+					managed by the environment and shown read-only.
 				</p>
 			{:else}
 				<p class="lede">
@@ -167,6 +165,11 @@
 					variables still override values set here.
 				</p>
 			{/if}
+			<!-- Outside the shared/local branch: both deployments have an assistant. -->
+			<nav class="sub-links">
+				<a href="/settings/ai">AI provider &amp; keys</a>
+				<a href="/settings/assistant">Assistant behavior</a>
+			</nav>
 		</header>
 
 		{#if error}
@@ -292,6 +295,18 @@
 </AdminGuard>
 
 <style>
+	.sub-links {
+		display: flex;
+		gap: 1rem;
+		flex-wrap: wrap;
+		margin-top: 0.5rem;
+		font-size: 0.85rem;
+	}
+	.sub-links a {
+		color: var(--color-accent);
+		font-weight: 600;
+	}
+
 	.wrap {
 		width: min(100% - 2rem, 64rem);
 		margin: 2.5rem auto 4rem;

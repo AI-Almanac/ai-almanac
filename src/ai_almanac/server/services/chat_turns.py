@@ -134,6 +134,9 @@ def _apply_stream_event(turn: ChatTurn, data: dict) -> None:
                 tool_call_id=data.get("tool_call_id"),
                 errors=[item for item in data.get("errors") or [] if isinstance(item, str)],
                 warnings=[item for item in data.get("warnings") or [] if isinstance(item, str)],
+                finding_keys=[
+                    item for item in data.get("finding_keys") or [] if isinstance(item, str)
+                ],
             )
         )
         return
