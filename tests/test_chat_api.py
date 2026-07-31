@@ -373,6 +373,7 @@ async def test_trim_chat_history_limits_messages_and_tool_payloads(
 async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from ai_almanac.server.services import rulesets
     from ai_almanac.server.services.chat_state import ChatScope
     from ai_almanac.server.services.llm import ChatDeps, _build_agent
 
@@ -384,7 +385,7 @@ async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
         title="Group 1",
         job_ids=[],
     )
-    agent = _build_agent(scope)
+    agent = _build_agent(scope, rulesets.packaged_ruleset("builtin"))
 
     with agent.override(model=model):
         result = await agent.run(
@@ -943,3 +944,59 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
     assert result["artifacts"][0]["id"] == "artifact-1"
     assert result["artifacts"][0]["label"] == "Plot"
     assert result["artifacts"][0]["filename"] == "plot.webp"
+
+
+@pytest.mark.asyncio
+async def test_a_ruleset_model_pin_does_not_override_a_users_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ruleset decides wording, never whose API key pays for the turn.
+
+    Pinning a model is how a comparison runs two models under one policy. If the
+    pin bypassed profile resolution, a shared-deployment user who chose "use my
+    own key" would have their prompts silently sent through the host's provider.
+    """
+    from ai_almanac.server.services import llm, llm_profiles, rulesets
+    from ai_almanac.server.services.chat_state import ChatScope
+
+    resolved: list[str] = []
+
+    async def fake_resolve(user_id: str):
+        resolved.append(user_id)
+        return llm_profiles.ResolvedLLMProfile(
+            provider_type="openai-compatible",
+            base_url="http://user-choice.local",
+            model_name="user-picked-model",
+            api_key="user-key",
+        )
+
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+    monkeypatch.setattr(llm_profiles, "resolve_llm_for_user", fake_resolve)
+
+    built: dict = {}
+    real_build_agent = llm._build_agent
+
+    def capture(scope, ruleset, model=None):
+        built["model"] = model
+        return real_build_agent(scope, ruleset, TestModel(call_tools=[], custom_output_text="ok"))
+
+    monkeypatch.setattr(llm, "_build_agent", capture)
+
+    pinned = rulesets.packaged_ruleset("builtin").model_copy(update={"model": "pinned-model"})
+    scope = ChatScope(kind="benchmark_run_group", key="group-1", title="G", job_ids=[])
+
+    events = [
+        json.loads(event)
+        async for event in llm.stream_response(
+            [], "user-1", "session-1", scope, latest_user_message="hi", active_ruleset=pinned
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    # The user's profile was consulted despite the pin...
+    assert resolved == ["user-1"]
+    # ...and the pin only swapped the model name onto that resolved provider,
+    # so the credentials in play are still the user's.
+    model = built["model"]
+    assert model.model_name == "pinned-model"
+    assert "user-choice.local" in str(model.client.base_url)

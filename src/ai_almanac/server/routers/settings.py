@@ -22,7 +22,6 @@ from pydantic import BaseModel
 
 from ai_almanac.paths import config_yaml_path
 from ai_almanac.server.auth import AdminUser
-from ai_almanac.server.services.llm import SYSTEM_PROMPT
 from ai_almanac.settings import (
     LOCAL_ONLY_FIELDS,
     RESTART_REQUIRED_FIELDS,
@@ -97,15 +96,34 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Tool output limit",
                 "Max characters of tool output forwarded to the assistant",
             ),
+        ],
+    ),
+    (
+        # Thresholds the platform enforces. Shared by the submission chokepoint,
+        # the validation display, and the assistant's prompt prose, so the number
+        # shown here is the number that will be applied — see
+        # services.guardrails.current().
+        "Assistant guardrails",
+        [
             (
-                "llm_code_context_max_chars",
-                "Code context limit",
-                "Max characters of code context included per request",
+                "guardrail_min_training_years",
+                "Minimum training years",
+                "Below this many blend training years, warn that the fitted weights will not generalize",
             ),
             (
-                "chat_system_prompt",
-                "System prompt",
-                "Instructions given to the assistant before every conversation. Leave empty to use the built-in default.",
+                "guardrail_blend_member_warn",
+                "Blend member warning threshold",
+                "Warn about overfitting at this many blend members or more",
+            ),
+            (
+                "guardrail_small_sample_years",
+                "Small-sample threshold",
+                "Below this many scored years, warn that differences are dominated by noise",
+            ),
+            (
+                "guardrail_presatellite_end_year",
+                "Pre-satellite era ends",
+                "Last year for which ERA5 initial conditions are treated as less reliable",
             ),
         ],
     ),
@@ -178,11 +196,12 @@ _SCHEMA_FIELDS: frozenset[str] = frozenset(
 
 # Long free-text fields the UI renders as a textarea (in a collapsible section)
 # instead of a single-line input.
-MULTILINE_FIELDS: frozenset[str] = frozenset({"chat_system_prompt"})
+MULTILINE_FIELDS: frozenset[str] = frozenset()
 
-# Field name -> effective value to show when the override is unset, so the UI
-# displays the built-in prompt instead of a blank box.
-_LIVE_DEFAULTS: dict[str, Any] = {"chat_system_prompt": SYSTEM_PROMPT}
+# Field name -> effective value to show when the override is unset. The assistant
+# prompt used to live here as one big textarea; it is now edited section by
+# section as an assistant ruleset (services/rulesets.py).
+_LIVE_DEFAULTS: dict[str, Any] = {}
 
 
 class FieldSchema(BaseModel):

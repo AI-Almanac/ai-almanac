@@ -4,6 +4,121 @@
  */
 
 export interface paths {
+    "/assistant/rulesets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Rulesets */
+        get: operations["list_rulesets_assistant_rulesets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Guardrails */
+        get: operations["read_guardrails_assistant_guardrails_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Ruleset */
+        get: operations["read_ruleset_assistant_rulesets__ruleset_id__get"];
+        /** Save Ruleset */
+        put: operations["save_ruleset_assistant_rulesets__ruleset_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Ruleset
+         * @description Copy a ruleset to a new id, one version up.
+         *
+         *     Cloning rather than editing in place keeps the wording that produced the
+         *     transcripts already logged against the old version.
+         */
+        post: operations["clone_ruleset_assistant_rulesets__ruleset_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate Ruleset */
+        post: operations["activate_ruleset_assistant_rulesets__ruleset_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Ruleset
+         * @description The exact system prompt this ruleset produces, for one scope kind.
+         *
+         *     Rendered through the same function the chat path uses, so an unresolved
+         *     ``{{placeholder}}`` or a section left disabled is visible before activating.
+         */
+        post: operations["preview_ruleset_assistant_rulesets__ruleset_id__preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/me": {
         parameters: {
             query?: never;
@@ -2748,6 +2863,26 @@ export interface components {
             /** Warnings */
             warnings?: string[];
         };
+        /**
+         * GuardrailThresholds
+         * @description The enforced thresholds, read-only here.
+         *
+         *     Surfaced so an admin editing prose can see the numbers the {{placeholders}}
+         *     will resolve to. Editing them is a platform setting (PATCH /settings), not a
+         *     ruleset edit, because the submission chokepoint reads the same value.
+         */
+        GuardrailThresholds: {
+            /** Min Onset Years */
+            min_onset_years: number;
+            /** Min Training Years */
+            min_training_years: number;
+            /** Blend Member Warn */
+            blend_member_warn: number;
+            /** Small Sample Years */
+            small_sample_years: number;
+            /** Presatellite End Year */
+            presatellite_end_year: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3210,6 +3345,23 @@ export interface components {
             /** Preference */
             preference: string;
         };
+        /** PreviewRequest */
+        PreviewRequest: {
+            /**
+             * Scope Kind
+             * @default blend_setup
+             */
+            scope_kind: string;
+        };
+        /** PreviewResult */
+        PreviewResult: {
+            /** Scope Kind */
+            scope_kind: string;
+            /** Instructions */
+            instructions: string;
+            /** Character Count */
+            character_count: number;
+        };
         /** ProfileIn */
         ProfileIn: {
             /** Provider Id */
@@ -3252,6 +3404,33 @@ export interface components {
             model_name?: string | null;
             /** Api Key */
             api_key?: string | null;
+        };
+        /**
+         * PromptSection
+         * @description One toggleable block of the system prompt.
+         */
+        PromptSection: {
+            /** Key */
+            key: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Body */
+            body: string;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Scope Kinds */
+            scope_kinds?: string[];
         };
         /**
          * Properties
@@ -3503,6 +3682,77 @@ export interface components {
             ref_model_dir?: string | null;
             /** Thresh File */
             thresh_file?: string | null;
+        };
+        /** RulesetDetail */
+        RulesetDetail: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /** Source */
+            source: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Prompt Sections */
+            prompt_sections: components["schemas"]["PromptSection"][];
+            tool_policy: components["schemas"]["ToolPolicy"];
+            /** Model */
+            model: string | null;
+            /** Model Settings */
+            model_settings: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** RulesetSave */
+        RulesetSave: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** Prompt Sections */
+            prompt_sections: components["schemas"]["PromptSection"][];
+            tool_policy?: components["schemas"]["ToolPolicy"];
+            /** Model */
+            model?: string | null;
+            /** Model Settings */
+            model_settings?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** RulesetSummary */
+        RulesetSummary: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /** Source */
+            source: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Section Keys */
+            section_keys: string[];
+            /** Denied Tools */
+            denied_tools: string[];
+            /** Model */
+            model: string | null;
         };
         /** SessionCreate */
         SessionCreate: {
@@ -3903,6 +4153,17 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /**
+         * ToolPolicy
+         * @description Tools withheld from the assistant.
+         *
+         *     Applied at registration, so a denied tool has no schema entry and there is
+         *     nothing for the model to attempt.
+         */
+        ToolPolicy: {
+            /** Deny */
+            deny?: string[];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -3994,6 +4255,213 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_rulesets_assistant_rulesets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"][];
+                };
+            };
+        };
+    };
+    read_guardrails_assistant_guardrails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailThresholds"];
+                };
+            };
+        };
+    };
+    read_ruleset_assistant_rulesets__ruleset_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_ruleset_assistant_rulesets__ruleset_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulesetSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_ruleset_assistant_rulesets__ruleset_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulesetSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_ruleset_assistant_rulesets__ruleset_id__activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ruleset_assistant_rulesets__ruleset_id__preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     me_auth_me_get: {
         parameters: {
             query?: never;

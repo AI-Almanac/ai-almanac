@@ -24,7 +24,7 @@ same user one ``curl`` away from the same bad configuration.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 Severity = Literal["error", "warning"]
@@ -58,6 +58,30 @@ class Guardrails:
 
 
 DEFAULT_GUARDRAILS = Guardrails()
+
+
+def current() -> Guardrails:
+    """The thresholds in force, from the settings overlay.
+
+    Deliberately *not* a field on the assistant ruleset. These numbers decide
+    what the platform accepts, so they must be one value shared by the
+    chokepoint, the validation display, and the prompt prose. Hanging them off
+    the ruleset would let an admin relax the wording while enforcement kept the
+    old number — the drift this whole design exists to remove.
+
+    ``settings`` is the hot-reloaded singleton, so an admin edit takes effect on
+    the next submission with no restart and no extra query.
+    """
+    from ai_almanac.settings import settings
+
+    overrides = {
+        field: value
+        for field in Guardrails.__dataclass_fields__
+        if isinstance(value := getattr(settings, f"guardrail_{field}", None), int)
+        and not isinstance(value, bool)
+        and value > 0
+    }
+    return replace(DEFAULT_GUARDRAILS, **overrides) if overrides else DEFAULT_GUARDRAILS
 
 
 @dataclass(frozen=True)

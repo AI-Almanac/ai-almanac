@@ -578,7 +578,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     # checked here cannot be talked past in conversation or skipped with a direct
     # API call. The chat path also surfaces these findings before submitting (see
     # blend_domain._validation_for_config); this is what actually enforces them.
-    findings = guardrails.check_blend(blend_years(body.params), len(model_names))
+    findings = guardrails.check_blend(
+        blend_years(body.params), len(model_names), guardrails.current()
+    )
     guardrail_errors = guardrails.error_messages(findings)
     if guardrail_errors:
         raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))

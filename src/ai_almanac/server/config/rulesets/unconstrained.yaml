@@ -1,0 +1,30 @@
+# The control arm for assistant comparisons. Never the active default.
+#
+# Strips the domain vocabulary, the statistical interpretation caveats, the
+# tool-usage rules and the output style, keeping the same tools. Its purpose is
+# to answer, with data rather than conviction, how much of the assistant's
+# usefulness comes from the ruleset.
+#
+# It is safe to run precisely because a ruleset enforces nothing. The guardrails
+# in services.guardrails still block a leaked holdout, and the platform still
+# emits every warning banner, under this ruleset exactly as under `builtin`.
+# Phase 5's eval suite asserts that: the set of created jobs, raised errors and
+# emitted guardrail events must be identical between the two, and only the
+# explanation quality may differ. If that ever diverges, a rule leaked into the
+# prompt that belonged in code.
+#
+# Note there is no `caveats` section here. `required: true` stops an admin
+# editing a ruleset from dropping its cautions by accident; it does not stop us
+# authoring a deliberate control arm that never had them.
+id: unconstrained
+name: Unconstrained (comparison control)
+description: >-
+  No domain rules, no statistical caveats, no output style — same tools. Used
+  side by side with a constrained ruleset to measure what the rules are worth.
+version: 1
+prompt_sections:
+  - key: minimal
+    title: Minimal instruction
+    body: |-
+      You are an assistant for a benchmarking platform for AI weather and climate models.
+      Answer the user's questions. Use the available tools to read benchmark and blend data.

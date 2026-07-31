@@ -327,7 +327,7 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
             ):
                 errors.append(f"{model_id}: start_year_clim must be before end_year_clim")
 
-    findings = guardrails.check_benchmark(_model_windows(spec, model_map))
+    findings = guardrails.check_benchmark(_model_windows(spec, model_map), guardrails.current())
     errors.extend(guardrails.error_messages(findings))
     warnings.extend(guardrails.warning_messages(findings))
 

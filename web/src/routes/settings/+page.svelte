@@ -157,7 +157,8 @@
 				<p class="lede">
 					Application configuration. Deployment-level settings (database, identity, storage) are
 					managed by the environment and shown read-only. The AI assistant has its own
-					<a href="/settings/ai">settings page</a>.
+					<a href="/settings/ai">settings page</a>, and its rules and prompt live under
+					<a href="/settings/assistant">assistant behavior</a>.
 				</p>
 			{:else}
 				<p class="lede">

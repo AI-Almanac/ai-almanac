@@ -178,6 +178,7 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
             true_holdout=_parse_year_spec(spec.true_holdout_years) or [],
         ),
         len(selected_models),
+        guardrails.current(),
     )
     errors.extend(guardrails.error_messages(findings))
     warnings.extend(guardrails.warning_messages(findings))
