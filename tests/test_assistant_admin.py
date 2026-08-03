@@ -190,3 +190,52 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
 
     assert res.status_code == 409
     assert "Clone it" in res.json()["detail"]
+
+
+# --- admin gating ---------------------------------------------------------
+#
+# The suite runs without auth, so every request in the tests above is admin by
+# default and none of them exercise the gate. These do, using the shared-mode
+# pattern from test_auth.py. A ruleset decides what the assistant says to every
+# user of the deployment, so a non-admin must not be able to read one, let alone
+# activate one.
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/assistant/rulesets"),
+        ("GET", "/assistant/guardrails"),
+        ("GET", "/assistant/rulesets/builtin"),
+        ("PUT", "/assistant/rulesets/builtin"),
+        ("POST", "/assistant/rulesets/builtin/clone"),
+        ("POST", "/assistant/rulesets/builtin/activate"),
+        ("POST", "/assistant/rulesets/builtin/preview"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_endpoint_requires_admin_in_shared(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+
+    res = await client.request(method, path, headers={"X-Forwarded-User": "rando"}, json={})
+
+    assert res.status_code == 403, f"{method} {path} returned {res.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_endpoints_reject_an_unidentified_caller_in_shared(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    assert (await client.get("/assistant/rulesets")).status_code == 401
