@@ -67,6 +67,7 @@ from ..services.chat_turns import (
     validate_scope,
 )
 from ..services.llm import llm_is_configured
+from ..services.rulesets import selectable_ruleset
 from ..services.llm_profiles import chat_available_for_user
 from ..services.storage import get_storage, guess_chat_figure_media_type
 from ..services.turn_log import rate_turn
@@ -100,6 +101,7 @@ async def require_chat_available(user_id: str) -> None:
 class SessionCreate(BaseModel):
     title: str | None = None
     scope: ChatScope
+    ruleset_id: str | None = None
 
 
 class SessionOut(BaseModel):
@@ -116,6 +118,7 @@ class SessionOut(BaseModel):
     blend_config: BlendRunSpec | None = None
     blend_validation: BlendValidation | None = None
     run_id: str | None = None
+    ruleset_id: str | None = None
 
 
 class SessionDetail(SessionOut):
@@ -136,6 +139,7 @@ class TurnRatingIn(BaseModel):
 
 class SessionUpdate(BaseModel):
     title: str | None = None
+    ruleset_id: str | None = None
 
 
 class BenchmarkSubmitOut(BaseModel):
@@ -271,6 +275,7 @@ def _session_out(row) -> SessionOut:
         blend_config=_blend_config(row.get("blend_config")),
         blend_validation=_blend_validation(row.get("blend_validation")),
         run_id=row.get("run_id"),
+        ruleset_id=row.get("ruleset_id"),
     )
 
 
@@ -290,9 +295,16 @@ def _session_detail(row, user_id: str) -> SessionDetail:
 # ---------------------------------------------------------------------------
 
 
+async def _require_selectable_ruleset(ruleset_id: str) -> None:
+    if await selectable_ruleset(ruleset_id) is None:
+        raise HTTPException(status_code=400, detail=f"Ruleset not available: {ruleset_id}")
+
+
 @router.post("/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
 async def create_session(body: SessionCreate, user: CurrentUser):
     await require_chat_available(user.id)
+    if body.ruleset_id is not None:
+        await _require_selectable_ruleset(body.ruleset_id)
 
     session_id = str(uuid.uuid4())
     now = _now()
@@ -301,8 +313,8 @@ async def create_session(body: SessionCreate, user: CurrentUser):
     async with get_db() as conn:
         await conn.execute(
             text("""
-                INSERT INTO chat_sessions (id, user_id, title, provider_state, scope, transcript, created_at, updated_at)
-                VALUES (:id, :uid, :title, :provider_state, :scope, '[]', :now, :now)
+                INSERT INTO chat_sessions (id, user_id, title, provider_state, scope, transcript, ruleset_id, created_at, updated_at)
+                VALUES (:id, :uid, :title, :provider_state, :scope, '[]', :ruleset_id, :now, :now)
             """),
             {
                 "id": session_id,
@@ -310,6 +322,7 @@ async def create_session(body: SessionCreate, user: CurrentUser):
                 "title": body.title,
                 "provider_state": json.dumps(initial_messages),
                 "scope": json.dumps(body.scope.model_dump(mode="json")),
+                "ruleset_id": body.ruleset_id,
                 "now": now,
             },
         )
@@ -324,6 +337,7 @@ async def create_session(body: SessionCreate, user: CurrentUser):
         benchmark_config=None,
         benchmark_validation=None,
         run_id=None,
+        ruleset_id=body.ruleset_id,
     )
 
 
@@ -381,26 +395,31 @@ async def get_session(session_id: str, user: CurrentUser):
 
 @router.patch("/sessions/{session_id}", response_model=SessionOut)
 async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser):
-    title = body.title.strip() if isinstance(body.title, str) else None
-    if title == "":
-        title = None
+    updates = body.model_dump(exclude_unset=True)
+    assignments = ["updated_at = :now"]
+    params: dict[str, object] = {"id": session_id, "uid": user.id, "now": _now()}
+
+    if "title" in updates:
+        title = updates["title"].strip() if isinstance(updates["title"], str) else None
+        params["title"] = title or None
+        assignments.append("title = :title")
+    if "ruleset_id" in updates:
+        if updates["ruleset_id"] is not None:
+            await _require_selectable_ruleset(updates["ruleset_id"])
+        params["ruleset_id"] = updates["ruleset_id"]
+        assignments.append("ruleset_id = :ruleset_id")
 
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    text("""
+                    text(f"""
                 UPDATE chat_sessions
-                SET title = :title, updated_at = :now
+                SET {", ".join(assignments)}
                 WHERE id = :id AND user_id = :uid
                 RETURNING *
             """),
-                    {
-                        "id": session_id,
-                        "uid": user.id,
-                        "title": title,
-                        "now": _now(),
-                    },
+                    params,
                 )
             )
             .mappings()
@@ -572,17 +591,29 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
     async with get_db() as conn:
         row = (
-            await conn.execute(
-                text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-                {"id": session_id, "uid": user.id},
+            (
+                await conn.execute(
+                    text(
+                        "SELECT id, ruleset_id FROM chat_sessions WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user.id},
+                )
             )
-        ).fetchone()
+            .mappings()
+            .fetchone()
+        )
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # A pinned ruleset that has since been archived or deleted degrades to the
+    # active one — same never-raise spirit as rulesets.active_ruleset().
+    session_ruleset = await selectable_ruleset(row["ruleset_id"]) if row["ruleset_id"] else None
+
     return StreamingResponse(
-        stream_chat_turn(session_id, user.id, body.content, requested_scope),
+        stream_chat_turn(
+            session_id, user.id, body.content, requested_scope, active_ruleset=session_ruleset
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

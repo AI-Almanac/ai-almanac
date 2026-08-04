@@ -530,12 +530,16 @@ def test_guardrail_events_are_recorded_on_the_turn() -> None:
 
 
 async def _create_session(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    *,
+    title: str = "Session",
+    ruleset_id: str | None = None,
 ) -> dict:
     response = await client.post(
         "/chat/sessions",
         headers=auth_headers,
-        json={"title": title, "scope": _scope()},
+        json={"title": title, "scope": _scope(), "ruleset_id": ruleset_id},
     )
     assert response.status_code == 201
     return response.json()
@@ -1004,3 +1008,147 @@ async def test_a_ruleset_model_pin_does_not_override_a_users_own_credentials(
     model = built["model"]
     assert model.model_name == "pinned-model"
     assert "user-choice.local" in str(model.client.base_url)
+
+
+# ---------------------------------------------------------------------------
+# Per-session ruleset selection
+# ---------------------------------------------------------------------------
+
+
+async def _archive_ruleset(ruleset_id: str) -> None:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE assistant_rulesets SET archived = TRUE WHERE id = :id"),
+            {"id": ruleset_id},
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_session_carries_its_chosen_ruleset(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    from ai_almanac.server.services import rulesets
+
+    await rulesets.seed_packaged_rulesets()
+
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    session_id = created["id"]
+    assert created["ruleset_id"] == "unconstrained"
+
+    detail = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    assert detail.json()["ruleset_id"] == "unconstrained"
+
+    # A rename does not disturb the ruleset choice.
+    renamed = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"title": "Renamed"}
+    )
+    assert renamed.json()["title"] == "Renamed"
+    assert renamed.json()["ruleset_id"] == "unconstrained"
+
+    # Switching and clearing are both PATCHes on the same field.
+    switched = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": "builtin"}
+    )
+    assert switched.json()["ruleset_id"] == "builtin"
+    cleared = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": None}
+    )
+    assert cleared.json()["ruleset_id"] is None
+    assert cleared.json()["title"] == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_ruleset_cannot_be_selected(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    from ai_almanac.server.services import rulesets
+
+    await rulesets.seed_packaged_rulesets()
+
+    unknown = await client.post(
+        "/chat/sessions",
+        headers=auth_headers,
+        json={"title": "S", "scope": _scope(), "ruleset_id": "no-such-ruleset"},
+    )
+    assert unknown.status_code == 400
+
+    created = await _create_session(client, auth_headers)
+    patched = await client.patch(
+        f"/chat/sessions/{created['id']}",
+        headers=auth_headers,
+        json={"ruleset_id": "no-such-ruleset"},
+    )
+    assert patched.status_code == 400
+
+    await _archive_ruleset("unconstrained")
+    try:
+        archived = await client.patch(
+            f"/chat/sessions/{created['id']}",
+            headers=auth_headers,
+            json={"ruleset_id": "unconstrained"},
+        )
+        assert archived.status_code == 400
+    finally:
+        await rulesets.seed_packaged_rulesets()
+
+
+@pytest.mark.asyncio
+async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import rulesets
+
+    await rulesets.seed_packaged_rulesets()
+
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    session_id = created["id"]
+
+    seen_rulesets: list[object] = []
+
+    async def fake_stream_response(
+        provider_state: list,
+        user_id: str,
+        session_id_arg: str,
+        scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
+        active_ruleset=None,
+        **_comparison: object,
+    ) -> AsyncIterator[str]:
+        seen_rulesets.append(active_ruleset)
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {"content": "ok", "tool_calls": [], "artifacts": []},
+                "provider_state": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+    )
+    assert response.status_code == 200
+    assert response.text  # drain the stream
+
+    # The pinned ruleset went missing: the turn degrades to the active one
+    # (None lets the LLM layer resolve it) rather than failing the chat.
+    await _archive_ruleset("unconstrained")
+    try:
+        response = await client.post(
+            f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+        )
+        assert response.status_code == 200
+        assert response.text
+    finally:
+        await rulesets.seed_packaged_rulesets()
+
+    assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained", None]

@@ -330,6 +330,32 @@ async def get_ruleset(ruleset_id: str) -> Ruleset | None:
     return _row_to_ruleset(row) if row else None
 
 
+async def selectable_ruleset(ruleset_id: str) -> Ruleset | None:
+    """A stored, non-archived ruleset a user may run a session under.
+
+    The user-facing counterpart of ``get_ruleset``, which deliberately returns
+    archived rows for admin use. None means the caller falls back to the
+    active ruleset.
+    """
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    sa.text(
+                        f"SELECT {_COLUMNS} FROM assistant_rulesets "
+                        "WHERE id = :id AND archived = FALSE"
+                    ),
+                    {"id": ruleset_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    return _row_to_ruleset(row) if row else None
+
+
 async def active_ruleset() -> Ruleset:
     """The ruleset in force, falling back to the packaged built-in.
 
