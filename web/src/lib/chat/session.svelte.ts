@@ -184,7 +184,12 @@ export class ChatSessionState {
 		this.error = null;
 		try {
 			const scope = this.getScope();
-			const session = await createChatSession(scope, scope.title ?? undefined);
+			// A new chat keeps the assistant style the user picked for this one.
+			const session = await createChatSession(
+				scope,
+				scope.title ?? undefined,
+				this.currentSession?.ruleset_id ?? undefined
+			);
 			if (session.benchmark_config) {
 				this.callbacks.onBenchmarkConfig?.(
 					session.benchmark_config,
@@ -216,6 +221,19 @@ export class ChatSessionState {
 			return true;
 		} catch {
 			this.error = 'Failed to rename session.';
+			return false;
+		}
+	}
+
+	async setSessionRuleset(rulesetId: string | null): Promise<boolean> {
+		if (!this.sessionId) return false;
+		this.error = null;
+		try {
+			const updated = await updateChatSession(this.sessionId, { ruleset_id: rulesetId });
+			this.sessions = this.sessions.map((s) => (s.id === updated.id ? updated : s));
+			return true;
+		} catch {
+			this.error = 'Failed to switch the assistant style.';
 			return false;
 		}
 	}

@@ -138,11 +138,57 @@ export type ComparisonVariantSpec = {
 export type ComparisonVariant = {
 	variant: number;
 	session_id: string;
-	ruleset_id: string;
-	ruleset_name: string;
-	ruleset_version: number;
-	model: string | null;
+	// Absent on a blind comparison: the arms stay anonymous until the vote.
+	ruleset_id?: string;
+	ruleset_name?: string;
+	ruleset_version?: number;
+	model?: string | null;
 };
+
+/** One arm's identity, disclosed by the vote response. */
+export type RevealedArm = {
+	session_id: string;
+	ruleset_id: string | null;
+	ruleset_name: string | null;
+	ruleset_version: number | null;
+};
+
+export type VoteResult = {
+	rated_turns: number;
+	arms: RevealedArm[];
+};
+
+/** What a non-admin may know about a ruleset: enough to pick one. */
+export type RulesetOption = {
+	id: string;
+	name: string;
+	description: string;
+	is_active: boolean;
+};
+
+export type RulesetOptions = {
+	rulesets: RulesetOption[];
+	compare_available: boolean;
+};
+
+export type RulesetFeedback = {
+	ruleset_id: string;
+	ruleset_version: number | null;
+	turns: number;
+	rated: number;
+	wins: number;
+	losses: number;
+	ties: number;
+	flag_counts: Record<string, number>;
+};
+
+export async function getRulesetOptions(): Promise<RulesetOptions> {
+	return request<RulesetOptions>('/assistant/ruleset-options');
+}
+
+export async function getRulesetFeedback(): Promise<RulesetFeedback[]> {
+	return request<RulesetFeedback[]>('/assistant/feedback');
+}
 
 export type CompareEvent =
 	| { type: 'comparison_started'; comparison_id: string; variants: ComparisonVariant[] }
@@ -173,19 +219,43 @@ export async function* compareRulesets(
 	}
 }
 
+/**
+ * A blind comparison: the server runs the message under the active and the
+ * admin-designated candidate rulesets, shuffled — the stream never says which
+ * arm is which. Voting is what reveals them.
+ */
+export async function* blindCompare(
+	message: string,
+	options: { sourceSessionId?: string; scope?: ChatScope } = {}
+): AsyncGenerator<CompareEvent> {
+	const res = await fetch(`${BASE_URL}/assistant/compare/blind`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		body: JSON.stringify({
+			message,
+			source_session_id: options.sourceSessionId ?? null,
+			scope: options.scope ?? null
+		})
+	});
+	if (!res.ok) {
+		throw new Error(`Comparison failed (${res.status}): ${await res.text()}`);
+	}
+	for await (const event of sseEvents<CompareEvent>(res)) {
+		yield event;
+		if (event.type === 'comparison_complete') return;
+	}
+}
+
 /** Record which arm won. `null` is a tie; the vote lands on both turn logs. */
 export async function voteOnComparison(
 	comparisonId: string,
 	winnerSessionId: string | null,
 	note?: string
-): Promise<{ rated_turns: number }> {
-	return request<{ rated_turns: number }>(
-		`/assistant/comparisons/${encodeURIComponent(comparisonId)}/vote`,
-		{
-			method: 'POST',
-			body: JSON.stringify({ winner_session_id: winnerSessionId, note: note ?? null })
-		}
-	);
+): Promise<VoteResult> {
+	return request<VoteResult>(`/assistant/comparisons/${encodeURIComponent(comparisonId)}/vote`, {
+		method: 'POST',
+		body: JSON.stringify({ winner_session_id: winnerSessionId, note: note ?? null })
+	});
 }
 
 export async function discardComparison(comparisonId: string): Promise<void> {

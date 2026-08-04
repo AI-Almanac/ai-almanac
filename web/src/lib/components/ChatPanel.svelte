@@ -4,8 +4,11 @@
 	import ChatHeader from '$lib/components/ChatHeader.svelte';
 	import ChatMessages from '$lib/components/ChatMessages.svelte';
 	import ChatArtifactGallery from '$lib/components/ChatArtifactGallery.svelte';
+	import ChatCompare from '$lib/components/ChatCompare.svelte';
 	import { ChatSessionState } from '$lib/chat/session.svelte';
+	import { ComparisonState } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
+	import { blindCompare, getRulesetOptions } from '$lib/api';
 	import type {
 		BenchmarkRunSpec,
 		BenchmarkValidation,
@@ -13,7 +16,8 @@
 		BlendRunSpec,
 		BlendValidation,
 		ChatScope,
-		Job
+		Job,
+		RulesetOption
 	} from '$lib/api';
 
 	interface Props {
@@ -184,10 +188,44 @@
 		const idx = galleryFigures.findIndex((f) => f.artifactId === artifactId);
 		if (idx !== -1) selectedFigureIndex = idx;
 	}
+
+	// ---- Assistant styles and blind A/B comparison -------------------------
+
+	let rulesetOptions = $state<RulesetOption[]>([]);
+	let compareAvailable = $state(false);
+	const comparison = new ComparisonState();
+	let comparing = $state(false);
+
+	onMount(() => {
+		getRulesetOptions()
+			.then((options) => {
+				rulesetOptions = options.rulesets;
+				compareAvailable = options.compare_available;
+			})
+			.catch(() => undefined);
+	});
+
+	function startCompare() {
+		const text = input.trim();
+		if (!text || comparison.running) return;
+		input = '';
+		comparing = true;
+		void comparison.run(
+			blindCompare(text, {
+				sourceSessionId: chat.sessionId ?? undefined,
+				scope: sessionScope()
+			})
+		);
+	}
+
+	async function closeCompare() {
+		await comparison.discard();
+		comparing = false;
+	}
 </script>
 
 <div class="chat-panel">
-	<ChatHeader {chat} />
+	<ChatHeader {chat} {rulesetOptions} />
 
 	{#if showBetaNote}
 		<div class="beta-note">
@@ -226,7 +264,9 @@
 		{/if}
 	</div>
 
-	{#if activeTab === 'chat'}
+	{#if comparing}
+		<ChatCompare {comparison} onClose={() => void closeCompare()} />
+	{:else if activeTab === 'chat'}
 		<ChatMessages
 			{chat}
 			{emptyMessage}
@@ -247,7 +287,7 @@
 		<div class="chat-error">{chat.error}</div>
 	{/if}
 
-	{#if activeTab === 'chat'}
+	{#if activeTab === 'chat' && !comparing}
 		<div class="input-row">
 			<textarea
 				bind:value={input}
@@ -255,6 +295,16 @@
 				{placeholder}
 				rows={2}
 				disabled={chat.sending}></textarea>
+			{#if compareAvailable}
+				<button
+					class="ab-btn"
+					onclick={startCompare}
+					disabled={chat.sending || !input.trim() || chat.loadingSession}
+					title="Get two answers from two assistant styles and vote on the better one"
+				>
+					A/B
+				</button>
+			{/if}
 			<button
 				class="send-btn"
 				onclick={() => send()}
@@ -394,6 +444,27 @@
 	}
 	.send-btn:not(:disabled):hover {
 		opacity: 0.85;
+	}
+	.ab-btn {
+		padding: 0 0.75rem;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		border: 1px solid var(--color-border);
+		border-radius: 6px;
+		font-size: 0.8rem;
+		font-weight: 600;
+		cursor: pointer;
+		align-self: flex-end;
+		height: 2.25rem;
+	}
+	.ab-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.ab-btn:not(:disabled):hover {
+		color: var(--color-accent);
+		border-color: var(--color-accent-border);
+		background: var(--color-accent-light);
 	}
 	.beta-note {
 		display: flex;

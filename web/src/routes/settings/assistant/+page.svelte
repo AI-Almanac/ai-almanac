@@ -5,19 +5,22 @@
 		listRulesets,
 		getRuleset,
 		getGuardrailThresholds,
+		getRulesetFeedback,
+		getSettings,
+		patchSettings,
 		saveRuleset,
 		cloneRuleset,
 		activateRuleset,
 		previewRuleset,
 		compareRulesets,
-		voteOnComparison,
-		discardComparison,
 		PREVIEW_SCOPE_KINDS,
 		type RulesetSummary,
 		type RulesetDetail,
+		type RulesetFeedback,
 		type GuardrailThresholds,
 		type PromptPreview
 	} from '$lib/api';
+	import { ComparisonState } from '$lib/chat/compare.svelte';
 
 	let rulesets = $state<RulesetSummary[]>([]);
 	let selected = $state<RulesetDetail | null>(null);
@@ -35,23 +38,12 @@
 
 	// ---- Comparison playground ------------------------------------------------
 
-	type Column = {
-		label: string;
-		sessionId: string;
-		text: string;
-		tools: string[];
-		cautions: string[];
-		error: string | null;
-	};
-
 	let compareMessage = $state('');
 	let arms = $state([
 		{ ruleset_id: '', model: '' },
 		{ ruleset_id: '', model: '' }
 	]);
-	let columns = $state<Column[]>([]);
-	let comparisonId = $state<string | null>(null);
-	let comparing = $state(false);
+	const comparison = new ComparisonState();
 	let voteNote = $state('');
 
 	function armDefaults(list: RulesetSummary[]) {
@@ -61,98 +53,69 @@
 		arms[1].ruleset_id ||= other?.id ?? '';
 	}
 
-	function applyCompareEvent(event: {
-		type: string;
-		variant?: number;
-		[key: string]: unknown;
-	}): void {
-		if (event.type === 'comparison_started') {
-			const variants = event.variants as {
-				session_id: string;
-				ruleset_name: string;
-				ruleset_version: number;
-				model: string | null;
-			}[];
-			comparisonId = event.comparison_id as string;
-			columns = variants.map((variant) => ({
-				label: `${variant.ruleset_name} v${variant.ruleset_version}${
-					variant.model ? ` · ${variant.model}` : ''
-				}`,
-				sessionId: variant.session_id,
-				text: '',
-				tools: [],
-				cautions: [],
-				error: null
-			}));
-			return;
-		}
-		const column = columns[event.variant ?? -1];
-		if (!column) return;
-		if (event.type === 'text_delta') column.text += (event.content as string) ?? '';
-		if (event.type === 'tool_call') column.tools.push((event.tool_call as { name: string }).name);
-		if (event.type === 'guardrail')
-			column.cautions.push(
-				...((event.errors as string[]) ?? []),
-				...((event.warnings as string[]) ?? [])
-			);
-		if (event.type === 'error') column.error = (event.message as string) ?? 'Failed';
-		if (event.type === 'done') column.text = (event.turn as { content: string }).content;
-	}
-
 	async function runComparison() {
-		if (!compareMessage.trim() || comparing) return;
-		comparing = true;
+		if (!compareMessage.trim() || comparison.running) return;
 		error = null;
 		notice = null;
-		// Discard the previous scratch conversations, not the ratings: the turn log
-		// keeps every vote already recorded against a ruleset version.
-		if (comparisonId) await discardComparison(comparisonId).catch(() => undefined);
-		comparisonId = null;
-		columns = [];
 		voteNote = '';
-		try {
-			for await (const event of compareRulesets(
+		await comparison.run(
+			compareRulesets(
 				compareMessage.trim(),
 				arms.map((arm) => ({ ruleset_id: arm.ruleset_id, model: arm.model.trim() || null }))
-			)) {
-				applyCompareEvent(event as never);
-			}
-		} catch (e) {
-			error = (e as Error).message;
-		} finally {
-			comparing = false;
-		}
+			)
+		);
 	}
 
 	function vote(winnerSessionId: string | null) {
-		const id = comparisonId;
-		if (!id) return;
 		void run(
 			async () => {
-				await voteOnComparison(id, winnerSessionId, voteNote.trim() || undefined);
+				await comparison.vote(winnerSessionId, voteNote.trim() || undefined);
 			},
 			winnerSessionId ? 'Vote recorded on both answers.' : 'Recorded as a tie.'
 		);
 	}
 
 	function discard() {
-		const id = comparisonId;
-		if (!id) return;
 		void run(async () => {
-			await discardComparison(id);
-			comparisonId = null;
-			columns = [];
+			await comparison.discard();
 			voteNote = '';
 		}, 'Comparison discarded. The ratings it produced are kept.');
 	}
+
+	// ---- Candidate for user-facing blind comparisons ---------------------------
+
+	let candidateId = $state('');
+
+	function setCandidate(id: string) {
+		void run(
+			async () => {
+				await patchSettings({ assistant_comparison_candidate: id });
+				candidateId = id;
+			},
+			id
+				? 'Candidate set. Users now get a blind A/B button in the chat.'
+				: 'Candidate cleared. User comparisons are off.'
+		);
+	}
+
+	// ---- Collected feedback -----------------------------------------------------
+
+	let feedback = $state<RulesetFeedback[]>([]);
 
 	async function load(selectId?: string) {
 		loading = true;
 		error = null;
 		try {
-			const [list, limits] = await Promise.all([listRulesets(), getGuardrailThresholds()]);
+			const [list, limits, state, collected] = await Promise.all([
+				listRulesets(),
+				getGuardrailThresholds(),
+				getSettings(),
+				getRulesetFeedback()
+			]);
 			rulesets = list;
 			thresholds = limits;
+			candidateId = String(state.values.assistant_comparison_candidate ?? '');
+			feedback = collected;
 			armDefaults(list);
 			const target = selectId ?? selected?.id ?? list.find((r) => r.is_active)?.id ?? list[0]?.id;
 			if (target) await select(target);
@@ -303,6 +266,7 @@
 									<span class="tag">v{ruleset.version}</span>
 									<span class="tag">{ruleset.source}</span>
 									{#if ruleset.is_active}<span class="tag active">active</span>{/if}
+									{#if ruleset.id === candidateId}<span class="tag candidate">candidate</span>{/if}
 								</span>
 								<span class="ruleset-desc">{ruleset.description}</span>
 							</button>
@@ -333,6 +297,19 @@
 						>
 							Save changes
 						</button>
+						{#if candidateId === selected.id}
+							<button onclick={() => setCandidate('')} disabled={busy}>Clear candidate</button>
+						{:else}
+							<button
+								onclick={() => setCandidate(selected!.id)}
+								disabled={busy || selected.is_active}
+								title={selected.is_active
+									? 'The candidate is compared against the active ruleset, so it must be a different one'
+									: 'Users get a blind A/B button in the chat that compares this against the active ruleset'}
+							>
+								Set as blind-test candidate
+							</button>
+						{/if}
 					</div>
 
 					<div class="clone-row">
@@ -428,17 +405,19 @@
 				</div>
 
 				<div class="actions">
-					<button onclick={runComparison} disabled={comparing || !compareMessage.trim()}>
-						{comparing ? 'Running…' : 'Run comparison'}
+					<button onclick={runComparison} disabled={comparison.running || !compareMessage.trim()}>
+						{comparison.running ? 'Running…' : 'Run comparison'}
 					</button>
-					{#if comparisonId && !comparing}
+					{#if comparison.comparisonId && !comparison.running}
 						<button onclick={discard} disabled={busy}>Discard</button>
 					{/if}
 				</div>
 
-				{#if columns.length}
+				{#if comparison.error}<p class="banner error">{comparison.error}</p>{/if}
+
+				{#if comparison.columns.length}
 					<div class="columns">
-						{#each columns as column (column.sessionId)}
+						{#each comparison.columns as column (column.sessionId)}
 							<article class="column">
 								<h3 class="column-head">{column.label}</h3>
 								{#if column.cautions.length}
@@ -459,17 +438,66 @@
 						{/each}
 					</div>
 
-					{#if !comparing}
+					{#if !comparison.running}
 						<div class="vote-row">
 							<input bind:value={voteNote} placeholder="Why? (optional)" maxlength="2000" />
-							<button onclick={() => vote(columns[0].sessionId)} disabled={busy}>A is better</button
+							<button onclick={() => vote(comparison.columns[0].sessionId)} disabled={busy}>
+								A is better
+							</button>
+							<button
+								onclick={() => vote(comparison.columns[1]?.sessionId ?? null)}
+								disabled={busy}
 							>
-							<button onclick={() => vote(columns[1]?.sessionId ?? null)} disabled={busy}>
 								B is better
 							</button>
 							<button onclick={() => vote(null)} disabled={busy}>Tie</button>
 						</div>
 					{/if}
+				{/if}
+			</section>
+
+			<section class="card">
+				<h2>Collected feedback</h2>
+				<p class="hint">
+					Every rating in one place: thumbs on ordinary chat turns and votes from comparisons — the
+					admin playground above and the blind A/B users run from the benchmark and blend chats —
+					grouped by the ruleset version that produced the answer.
+				</p>
+				{#if feedback.length === 0}
+					<p class="empty">No rated turns yet.</p>
+				{:else}
+					<table class="feedback">
+						<thead>
+							<tr>
+								<th>Ruleset</th>
+								<th>Turns</th>
+								<th>Rated</th>
+								<th>Wins</th>
+								<th>Losses</th>
+								<th>Ties</th>
+								<th>Flags</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each feedback as row (row.ruleset_id + ':' + row.ruleset_version)}
+								<tr>
+									<td>{row.ruleset_id} v{row.ruleset_version ?? '?'}</td>
+									<td>{row.turns}</td>
+									<td>{row.rated}</td>
+									<td>{row.wins}</td>
+									<td>{row.losses}</td>
+									<td>{row.ties}</td>
+									<td>
+										{#each Object.entries(row.flag_counts) as [flag, count] (flag)}
+											<span class="tag">{flag}: {count}</span>
+										{:else}
+											—
+										{/each}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
 				{/if}
 			</section>
 		{/if}
@@ -606,6 +634,26 @@
 		color: var(--color-status-running);
 		border-color: var(--color-status-running);
 		background: var(--color-status-running-bg);
+	}
+	.tag.candidate {
+		color: var(--color-status-running);
+		border-color: var(--color-status-running);
+	}
+	.feedback {
+		border-collapse: collapse;
+		font-size: 0.78rem;
+	}
+	.feedback th,
+	.feedback td {
+		text-align: left;
+		padding: 0.35rem 0.75rem 0.35rem 0;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.feedback th {
+		font-size: 0.68rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--color-text-muted);
 	}
 	.arms {
 		display: flex;

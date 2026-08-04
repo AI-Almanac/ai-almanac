@@ -3,7 +3,6 @@
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { codeForToolCall, copyCode, formatToolName, renderMarkdown } from '$lib/chat/format';
 	import { rateChatTurn } from '$lib/api';
-	import { account } from '$lib/account.svelte';
 
 	interface Props {
 		chat: ChatSessionState;
@@ -19,10 +18,9 @@
 	let shownCode = $state<Set<string>>(new Set());
 	let ratings = $state<Record<string, 1 | -1>>({});
 
-	// Admin-only for now: the rating feeds the assistant turn log, and the
-	// sample is being gathered deliberately before it is opened to everyone.
-	// Widening it is this one condition.
-	const canRate = $derived(account.isAdmin);
+	// Everyone can rate: the turn log is the evidence base for ruleset changes,
+	// and user feedback is the sample that matters. The API was always open.
+	const canRate = true;
 
 	async function rate(turnId: string, value: 1 | -1) {
 		const sessionId = chat.sessionId;

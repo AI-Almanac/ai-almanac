@@ -88,6 +88,8 @@ export type ChatSession = {
 	blend_config?: BlendRunSpec | null;
 	blend_validation?: BlendValidation | null;
 	run_id?: string | null;
+	/** Ruleset this session is pinned to; null follows the platform default. */
+	ruleset_id?: string | null;
 };
 
 /**
@@ -196,10 +198,14 @@ export type ChatEvent =
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 
-export async function createChatSession(scope: ChatScope, title?: string): Promise<ChatSession> {
+export async function createChatSession(
+	scope: ChatScope,
+	title?: string,
+	rulesetId?: string | null
+): Promise<ChatSession> {
 	return request<ChatSession>('/chat/sessions', {
 		method: 'POST',
-		body: JSON.stringify({ scope, title })
+		body: JSON.stringify({ scope, title, ruleset_id: rulesetId ?? undefined })
 	});
 }
 
@@ -216,7 +222,8 @@ export async function getChatSession(id: string): Promise<ChatSessionDetail> {
 
 export async function updateChatSession(
 	id: string,
-	updates: { title?: string | null }
+	// Only the keys present are changed; JSON.stringify drops undefined ones.
+	updates: { title?: string | null; ruleset_id?: string | null }
 ): Promise<ChatSession> {
 	return request<ChatSession>(`/chat/sessions/${id}`, {
 		method: 'PATCH',

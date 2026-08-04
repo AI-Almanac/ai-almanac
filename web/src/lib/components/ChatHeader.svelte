@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ChatSession } from '$lib/api';
+	import type { ChatSession, RulesetOption } from '$lib/api';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { sessionLabel } from '$lib/chat/format';
 
 	interface Props {
 		chat: ChatSessionState;
+		rulesetOptions?: RulesetOption[];
 	}
 
-	const { chat }: Props = $props();
+	const { chat, rulesetOptions = [] }: Props = $props();
 
 	let showSessionList = $state(false);
 	let renamingSessionId = $state<string | null>(null);
@@ -155,6 +156,19 @@
 	</div>
 
 	<div class="header-actions">
+		{#if rulesetOptions.length > 1 && chat.currentSession}
+			<select
+				class="style-select"
+				title="Assistant style for this chat"
+				value={chat.currentSession.ruleset_id ?? ''}
+				onchange={(e) => void chat.setSessionRuleset(e.currentTarget.value || null)}
+			>
+				<option value="">Default style</option>
+				{#each rulesetOptions as option (option.id)}
+					<option value={option.id}>{option.name}</option>
+				{/each}
+			</select>
+		{/if}
 		{#if chat.currentSession && renamingSessionId !== chat.currentSession.id}
 			<button
 				class="copy-btn"
@@ -244,6 +258,17 @@
 	.copy-btn:disabled {
 		opacity: 0.35;
 		cursor: default;
+	}
+
+	.style-select {
+		max-width: 10rem;
+		padding: 0.25rem 0.4rem;
+		border: 1px solid var(--color-border);
+		border-radius: 4px;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		font-family: inherit;
+		font-size: 0.72rem;
 	}
 
 	.session-selector {

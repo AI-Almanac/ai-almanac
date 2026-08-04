@@ -143,6 +143,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/ruleset-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Ruleset Options
+         * @description The rulesets any user may pick for a session, plus whether the blind
+         *     A/B comparison is currently offered.
+         */
+        get: operations["list_ruleset_options_assistant_ruleset_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/compare/blind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Blind
+         * @description Answer one message under the active and candidate rulesets, blinded.
+         *
+         *     The server picks and shuffles the arms; the stream names them only by
+         *     index, and the vote response is where the identities come out.
+         */
+        post: operations["compare_blind_assistant_compare_blind_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assistant/comparisons/{comparison_id}/vote": {
         parameters: {
             query?: never;
@@ -154,7 +198,7 @@ export interface paths {
         put?: never;
         /**
          * Vote On Comparison
-         * @description Record which arm won, on both arms' turn logs.
+         * @description Record which arm won, on both arms' turn logs, and reveal the arms.
          */
         post: operations["vote_on_comparison_assistant_comparisons__comparison_id__vote_post"];
         delete?: never;
@@ -178,6 +222,27 @@ export interface paths {
          * @description Discard a comparison's scratch sessions.
          */
         delete: operations["delete_comparison_assistant_comparisons__comparison_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ruleset Feedback
+         * @description Votes, ratings and flags per ruleset version — the read side of the
+         *     turn log, so collected feedback is actually visible.
+         */
+        get: operations["ruleset_feedback_assistant_feedback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2178,6 +2243,18 @@ export interface components {
             finding_keys?: string[];
         };
         /**
+         * BlindCompareRequest
+         * @description A user-triggered comparison. The server picks the arms — there is no
+         *     ``variants`` field, so users can never choose or learn what runs.
+         */
+        BlindCompareRequest: {
+            /** Message */
+            message: string;
+            /** Source Session Id */
+            source_session_id?: string | null;
+            scope?: components["schemas"]["ChatScope"] | null;
+        };
+        /**
          * BoundingBox
          * @description BoundingBox model.
          *
@@ -3723,6 +3800,21 @@ export interface components {
             /** Url */
             url: string;
         };
+        /**
+         * RevealedArm
+         * @description One arm's identity, disclosed after the vote. Nulls mean the turn log
+         *     for that arm never landed — degraded, not an error.
+         */
+        RevealedArm: {
+            /** Session Id */
+            session_id: string;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
+            /** Ruleset Name */
+            ruleset_name?: string | null;
+            /** Ruleset Version */
+            ruleset_version?: number | null;
+        };
         /** RompParams */
         RompParams: {
             /** Obs */
@@ -3812,6 +3904,49 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** RulesetFeedback */
+        RulesetFeedback: {
+            /** Ruleset Id */
+            ruleset_id: string;
+            /** Ruleset Version */
+            ruleset_version: number | null;
+            /** Turns */
+            turns: number;
+            /** Rated */
+            rated: number;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Ties */
+            ties: number;
+            /** Flag Counts */
+            flag_counts: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * RulesetOption
+         * @description What a non-admin may know about a ruleset: enough to pick one, nothing
+         *     about its prompt or tool policy.
+         */
+        RulesetOption: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Is Active */
+            is_active: boolean;
+        };
+        /** RulesetOptionsOut */
+        RulesetOptionsOut: {
+            /** Rulesets */
+            rulesets: components["schemas"]["RulesetOption"][];
+            /** Compare Available */
+            compare_available: boolean;
+        };
         /** RulesetSave */
         RulesetSave: {
             /** Id */
@@ -3864,6 +3999,8 @@ export interface components {
             /** Title */
             title?: string | null;
             scope: components["schemas"]["ChatScope"];
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SessionDetail */
         SessionDetail: {
@@ -3890,6 +4027,8 @@ export interface components {
             blend_validation?: components["schemas"]["BlendValidation"] | null;
             /** Run Id */
             run_id?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
             /** Transcript */
             transcript: components["schemas"]["ChatTurn"][];
         };
@@ -3918,11 +4057,15 @@ export interface components {
             blend_validation?: components["schemas"]["BlendValidation"] | null;
             /** Run Id */
             run_id?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SessionUpdate */
         SessionUpdate: {
             /** Title */
             title?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SettingsPatch */
         SettingsPatch: {
@@ -4319,6 +4462,11 @@ export interface components {
         VoteOut: {
             /** Rated Turns */
             rated_turns: number;
+            /**
+             * Arms
+             * @default []
+             */
+            arms: components["schemas"]["RevealedArm"][];
         };
         /** WindowMetrics */
         WindowMetrics: {
@@ -4638,6 +4786,59 @@ export interface operations {
             };
         };
     };
+    list_ruleset_options_assistant_ruleset_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetOptionsOut"];
+                };
+            };
+        };
+    };
+    compare_blind_assistant_compare_blind_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlindCompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     vote_on_comparison_assistant_comparisons__comparison_id__vote_post: {
         parameters: {
             query?: never;
@@ -4698,6 +4899,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ruleset_feedback_assistant_feedback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetFeedback"][];
                 };
             };
         };

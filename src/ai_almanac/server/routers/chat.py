@@ -67,8 +67,8 @@ from ..services.chat_turns import (
     validate_scope,
 )
 from ..services.llm import llm_is_configured
-from ..services.rulesets import selectable_ruleset
 from ..services.llm_profiles import chat_available_for_user
+from ..services.rulesets import selectable_ruleset
 from ..services.storage import get_storage, guess_chat_figure_media_type
 from ..services.turn_log import rate_turn
 
