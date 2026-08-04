@@ -1,40 +1,65 @@
 import { discardComparison, voteOnComparison, type CompareEvent, type RevealedArm } from '$lib/api';
 
-export type ComparisonColumn = {
+export type ComparisonArm = {
 	label: string;
 	sessionId: string;
+};
+
+export type ArmAnswer = {
 	text: string;
 	tools: string[];
 	cautions: string[];
 	error: string | null;
 };
 
+export type ComparisonRound = {
+	message: string;
+	/** Index-aligned with `arms`. */
+	answers: ArmAnswer[];
+};
+
 /**
- * Folds a comparison SSE stream into side-by-side columns and owns the
- * vote/discard lifecycle. Labeled (admin) and blind (user) comparisons are the
- * same state machine — a blind variant simply arrives without a ruleset name,
- * so its column is labeled "Answer A"/"Answer B" and `revealedArms` fills in
- * after the vote.
+ * Folds comparison SSE streams into a side-by-side dialogue — arms across,
+ * rounds down — and owns the vote/discard lifecycle. Labeled (admin) and blind
+ * (user) comparisons are the same state machine: a blind variant arrives
+ * without a ruleset name, so its arm is labeled "Answer A"/"Answer B" and
+ * `revealedArms` fills in after the vote. One vote covers every round.
  */
 export class ComparisonState {
-	columns = $state<ComparisonColumn[]>([]);
+	arms = $state<ComparisonArm[]>([]);
+	rounds = $state<ComparisonRound[]>([]);
 	comparisonId = $state<string | null>(null);
 	running = $state(false);
 	voted = $state(false);
 	revealedArms = $state<RevealedArm[]>([]);
 	error = $state<string | null>(null);
 
-	async run(events: AsyncGenerator<CompareEvent>) {
+	/** Maps the active stream's variant index onto an `arms` index; each
+	 * stream declares its own ordering in `comparison_started`. */
+	private variantToArm: number[] = [];
+
+	async start(message: string, events: AsyncGenerator<CompareEvent>) {
 		if (this.running) return;
-		this.running = true;
-		this.error = null;
 		// Discard the previous scratch conversations, not the ratings: the turn
 		// log keeps every vote already recorded against a ruleset version.
 		if (this.comparisonId) await discardComparison(this.comparisonId).catch(() => undefined);
+		this.arms = [];
+		this.rounds = [];
 		this.comparisonId = null;
-		this.columns = [];
 		this.voted = false;
 		this.revealedArms = [];
+		await this.streamRound(message, events);
+	}
+
+	async followUp(message: string, events: AsyncGenerator<CompareEvent>) {
+		if (this.running || !this.comparisonId) return;
+		await this.streamRound(message, events);
+	}
+
+	private async streamRound(message: string, events: AsyncGenerator<CompareEvent>) {
+		this.running = true;
+		this.error = null;
+		this.rounds.push({ message, answers: [] });
 		try {
 			for await (const event of events) this.apply(event);
 		} catch (e) {
@@ -45,32 +70,36 @@ export class ComparisonState {
 	}
 
 	private apply(event: CompareEvent) {
+		const round = this.rounds[this.rounds.length - 1];
+		if (!round) return;
 		if (event.type === 'comparison_started') {
 			this.comparisonId = event.comparison_id;
-			this.columns = event.variants.map((variant, i) => ({
-				label: variant.ruleset_name
-					? `${variant.ruleset_name} v${variant.ruleset_version}${
-							variant.model ? ` · ${variant.model}` : ''
-						}`
-					: `Answer ${String.fromCharCode(65 + i)}`,
-				sessionId: variant.session_id,
-				text: '',
-				tools: [],
-				cautions: [],
-				error: null
-			}));
+			if (this.arms.length === 0) {
+				this.arms = event.variants.map((variant, i) => ({
+					label: variant.ruleset_name
+						? `${variant.ruleset_name} v${variant.ruleset_version}${
+								variant.model ? ` · ${variant.model}` : ''
+							}`
+						: `Answer ${String.fromCharCode(65 + i)}`,
+					sessionId: variant.session_id
+				}));
+			}
+			this.variantToArm = event.variants.map((variant) =>
+				this.arms.findIndex((arm) => arm.sessionId === variant.session_id)
+			);
+			round.answers = this.arms.map(() => ({ text: '', tools: [], cautions: [], error: null }));
 			return;
 		}
 		if (event.type === 'comparison_complete') return;
-		const column = this.columns[event.variant ?? -1];
-		if (!column) return;
-		if (event.type === 'text_delta') column.text += event.content ?? '';
-		if (event.type === 'tool_call') column.tools.push(event.tool_call.name);
+		const answer = round.answers[this.variantToArm[event.variant] ?? -1];
+		if (!answer) return;
+		if (event.type === 'text_delta') answer.text += event.content ?? '';
+		if (event.type === 'tool_call') answer.tools.push(event.tool_call.name);
 		if (event.type === 'guardrail') {
-			column.cautions.push(...(event.errors ?? []), ...(event.warnings ?? []));
+			answer.cautions.push(...(event.errors ?? []), ...(event.warnings ?? []));
 		}
-		if (event.type === 'error') column.error = event.message ?? 'Failed';
-		if (event.type === 'done') column.text = event.turn.content;
+		if (event.type === 'error') answer.error = event.message ?? 'Failed';
+		if (event.type === 'done') answer.text = event.turn.content;
 	}
 
 	async vote(winnerSessionId: string | null, note?: string): Promise<boolean> {
@@ -95,8 +124,9 @@ export class ComparisonState {
 
 	async discard() {
 		if (this.comparisonId) await discardComparison(this.comparisonId).catch(() => undefined);
+		this.arms = [];
+		this.rounds = [];
 		this.comparisonId = null;
-		this.columns = [];
 		this.voted = false;
 		this.revealedArms = [];
 	}

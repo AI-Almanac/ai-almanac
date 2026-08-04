@@ -542,3 +542,108 @@ async def test_a_vote_is_scoped_to_the_comparisons_owner(
     with pytest.raises(assistant_compare.UnknownSessionError):
         await assistant_compare.record_vote(comparison_id, "someone-else", None)
     assert await assistant_compare.comparison_arms(comparison_id, "someone-else") == []
+
+
+# --- multi-turn comparisons --------------------------------------------------
+#
+# The side-by-side view is a dialogue: follow-up messages continue both arms'
+# scratch conversations under their original rulesets, and one vote covers
+# every turn of the comparison.
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_message_continues_both_arms(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+    _test_engine,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    first = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "which model is best?"}
+    )
+    started = _sse_events(first.text)[0]
+    comparison_id = started["comparison_id"]
+    session_ids = {variant["session_id"] for variant in started["variants"]}
+
+    followup = await client.post(
+        f"/assistant/comparisons/{comparison_id}/message",
+        headers=auth_headers,
+        json={"message": "and for a shorter lead time?"},
+    )
+
+    assert followup.status_code == 200, followup.text
+    events = _sse_events(followup.text)
+    restarted = events[0]
+    assert restarted["type"] == "comparison_started"
+    # Same scratch sessions — the conversation continues rather than restarting —
+    # and still no ruleset identity anywhere in the stream.
+    assert {variant["session_id"] for variant in restarted["variants"]} == session_ids
+    for leak in ("ruleset_id", "ruleset_name", "builtin", "unconstrained"):
+        assert leak not in followup.text
+    done = {event["variant"]: event for event in events if event.get("type") == "done"}
+    assert set(done) == {0, 1}
+
+    # Two rounds logged two turns per arm; one vote rates all four.
+    async with _test_engine.begin() as conn:
+        turns = (
+            await conn.execute(
+                sa.text("SELECT COUNT(*) FROM assistant_turn_logs WHERE comparison_id = :cid"),
+                {"cid": comparison_id},
+            )
+        ).scalar_one()
+    assert turns == 4
+
+    vote = await client.post(
+        f"/assistant/comparisons/{comparison_id}/vote",
+        headers=auth_headers,
+        json={"winner_session_id": sorted(session_ids)[0]},
+    )
+    assert vote.json()["rated_turns"] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_arm_still_lacks_the_submit_tools(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+    user_id: str,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    first = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    comparison_id = _sse_events(first.text)[0]["comparison_id"]
+
+    resumed = await assistant_compare.resume_comparison(comparison_id, user_id)
+    for variant in resumed.variants:
+        assert set(assistant_compare.COMPARE_DENIED_TOOLS) <= set(variant.ruleset.tool_policy.deny)
+
+
+@pytest.mark.asyncio
+async def test_a_comparison_cannot_be_continued_by_someone_else(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    first = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    comparison_id = _sse_events(first.text)[0]["comparison_id"]
+
+    with pytest.raises(assistant_compare.UnknownSessionError):
+        await assistant_compare.resume_comparison(comparison_id, "someone-else")
+
+    missing = await client.post(
+        "/assistant/comparisons/no-such-comparison/message",
+        headers=auth_headers,
+        json={"message": "hi"},
+    )
+    assert missing.status_code == 404

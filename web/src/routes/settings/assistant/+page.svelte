@@ -21,6 +21,7 @@
 		type PromptPreview
 	} from '$lib/api';
 	import { ComparisonState } from '$lib/chat/compare.svelte';
+	import ChatCompare from '$lib/components/ChatCompare.svelte';
 
 	let rulesets = $state<RulesetSummary[]>([]);
 	let selected = $state<RulesetDetail | null>(null);
@@ -44,7 +45,6 @@
 		{ ruleset_id: '', model: '' }
 	]);
 	const comparison = new ComparisonState();
-	let voteNote = $state('');
 
 	function armDefaults(list: RulesetSummary[]) {
 		const active = list.find((r) => r.is_active) ?? list[0];
@@ -57,8 +57,8 @@
 		if (!compareMessage.trim() || comparison.running) return;
 		error = null;
 		notice = null;
-		voteNote = '';
-		await comparison.run(
+		await comparison.start(
+			compareMessage.trim(),
 			compareRulesets(
 				compareMessage.trim(),
 				arms.map((arm) => ({ ruleset_id: arm.ruleset_id, model: arm.model.trim() || null }))
@@ -66,19 +66,9 @@
 		);
 	}
 
-	function vote(winnerSessionId: string | null) {
-		void run(
-			async () => {
-				await comparison.vote(winnerSessionId, voteNote.trim() || undefined);
-			},
-			winnerSessionId ? 'Vote recorded on both answers.' : 'Recorded as a tie.'
-		);
-	}
-
 	function discard() {
 		void run(async () => {
 			await comparison.discard();
-			voteNote = '';
 		}, 'Comparison discarded. The ratings it produced are kept.');
 	}
 
@@ -408,51 +398,10 @@
 					<button onclick={runComparison} disabled={comparison.running || !compareMessage.trim()}>
 						{comparison.running ? 'Running…' : 'Run comparison'}
 					</button>
-					{#if comparison.comparisonId && !comparison.running}
-						<button onclick={discard} disabled={busy}>Discard</button>
-					{/if}
 				</div>
 
-				{#if comparison.error}<p class="banner error">{comparison.error}</p>{/if}
-
-				{#if comparison.columns.length}
-					<div class="columns">
-						{#each comparison.columns as column (column.sessionId)}
-							<article class="column">
-								<h3 class="column-head">{column.label}</h3>
-								{#if column.cautions.length}
-									<ul class="cautions">
-										{#each column.cautions as caution (caution)}
-											<li>{caution}</li>
-										{/each}
-									</ul>
-								{/if}
-								{#if column.tools.length}
-									<p class="tools">
-										{#each column.tools as tool, t (t)}<span class="tag">{tool}</span>{/each}
-									</p>
-								{/if}
-								<pre class="answer">{column.text}</pre>
-								{#if column.error}<p class="banner error">{column.error}</p>{/if}
-							</article>
-						{/each}
-					</div>
-
-					{#if !comparison.running}
-						<div class="vote-row">
-							<input bind:value={voteNote} placeholder="Why? (optional)" maxlength="2000" />
-							<button onclick={() => vote(comparison.columns[0].sessionId)} disabled={busy}>
-								A is better
-							</button>
-							<button
-								onclick={() => vote(comparison.columns[1]?.sessionId ?? null)}
-								disabled={busy}
-							>
-								B is better
-							</button>
-							<button onclick={() => vote(null)} disabled={busy}>Tie</button>
-						</div>
-					{/if}
+				{#if comparison.arms.length || comparison.running}
+					<ChatCompare {comparison} labeled onClose={discard} />
 				{/if}
 			</section>
 
@@ -679,57 +628,6 @@
 	.arm-label {
 		font-weight: 600;
 		font-size: 0.8rem;
-	}
-	.columns {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-		margin-top: 0.5rem;
-	}
-	.column {
-		flex: 1 1 20rem;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		padding: 0.6rem;
-		background: var(--color-surface);
-	}
-	.column-head {
-		margin: 0;
-		font-size: 0.8rem;
-	}
-	.cautions {
-		margin: 0;
-		padding-left: 1.1rem;
-		font-size: 0.75rem;
-		color: var(--color-status-running);
-	}
-	.tools {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.25rem;
-		margin: 0;
-	}
-	.answer {
-		margin: 0;
-		white-space: pre-wrap;
-		font-family: inherit;
-		font-size: 0.8rem;
-		line-height: 1.55;
-	}
-	.vote-row {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		align-items: center;
-		margin-top: 0.6rem;
-	}
-	.vote-row input {
-		flex: 1 1 14rem;
-		min-width: 0;
 	}
 	.actions,
 	.clone-row,

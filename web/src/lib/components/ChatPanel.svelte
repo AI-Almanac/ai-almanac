@@ -210,7 +210,8 @@
 		if (!text || comparison.running) return;
 		input = '';
 		comparing = true;
-		void comparison.run(
+		void comparison.start(
+			text,
 			blindCompare(text, {
 				sourceSessionId: chat.sessionId ?? undefined,
 				scope: sessionScope()

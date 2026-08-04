@@ -396,6 +396,38 @@ async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> Streami
     )
 
 
+class ComparisonMessageIn(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+
+
+@router.post("/comparisons/{comparison_id}/message")
+async def continue_comparison(
+    comparison_id: str, body: ComparisonMessageIn, user: CurrentUser
+) -> StreamingResponse:
+    """Run a follow-up message through both arms of a live comparison.
+
+    Each arm continues its own scratch conversation under the ruleset that
+    produced its earlier answers, so the side-by-side view is a dialogue, not a
+    single exchange. Identity stays out of the stream either way: a labeled
+    client already knows its arms, a blind one must not learn them.
+    """
+    await require_chat_available(user.id)
+    try:
+        comparison = await assistant_compare.resume_comparison(comparison_id, user.id)
+    except assistant_compare.UnknownSessionError:
+        raise HTTPException(status_code=404, detail="Comparison not found") from None
+    except assistant_compare.UnknownRulesetError as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Ruleset no longer exists: {exc.args[0]}"
+        ) from None
+
+    return StreamingResponse(
+        assistant_compare.stream_comparison(comparison, user.id, body.message, reveal=False),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def _revealed_arms(comparison_id: str, user_id: str) -> list[RevealedArm]:
     arms = []
     for arm in await assistant_compare.comparison_arms(comparison_id, user_id):

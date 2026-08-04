@@ -187,6 +187,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/comparisons/{comparison_id}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Comparison
+         * @description Run a follow-up message through both arms of a live comparison.
+         *
+         *     Each arm continues its own scratch conversation under the ruleset that
+         *     produced its earlier answers, so the side-by-side view is a dialogue, not a
+         *     single exchange. Identity stays out of the stream either way: a labeled
+         *     client already knows its arms, a blind one must not learn them.
+         */
+        post: operations["continue_comparison_assistant_comparisons__comparison_id__message_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assistant/comparisons/{comparison_id}/vote": {
         parameters: {
             query?: never;
@@ -2450,6 +2475,11 @@ export interface components {
             /** Source Session Id */
             source_session_id?: string | null;
             scope?: components["schemas"]["ChatScope"] | null;
+        };
+        /** ComparisonMessageIn */
+        ComparisonMessageIn: {
+            /** Message */
+            message: string;
         };
         /** DataSourceIn */
         DataSourceIn: {
@@ -4816,6 +4846,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["BlindCompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_comparison_assistant_comparisons__comparison_id__message_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonMessageIn"];
             };
         };
         responses: {

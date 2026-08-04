@@ -201,6 +201,29 @@ async def prepare_comparison(
     return Comparison(id=comparison_id, variants=tuple(prepared))
 
 
+async def resume_comparison(comparison_id: str, user_id: str) -> Comparison:
+    """Rebuild a live comparison so a follow-up message can run both arms.
+
+    The arms' rulesets come from the turn logs — the scratch sessions
+    deliberately do not store a ruleset id, because a stored one would unblind
+    a blind comparison through ``GET /chat/sessions/{id}``. A comparison whose
+    first turn never logged (best-effort write) or whose ruleset has since been
+    deleted cannot be continued; the vote still works either way.
+    """
+    arms = {
+        arm["session_id"]: arm["ruleset_id"]
+        for arm in await comparison_arms(comparison_id, user_id)
+        if arm["ruleset_id"]
+    }
+    if len(arms) < 2:
+        raise UnknownSessionError(comparison_id)
+    prepared = []
+    for index, session_id in enumerate(sorted(arms)):
+        ruleset = await variant_ruleset(VariantSpec(ruleset_id=arms[session_id]))
+        prepared.append(PreparedVariant(index=index, session_id=session_id, ruleset=ruleset))
+    return Comparison(id=comparison_id, variants=tuple(prepared))
+
+
 async def _merged(streams: Sequence[AsyncIterator[str]]) -> AsyncIterator[tuple[int, str]]:
     """Interleave the variant streams, tagging each event with its index.
 

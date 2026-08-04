@@ -246,6 +246,32 @@ export async function* blindCompare(
 	}
 }
 
+/**
+ * Continue a live comparison: the follow-up runs through both arms' scratch
+ * conversations under their original rulesets. Arm identity is never in the
+ * stream — a labeled client already knows it, a blind one must not learn it.
+ */
+export async function* continueComparison(
+	comparisonId: string,
+	message: string
+): AsyncGenerator<CompareEvent> {
+	const res = await fetch(
+		`${BASE_URL}/assistant/comparisons/${encodeURIComponent(comparisonId)}/message`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: JSON.stringify({ message })
+		}
+	);
+	if (!res.ok) {
+		throw new Error(`Comparison follow-up failed (${res.status}): ${await res.text()}`);
+	}
+	for await (const event of sseEvents<CompareEvent>(res)) {
+		yield event;
+		if (event.type === 'comparison_complete') return;
+	}
+}
+
 /** Record which arm won. `null` is a tie; the vote lands on both turn logs. */
 export async function voteOnComparison(
 	comparisonId: string,
