@@ -196,7 +196,18 @@
 	const comparison = new ComparisonState();
 	let comparing = $state(false);
 
+	// ponytail: localStorage, like the beta note — an opt-in view preference,
+	// and re-toggling it on a new device is the harmless failure.
+	const COMPARISON_MODE_KEY = 'almanac.comparisonModeEnabled';
+	let comparisonMode = $state(false);
+
+	function toggleComparisonMode() {
+		comparisonMode = !comparisonMode;
+		localStorage.setItem(COMPARISON_MODE_KEY, comparisonMode ? '1' : '0');
+	}
+
 	onMount(() => {
+		comparisonMode = localStorage.getItem(COMPARISON_MODE_KEY) === '1';
 		getRulesetOptions()
 			.then((options) => {
 				rulesetOptions = options.rulesets;
@@ -226,7 +237,12 @@
 </script>
 
 <div class="chat-panel">
-	<ChatHeader {chat} {rulesetOptions} />
+	<ChatHeader
+		{chat}
+		{rulesetOptions}
+		{comparisonMode}
+		onToggleComparisonMode={toggleComparisonMode}
+	/>
 
 	{#if showBetaNote}
 		<div class="beta-note">
@@ -272,6 +288,7 @@
 			{chat}
 			{emptyMessage}
 			{suggestions}
+			canRate={comparisonMode}
 			onSuggestion={(text) => send(text)}
 			onOpenArtifact={openArtifactInGallery}
 		/>
@@ -296,7 +313,7 @@
 				{placeholder}
 				rows={2}
 				disabled={chat.sending}></textarea>
-			{#if compareAvailable}
+			{#if comparisonMode && compareAvailable}
 				<button
 					class="ab-btn"
 					onclick={startCompare}

@@ -8,19 +8,24 @@
 		chat: ChatSessionState;
 		emptyMessage: string;
 		suggestions: string[];
+		/** Comparison mode is the opt-in for all feedback UI, thumbs included. */
+		canRate?: boolean;
 		onSuggestion: (text: string) => void;
 		onOpenArtifact: (artifactId: string) => void;
 	}
 
-	const { chat, emptyMessage, suggestions, onSuggestion, onOpenArtifact }: Props = $props();
+	const {
+		chat,
+		emptyMessage,
+		suggestions,
+		canRate = false,
+		onSuggestion,
+		onOpenArtifact
+	}: Props = $props();
 
 	let messagesEl = $state<HTMLElement | null>(null);
 	let shownCode = $state<Set<string>>(new Set());
 	let ratings = $state<Record<string, 1 | -1>>({});
-
-	// Everyone can rate: the turn log is the evidence base for ruleset changes,
-	// and user feedback is the sample that matters. The API was always open.
-	const canRate = true;
 
 	async function rate(turnId: string, value: 1 | -1) {
 		const sessionId = chat.sessionId;
