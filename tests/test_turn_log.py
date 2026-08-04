@@ -405,3 +405,54 @@ async def test_guardrails_survive_onto_the_persisted_turn() -> None:
     dumped = turn.model_dump(mode="json")
     assert dumped["guardrails"][0]["warnings"] == ["Blending 3 models risks overfitting."]
     assert dumped["guardrails"][0]["finding_keys"] == ["blend_members_at_risk"]
+
+
+@pytest.mark.asyncio
+async def test_the_log_is_written_by_the_time_the_turn_stream_ends(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No caller should have to wait for garbage collection to read a turn's log.
+
+    ``stream_chat_turn`` breaks out of the LLM generator on the terminal event,
+    which leaves it suspended with the log write still in its ``finally``. Closing
+    it explicitly is what makes the write happen before the stream returns —
+    without that, a reader immediately afterwards sometimes sees nothing.
+    """
+    from pydantic_ai.models.test import TestModel
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.chat_state import ChatScope
+    from ai_almanac.server.services.chat_turns import stream_chat_turn
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: TestModel(call_tools=[], custom_output_text="Answer."),
+    )
+    created = await client.post(
+        "/chat/sessions",
+        headers=auth_headers,
+        json={"scope": {"kind": "blend_setup", "key": "k", "job_ids": []}},
+    )
+    session_id = created.json()["id"]
+    # A local install resolves its own operator id, not the forwarded header.
+    async with get_db() as conn:
+        user_id = (
+            await conn.execute(
+                text("SELECT user_id FROM chat_sessions WHERE id = :sid"), {"sid": session_id}
+            )
+        ).scalar()
+
+    async for _ in stream_chat_turn(
+        session_id, user_id, "hi", ChatScope(kind="blend_setup", key="k", job_ids=[])
+    ):
+        pass
+
+    async with get_db() as conn:
+        logged = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM assistant_turn_logs WHERE session_id = :sid"),
+                {"sid": session_id},
+            )
+        ).scalar()
+
+    assert logged == 1

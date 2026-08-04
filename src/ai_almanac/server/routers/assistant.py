@@ -12,14 +12,17 @@ and are not editable here at all — only the wording that explains them is.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.auth import AdminUser
-from ai_almanac.server.services import guardrails, rulesets
+from ai_almanac.server.services import assistant_compare, guardrails, rulesets
 from ai_almanac.server.services.chat_state import ChatScope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
+
+from .chat import require_chat_available
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -76,6 +79,33 @@ class RulesetSave(BaseModel):
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     model: str | None = None
     model_settings: dict | None = None
+
+
+class VariantIn(BaseModel):
+    """One arm of a comparison: a ruleset, optionally on a different model."""
+
+    ruleset_id: str = Field(min_length=1, max_length=64)
+    model: str | None = Field(default=None, max_length=200)
+
+
+class CompareRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    variants: list[VariantIn] = Field(min_length=2, max_length=2)
+    # Clone an existing conversation to compare against its configuration state;
+    # omit for a fresh pair of sessions.
+    source_session_id: str | None = None
+    scope: ChatScope | None = None
+
+
+class VoteIn(BaseModel):
+    """Which arm won. ``None`` records a tie."""
+
+    winner_session_id: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class VoteOut(BaseModel):
+    rated_turns: int
 
 
 class PreviewRequest(BaseModel):
@@ -214,3 +244,56 @@ async def preview_ruleset(ruleset_id: str, body: PreviewRequest, user: AdminUser
         instructions=instructions,
         character_count=len(instructions),
     )
+
+
+@router.post("/compare")
+async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingResponse:
+    """Answer one message under two policies at once, merged onto one SSE stream.
+
+    Every event carries a ``variant`` index, so "constrained vs raw" and "one
+    ruleset, two models" are the same mechanism. The submit tools are withheld
+    from both arms — see ``services.assistant_compare``.
+    """
+    await require_chat_available(user.id)
+    variants = [
+        assistant_compare.VariantSpec(ruleset_id=variant.ruleset_id, model=variant.model)
+        for variant in body.variants
+    ]
+    try:
+        comparison = await assistant_compare.prepare_comparison(
+            user.id,
+            variants,
+            source_session_id=body.source_session_id,
+            scope=body.scope,
+        )
+    except assistant_compare.UnknownRulesetError as exc:
+        raise HTTPException(status_code=404, detail=f"Ruleset not found: {exc.args[0]}") from None
+    except assistant_compare.UnknownSessionError:
+        raise HTTPException(status_code=404, detail="Session not found") from None
+
+    return StreamingResponse(
+        assistant_compare.stream_comparison(comparison, user.id, body.message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/comparisons/{comparison_id}/vote", response_model=VoteOut)
+async def vote_on_comparison(comparison_id: str, body: VoteIn, user: AdminUser) -> VoteOut:
+    """Record which arm won, on both arms' turn logs."""
+    try:
+        rated = await assistant_compare.record_vote(
+            comparison_id, user.id, body.winner_session_id, body.note
+        )
+    except assistant_compare.UnknownSessionError:
+        raise HTTPException(status_code=404, detail="Comparison not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return VoteOut(rated_turns=rated)
+
+
+@router.delete("/comparisons/{comparison_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comparison(comparison_id: str, user: AdminUser) -> None:
+    """Discard a comparison's scratch sessions."""
+    if not await assistant_compare.delete_comparison(comparison_id, user.id):
+        raise HTTPException(status_code=404, detail="Comparison not found")

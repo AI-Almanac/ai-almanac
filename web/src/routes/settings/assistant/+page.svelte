@@ -9,6 +9,9 @@
 		cloneRuleset,
 		activateRuleset,
 		previewRuleset,
+		compareRulesets,
+		voteOnComparison,
+		discardComparison,
 		PREVIEW_SCOPE_KINDS,
 		type RulesetSummary,
 		type RulesetDetail,
@@ -30,6 +33,119 @@
 
 	const isPackaged = $derived(selected?.source === 'packaged');
 
+	// ---- Comparison playground ------------------------------------------------
+
+	type Column = {
+		label: string;
+		sessionId: string;
+		text: string;
+		tools: string[];
+		cautions: string[];
+		error: string | null;
+	};
+
+	let compareMessage = $state('');
+	let arms = $state([
+		{ ruleset_id: '', model: '' },
+		{ ruleset_id: '', model: '' }
+	]);
+	let columns = $state<Column[]>([]);
+	let comparisonId = $state<string | null>(null);
+	let comparing = $state(false);
+	let voteNote = $state('');
+
+	function armDefaults(list: RulesetSummary[]) {
+		const active = list.find((r) => r.is_active) ?? list[0];
+		const other = list.find((r) => r.id !== active?.id) ?? active;
+		arms[0].ruleset_id ||= active?.id ?? '';
+		arms[1].ruleset_id ||= other?.id ?? '';
+	}
+
+	function applyCompareEvent(event: {
+		type: string;
+		variant?: number;
+		[key: string]: unknown;
+	}): void {
+		if (event.type === 'comparison_started') {
+			const variants = event.variants as {
+				session_id: string;
+				ruleset_name: string;
+				ruleset_version: number;
+				model: string | null;
+			}[];
+			comparisonId = event.comparison_id as string;
+			columns = variants.map((variant) => ({
+				label: `${variant.ruleset_name} v${variant.ruleset_version}${
+					variant.model ? ` · ${variant.model}` : ''
+				}`,
+				sessionId: variant.session_id,
+				text: '',
+				tools: [],
+				cautions: [],
+				error: null
+			}));
+			return;
+		}
+		const column = columns[event.variant ?? -1];
+		if (!column) return;
+		if (event.type === 'text_delta') column.text += (event.content as string) ?? '';
+		if (event.type === 'tool_call') column.tools.push((event.tool_call as { name: string }).name);
+		if (event.type === 'guardrail')
+			column.cautions.push(
+				...((event.errors as string[]) ?? []),
+				...((event.warnings as string[]) ?? [])
+			);
+		if (event.type === 'error') column.error = (event.message as string) ?? 'Failed';
+		if (event.type === 'done') column.text = (event.turn as { content: string }).content;
+	}
+
+	async function runComparison() {
+		if (!compareMessage.trim() || comparing) return;
+		comparing = true;
+		error = null;
+		notice = null;
+		// Discard the previous scratch conversations, not the ratings: the turn log
+		// keeps every vote already recorded against a ruleset version.
+		if (comparisonId) await discardComparison(comparisonId).catch(() => undefined);
+		comparisonId = null;
+		columns = [];
+		voteNote = '';
+		try {
+			for await (const event of compareRulesets(
+				compareMessage.trim(),
+				arms.map((arm) => ({ ruleset_id: arm.ruleset_id, model: arm.model.trim() || null }))
+			)) {
+				applyCompareEvent(event as never);
+			}
+		} catch (e) {
+			error = (e as Error).message;
+		} finally {
+			comparing = false;
+		}
+	}
+
+	function vote(winnerSessionId: string | null) {
+		const id = comparisonId;
+		if (!id) return;
+		void run(
+			async () => {
+				await voteOnComparison(id, winnerSessionId, voteNote.trim() || undefined);
+			},
+			winnerSessionId ? 'Vote recorded on both answers.' : 'Recorded as a tie.'
+		);
+	}
+
+	function discard() {
+		const id = comparisonId;
+		if (!id) return;
+		void run(async () => {
+			await discardComparison(id);
+			comparisonId = null;
+			columns = [];
+			voteNote = '';
+		}, 'Comparison discarded. The ratings it produced are kept.');
+	}
+
 	async function load(selectId?: string) {
 		loading = true;
 		error = null;
@@ -37,6 +153,7 @@
 			const [list, limits] = await Promise.all([listRulesets(), getGuardrailThresholds()]);
 			rulesets = list;
 			thresholds = limits;
+			armDefaults(list);
 			const target = selectId ?? selected?.id ?? list.find((r) => r.is_active)?.id ?? list[0]?.id;
 			if (target) await select(target);
 		} catch (e) {
@@ -281,6 +398,80 @@
 					{/if}
 				</section>
 			{/if}
+
+			<section class="card">
+				<h2>Compare rulesets</h2>
+				<p class="hint">
+					One question, two answers, side by side. Pick two rulesets — or the same ruleset with a
+					different model — and vote on which explained itself better. The vote is recorded against
+					both answers' ruleset versions, so wording changes can be judged on evidence rather than
+					impressions. Neither answer can submit anything: the submit tools are withheld from both.
+				</p>
+
+				<textarea
+					rows="3"
+					bind:value={compareMessage}
+					placeholder="e.g. Which model is best for this blend?"></textarea>
+
+				<div class="arms">
+					{#each arms as arm, i (i)}
+						<div class="arm">
+							<span class="arm-label">{i === 0 ? 'A' : 'B'}</span>
+							<select bind:value={arms[i].ruleset_id}>
+								{#each rulesets as ruleset (ruleset.id)}
+									<option value={ruleset.id}>{ruleset.name} (v{ruleset.version})</option>
+								{/each}
+							</select>
+							<input bind:value={arms[i].model} placeholder="model (optional)" maxlength="200" />
+						</div>
+					{/each}
+				</div>
+
+				<div class="actions">
+					<button onclick={runComparison} disabled={comparing || !compareMessage.trim()}>
+						{comparing ? 'Running…' : 'Run comparison'}
+					</button>
+					{#if comparisonId && !comparing}
+						<button onclick={discard} disabled={busy}>Discard</button>
+					{/if}
+				</div>
+
+				{#if columns.length}
+					<div class="columns">
+						{#each columns as column (column.sessionId)}
+							<article class="column">
+								<h3 class="column-head">{column.label}</h3>
+								{#if column.cautions.length}
+									<ul class="cautions">
+										{#each column.cautions as caution (caution)}
+											<li>{caution}</li>
+										{/each}
+									</ul>
+								{/if}
+								{#if column.tools.length}
+									<p class="tools">
+										{#each column.tools as tool, t (t)}<span class="tag">{tool}</span>{/each}
+									</p>
+								{/if}
+								<pre class="answer">{column.text}</pre>
+								{#if column.error}<p class="banner error">{column.error}</p>{/if}
+							</article>
+						{/each}
+					</div>
+
+					{#if !comparing}
+						<div class="vote-row">
+							<input bind:value={voteNote} placeholder="Why? (optional)" maxlength="2000" />
+							<button onclick={() => vote(columns[0].sessionId)} disabled={busy}>A is better</button
+							>
+							<button onclick={() => vote(columns[1]?.sessionId ?? null)} disabled={busy}>
+								B is better
+							</button>
+							<button onclick={() => vote(null)} disabled={busy}>Tie</button>
+						</div>
+					{/if}
+				{/if}
+			</section>
 		{/if}
 	</div>
 </AdminGuard>
@@ -415,6 +606,82 @@
 		color: var(--color-status-running);
 		border-color: var(--color-status-running);
 		background: var(--color-status-running-bg);
+	}
+	.arms {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin: 0.5rem 0;
+	}
+	.arm {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex: 1 1 18rem;
+		min-width: 0;
+	}
+	.arm select {
+		flex: 1 1 8rem;
+		min-width: 0;
+	}
+	.arm input {
+		flex: 1 1 6rem;
+		min-width: 0;
+	}
+	.arm-label {
+		font-weight: 600;
+		font-size: 0.8rem;
+	}
+	.columns {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 0.5rem;
+	}
+	.column {
+		flex: 1 1 20rem;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.4rem;
+		padding: 0.6rem;
+		background: var(--color-surface);
+	}
+	.column-head {
+		margin: 0;
+		font-size: 0.8rem;
+	}
+	.cautions {
+		margin: 0;
+		padding-left: 1.1rem;
+		font-size: 0.75rem;
+		color: var(--color-status-running);
+	}
+	.tools {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		margin: 0;
+	}
+	.answer {
+		margin: 0;
+		white-space: pre-wrap;
+		font-family: inherit;
+		font-size: 0.8rem;
+		line-height: 1.55;
+	}
+	.vote-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		align-items: center;
+		margin-top: 0.6rem;
+	}
+	.vote-row input {
+		flex: 1 1 14rem;
+		min-width: 0;
 	}
 	.actions,
 	.clone-row,

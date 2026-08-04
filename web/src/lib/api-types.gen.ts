@@ -119,6 +119,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Rulesets
+         * @description Answer one message under two policies at once, merged onto one SSE stream.
+         *
+         *     Every event carries a ``variant`` index, so "constrained vs raw" and "one
+         *     ruleset, two models" are the same mechanism. The submit tools are withheld
+         *     from both arms — see ``services.assistant_compare``.
+         */
+        post: operations["compare_rulesets_assistant_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/comparisons/{comparison_id}/vote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vote On Comparison
+         * @description Record which arm won, on both arms' turn logs.
+         */
+        post: operations["vote_on_comparison_assistant_comparisons__comparison_id__vote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/comparisons/{comparison_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Comparison
+         * @description Discard a comparison's scratch sessions.
+         */
+        delete: operations["delete_comparison_assistant_comparisons__comparison_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/me": {
         parameters: {
             query?: never;
@@ -2300,6 +2364,16 @@ export interface components {
             /** Guardrails */
             guardrails?: components["schemas"]["GuardrailNotice"][];
         };
+        /** CompareRequest */
+        CompareRequest: {
+            /** Message */
+            message: string;
+            /** Variants */
+            variants: components["schemas"]["VariantIn"][];
+            /** Source Session Id */
+            source_session_id?: string | null;
+            scope?: components["schemas"]["ChatScope"] | null;
+        };
         /** DataSourceIn */
         DataSourceIn: {
             /**
@@ -4221,6 +4295,31 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * VariantIn
+         * @description One arm of a comparison: a ruleset, optionally on a different model.
+         */
+        VariantIn: {
+            /** Ruleset Id */
+            ruleset_id: string;
+            /** Model */
+            model?: string | null;
+        };
+        /**
+         * VoteIn
+         * @description Which arm won. ``None`` records a tie.
+         */
+        VoteIn: {
+            /** Winner Session Id */
+            winner_session_id?: string | null;
+            /** Note */
+            note?: string | null;
+        };
+        /** VoteOut */
+        VoteOut: {
+            /** Rated Turns */
+            rated_turns: number;
+        };
         /** WindowMetrics */
         WindowMetrics: {
             /** Window */
@@ -4494,6 +4593,103 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PreviewResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_rulesets_assistant_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vote_on_comparison_assistant_comparisons__comparison_id__vote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_comparison_assistant_comparisons__comparison_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

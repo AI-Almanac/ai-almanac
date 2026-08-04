@@ -611,6 +611,7 @@ async def test_send_message_persists_user_and_assistant_turns(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert latest_user_message == "How did this run do?"
         assert session_id_arg == session_id
@@ -668,6 +669,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "Partial"})
@@ -736,6 +738,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert latest_user_message == "Let's revise this first."
         assert isinstance(provider_state[-1], ModelRequest)
@@ -789,6 +792,7 @@ async def test_send_message_refreshes_scope_job_ids(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         assert scope.job_ids == [job_id]

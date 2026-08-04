@@ -4,7 +4,9 @@
 // order, and which tools it is withheld. It never decides what the platform
 // accepts — the statistical guardrails do that server-side, past the model — so
 // editing one here cannot loosen a configuration rule.
-import { request } from './core';
+import { authHeaders } from '../auth';
+import { BASE_URL, request } from './core';
+import { sseEvents, type ChatEvent, type ChatScope } from './chat';
 
 export type PromptSection = {
 	key: string;
@@ -118,5 +120,76 @@ export async function previewRuleset(id: string, scopeKind: string): Promise<Pro
 	return request<PromptPreview>(`/assistant/rulesets/${encodeURIComponent(id)}/preview`, {
 		method: 'POST',
 		body: JSON.stringify({ scope_kind: scopeKind })
+	});
+}
+
+// ---- Side-by-side comparison -------------------------------------------------
+//
+// Two answers to one message, produced under two rulesets (or two models under
+// one ruleset), so a wording change can be judged on evidence. Each arm runs in
+// its own scratch session and neither can submit anything: the submit tools are
+// withheld server-side, at registration.
+
+export type ComparisonVariantSpec = {
+	ruleset_id: string;
+	model?: string | null;
+};
+
+export type ComparisonVariant = {
+	variant: number;
+	session_id: string;
+	ruleset_id: string;
+	ruleset_name: string;
+	ruleset_version: number;
+	model: string | null;
+};
+
+export type CompareEvent =
+	| { type: 'comparison_started'; comparison_id: string; variants: ComparisonVariant[] }
+	| { type: 'comparison_complete'; comparison_id: string }
+	| (ChatEvent & { variant: number });
+
+export async function* compareRulesets(
+	message: string,
+	variants: ComparisonVariantSpec[],
+	options: { sourceSessionId?: string; scope?: ChatScope } = {}
+): AsyncGenerator<CompareEvent> {
+	const res = await fetch(`${BASE_URL}/assistant/compare`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		body: JSON.stringify({
+			message,
+			variants,
+			source_session_id: options.sourceSessionId ?? null,
+			scope: options.scope ?? null
+		})
+	});
+	if (!res.ok) {
+		throw new Error(`Comparison failed (${res.status}): ${await res.text()}`);
+	}
+	for await (const event of sseEvents<CompareEvent>(res)) {
+		yield event;
+		if (event.type === 'comparison_complete') return;
+	}
+}
+
+/** Record which arm won. `null` is a tie; the vote lands on both turn logs. */
+export async function voteOnComparison(
+	comparisonId: string,
+	winnerSessionId: string | null,
+	note?: string
+): Promise<{ rated_turns: number }> {
+	return request<{ rated_turns: number }>(
+		`/assistant/comparisons/${encodeURIComponent(comparisonId)}/vote`,
+		{
+			method: 'POST',
+			body: JSON.stringify({ winner_session_id: winnerSessionId, note: note ?? null })
+		}
+	);
+}
+
+export async function discardComparison(comparisonId: string): Promise<void> {
+	await request<void>(`/assistant/comparisons/${encodeURIComponent(comparisonId)}`, {
+		method: 'DELETE'
 	});
 }
