@@ -211,6 +211,7 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
         ("POST", "/assistant/rulesets/builtin/clone"),
         ("POST", "/assistant/rulesets/builtin/activate"),
         ("POST", "/assistant/rulesets/builtin/preview"),
+        ("GET", "/assistant/feedback"),
     ],
 )
 @pytest.mark.asyncio

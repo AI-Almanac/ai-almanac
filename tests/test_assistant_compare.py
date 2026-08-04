@@ -299,13 +299,24 @@ async def test_comparison_endpoints_require_admin_in_shared(
     monkeypatch.setattr(settings, "admin_emails", "")
     headers = {"X-Forwarded-User": "rando"}
 
+    # Naming arbitrary variants stays an admin capability.
+    res = await client.post(
+        "/assistant/compare", headers=headers, json={"message": "hi", "variants": []}
+    )
+    assert res.status_code == 403, res.text
+
+    # Voting, discarding and the blind flow are open to any identified user —
+    # they are scoped to the caller's own comparisons.
     for method, path, payload in (
-        ("POST", "/assistant/compare", {"message": "hi", "variants": []}),
         ("POST", "/assistant/comparisons/abc/vote", {}),
         ("DELETE", "/assistant/comparisons/abc", None),
+        ("POST", "/assistant/compare/blind", {"message": "hi"}),
+        ("GET", "/assistant/ruleset-options", None),
     ):
         res = await client.request(method, path, headers=headers, json=payload)
-        assert res.status_code == 403, f"{method} {path} returned {res.status_code}"
+        assert res.status_code != 403, f"{method} {path} returned 403 for a plain user"
+        unauthenticated = await client.request(method, path, json=payload)
+        assert unauthenticated.status_code == 401, f"{method} {path} open when unidentified"
 
 
 @pytest.mark.asyncio
@@ -339,3 +350,195 @@ async def test_a_scratch_session_cannot_submit_a_run(
         submitted = await client.post(path, headers=auth_headers, json={})
         assert submitted.status_code == 400, submitted.text
         assert "comparison" in submitted.json()["detail"]
+
+
+# --- blind user-facing comparisons -----------------------------------------
+#
+# Regular users compare active-vs-candidate without knowing which is which:
+# the server picks and shuffles the arms, the stream names them only by index,
+# and identities come out in the vote response.
+
+
+@pytest.fixture
+def candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "assistant_comparison_candidate", "unconstrained")
+
+
+@pytest.mark.asyncio
+async def test_a_blind_comparison_never_names_its_arms(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    res = await client.post(
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "which model is best?"},
+    )
+
+    assert res.status_code == 200, res.text
+    started = _sse_events(res.text)[0]
+    assert started["type"] == "comparison_started"
+    for variant in started["variants"]:
+        assert set(variant) == {"variant", "session_id"}
+    # Nothing anywhere in the stream identifies a ruleset.
+    for leak in ("ruleset_id", "ruleset_name", "builtin", "unconstrained", "Unconstrained"):
+        assert leak not in res.text, f"{leak!r} leaked into the blind stream"
+
+    # The scratch sessions are fetchable by their owner, so their titles must
+    # not unblind the arms either.
+    for variant in started["variants"]:
+        detail = await client.get(f"/chat/sessions/{variant['session_id']}", headers=auth_headers)
+        title = detail.json()["title"]
+        assert "Arm" in title
+        assert "Built-in" not in title and "Unconstrained" not in title
+
+
+@pytest.mark.asyncio
+async def test_the_arm_order_is_shuffled(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint really applies the shuffle: force it to reverse and the
+    candidate lands in arm 0."""
+    await rulesets.seed_packaged_rulesets()
+    monkeypatch.setattr("ai_almanac.server.routers.assistant.random.shuffle", list.reverse)
+
+    res = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    started = _sse_events(res.text)[0]
+
+    vote = await client.post(
+        f"/assistant/comparisons/{started['comparison_id']}/vote",
+        headers=auth_headers,
+        json={"winner_session_id": None},
+    )
+    by_session = {arm["session_id"]: arm["ruleset_id"] for arm in vote.json()["arms"]}
+    ordered = [by_session[variant["session_id"]] for variant in started["variants"]]
+
+    assert ordered == ["unconstrained", "builtin"]
+
+
+@pytest.mark.asyncio
+async def test_the_vote_response_reveals_the_arms(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    res = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    started = _sse_events(res.text)[0]
+    winner = started["variants"][0]["session_id"]
+
+    vote = await client.post(
+        f"/assistant/comparisons/{started['comparison_id']}/vote",
+        headers=auth_headers,
+        json={"winner_session_id": winner},
+    )
+
+    assert vote.status_code == 200, vote.text
+    arms = vote.json()["arms"]
+    assert {arm["ruleset_id"] for arm in arms} == {"builtin", "unconstrained"}
+    assert all(arm["ruleset_name"] for arm in arms)
+
+
+@pytest.mark.asyncio
+async def test_blind_comparisons_are_offered_only_with_a_usable_candidate(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.settings import settings
+
+    await rulesets.seed_packaged_rulesets()
+
+    async def availability() -> bool:
+        res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+        return res.json()["compare_available"]
+
+    async def compare_status() -> int:
+        res = await client.post(
+            "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        )
+        return res.status_code
+
+    monkeypatch.setattr(settings, "assistant_comparison_candidate", "")
+    assert not await availability()
+    assert await compare_status() == 409
+
+    monkeypatch.setattr(settings, "assistant_comparison_candidate", "builtin")  # == active
+    assert not await availability()
+    assert await compare_status() == 409
+
+    monkeypatch.setattr(settings, "assistant_comparison_candidate", "no-such-ruleset")
+    assert not await availability()
+    assert await compare_status() == 409
+
+
+@pytest.mark.asyncio
+async def test_ruleset_options_expose_no_prompt_or_policy(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+
+    assert res.status_code == 200
+    listed = res.json()["rulesets"]
+    assert {item["id"] for item in listed} >= {"builtin", "unconstrained"}
+    for item in listed:
+        assert set(item) == {"id", "name", "description", "is_active"}
+
+
+@pytest.mark.asyncio
+async def test_a_blind_scratch_session_cannot_submit_a_run(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    res = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    session_id = _sse_events(res.text)[0]["variants"][0]["session_id"]
+
+    for path in (
+        f"/chat/sessions/{session_id}/benchmark/submit",
+        f"/chat/sessions/{session_id}/blend/submit",
+    ):
+        submitted = await client.post(path, headers=auth_headers, json={})
+        assert submitted.status_code == 400, submitted.text
+
+
+@pytest.mark.asyncio
+async def test_a_vote_is_scoped_to_the_comparisons_owner(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    candidate: None,
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    res = await client.post(
+        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+    )
+    comparison_id = _sse_events(res.text)[0]["comparison_id"]
+
+    with pytest.raises(assistant_compare.UnknownSessionError):
+        await assistant_compare.record_vote(comparison_id, "someone-else", None)
+    assert await assistant_compare.comparison_arms(comparison_id, "someone-else") == []

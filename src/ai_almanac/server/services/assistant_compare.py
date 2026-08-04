@@ -168,19 +168,24 @@ async def prepare_comparison(
     *,
     source_session_id: str | None = None,
     scope: ChatScope | None = None,
+    blind: bool = False,
 ) -> Comparison:
     """Resolve the rulesets and create one scratch session per variant.
 
     Separate from the streaming so a bad ruleset id or an unreachable source
     session is an HTTP error, not an event half way down a stream the client has
     already started rendering.
+
+    ``blind`` keeps ruleset names out of the scratch-session titles — the owner
+    can fetch those sessions by id, so a named title would unblind the arms.
     """
     comparison_id = str(uuid4())
     resolved = [await variant_ruleset(variant) for variant in variants]
     prepared: list[PreparedVariant] = []
     async with get_db() as conn:
         for index, ruleset in enumerate(resolved):
-            title = f"Comparison {comparison_id[:8]} · {ruleset.name}"
+            label = f"Arm {index + 1}" if blind else ruleset.name
+            title = f"Comparison {comparison_id[:8]} · {label}"
             session_id = (
                 await _clone_session(conn, user_id, source_session_id, comparison_id, title)
                 if source_session_id
@@ -230,24 +235,30 @@ async def _merged(streams: Sequence[AsyncIterator[str]]) -> AsyncIterator[tuple[
             task.cancel()
 
 
+def _variant_intro(variant: PreparedVariant, *, reveal: bool) -> dict:
+    intro = {"variant": variant.index, "session_id": variant.session_id}
+    if reveal:
+        intro |= {
+            "ruleset_id": variant.ruleset.id,
+            "ruleset_name": variant.ruleset.name,
+            "ruleset_version": variant.ruleset.version,
+            "model": variant.ruleset.model,
+        }
+    return intro
+
+
 async def stream_comparison(
-    comparison: Comparison, user_id: str, message: str
+    comparison: Comparison, user_id: str, message: str, *, reveal: bool = True
 ) -> AsyncIterator[str]:
-    """Run every variant on the same message, merged onto one SSE stream."""
+    """Run every variant on the same message, merged onto one SSE stream.
+
+    ``reveal=False`` is the blind mode: the stream identifies arms only by
+    index and session id, and the vote response is where names come out.
+    """
     yield _sse(
         "comparison_started",
         comparison_id=comparison.id,
-        variants=[
-            {
-                "variant": variant.index,
-                "session_id": variant.session_id,
-                "ruleset_id": variant.ruleset.id,
-                "ruleset_name": variant.ruleset.name,
-                "ruleset_version": variant.ruleset.version,
-                "model": variant.ruleset.model,
-            }
-            for variant in comparison.variants
-        ],
+        variants=[_variant_intro(variant, reveal=reveal) for variant in comparison.variants],
     )
     streams = [
         stream_chat_turn(
@@ -277,6 +288,32 @@ async def comparison_session_ids(comparison_id: str, user_id: str) -> list[str]:
             )
         ).fetchall()
     return [row[0] for row in rows]
+
+
+async def comparison_arms(comparison_id: str, user_id: str) -> list[dict]:
+    """Which ruleset ran in each arm, from the turn logs — the blind-mode reveal.
+
+    Derived rather than stored: the turn log already records provenance per
+    session, keyed by comparison_id. A turn whose log write was swallowed shows
+    up as an absent row, which the caller renders as "unknown" rather than
+    failing the vote.
+    """
+    async with get_db() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    sa.text("""
+                        SELECT DISTINCT session_id, ruleset_id, ruleset_version
+                        FROM assistant_turn_logs
+                        WHERE comparison_id = :cid AND user_id = :uid
+                    """),
+                    {"cid": comparison_id, "uid": user_id},
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
+    return [dict(row) for row in rows]
 
 
 async def record_vote(

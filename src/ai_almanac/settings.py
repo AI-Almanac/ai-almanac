@@ -179,6 +179,11 @@ class Settings(BaseSettings):
     # one release.
     chat_system_prompt: str = ""
 
+    # Ruleset id that users' blind A/B comparisons run against the active one.
+    # Empty disables user-facing comparisons entirely, which is also the cost
+    # kill-switch: every comparison is two full LLM turns.
+    assistant_comparison_candidate: str = ""
+
     # Statistical guardrail thresholds. These decide what the platform accepts,
     # so they live here rather than on an assistant ruleset: the submission
     # chokepoint, the validation display, and the prompt prose all read the same

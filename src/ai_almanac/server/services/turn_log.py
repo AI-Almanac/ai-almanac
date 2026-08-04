@@ -187,3 +187,60 @@ async def rate_turn(
             },
         )
     return result.rowcount > 0
+
+
+async def feedback_summary() -> list[dict]:
+    """Votes, ratings and flags rolled up per ruleset version.
+
+    Aggregated in Python rather than SQL: ``flags`` is JSON text and boolean
+    extraction differs between SQLite and Postgres, and turn-log volume is
+    tiny.
+    """
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT ruleset_id, ruleset_version, rating, comparison_id, flags "
+                        "FROM assistant_turn_logs WHERE ruleset_id IS NOT NULL"
+                    )
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
+
+    groups: dict[tuple[str, int | None], dict] = {}
+    for row in rows:
+        key = (row["ruleset_id"], row["ruleset_version"])
+        group = groups.setdefault(
+            key,
+            {
+                "ruleset_id": row["ruleset_id"],
+                "ruleset_version": row["ruleset_version"],
+                "turns": 0,
+                "rated": 0,
+                "wins": 0,
+                "losses": 0,
+                "ties": 0,
+                "flag_counts": {},
+            },
+        )
+        group["turns"] += 1
+        rating = row["rating"]
+        if rating is not None:
+            group["rated"] += 1
+            if rating > 0:
+                group["wins"] += 1
+            elif rating < 0:
+                group["losses"] += 1
+            elif row["comparison_id"] is not None:
+                group["ties"] += 1
+        flags = row["flags"]
+        flags = json.loads(flags) if isinstance(flags, str) else (flags or {})
+        for flag, value in flags.items():
+            if value:
+                group["flag_counts"][flag] = group["flag_counts"].get(flag, 0) + 1
+    return sorted(groups.values(), key=lambda g: (g["ruleset_id"], g["ruleset_version"] or 0))

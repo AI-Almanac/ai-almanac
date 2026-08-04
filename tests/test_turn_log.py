@@ -456,3 +456,43 @@ async def test_the_log_is_written_by_the_time_the_turn_stream_ends(
         ).scalar()
 
     assert logged == 1
+
+
+# --- feedback summary -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_feedback_summary_rolls_up_votes_ratings_and_flags() -> None:
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.turn_log import feedback_summary, rate_turn
+
+    def fb_record(turn_id: str, **kwargs) -> TurnRecord:
+        return TurnRecord(
+            session_id=f"sess-{turn_id}",
+            user_id="user-fb",
+            turn_id=turn_id,
+            ruleset_id="fb-test",
+            ruleset_version=7,
+            **kwargs,
+        )
+
+    # A thumbs-up, a comparison tie, and an unrated turn that trips a flag.
+    await record_turn(fb_record("fb-up", text="fine", tool_calls=["get_job_metrics"]))
+    await rate_turn("sess-fb-up", "fb-up", "user-fb", 1, None)
+    await record_turn(fb_record("fb-tie", comparison_id="cmp-fb", text="fine"))
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE assistant_turn_logs SET rating = 0 WHERE turn_id = 'fb-tie'")
+        )
+    await record_turn(fb_record("fb-flagged", text="The score is 0.53."))
+
+    summary = await feedback_summary()
+    group = next(g for g in summary if g["ruleset_id"] == "fb-test")
+
+    assert group["ruleset_version"] == 7
+    assert group["turns"] == 3
+    assert group["rated"] == 2
+    assert group["wins"] == 1
+    assert group["losses"] == 0
+    assert group["ties"] == 1
+    assert group["flag_counts"]["numbers_without_tool_call"] == 1

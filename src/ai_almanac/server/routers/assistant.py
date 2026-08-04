@@ -12,15 +12,18 @@ and are not editable here at all — only the wording that explains them is.
 
 from __future__ import annotations
 
+import random
+
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.auth import AdminUser
-from ai_almanac.server.services import assistant_compare, guardrails, rulesets
+from ai_almanac.server.auth import AdminUser, CurrentUser
+from ai_almanac.server.services import assistant_compare, guardrails, rulesets, turn_log
 from ai_almanac.server.services.chat_state import ChatScope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
+from ai_almanac.settings import settings
 
 from .chat import require_chat_available
 
@@ -97,6 +100,15 @@ class CompareRequest(BaseModel):
     scope: ChatScope | None = None
 
 
+class BlindCompareRequest(BaseModel):
+    """A user-triggered comparison. The server picks the arms — there is no
+    ``variants`` field, so users can never choose or learn what runs."""
+
+    message: str = Field(min_length=1, max_length=8000)
+    source_session_id: str | None = None
+    scope: ChatScope | None = None
+
+
 class VoteIn(BaseModel):
     """Which arm won. ``None`` records a tie."""
 
@@ -104,8 +116,45 @@ class VoteIn(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class RevealedArm(BaseModel):
+    """One arm's identity, disclosed after the vote. Nulls mean the turn log
+    for that arm never landed — degraded, not an error."""
+
+    session_id: str
+    ruleset_id: str | None = None
+    ruleset_name: str | None = None
+    ruleset_version: int | None = None
+
+
 class VoteOut(BaseModel):
     rated_turns: int
+    arms: list[RevealedArm] = []
+
+
+class RulesetOption(BaseModel):
+    """What a non-admin may know about a ruleset: enough to pick one, nothing
+    about its prompt or tool policy."""
+
+    id: str
+    name: str
+    description: str
+    is_active: bool
+
+
+class RulesetOptionsOut(BaseModel):
+    rulesets: list[RulesetOption]
+    compare_available: bool
+
+
+class RulesetFeedback(BaseModel):
+    ruleset_id: str
+    ruleset_version: int | None
+    turns: int
+    rated: int
+    wins: int
+    losses: int
+    ties: int
+    flag_counts: dict[str, int]
 
 
 class PreviewRequest(BaseModel):
@@ -278,9 +327,93 @@ async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingRe
     )
 
 
+async def _blind_pair() -> tuple[Ruleset, Ruleset] | None:
+    """The (active, candidate) pair user comparisons run, or None when unset,
+    unknown, archived, or the same as the active ruleset."""
+    candidate_id = settings.assistant_comparison_candidate.strip()
+    if not candidate_id:
+        return None
+    active = await rulesets.active_ruleset()
+    if candidate_id == active.id:
+        return None
+    candidate = await rulesets.selectable_ruleset(candidate_id)
+    if candidate is None:
+        return None
+    return active, candidate
+
+
+@router.get("/ruleset-options", response_model=RulesetOptionsOut)
+async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
+    """The rulesets any user may pick for a session, plus whether the blind
+    A/B comparison is currently offered."""
+    stored = await rulesets.list_rulesets()
+    if not stored:
+        stored = [(await rulesets.active_ruleset(), True)]
+    return RulesetOptionsOut(
+        rulesets=[
+            RulesetOption(
+                id=ruleset.id,
+                name=ruleset.name,
+                description=ruleset.description,
+                is_active=is_active,
+            )
+            for ruleset, is_active in stored
+        ],
+        compare_available=await _blind_pair() is not None,
+    )
+
+
+@router.post("/compare/blind")
+async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> StreamingResponse:
+    """Answer one message under the active and candidate rulesets, blinded.
+
+    The server picks and shuffles the arms; the stream names them only by
+    index, and the vote response is where the identities come out.
+    """
+    await require_chat_available(user.id)
+    pair = await _blind_pair()
+    if pair is None:
+        raise HTTPException(status_code=409, detail="Comparisons are not currently available")
+    arms = [assistant_compare.VariantSpec(ruleset_id=ruleset.id) for ruleset in pair]
+    random.shuffle(arms)
+    try:
+        comparison = await assistant_compare.prepare_comparison(
+            user.id,
+            arms,
+            source_session_id=body.source_session_id,
+            scope=body.scope,
+            blind=True,
+        )
+    except assistant_compare.UnknownRulesetError as exc:
+        raise HTTPException(status_code=404, detail=f"Ruleset not found: {exc.args[0]}") from None
+    except assistant_compare.UnknownSessionError:
+        raise HTTPException(status_code=404, detail="Session not found") from None
+
+    return StreamingResponse(
+        assistant_compare.stream_comparison(comparison, user.id, body.message, reveal=False),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _revealed_arms(comparison_id: str, user_id: str) -> list[RevealedArm]:
+    arms = []
+    for arm in await assistant_compare.comparison_arms(comparison_id, user_id):
+        ruleset = await rulesets.get_ruleset(arm["ruleset_id"]) if arm["ruleset_id"] else None
+        arms.append(
+            RevealedArm(
+                session_id=arm["session_id"],
+                ruleset_id=arm["ruleset_id"],
+                ruleset_name=ruleset.name if ruleset else arm["ruleset_id"],
+                ruleset_version=arm["ruleset_version"],
+            )
+        )
+    return arms
+
+
 @router.post("/comparisons/{comparison_id}/vote", response_model=VoteOut)
-async def vote_on_comparison(comparison_id: str, body: VoteIn, user: AdminUser) -> VoteOut:
-    """Record which arm won, on both arms' turn logs."""
+async def vote_on_comparison(comparison_id: str, body: VoteIn, user: CurrentUser) -> VoteOut:
+    """Record which arm won, on both arms' turn logs, and reveal the arms."""
     try:
         rated = await assistant_compare.record_vote(
             comparison_id, user.id, body.winner_session_id, body.note
@@ -289,11 +422,18 @@ async def vote_on_comparison(comparison_id: str, body: VoteIn, user: AdminUser) 
         raise HTTPException(status_code=404, detail="Comparison not found") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    return VoteOut(rated_turns=rated)
+    return VoteOut(rated_turns=rated, arms=await _revealed_arms(comparison_id, user.id))
 
 
 @router.delete("/comparisons/{comparison_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_comparison(comparison_id: str, user: AdminUser) -> None:
+async def delete_comparison(comparison_id: str, user: CurrentUser) -> None:
     """Discard a comparison's scratch sessions."""
     if not await assistant_compare.delete_comparison(comparison_id, user.id):
         raise HTTPException(status_code=404, detail="Comparison not found")
+
+
+@router.get("/feedback", response_model=list[RulesetFeedback])
+async def ruleset_feedback(user: AdminUser) -> list[RulesetFeedback]:
+    """Votes, ratings and flags per ruleset version — the read side of the
+    turn log, so collected feedback is actually visible."""
+    return [RulesetFeedback(**group) for group in await turn_log.feedback_summary()]

@@ -130,6 +130,11 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
         "Assistant capabilities",
         [
+            (
+                "assistant_comparison_candidate",
+                "Comparison candidate ruleset",
+                "Ruleset id users' blind A/B comparisons run against the active one; empty disables them",
+            ),
             ("enable_run_code", "Allow code execution", "Let the assistant run code"),
             (
                 "enable_run_code_sandbox",
