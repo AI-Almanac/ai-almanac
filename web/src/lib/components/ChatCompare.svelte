@@ -17,6 +17,10 @@
 	let voting = $state(false);
 	let followUpText = $state('');
 
+	const canVote = $derived(
+		!comparison.running && comparison.rounds.length > 0 && !comparison.voted
+	);
+
 	async function vote(winnerSessionId: string | null) {
 		if (voting) return;
 		voting = true;
@@ -58,19 +62,13 @@
 
 	{#if comparison.arms.length}
 		<div class="board" style="--arms: {comparison.arms.length}">
-			{#each comparison.arms as arm (arm.sessionId)}
-				<h3 class="arm-head">
-					{arm.label}
-					{#if !labeled && comparison.voted && comparison.revealedName(arm.sessionId)}
-						<span class="reveal">was {comparison.revealedName(arm.sessionId)}</span>
-					{/if}
-				</h3>
-			{/each}
 			{#each comparison.rounds as round, r (r)}
 				<p class="round-message">{round.message}</p>
 				{#each round.answers as answer, a (a)}
-					<!-- Stacked one per row, the heading row above is too far away to say
-					     which answer this is, so each cell carries its own label. -->
+					<!-- Each answer carries its own label, directly under the message it
+					     answers: a heading row at the top of the board drifts away from
+					     the answers as the conversation grows, and disappears entirely
+					     once the cells stack. -->
 					{@const cellArm = comparison.arms[a]}
 					<article class="cell">
 						<h4 class="cell-arm">
@@ -101,6 +99,13 @@
 							<p class="answer waiting">…</p>
 						{/if}
 						{#if answer.error}<p class="compare-error">{answer.error}</p>{/if}
+						<!-- The pick sits under the answer it picks, not in a bar at the
+						     bottom of the view where "A" and "B" are just letters. -->
+						{#if canVote && cellArm && r === comparison.rounds.length - 1}
+							<button class="pick" onclick={() => void vote(cellArm.sessionId)} disabled={voting}>
+								{cellArm.label} is better
+							</button>
+						{/if}
 					</article>
 				{/each}
 			{/each}
@@ -121,17 +126,18 @@
 		</div>
 	{/if}
 
+	{#if canVote}
+		<div class="vote-row">
+			<input
+				bind:value={voteNote}
+				placeholder="Why did you pick that one? (optional)"
+				maxlength="2000"
+			/>
+			<button onclick={() => void vote(null)} disabled={voting}>Both about equal</button>
+		</div>
+	{/if}
+
 	<div class="compare-actions">
-		{#if !comparison.running && comparison.rounds.length && !comparison.voted}
-			<input bind:value={voteNote} placeholder="Why? (optional)" maxlength="2000" />
-			<button onclick={() => void vote(comparison.arms[0].sessionId)} disabled={voting}>
-				A is better
-			</button>
-			<button onclick={() => void vote(null)} disabled={voting}>Tie</button>
-			<button onclick={() => void vote(comparison.arms[1]?.sessionId ?? null)} disabled={voting}>
-				B is better
-			</button>
-		{/if}
 		{#if comparison.voted}
 			<span class="thanks">Thanks — your vote covers the whole conversation.</span>
 		{/if}
@@ -180,14 +186,6 @@
 		gap: 0.6rem;
 	}
 
-	.arm-head {
-		margin: 0;
-		font-size: 0.8rem;
-		display: flex;
-		align-items: baseline;
-		gap: 0.4rem;
-		flex-wrap: wrap;
-	}
 	.round-message {
 		grid-column: 1 / -1;
 		margin: 0;
@@ -196,6 +194,10 @@
 		background: var(--color-accent-light);
 		border: 1px solid var(--color-accent-border);
 		font-size: 0.8rem;
+	}
+	/* Every round after the first opens a new exchange; the gap says so. */
+	.round-message:not(:first-child) {
+		margin-top: 0.5rem;
 	}
 	.cell {
 		min-width: 0;
@@ -241,10 +243,17 @@
 	.prose :global(p:last-child) {
 		margin-bottom: 0;
 	}
-	.prose :global(ul),
+	/* Tailwind's preflight strips list markers, and these answers lean on
+	   bullets to separate findings from caveats. */
+	.prose :global(ul) {
+		margin: 0 0 0.6rem;
+		padding-left: 1.1rem;
+		list-style: disc outside;
+	}
 	.prose :global(ol) {
 		margin: 0 0 0.6rem;
 		padding-left: 1.1rem;
+		list-style: decimal outside;
 	}
 	.prose :global(li) {
 		margin-bottom: 0.2rem;
@@ -297,12 +306,65 @@
 		color: var(--color-text-muted);
 	}
 
-	/* Side by side, the heading row labels the columns and the per-cell label
-	   would just repeat it every round. */
 	.cell-arm {
-		display: none;
-		margin: 0;
+		margin: 0 0 0.1rem;
+		display: flex;
+		align-items: baseline;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+		font-size: 0.7rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
+	}
+	.pick {
+		/* Both cells in a row stretch to the same height, so auto margin puts the
+		   two picks on one line however unequal the answers are. */
+		margin-top: auto;
+		align-self: flex-start;
+		padding: 0.35rem 0.7rem;
+		border-radius: 0.35rem;
+		border: 1px solid var(--color-accent-border);
+		background: var(--color-accent-light);
+		color: var(--color-accent);
 		font-size: 0.78rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.pick:hover:not(:disabled) {
+		background: var(--color-accent-soft);
+	}
+	.pick:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.vote-row {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.vote-row input {
+		flex: 1 1 12rem;
+		min-width: 0;
+		padding: 0.4rem 0.5rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.35rem;
+		background: var(--color-surface);
+		font-size: 0.8rem;
+		font-family: inherit;
+	}
+	.vote-row button {
+		padding: 0.4rem 0.8rem;
+		border-radius: 0.35rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		font-size: 0.8rem;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.vote-row button:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 	.follow-up-row {
 		display: flex;
@@ -342,16 +404,6 @@
 		gap: 0.5rem;
 		align-items: center;
 	}
-	.compare-actions input {
-		flex: 1 1 12rem;
-		min-width: 0;
-		padding: 0.4rem 0.5rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.35rem;
-		background: var(--color-surface);
-		font-size: 0.8rem;
-		font-family: inherit;
-	}
 	.compare-actions button {
 		padding: 0.4rem 0.8rem;
 		border-radius: 0.35rem;
@@ -371,18 +423,10 @@
 		font-size: 0.78rem;
 		color: var(--color-accent);
 	}
-	/* Too narrow to read two columns: stack them rather than shrink to ribbons.
-	   Stacked, the column headings no longer sit above their answers, so they
-	   hand off to the per-cell labels. */
+	/* Too narrow to read two columns: stack them rather than shrink to ribbons. */
 	@container (max-width: 34rem) {
 		.board {
 			grid-template-columns: minmax(0, 1fr);
-		}
-		.arm-head {
-			display: none;
-		}
-		.cell-arm {
-			display: block;
 		}
 	}
 </style>
