@@ -23,20 +23,33 @@
 # (git unlinks the temp when the object already exists). Harmless; a native
 # `git gc` or `git prune` cleans them up.
 #
+# Works in a linked worktree as well as the main checkout: the index is taken from
+# the per-worktree GIT_DIR, the branch ref from the shared COMMON_DIR.
+#
 # Usage:
 #   cowork-git.sh add <paths...>
 #   cowork-git.sh commit -m <message>        # commits the staged index
 #   cowork-git.sh status | diff | log [...]  # lock-free pass-through
 #
-# Not supported: checkout, merge, rebase, pull — run those natively.
+# Not supported: checkout, merge, rebase, pull, push — run those natively. push in
+# particular needs network and SSH host keys the sandbox does not have.
 
 set -euo pipefail
 
 die() { echo "cowork-git: $*" >&2; exit 1; }
 
+# GIT_DIR is per-worktree (`.git/worktrees/<name>` in a linked worktree) and owns
+# HEAD and the index. COMMON_DIR is shared and owns refs/ and objects/. In a
+# single-worktree repo they are the same path; in a linked worktree they are not,
+# and writing a branch ref into GIT_DIR silently creates a file git never reads.
 GIT_DIR=$(git rev-parse --git-dir) || die "not a git repository"
 GIT_DIR=$(cd "$GIT_DIR" && pwd)
-SHADOW="/tmp/cowork-git-$(echo "$GIT_DIR" | cksum | cut -d' ' -f1).index"
+COMMON_DIR=$(git rev-parse --git-common-dir) || die "cannot resolve common git dir"
+COMMON_DIR=$(cd "$COMMON_DIR" && pwd)
+# TMPDIR, not /tmp: a sandbox typically grants write access to its own TMPDIR and
+# denies the rest of /tmp, which failed here as an unhelpful `cp: Operation not
+# permitted` on the very tool meant to work inside the sandbox.
+SHADOW="${TMPDIR:-/tmp}/cowork-git-$(echo "$GIT_DIR" | cksum | cut -d' ' -f1).index"
 
 # The shadow must start from the repo's real index so we never lose staged
 # state created natively; the copy-back keeps native git in agreement with us.
@@ -69,10 +82,12 @@ case "$cmd" in
 		commit=$(GIT_INDEX_FILE="$SHADOW" git commit-tree "$tree" -p "$parent" -m "$msg")
 
 		# Direct loose-ref write (see header). Re-check the ref, write, verify.
+		# Refs live in COMMON_DIR, not GIT_DIR — they differ in a linked worktree.
 		[ "$(git rev-parse "refs/heads/$branch")" = "$parent" ] ||
 			die "ref moved during commit; aborting"
-		mkdir -p "$GIT_DIR/refs/heads/$(dirname "$branch" 2>/dev/null || true)" 2>/dev/null || true
-		printf '%s\n' "$commit" > "$GIT_DIR/refs/heads/$branch"
+		ref_path="$COMMON_DIR/refs/heads/$branch"
+		mkdir -p "$(dirname "$ref_path")"
+		printf '%s\n' "$commit" > "$ref_path"
 		[ "$(git rev-parse HEAD)" = "$commit" ] || die "ref verification failed"
 		echo "[$branch $(git rev-parse --short "$commit")] $msg"
 		;;

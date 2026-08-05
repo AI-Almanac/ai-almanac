@@ -31,6 +31,9 @@ src/ai_almanac/server/static/
 
 # Data
 .env
+# Per-worktree ports and data dir, written by scripts/agent-worktree.sh.
+.env.agent
+.almanac-data/
 scripts/backend-env.yaml
 *.db
 *.db-shm

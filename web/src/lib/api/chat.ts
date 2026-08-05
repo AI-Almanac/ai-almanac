@@ -88,6 +88,22 @@ export type ChatSession = {
 	blend_config?: BlendRunSpec | null;
 	blend_validation?: BlendValidation | null;
 	run_id?: string | null;
+	/** Ruleset this session is pinned to; null follows the platform default. */
+	ruleset_id?: string | null;
+};
+
+/**
+ * Statistical findings the platform reported during a turn.
+ *
+ * Emitted by the backend from the validation payload, not written by the
+ * assistant, so the caution shows whatever the model chose to say about it.
+ */
+export type GuardrailNotice = {
+	tool_call_id?: string | null;
+	errors: string[];
+	warnings: string[];
+	/** Stable rule ids behind the messages, for keying UI and telemetry. */
+	finding_keys?: string[];
 };
 
 export type ChatMessage = {
@@ -97,6 +113,7 @@ export type ChatMessage = {
 	created_at: string;
 	tool_calls?: ChatToolCall[];
 	artifacts?: ChatArtifact[];
+	guardrails?: GuardrailNotice[];
 };
 
 export type ChatArtifact = {
@@ -134,6 +151,14 @@ export type ChatEvent =
 			result: unknown;
 	  }
 	| { type: 'artifact'; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+	| {
+			type: 'guardrail';
+			turn_id: string;
+			tool_call_id: string;
+			errors: string[];
+			warnings: string[];
+			finding_keys: string[];
+	  }
 	| {
 			type: 'tool_approval_request';
 			turn_id: string;
@@ -173,10 +198,14 @@ export type ChatEvent =
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 
-export async function createChatSession(scope: ChatScope, title?: string): Promise<ChatSession> {
+export async function createChatSession(
+	scope: ChatScope,
+	title?: string,
+	rulesetId?: string | null
+): Promise<ChatSession> {
 	return request<ChatSession>('/chat/sessions', {
 		method: 'POST',
-		body: JSON.stringify({ scope, title })
+		body: JSON.stringify({ scope, title, ruleset_id: rulesetId ?? undefined })
 	});
 }
 
@@ -193,7 +222,8 @@ export async function getChatSession(id: string): Promise<ChatSessionDetail> {
 
 export async function updateChatSession(
 	id: string,
-	updates: { title?: string | null }
+	// Only the keys present are changed; JSON.stringify drops undefined ones.
+	updates: { title?: string | null; ruleset_id?: string | null }
 ): Promise<ChatSession> {
 	return request<ChatSession>(`/chat/sessions/${id}`, {
 		method: 'PATCH',
@@ -297,6 +327,37 @@ export async function updateChatBlendConfig(
 	);
 }
 
+/** Parse an SSE response body into the events it carries. */
+export async function* sseEvents<T>(res: Response): AsyncGenerator<T> {
+	const reader = res.body!.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+
+	const parseLine = (line: string): T | null => {
+		if (!line.startsWith('data: ')) return null;
+		try {
+			return JSON.parse(line.slice(6)) as T;
+		} catch {
+			return null;
+		}
+	};
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split('\n');
+		buffer = lines.pop()!;
+		for (const line of lines) {
+			const event = parseLine(line);
+			if (event) yield event;
+		}
+	}
+
+	const finalEvent = parseLine(buffer.trimEnd());
+	if (finalEvent) yield finalEvent;
+}
+
 /**
  * Send a message and return an async generator of ChatEvents parsed from SSE.
  */
@@ -315,46 +376,26 @@ export async function* sendChatMessage(
 		throw new Error(`Chat message failed (${res.status}): ${body}`);
 	}
 
-	const reader = res.body!.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let sawTerminalEvent = false;
-
-	const parseLine = (line: string): ChatEvent | null => {
-		if (!line.startsWith('data: ')) return null;
-		try {
-			return JSON.parse(line.slice(6)) as ChatEvent;
-		} catch {
-			return null;
-		}
-	};
-
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split('\n');
-		buffer = lines.pop()!;
-		for (const line of lines) {
-			const event = parseLine(line);
-			if (!event) continue;
-			yield event;
-			if (event.type === 'done' || event.type === 'error') {
-				sawTerminalEvent = true;
-				return;
-			}
-		}
+	for await (const event of sseEvents<ChatEvent>(res)) {
+		yield event;
+		if (event.type === 'done' || event.type === 'error') return;
 	}
 
-	const finalEvent = parseLine(buffer.trimEnd());
-	if (finalEvent) {
-		yield finalEvent;
-		if (finalEvent.type === 'done' || finalEvent.type === 'error') {
-			sawTerminalEvent = true;
-		}
-	}
+	throw new Error('Chat stream ended before a terminal event was received.');
+}
 
-	if (!sawTerminalEvent) {
-		throw new Error('Chat stream ended before a terminal event was received.');
-	}
+/**
+ * Rate one assistant turn. Feeds the per-turn log so ruleset changes can be
+ * compared on something other than impressions.
+ */
+export async function rateChatTurn(
+	sessionId: string,
+	turnId: string,
+	value: 1 | -1,
+	note?: string
+): Promise<void> {
+	await request<void>(
+		`/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/rating`,
+		{ method: 'POST', body: JSON.stringify({ value, note: note ?? null }) }
+	);
 }

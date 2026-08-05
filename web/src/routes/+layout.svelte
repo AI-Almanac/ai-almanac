@@ -3,6 +3,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import Nav from '$lib/Nav.svelte';
 	import Footer from '$lib/Footer.svelte';
+	import ViewAsUserBanner from '$lib/components/ViewAsUserBanner.svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
@@ -28,6 +29,7 @@
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<ViewAsUserBanner />
 <Nav />
 {@render children()}
 <FeedbackWidget />

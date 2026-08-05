@@ -88,9 +88,9 @@ dev = { features = ["dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
-lint-python = { cmd = "ruff check src tests modal scripts", default-environment = "dev", description = "Lint Python sources and tests" }
-format-python = { cmd = "ruff format src tests modal scripts", default-environment = "dev", description = "Format Python sources and tests" }
-format-python-check = { cmd = "ruff format --check src tests modal scripts", default-environment = "dev", description = "Check Python formatting without modifying files" }
+lint-python = { cmd = "ruff check src tests modal scripts evals", default-environment = "dev", description = "Lint Python sources and tests" }
+format-python = { cmd = "ruff format src tests modal scripts evals", default-environment = "dev", description = "Format Python sources and tests" }
+format-python-check = { cmd = "ruff format --check src tests modal scripts evals", default-environment = "dev", description = "Check Python formatting without modifying files" }
 install-hooks = { cmd = "git config core.hooksPath .githooks", description = "Enable the repo's git hooks (pre-commit format/lint, pre-push check/test)" }
 install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
 build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }
@@ -102,6 +102,7 @@ backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the 
 test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
 generate-api-types = { cmd = "bash scripts/generate-api-types.sh", default-environment = "dev", description = "Regenerate web/src/lib/api-types.gen.ts from the FastAPI OpenAPI schema" }
 test-compose-e2e = { cmd = "./scripts/e2e-compose.sh", description = "Run the containerized PostgreSQL benchmark smoke flow" }
+eval-assistant = { cmd = "python evals/assistant/run.py", default-environment = "dev", description = "Score the assistant's guardrails against adversarial prompts (calls a real model; --offline to check the harness for free)" }
 self-host-local = { cmd = "./scripts/self-host-local.sh", description = "Start the local shared-mode development stack" }
 self-host-local-gpu = { cmd = "./scripts/self-host-local.sh gpu", description = "Start local shared mode with the real Pixi GPU runner" }
 self-host-local-gcs = { cmd = "./scripts/self-host-local.sh --storage gcs", description = "Start local shared mode with GCS storage" }

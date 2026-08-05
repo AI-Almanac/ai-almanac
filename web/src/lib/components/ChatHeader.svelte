@@ -1,16 +1,34 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ChatSession } from '$lib/api';
+	import type { ChatSession, RulesetOption } from '$lib/api';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { sessionLabel } from '$lib/chat/format';
 
 	interface Props {
 		chat: ChatSessionState;
+		rulesetOptions?: RulesetOption[];
+		comparisonMode?: boolean;
+		/** The comparison feature flag; off removes the mode toggle entirely. */
+		comparisonsEnabled?: boolean;
+		compareAvailable?: boolean;
+		compareArmIds?: [string, string];
+		onToggleComparisonMode?: () => void;
+		onCompareArmChange?: (index: 0 | 1, id: string) => void;
 	}
 
-	const { chat }: Props = $props();
+	const {
+		chat,
+		rulesetOptions = [],
+		comparisonMode = false,
+		comparisonsEnabled = false,
+		compareAvailable = false,
+		compareArmIds = ['', ''],
+		onToggleComparisonMode,
+		onCompareArmChange
+	}: Props = $props();
 
 	let showSessionList = $state(false);
+	let showMenu = $state(false);
 	let renamingSessionId = $state<string | null>(null);
 	let renamingValue = $state('');
 	let savingTitle = $state(false);
@@ -19,6 +37,9 @@
 	function handleOutsideClick(e: MouseEvent) {
 		if (showSessionList && !(e.target as Element).closest('.session-selector')) {
 			showSessionList = false;
+		}
+		if (showMenu && !(e.target as Element).closest('.header-menu')) {
+			showMenu = false;
 		}
 	}
 
@@ -87,6 +108,9 @@
 
 <div class="chat-header">
 	<span class="ai-badge">✦ AI</span>
+	<span class="beta-badge" title="The assistant is under active development and can be wrong.">
+		Beta
+	</span>
 	<div class="session-selector">
 		{#if chat.currentSession && renamingSessionId === chat.currentSession.id}
 			<div class="session-rename-bar">
@@ -169,6 +193,68 @@
 		>
 			{copyState === 'copied' ? '✓ Copied' : 'Copy'}
 		</button>
+		<div class="header-menu">
+			<button
+				class="copy-btn"
+				title="Chat options"
+				aria-label="Chat options"
+				onclick={() => {
+					showMenu = !showMenu;
+				}}
+			>
+				⋯
+			</button>
+			{#if showMenu}
+				<div class="menu-dropdown">
+					{#if comparisonsEnabled}
+						<label class="menu-toggle">
+							<input type="checkbox" checked={comparisonMode} onchange={onToggleComparisonMode} />
+							<span>
+								<strong>Comparison mode</strong>
+								<small>Rate answers and compare assistant styles side by side.</small>
+							</span>
+						</label>
+					{:else}
+						<p class="menu-empty">No chat options are available.</p>
+					{/if}
+					{#if comparisonMode && rulesetOptions.length > 0 && chat.currentSession}
+						<div class="menu-divider"></div>
+						<label class="menu-field">
+							<span>Assistant style for this chat</span>
+							<select
+								value={chat.currentSession.ruleset_id ?? ''}
+								onchange={(e) => void chat.setSessionRuleset(e.currentTarget.value || null)}
+							>
+								<option value="">Default style</option>
+								{#each rulesetOptions as option (option.id)}
+									<option value={option.id}>{option.name}</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
+					{#if comparisonMode && compareAvailable}
+						<div class="menu-divider"></div>
+						<span class="menu-heading">A/B compares these two styles</span>
+						{#each [0, 1] as const as index (index)}
+							<label class="menu-field">
+								<span>{index === 0 ? 'A' : 'B'}</span>
+								<select
+									value={compareArmIds[index]}
+									onchange={(e) => onCompareArmChange?.(index, e.currentTarget.value)}
+								>
+									{#each rulesetOptions as option (option.id)}
+										<option value={option.id}>{option.name}</option>
+									{/each}
+								</select>
+							</label>
+						{/each}
+						{#if compareArmIds[0] === compareArmIds[1]}
+							<span class="menu-warning">Pick two different styles to compare.</span>
+						{/if}
+					{/if}
+				</div>
+			{/if}
+		</div>
 	</div>
 </div>
 
@@ -193,6 +279,18 @@
 		color: var(--color-accent);
 		background: var(--color-accent-light);
 		border: 1px solid var(--color-accent-border);
+		border-radius: 3px;
+		padding: 0.15rem 0.4rem;
+		flex-shrink: 0;
+	}
+	.beta-badge {
+		font-size: 0.6rem;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border: 1px solid var(--color-status-running);
 		border-radius: 3px;
 		padding: 0.15rem 0.4rem;
 		flex-shrink: 0;
@@ -229,6 +327,88 @@
 	.copy-btn:disabled {
 		opacity: 0.35;
 		cursor: default;
+	}
+
+	.header-menu {
+		position: relative;
+	}
+
+	.menu-dropdown {
+		position: absolute;
+		top: calc(100% + 4px);
+		right: 0;
+		width: 15rem;
+		background: var(--color-surface-raised);
+		border: 1px solid var(--color-border);
+		border-radius: 7px;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+		z-index: 100;
+		padding: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.menu-toggle {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		cursor: pointer;
+	}
+	.menu-toggle input {
+		margin-top: 0.15rem;
+	}
+	.menu-toggle span {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+	.menu-toggle strong {
+		font-size: 0.78rem;
+	}
+	.menu-toggle small {
+		font-size: 0.68rem;
+		color: var(--color-text-muted);
+		line-height: 1.35;
+	}
+
+	.menu-divider {
+		height: 1px;
+		background: var(--color-border-subtle);
+	}
+
+	.menu-heading {
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--color-text-muted);
+	}
+
+	.menu-warning {
+		font-size: 0.68rem;
+		color: var(--color-status-running);
+	}
+
+	.menu-empty {
+		margin: 0;
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+	}
+
+	.menu-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		font-size: 0.68rem;
+		color: var(--color-text-muted);
+	}
+	.menu-field select {
+		padding: 0.3rem 0.4rem;
+		border: 1px solid var(--color-border);
+		border-radius: 4px;
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-family: inherit;
+		font-size: 0.75rem;
 	}
 
 	.session-selector {

@@ -14,6 +14,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -29,6 +30,7 @@ from ai_almanac.server.services.chat_state import (
     ChatScope,
     ChatToolCall,
     ChatTurn,
+    GuardrailNotice,
 )
 from ai_almanac.server.services.chat_tools import (
     SubmitBenchmarkApproval,
@@ -39,6 +41,7 @@ from ai_almanac.server.services.llm import (
     serialize_model_messages,
     stream_response,
 )
+from ai_almanac.server.services.rulesets import Ruleset, selectable_ruleset
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +129,18 @@ def _apply_stream_event(turn: ChatTurn, data: dict) -> None:
         artifact_payload = data.get("artifact")
         if isinstance(artifact_payload, dict):
             _append_artifact(turn, data.get("tool_call_id"), artifact_payload)
+        return
+    if event_type == "guardrail":
+        turn.guardrails.append(
+            GuardrailNotice(
+                tool_call_id=data.get("tool_call_id"),
+                errors=[item for item in data.get("errors") or [] if isinstance(item, str)],
+                warnings=[item for item in data.get("warnings") or [] if isinstance(item, str)],
+                finding_keys=[
+                    item for item in data.get("finding_keys") or [] if isinstance(item, str)
+                ],
+            )
+        )
         return
     if event_type == "tool_result":
         tool_call_id = data.get("tool_call_id")
@@ -257,12 +272,20 @@ async def _persist_failed_turn(
 
 
 async def get_session_provider_scope(session_id: str, user_id: str):
+    """Read a session's provider state for a submission or a resumed approval.
+
+    Refuses a comparison's scratch session. Withholding the submit *tools* from a
+    comparison keeps the model from launching anything, but the session id is
+    visible to whoever ran the comparison, and these endpoints submit a session's
+    configuration without involving the model at all. The playground compares what
+    the assistant proposes; a run belongs to a conversation the user owns.
+    """
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
                     text("""
-                        SELECT provider_state, scope
+                        SELECT provider_state, scope, comparison_id, ruleset_id
                         FROM chat_sessions
                         WHERE id = :id AND user_id = :uid
                     """),
@@ -274,6 +297,11 @@ async def get_session_provider_scope(session_id: str, user_id: str):
         )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    if row["comparison_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="This session belongs to a ruleset comparison and cannot submit a run.",
+        )
     return row
 
 
@@ -320,6 +348,10 @@ async def resume_deferred_setup_tool(
     row = await get_session_provider_scope(session_id, user_id)
     scope = ChatScope.model_validate(json_dict(row["scope"]))
     provider_state = deserialize_model_messages(row["provider_state"])
+    # The approval continues a conversation, so it runs under the same pinned
+    # ruleset as the turns around it — falling back to the active one exactly
+    # as send_message does when the pin has since been archived.
+    session_ruleset = await selectable_ruleset(row["ruleset_id"]) if row["ruleset_id"] else None
     deferred_results = DeferredToolResults(
         approvals={approval.tool_call_id: approval_result},
         metadata={approval.tool_call_id: _approval_metadata(approval)},
@@ -333,6 +365,7 @@ async def resume_deferred_setup_tool(
         session_id,
         scope,
         deferred_tool_results=deferred_results,
+        active_ruleset=session_ruleset,
     ):
         data = parse_llm_event(event)
         if data and data.get("type") == config_event and data.get("run_id"):
@@ -353,8 +386,16 @@ async def stream_chat_turn(
     user_id: str,
     content: str,
     requested_scope: ChatScope | None,
+    *,
+    active_ruleset: Ruleset | None = None,
+    comparison_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """Persist the user turn, relay the LLM stream as SSE, persist the outcome."""
+    """Persist the user turn, relay the LLM stream as SSE, persist the outcome.
+
+    ``active_ruleset`` overrides the platform's active policy for this turn, and
+    ``comparison_id`` tags the turn log; both are set by a side-by-side
+    comparison and are None for an ordinary conversation.
+    """
     # --- Transaction 1: read state with row lock, persist user + streaming assistant turn ---
     async with get_db() as conn:
         lock_clause = await lock_for_update(conn)
@@ -428,61 +469,77 @@ async def stream_chat_turn(
     # --- Stream without holding a DB connection ---
     terminal_event: str | None = None
     try:
-        async for event in stream_response(
-            provider_state,
-            user_id,
-            session_id,
-            scope,
-            latest_user_message=content,
-        ):
-            data = parse_llm_event(event)
-            if data is None:
-                continue
-            if (
-                data.get("type") in ("benchmark_config", "blend_config")
-                and isinstance(data.get("run_id"), str)
-                and isinstance(data.get("jobs"), list)
-            ):
-                scope = ChatScope(
-                    kind="benchmark_run_group" if data["type"] == "benchmark_config" else "job_set",
-                    key=data["run_id"],
-                    title=scope.title,
-                    job_ids=[
-                        job["id"]
-                        for job in data["jobs"]
-                        if isinstance(job, dict) and isinstance(job.get("id"), str)
-                    ],
-                )
-            if data.get("type") == "done":
-                completed_turn = ChatTurn.model_validate(
-                    {
-                        **assistant_turn.model_dump(mode="json"),
-                        **data["turn"],
-                        "id": assistant_turn.id,
-                        "status": "completed",
-                        "error": None,
-                    }
-                )
-                final_provider_state = data.get("provider_state", pending_provider_state)
-                final_transcript = _replace_turn(pending_transcript, completed_turn)
-                # --- Transaction 2: persist completed state ---
-                async with get_db() as conn:
-                    await _update_session_state(
-                        conn,
-                        session_id,
-                        provider_state=final_provider_state,
-                        transcript=final_transcript,
-                        updated_at=_now(),
-                        scope=scope,
+        # `aclosing` because the loop below breaks on the terminal event, leaving
+        # the LLM generator suspended. Its `finally` writes the turn log, so
+        # without an explicit close that write would happen whenever the
+        # generator was garbage-collected — which is soon enough to look correct
+        # and late enough to lose a race, as a comparison reading both variants'
+        # logs immediately afterwards found.
+        async with aclosing(
+            stream_response(
+                provider_state,
+                user_id,
+                session_id,
+                scope,
+                latest_user_message=content,
+                active_ruleset=active_ruleset,
+                comparison_id=comparison_id,
+                turn_id=assistant_turn.id,
+            )
+        ) as llm_events:
+            async for event in llm_events:
+                data = parse_llm_event(event)
+                if data is None:
+                    continue
+                if (
+                    data.get("type") in ("benchmark_config", "blend_config")
+                    and isinstance(data.get("run_id"), str)
+                    and isinstance(data.get("jobs"), list)
+                ):
+                    scope = ChatScope(
+                        kind="benchmark_run_group"
+                        if data["type"] == "benchmark_config"
+                        else "job_set",
+                        key=data["run_id"],
+                        title=scope.title,
+                        job_ids=[
+                            job["id"]
+                            for job in data["jobs"]
+                            if isinstance(job, dict) and isinstance(job.get("id"), str)
+                        ],
                     )
-                hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user_id)
-                terminal_event = _stream_event("done", turn=hydrated_turn.model_dump(mode="json"))
-                break
+                if data.get("type") == "done":
+                    completed_turn = ChatTurn.model_validate(
+                        {
+                            **assistant_turn.model_dump(mode="json"),
+                            **data["turn"],
+                            "id": assistant_turn.id,
+                            "status": "completed",
+                            "error": None,
+                        }
+                    )
+                    final_provider_state = data.get("provider_state", pending_provider_state)
+                    final_transcript = _replace_turn(pending_transcript, completed_turn)
+                    # --- Transaction 2: persist completed state ---
+                    async with get_db() as conn:
+                        await _update_session_state(
+                            conn,
+                            session_id,
+                            provider_state=final_provider_state,
+                            transcript=final_transcript,
+                            updated_at=_now(),
+                            scope=scope,
+                        )
+                    hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user_id)
+                    terminal_event = _stream_event(
+                        "done", turn=hydrated_turn.model_dump(mode="json")
+                    )
+                    break
 
-            _apply_stream_event(assistant_turn, data)
-            yield f"data: {event}\n\n"
-        else:
-            raise RuntimeError("Chat stream ended without a terminal event")
+                _apply_stream_event(assistant_turn, data)
+                yield f"data: {event}\n\n"
+            else:
+                raise RuntimeError("Chat stream ended without a terminal event")
     except asyncio.CancelledError as exc:
         try:
             async with get_db() as conn:

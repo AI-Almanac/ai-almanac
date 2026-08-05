@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ai_almanac.paths import ensure_layout
 from ai_almanac.server.routers import (
+    assistant,
     auth,
     blends,
     chat,
@@ -99,6 +100,7 @@ async def lifespan(app: FastAPI):
     # overlay) is reachable; the call at line ~75 only saw config.yaml + env.
     _reload_user_config()
     await _seed_regions()
+    await _seed_assistant_rulesets()
     await _reconcile_jobs()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
@@ -141,6 +143,21 @@ async def _seed_regions() -> None:
             logger.info("seeded %d packaged region(s)", count)
     except Exception as e:  # noqa: BLE001
         logger.warning("region seeding failed: %s", e)
+
+
+async def _seed_assistant_rulesets() -> None:
+    """Refresh the packaged assistant rulesets and pick an active one.
+
+    Non-fatal: ``rulesets.active_ruleset`` falls back to the packaged built-in,
+    so a seeding failure degrades to the behaviour the deployment shipped with
+    rather than taking chat down.
+    """
+    from ai_almanac.server.services.rulesets import seed_packaged_rulesets
+
+    try:
+        await seed_packaged_rulesets()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("assistant ruleset seeding failed: %s", e)
 
 
 # Last failure message per background step, used to record each distinct
@@ -311,6 +328,7 @@ async def _spa_navigation_fallback(request: Request, call_next):
     return await call_next(request)
 
 
+app.include_router(assistant.router)
 app.include_router(auth.router)
 app.include_router(blends.router)
 app.include_router(chat.router)

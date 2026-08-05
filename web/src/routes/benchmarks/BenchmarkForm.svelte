@@ -85,12 +85,16 @@
 		advancedPanelOpen = false;
 		void form.syncBenchmarkConfig({ showErrors: true });
 	}
+
+	// A comparison needs a wider assistant column than the plan panel leaves.
+	let chatComparing = $state(false);
 </script>
 
-<section class="setup-workspace has-plan">
+<section class="setup-workspace has-plan" class:is-comparing={chatComparing}>
 	<div class="setup-chat">
 		{#if chatAvailable}
 			<ChatPanel
+				onComparingChange={(value) => (chatComparing = value)}
 				jobs={[]}
 				scopeKind="benchmark_setup"
 				scopeKey={setupKey}
@@ -198,6 +202,11 @@
 
 	.setup-workspace.has-plan {
 		grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
+	}
+
+	/* Two answers side by side need the room the plan panel is using. */
+	.setup-workspace.has-plan.is-comparing {
+		grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
 	}
 
 	.setup-chat {

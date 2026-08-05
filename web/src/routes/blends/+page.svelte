@@ -24,6 +24,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
@@ -49,6 +50,9 @@
 	let creating = $state(false);
 	let loaded = $state(false);
 	let chatAvailable = $state(false);
+	// A comparison needs a wider assistant column than the normal rail.
+	let chatComparing = $state(false);
+	let splitEl = $state<HTMLElement | null>(null);
 	const blendSetupKey = crypto.randomUUID();
 
 	// A chat session that follows the user into a blend: either started here in
@@ -483,7 +487,7 @@
 
 	<div class="workspace-main">
 		{#if creating}
-			<div class="setup-layout" class:with-chat={chatAvailable}>
+			<div class="setup-layout" class:with-chat={chatAvailable} class:is-comparing={chatComparing}>
 				{#if chatAvailable}
 					<div class="setup-chat">
 						<ChatPanel
@@ -683,7 +687,12 @@
 				</section>
 			</div>
 		{:else if selected}
-			<div class="workspace-split" class:is-solo={!(chatAvailable && detailChat)}>
+			<div
+				class="workspace-split"
+				class:is-solo={!(chatAvailable && detailChat)}
+				class:is-comparing={chatComparing}
+				bind:this={splitEl}
+			>
 				<section class="card detail">
 					<header class="detail-header">
 						<div>
@@ -776,6 +785,7 @@
 					{/if}
 				</section>
 				{#if chatAvailable && detailChat}
+					<SplitResizer container={splitEl} comparing={chatComparing} storageKey="blend-detail" />
 					<aside class="workspace-aside">
 						<div class="result-chat">
 							<ChatPanel
@@ -791,6 +801,7 @@
 									'Summarise the forecast skill of this blend.'
 								]}
 								showArtifacts={false}
+								onComparingChange={(value) => (chatComparing = value)}
 								onBlendConfig={applyBlendConfig}
 								onBlendSubmitted={handleBlendSubmitted}
 							/>
@@ -851,6 +862,14 @@
 		width: 100%;
 		min-height: 100%;
 		box-shadow: var(--shadow-soft);
+	}
+
+	.setup-layout.with-chat.is-comparing .setup-chat {
+		flex: 1 1 66%;
+	}
+
+	.setup-layout.with-chat.is-comparing .form {
+		flex: 1 1 34%;
 	}
 
 	.setup-layout.with-chat .form {

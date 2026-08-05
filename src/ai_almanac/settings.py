@@ -169,13 +169,31 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_history_max_messages: int = 80
     llm_tool_result_max_chars: int = 12000
-    llm_code_context_max_chars: int = 6000
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
-    # Overrides the built-in chat system prompt (services/llm.py:SYSTEM_PROMPT)
-    # when non-empty. Edited from the admin Settings page.
+    # DEPRECATED. Superseded by assistant rulesets, which replace a single
+    # wholesale prompt override with named, versioned, section-by-section rows
+    # (services/rulesets.py). Read exactly once, by seed_packaged_rulesets, which
+    # carries a set value over into an "Imported override" ruleset. Remove after
+    # one release.
     chat_system_prompt: str = ""
+
+    # Statistical guardrail thresholds. These decide what the platform accepts,
+    # so they live here rather than on an assistant ruleset: the submission
+    # chokepoint, the validation display, and the prompt prose all read the same
+    # value through services.guardrails.current(). Putting them on the ruleset
+    # would let an admin soften the wording while enforcement kept the old
+    # number. Zero or unset falls back to the frozen default in guardrails.py.
+    #
+    # `min_onset_years` is deliberately absent: it is read at import time by
+    # job_submission.MIN_ONSET_YEARS and mirrored in modal/blending_app.py and
+    # web/src/routes/blends/year-coverage.ts, so a setting here would be a knob
+    # that only moves one of four copies.
+    guardrail_min_training_years: int = 10
+    guardrail_blend_member_warn: int = 3
+    guardrail_small_sample_years: int = 10
+    guardrail_presatellite_end_year: int = 1978
 
     # Feature flags. Boolean gates for features still in development. Default True
     # for zero-setup local installs; managed deployments set them False in
@@ -187,6 +205,11 @@ class Settings(BaseSettings):
     # still turn it off from the Settings page (e.g. an install with no
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
+    # Side-by-side ruleset comparisons: the admin playground and the blind A/B
+    # users run from the chat. Off hides the whole surface — every comparison is
+    # two LLM turns, so an install that cannot afford that, or is not collecting
+    # feedback yet, should not offer it.
+    enable_assistant_comparisons: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
