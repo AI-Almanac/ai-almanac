@@ -218,7 +218,8 @@ async def resume_comparison(comparison_id: str, user_id: str) -> Comparison:
     if len(arms) < 2:
         raise UnknownSessionError(comparison_id)
     prepared = []
-    for index, session_id in enumerate(sorted(arms)):
+    ordered = await comparison_session_ids(comparison_id, user_id)
+    for index, session_id in enumerate(s for s in ordered if s in arms):
         ruleset = await variant_ruleset(VariantSpec(ruleset_id=arms[session_id]))
         prepared.append(PreparedVariant(index=index, session_id=session_id, ruleset=ruleset))
     return Comparison(id=comparison_id, variants=tuple(prepared))
