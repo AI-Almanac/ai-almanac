@@ -1,4 +1,5 @@
-# The control arm for assistant comparisons. Never the active default.
+# The control arm for assistant comparisons. Never the active default —
+# `activatable: false` makes the API refuse, not just this header ask.
 #
 # Strips the domain vocabulary, the statistical interpretation caveats, the
 # tool-usage rules and the output style, keeping the same tools. Its purpose is
@@ -18,6 +19,7 @@
 # authoring a deliberate control arm that never had them.
 id: unconstrained
 name: Unconstrained (comparison control)
+activatable: false
 description: >-
   No domain rules, no statistical caveats, no output style — same tools. Used
   side by side with a constrained ruleset to measure what the rules are worth.

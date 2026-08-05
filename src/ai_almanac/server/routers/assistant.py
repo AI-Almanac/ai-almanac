@@ -41,6 +41,7 @@ class RulesetSummary(BaseModel):
     source: str
     is_active: bool
     comparison_enabled: bool = False
+    activatable: bool = True
     section_keys: list[str]
     denied_tools: list[str]
     model: str | None
@@ -53,6 +54,7 @@ class RulesetDetail(BaseModel):
     version: int
     source: str
     is_active: bool
+    activatable: bool = True
     prompt_sections: list[PromptSection]
     tool_policy: ToolPolicy
     model: str | None
@@ -186,6 +188,7 @@ def _summary(ruleset: Ruleset, is_active: bool, comparison_enabled: bool = False
         source=ruleset.source,
         is_active=is_active,
         comparison_enabled=comparison_enabled,
+        activatable=ruleset.activatable,
         section_keys=[section.key for section in ruleset.prompt_sections],
         denied_tools=list(ruleset.tool_policy.deny),
         model=ruleset.model,
@@ -200,6 +203,7 @@ def _detail(ruleset: Ruleset, is_active: bool) -> RulesetDetail:
         version=ruleset.version,
         source=ruleset.source,
         is_active=is_active,
+        activatable=ruleset.activatable,
         prompt_sections=ruleset.prompt_sections,
         tool_policy=ruleset.tool_policy,
         model=ruleset.model,
@@ -277,6 +281,11 @@ async def activate_ruleset(ruleset_id: str, user: AdminUser) -> RulesetSummary:
         await rulesets.activate_ruleset(ruleset_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Ruleset not found") from None
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail="This ruleset is a comparison control and cannot be made active",
+        ) from None
     ruleset = await rulesets.get_ruleset(ruleset_id)
     assert ruleset is not None
     return _summary(ruleset, True)

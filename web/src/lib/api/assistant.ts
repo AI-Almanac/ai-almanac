@@ -32,6 +32,8 @@ export type RulesetSummary = {
 	is_active: boolean;
 	/** Whether users can see this ruleset: in the style picker and as a comparison arm. */
 	comparison_enabled: boolean;
+	/** False for a comparison control arm, which can never be made active. */
+	activatable: boolean;
 	section_keys: string[];
 	denied_tools: string[];
 	model: string | null;
@@ -44,6 +46,8 @@ export type RulesetDetail = {
 	version: number;
 	source: 'packaged' | 'custom';
 	is_active: boolean;
+	/** False for a comparison control arm, which can never be made active. */
+	activatable: boolean;
 	prompt_sections: PromptSection[];
 	tool_policy: ToolPolicy;
 	model: string | null;

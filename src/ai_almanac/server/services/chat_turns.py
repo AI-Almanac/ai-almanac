@@ -41,7 +41,7 @@ from ai_almanac.server.services.llm import (
     serialize_model_messages,
     stream_response,
 )
-from ai_almanac.server.services.rulesets import Ruleset
+from ai_almanac.server.services.rulesets import Ruleset, selectable_ruleset
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,7 @@ async def get_session_provider_scope(session_id: str, user_id: str):
             (
                 await conn.execute(
                     text("""
-                        SELECT provider_state, scope, comparison_id
+                        SELECT provider_state, scope, comparison_id, ruleset_id
                         FROM chat_sessions
                         WHERE id = :id AND user_id = :uid
                     """),
@@ -348,6 +348,10 @@ async def resume_deferred_setup_tool(
     row = await get_session_provider_scope(session_id, user_id)
     scope = ChatScope.model_validate(json_dict(row["scope"]))
     provider_state = deserialize_model_messages(row["provider_state"])
+    # The approval continues a conversation, so it runs under the same pinned
+    # ruleset as the turns around it — falling back to the active one exactly
+    # as send_message does when the pin has since been archived.
+    session_ruleset = await selectable_ruleset(row["ruleset_id"]) if row["ruleset_id"] else None
     deferred_results = DeferredToolResults(
         approvals={approval.tool_call_id: approval_result},
         metadata={approval.tool_call_id: _approval_metadata(approval)},
@@ -361,6 +365,7 @@ async def resume_deferred_setup_tool(
         session_id,
         scope,
         deferred_tool_results=deferred_results,
+        active_ruleset=session_ruleset,
     ):
         data = parse_llm_event(event)
         if data and data.get("type") == config_event and data.get("run_id"):

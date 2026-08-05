@@ -3969,6 +3969,11 @@ export interface components {
             source: string;
             /** Is Active */
             is_active: boolean;
+            /**
+             * Activatable
+             * @default true
+             */
+            activatable: boolean;
             /** Prompt Sections */
             prompt_sections: components["schemas"]["PromptSection"][];
             tool_policy: components["schemas"]["ToolPolicy"];
@@ -4069,6 +4074,11 @@ export interface components {
              * @default false
              */
             comparison_enabled: boolean;
+            /**
+             * Activatable
+             * @default true
+             */
+            activatable: boolean;
             /** Section Keys */
             section_keys: string[];
             /** Denied Tools */

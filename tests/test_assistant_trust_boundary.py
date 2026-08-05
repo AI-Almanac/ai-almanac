@@ -65,7 +65,9 @@ async def _seed_source(kind: str, name: str, start_year: int, end_year: int) -> 
     return source_id
 
 
-async def _session_with_leaky_blend(user_id: str) -> tuple[str, ChatScope]:
+async def _session_with_leaky_blend(
+    user_id: str, ruleset_id: str | None = None
+) -> tuple[str, ChatScope]:
     """A chat session whose saved blend config leaks its true holdout."""
     from ai_almanac.server.db import get_db
 
@@ -78,13 +80,14 @@ async def _session_with_leaky_blend(user_id: str) -> tuple[str, ChatScope]:
     async with get_db() as conn:
         await conn.execute(
             text(
-                "INSERT INTO chat_sessions (id, user_id, scope, created_at, updated_at) "
-                "VALUES (:id, :uid, :scope, :now, :now)"
+                "INSERT INTO chat_sessions (id, user_id, scope, ruleset_id, created_at, "
+                "updated_at) VALUES (:id, :uid, :scope, :ruleset_id, :now, :now)"
             ),
             {
                 "id": session_id,
                 "uid": user_id,
                 "scope": json.dumps(scope.model_dump(mode="json")),
+                "ruleset_id": ruleset_id,
                 "now": now,
             },
         )
@@ -116,11 +119,12 @@ async def test_a_leaky_split_is_refused_under_every_ruleset(
     """Swapping the assistant's instructions does not swap the rules.
 
     ``unconstrained`` carries no statistical prose whatsoever, so if the rules
-    lived in the prompt this parametrisation would fail on that arm.
+    lived in the prompt this parametrisation would fail on that arm. The
+    session pins the ruleset — the control arm can no longer be *activated*,
+    by design — which is also how a real conversation ends up under it.
     """
     await rulesets.seed_packaged_rulesets()
-    await rulesets.activate_ruleset(ruleset_id)
-    session_id, scope = await _session_with_leaky_blend(user_id)
+    session_id, scope = await _session_with_leaky_blend(user_id, ruleset_id=ruleset_id)
     before = await _blend_job_count(user_id)
 
     payload = await blend_domain.submit_blend_for_session(user_id, scope, session_id)

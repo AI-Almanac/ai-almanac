@@ -220,11 +220,13 @@ async def test_seeding_is_idempotent_and_keeps_one_active() -> None:
 @pytest.mark.asyncio
 async def test_activating_moves_the_active_flag() -> None:
     await rulesets.seed_packaged_rulesets()
-    await rulesets.activate_ruleset("unconstrained")
+    other = rulesets.next_version(builtin(), "builtin-flag", "Built-in, flagged")
+    await rulesets.save_ruleset(other, created_by="admin@example.com")
+    await rulesets.activate_ruleset("builtin-flag")
 
-    assert (await rulesets.active_ruleset()).id == "unconstrained"
+    assert (await rulesets.active_ruleset()).id == "builtin-flag"
     active = [row.ruleset.id for row in await rulesets.list_rulesets() if row.is_active]
-    assert active == ["unconstrained"]
+    assert active == ["builtin-flag"]
 
     await rulesets.activate_ruleset("builtin")
 
@@ -233,6 +235,18 @@ async def test_activating_moves_the_active_flag() -> None:
 async def test_activating_an_unknown_ruleset_raises() -> None:
     with pytest.raises(KeyError):
         await rulesets.activate_ruleset("no-such-ruleset")
+
+
+@pytest.mark.asyncio
+async def test_activating_the_comparison_control_raises() -> None:
+    """`activatable: false` in the YAML is enforced, not advisory."""
+    await rulesets.seed_packaged_rulesets()
+    before = await rulesets.active_ruleset()
+
+    with pytest.raises(ValueError):
+        await rulesets.activate_ruleset("unconstrained")
+
+    assert (await rulesets.active_ruleset()).id == before.id
 
 
 @pytest.mark.asyncio

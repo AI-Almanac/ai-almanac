@@ -1035,6 +1035,47 @@ async def _seed_exposed_rulesets() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Approving a submission continues the conversation, so it must not
+    silently switch the assistant back to the platform's active ruleset."""
+    from ai_almanac.server.services.chat_tools import SubmitBenchmarkApproval
+    from ai_almanac.server.services.chat_turns import resume_deferred_setup_tool
+
+    await _seed_exposed_rulesets()
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+
+    seen_rulesets: list[object] = []
+
+    async def fake_stream_response(*args: object, **kwargs: object) -> AsyncIterator[str]:
+        seen_rulesets.append(kwargs.get("active_ruleset"))
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {"content": "ok", "tool_calls": [], "artifacts": []},
+                "provider_state": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
+
+    await resume_deferred_setup_tool(
+        created["id"],
+        user_id,
+        SubmitBenchmarkApproval(tool_call_id="call-1"),
+        True,
+    )
+
+    assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained"]
+
+
+@pytest.mark.asyncio
 async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],

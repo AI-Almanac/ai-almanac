@@ -190,7 +190,13 @@
 				{/if}
 
 				<div class="actions">
-					<button onclick={activate} disabled={busy || selected.is_active}>
+					<button
+						onclick={activate}
+						disabled={busy || selected.is_active || selected.activatable === false}
+						title={selected.activatable === false
+							? 'A comparison control cannot be made active'
+							: undefined}
+					>
 						{selected.is_active ? 'Active' : 'Make active'}
 					</button>
 					<button

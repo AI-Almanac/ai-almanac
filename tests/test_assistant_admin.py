@@ -111,6 +111,27 @@ async def test_clone_then_activate_changes_what_chat_resolves(
 
 
 @pytest.mark.asyncio
+async def test_the_comparison_control_cannot_be_made_active(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """The unconstrained arm exists to be compared against, never deployed:
+    activating it would strip every user's assistant of its caveats in one
+    click."""
+    await rulesets.seed_packaged_rulesets()
+    before = await rulesets.active_ruleset()
+
+    response = await client.post("/assistant/rulesets/unconstrained/activate", headers=auth_headers)
+
+    assert response.status_code == 409, response.text
+    # The refusal rolled back cleanly: the previous ruleset is still active.
+    assert (await rulesets.active_ruleset()).id == before.id
+    listing = await client.get("/assistant/rulesets", headers=auth_headers)
+    summaries = {entry["id"]: entry for entry in listing.json()}
+    assert summaries["unconstrained"]["activatable"] is False
+    assert summaries["builtin"]["activatable"] is True
+
+
+@pytest.mark.asyncio
 async def test_cloning_onto_an_existing_id_conflicts(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:

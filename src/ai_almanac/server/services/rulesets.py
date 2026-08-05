@@ -99,6 +99,9 @@ class Ruleset(BaseModel):
     # None means "use the model the user's profile resolves to".
     model: str | None = None
     model_settings: dict | None = None
+    # False marks a comparison control arm: it may run as one side of an A/B
+    # but can never become the platform-wide active ruleset.
+    activatable: bool = True
 
 
 def render_section(body: str, guardrails: Guardrails) -> str:
@@ -175,7 +178,7 @@ IMPORTED_OVERRIDE_ID = "imported-override"
 
 _COLUMNS = (
     "id, name, description, version, source, is_active, archived, comparison_enabled, "
-    "prompt_sections, tool_policy, model, model_settings"
+    "prompt_sections, tool_policy, model, model_settings, activatable"
 )
 
 
@@ -195,6 +198,7 @@ def _row_to_ruleset(row) -> Ruleset:
         tool_policy=parsed(row["tool_policy"], {}),
         model=row["model"],
         model_settings=parsed(row["model_settings"], None),
+        activatable=bool(row["activatable"]),
     )
 
 
@@ -213,6 +217,7 @@ async def _upsert(conn, ruleset: Ruleset, *, is_active: bool, created_by: str | 
         "tool_policy": json.dumps(ruleset.tool_policy.model_dump()),
         "model": ruleset.model,
         "model_settings": json.dumps(ruleset.model_settings) if ruleset.model_settings else None,
+        "activatable": ruleset.activatable,
         "created_by": created_by,
         "now": now,
     }
@@ -227,7 +232,8 @@ async def _upsert(conn, ruleset: Ruleset, *, is_active: bool, created_by: str | 
                 "UPDATE assistant_rulesets SET name = :name, description = :description, "
                 "version = :version, source = :source, prompt_sections = :prompt_sections, "
                 "tool_policy = :tool_policy, model = :model, "
-                "model_settings = :model_settings, archived = FALSE, updated_at = :now "
+                "model_settings = :model_settings, activatable = :activatable, "
+                "archived = FALSE, updated_at = :now "
                 "WHERE id = :id"
             ),
             {k: v for k, v in payload.items() if k not in ("is_active", "created_by")},
@@ -237,9 +243,10 @@ async def _upsert(conn, ruleset: Ruleset, *, is_active: bool, created_by: str | 
         sa.text(
             "INSERT INTO assistant_rulesets "
             "(id, name, description, version, source, is_active, archived, prompt_sections, "
-            " tool_policy, model, model_settings, created_by, created_at, updated_at) "
+            " tool_policy, model, model_settings, activatable, created_by, created_at, "
+            " updated_at) "
             "VALUES (:id, :name, :description, :version, :source, :is_active, FALSE, "
-            " :prompt_sections, :tool_policy, :model, :model_settings, "
+            " :prompt_sections, :tool_policy, :model, :model_settings, :activatable, "
             " :created_by, :now, :now)"
         ),
         payload,
@@ -478,17 +485,32 @@ async def activate_ruleset(ruleset_id: str) -> None:
     from ai_almanac.server.db import get_db
 
     async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT activatable FROM assistant_rulesets "
+                        "WHERE id = :id AND archived = FALSE"
+                    ),
+                    {"id": ruleset_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+        if row is None:
+            raise KeyError(f"no ruleset {ruleset_id!r} to activate")
+        if not row["activatable"]:
+            # A comparison control arm: it exists to be one side of an A/B and
+            # must never become every user's assistant.
+            raise ValueError(f"ruleset {ruleset_id!r} is a comparison control and cannot be active")
         await conn.execute(
             sa.text("UPDATE assistant_rulesets SET is_active = FALSE WHERE is_active = TRUE")
         )
-        result = await conn.execute(
-            sa.text(
-                "UPDATE assistant_rulesets SET is_active = TRUE WHERE id = :id AND archived = FALSE"
-            ),
+        await conn.execute(
+            sa.text("UPDATE assistant_rulesets SET is_active = TRUE WHERE id = :id"),
             {"id": ruleset_id},
         )
-        if result.rowcount == 0:
-            raise KeyError(f"no ruleset {ruleset_id!r} to activate")
 
 
 def next_version(ruleset: Ruleset, new_id: str, name: str) -> Ruleset:
