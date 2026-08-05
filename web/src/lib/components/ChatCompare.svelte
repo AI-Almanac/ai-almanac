@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { continueComparison } from '$lib/api';
+	import { renderMarkdown } from '$lib/chat/format';
 	import type { ComparisonState } from '$lib/chat/compare.svelte';
 
 	interface Props {
@@ -68,7 +69,16 @@
 			{#each comparison.rounds as round, r (r)}
 				<p class="round-message">{round.message}</p>
 				{#each round.answers as answer, a (a)}
+					<!-- Stacked one per row, the heading row above is too far away to say
+					     which answer this is, so each cell carries its own label. -->
+					{@const cellArm = comparison.arms[a]}
 					<article class="cell">
+						<h4 class="cell-arm">
+							{cellArm?.label ?? `Answer ${a + 1}`}
+							{#if cellArm && !labeled && comparison.voted && comparison.revealedName(cellArm.sessionId)}
+								<span class="reveal">was {comparison.revealedName(cellArm.sessionId)}</span>
+							{/if}
+						</h4>
 						{#if answer.cautions.length}
 							<ul class="cautions">
 								{#each answer.cautions as caution (caution)}
@@ -83,11 +93,13 @@
 									: 's'}
 							</p>
 						{/if}
-						<pre class="answer">{answer.text}{comparison.running &&
-							r === comparison.rounds.length - 1 &&
-							!answer.text
-								? '…'
-								: ''}</pre>
+						{#if answer.text}
+							<!-- Same renderer (and DOMPurify sanitising) the chat transcript
+							     uses: answers arrive as markdown, tables and all. -->
+							<div class="answer prose">{@html renderMarkdown(answer.text)}</div>
+						{:else if comparison.running && r === comparison.rounds.length - 1}
+							<p class="answer waiting">…</p>
+						{/if}
 						{#if answer.error}<p class="compare-error">{answer.error}</p>{/if}
 					</article>
 				{/each}
@@ -140,6 +152,9 @@
 		overflow-y: auto;
 		flex: 1;
 		min-height: 0;
+		/* The panel is user-resizable, so the board reacts to its own width
+		   rather than the viewport's. */
+		container-type: inline-size;
 	}
 	.compare-hint {
 		margin: 0;
@@ -158,11 +173,13 @@
 	}
 	.board {
 		display: grid;
-		/* Side by side when each answer has room to read, stacked when it does
-		   not — two 12rem ribbons are worse than one column you scroll. */
-		grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+		/* One track per arm, each an equal share of the panel. Not auto-fit: with
+		   room for three 19rem tracks it made three, and two answers then filled
+		   two of them and left the rest of the panel empty. */
+		grid-template-columns: repeat(var(--arms), minmax(0, 1fr));
 		gap: 0.6rem;
 	}
+
 	.arm-head {
 		margin: 0;
 		font-size: 0.8rem;
@@ -208,10 +225,84 @@
 	}
 	.answer {
 		margin: 0;
-		white-space: pre-wrap;
-		font-family: inherit;
 		font-size: 0.8rem;
 		line-height: 1.55;
+		min-width: 0;
+	}
+	.answer.waiting {
+		color: var(--color-text-muted);
+	}
+
+	/* Markdown prose. Answers are compared on how they explain themselves, so a
+	   table has to read as a table here as much as in the transcript. */
+	.prose :global(p) {
+		margin: 0 0 0.6rem;
+	}
+	.prose :global(p:last-child) {
+		margin-bottom: 0;
+	}
+	.prose :global(ul),
+	.prose :global(ol) {
+		margin: 0 0 0.6rem;
+		padding-left: 1.1rem;
+	}
+	.prose :global(li) {
+		margin-bottom: 0.2rem;
+	}
+	.prose :global(h1),
+	.prose :global(h2),
+	.prose :global(h3),
+	.prose :global(h4) {
+		margin: 0.7rem 0 0.35rem;
+		font-size: 0.85rem;
+	}
+	.prose :global(code) {
+		padding: 0.05rem 0.25rem;
+		border-radius: 0.2rem;
+		background: var(--color-surface-muted, var(--color-surface));
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 0.92em;
+	}
+	.prose :global(pre) {
+		margin: 0 0 0.6rem;
+		padding: 0.5rem;
+		overflow-x: auto;
+		border-radius: 0.3rem;
+		background: var(--color-surface-muted, var(--color-surface));
+	}
+	.prose :global(pre code) {
+		padding: 0;
+		background: none;
+	}
+	/* Tables are common in these answers and are what overflowed before. */
+	.prose :global(table) {
+		display: block;
+		width: 100%;
+		overflow-x: auto;
+		border-collapse: collapse;
+		margin: 0 0 0.6rem;
+		font-size: 0.74rem;
+	}
+	.prose :global(th),
+	.prose :global(td) {
+		padding: 0.2rem 0.45rem 0.2rem 0;
+		text-align: left;
+		white-space: nowrap;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.prose :global(blockquote) {
+		margin: 0 0 0.6rem;
+		padding-left: 0.6rem;
+		border-left: 2px solid var(--color-border);
+		color: var(--color-text-muted);
+	}
+
+	/* Side by side, the heading row labels the columns and the per-cell label
+	   would just repeat it every round. */
+	.cell-arm {
+		display: none;
+		margin: 0;
+		font-size: 0.78rem;
 	}
 	.follow-up-row {
 		display: flex;
@@ -279,5 +370,19 @@
 	.thanks {
 		font-size: 0.78rem;
 		color: var(--color-accent);
+	}
+	/* Too narrow to read two columns: stack them rather than shrink to ribbons.
+	   Stacked, the column headings no longer sit above their answers, so they
+	   hand off to the per-cell labels. */
+	@container (max-width: 34rem) {
+		.board {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.arm-head {
+			display: none;
+		}
+		.cell-arm {
+			display: block;
+		}
 	}
 </style>
