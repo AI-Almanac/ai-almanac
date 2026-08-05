@@ -167,7 +167,15 @@ async def test_post_blends_accepts_sufficient_coverage(
     )
 
     assert response.status_code == 201, response.text
-    assert response.json()["warnings"] == []
+    # 2020 is exactly `earliest_forecast`, and the boundary is inclusive — a
+    # coverage violation would be a 400, so the 201 is what proves the rule.
+    # The five-year training span this fixture is forced into (obs starts 2010,
+    # so nothing before 2020 is available) does draw the small-sample guardrail,
+    # which also confirms the guardrails run on the REST path and not only in
+    # the chat validation path.
+    warnings = response.json()["warnings"]
+    assert any("small sample" in w for w in warnings), warnings
+    assert not any("Climatology needs" in w for w in warnings), warnings
 
 
 @pytest.mark.asyncio
@@ -190,9 +198,11 @@ async def test_create_blend_warns_when_a_member_cannot_forecast_live(
         user_id,
     )
 
-    assert len(out.warnings) == 1
-    assert "NeuralGCM" in out.warnings[0]
-    assert "cannot be run as a live forecast" in out.warnings[0]
+    # Asserted by content rather than by count: the same list also carries any
+    # statistical guardrail warnings the config draws (here, a six-year training
+    # span), and this test is about the live-forecast note specifically.
+    live_forecast = next(w for w in out.warnings if "NeuralGCM" in w)
+    assert "cannot be run as a live forecast" in live_forecast
 
     async with get_db() as conn:
         row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()

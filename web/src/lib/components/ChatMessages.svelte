@@ -2,19 +2,44 @@
 	import { tick } from 'svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { codeForToolCall, copyCode, formatToolName, renderMarkdown } from '$lib/chat/format';
+	import { rateChatTurn } from '$lib/api';
 
 	interface Props {
 		chat: ChatSessionState;
 		emptyMessage: string;
 		suggestions: string[];
+		/** Comparison mode is the opt-in for all feedback UI, thumbs included. */
+		canRate?: boolean;
 		onSuggestion: (text: string) => void;
 		onOpenArtifact: (artifactId: string) => void;
 	}
 
-	const { chat, emptyMessage, suggestions, onSuggestion, onOpenArtifact }: Props = $props();
+	const {
+		chat,
+		emptyMessage,
+		suggestions,
+		canRate = false,
+		onSuggestion,
+		onOpenArtifact
+	}: Props = $props();
 
 	let messagesEl = $state<HTMLElement | null>(null);
 	let shownCode = $state<Set<string>>(new Set());
+	let ratings = $state<Record<string, 1 | -1>>({});
+
+	async function rate(turnId: string, value: 1 | -1) {
+		const sessionId = chat.sessionId;
+		if (!sessionId || ratings[turnId] === value) return;
+		ratings = { ...ratings, [turnId]: value };
+		try {
+			await rateChatTurn(sessionId, turnId, value);
+		} catch {
+			// A rating is telemetry, not the user's work — drop the optimistic
+			// mark rather than interrupting the conversation with an error.
+			const { [turnId]: _dropped, ...rest } = ratings;
+			ratings = rest;
+		}
+	}
 
 	function toggleCode(key: string) {
 		const next = new Set(shownCode);
@@ -90,6 +115,52 @@
 						&#128444; {artifact.label ?? 'Figure'} &rarr;
 					</button>
 				{/each}
+			{/each}
+
+			{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
+				<div class="rating">
+					<span class="rating-label">Was this useful?</span>
+					<button
+						class="rating-btn"
+						class:chosen={ratings[msg.id] === 1}
+						aria-label="Helpful"
+						onclick={() => void rate(msg.id, 1)}>&#128077;</button
+					>
+					<button
+						class="rating-btn"
+						class:chosen={ratings[msg.id] === -1}
+						aria-label="Not helpful"
+						onclick={() => void rate(msg.id, -1)}>&#128078;</button
+					>
+				</div>
+			{/if}
+
+			<!--
+				Rendered from the backend's guardrail events, not from the assistant's
+				prose. The reply above may explain these well, badly, or not at all;
+				the user is told either way.
+			-->
+			{#each msg.guardrails ?? [] as notice}
+				{#if notice.errors.length}
+					<div class="guardrail guardrail-error">
+						<p class="guardrail-title">This configuration cannot run</p>
+						<ul>
+							{#each notice.errors as item (item)}
+								<li>{item}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+				{#if notice.warnings.length}
+					<div class="guardrail guardrail-warning">
+						<p class="guardrail-title">Read these results with care</p>
+						<ul>
+							{#each notice.warnings as item (item)}
+								<li>{item}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
 			{/each}
 		{/if}
 	{/each}
@@ -448,6 +519,57 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
+	}
+	.rating {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+	}
+	.rating-btn {
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 0.3rem;
+		cursor: pointer;
+		padding: 0.1rem 0.25rem;
+		font-size: 0.8rem;
+		opacity: 0.55;
+	}
+	.rating-btn:hover,
+	.rating-btn.chosen {
+		opacity: 1;
+		border-color: var(--color-border);
+	}
+	.guardrail {
+		border-radius: 0.45rem;
+		border: 1px solid;
+		padding: 0.6rem 0.75rem;
+		font-size: 0.8rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.guardrail ul {
+		margin: 0;
+		padding-left: 1.1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.guardrail-title {
+		margin: 0;
+		font-weight: 700;
+	}
+	.guardrail-warning {
+		color: var(--color-status-running);
+		background: var(--color-status-running-bg);
+		border-color: var(--color-status-running);
+	}
+	.guardrail-error {
+		color: var(--color-status-failed);
+		background: var(--color-status-failed-bg);
+		border-color: var(--color-status-failed);
 	}
 	.approval-run {
 		border: 0;

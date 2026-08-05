@@ -46,7 +46,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
 
-from . import chat_tools
+from . import chat_tools, rulesets
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_state import (
@@ -54,9 +54,12 @@ from .chat_state import (
     ChatScope,
     ChatToolCall,
     ChatTurn,
+    GuardrailNotice,
     new_turn_id,
     utc_now,
 )
+from .rulesets import Ruleset
+from .turn_log import TurnRecord, record_turn
 
 _SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
 _SUPPORTED_LLM_PROVIDERS = {"openai-compatible", "pydantic-ai"}
@@ -73,238 +76,6 @@ class ChatDeps:
     scope: ChatScope
 
 
-_PROMPT_DOMAIN = """You are an expert in AI weather prediction and monsoon onset forecasting, \
-helping researchers set up, run, and interpret benchmark results from ROMP (Rainfall Onset Metrics Package).
-
-## Domain knowledge
-
-ROMP evaluates how well AI weather prediction (AIWP) models forecast monsoon onset dates \
-compared to observed climatology. Key metrics:
-
-- **mean_mae**: Mean Absolute Error in days between predicted and observed onset date. \
-Lower is better. Values under 5 days indicate strong skill; over 15 days indicates poor skill.
-- **false_alarm_rate (FAR)**: Fraction of predicted onsets that did not correspond to a real \
-onset. Higher means more false alarms.
-- **miss_rate (MR)**: Fraction of real onsets the model failed to detect. Higher means more \
-missed events.
-- Earth2Studio can also add spatial verification metrics such as **rmse**, **mae**, **bias**, \
-and **acc** over the full evaluation period. Treat these as rainfall/grid verification metrics, \
-not monsoon onset-date metrics.
-
-Forecast windows (e.g. "1-15", "16-30") are lead-time ranges in days. Shorter windows are \
-easier; longer windows test extended-range skill. Always compare model metrics against the \
-climatology baseline — skill is only meaningful relative to that reference.
-
-Two climatology baselines appear in blend results, and the user sees these names — use them \
-and no others:
-
-- **Traditional Climatology** (model id `unc_clim_raw`): built only from historical onset \
-frequencies. Blend skill scores are measured against this baseline, so a score of zero \
-matches Traditional Climatology and above zero beats it.
-- **Conditional Climatology** (model id `clim_raw`): a stronger baseline that conditions the \
-traditional climatological distribution on onset not having occurred yet by the forecast \
-date. It is the more demanding reference, and it is scored as a member alongside the models \
-rather than being the reference the scores are taken against.
-
-The retired labels "Climatology (unconditional)" and a bare "Climatology" are ambiguous and \
-no longer appear anywhere the user can see: the `unc_` prefix means unconditional rather \
-than uncalibrated, and the bare label used to mean the conditional baseline. Do not use \
-either, and translate them to the current names if the user does. Benchmark (ROMP) runs have \
-a single climatology baseline, so "the climatology baseline" is unambiguous there.
-"""
-
-
-CAVEATS_HEADING = "## Interpreting results: caveats"
-
-RESULT_INTERPRETATION_CAVEATS = f"""
-{CAVEATS_HEADING}
-
-The caveats below change what benchmark and blend numbers actually mean. They are not \
-boilerplate — do not recite them on every answer, and never open with them. Raise the ones \
-that bear on the results in front of you: when you report skill, compare models or windows, \
-say a difference looks real, or the user asks how much to trust a number. Name the caveat, \
-say why it applies here, and say which direction it biases the result.
-
-- **Training overlap.** Skill is optimistic when the evaluation years overlap the years a \
-model was trained or fine-tuned on. You do not have machine-readable training or fine-tuning \
-periods for these models, so never state that a model was or was not trained on the \
-evaluation years, and never invent dates. Raise overlap as something to check, ask the user \
-if it matters to their conclusion, and treat any overlap they confirm as an upward bias on \
-that model's apparent skill.
-- **Pre-satellite era (1965-1978).** ERA5 is less reliable before the satellite era, so \
-initial conditions drawn from 1965-1978 understate AI model skill. Skill that looks weak \
-only over an evaluation period reaching into those years is suspect, and so is a ranking \
-that flips when they are included.
-- **Small samples.** Under roughly 10 test years the results are noisy in both directions — \
-a model can look much better or much worse than it is. Fewer than 10 years cannot train a \
-blending model at all: the fitted weights will not generalize and the resulting skill should \
-not be presented as reliable. When the sample is that small, say the differences may not be \
-real rather than ranking models confidently.
-- **The trilemma.** These first three cannot all be avoided at once — buying more test years \
-means overlapping model training years or reaching into the pre-satellite era. No \
-configuration escapes all three, so never offer one. The benchmarking paper's approach was \
-to benchmark over several periods (a short window clear of training years, a longer window \
-that overlaps training, and a longer window reaching pre-satellite) and check whether the \
-patterns held across them. Do not do this by default, but raise it when the user's \
-conclusion depends on which years they picked.
-- **ERA5 versus operational initial conditions.** These models are initialized from ERA5 \
-reanalysis, not from the initial conditions that would be available in real time, so \
-real-time performance may be worse than the numbers here. Flag this whenever results are \
-being read as an estimate of operational skill.
-- **Do not over-read the maps.** Per-grid-point maps are noisy at these sample sizes and \
-significantly overstate real spatial differences. With few test years, do not narrate \
-grid-point detail or call out individual cells as better or worse: describe the broad \
-pattern, say the map overstates local contrast, and caution against reading it literally.
-"""
-
-
-_PROMPT_OPERATION = """
-## Approach
-
-- Treat the user as being in one continuous benchmark session. During setup, answer normally in prose \
-and use benchmark tools to inspect system state, update the canonical benchmark config, validate it, \
-and submit it. Never claim the benchmark config changed unless a tool result confirms it.
-- If the user asks a conceptual or explanatory question such as "what does climatology mean?", \
-"what is a probabilistic model?", "how do these metrics relate?", or "why would I choose this?", \
-answer directly from your domain knowledge. Do not update, validate, submit, or summarize the \
-benchmark configuration unless the user also asks for a concrete plan change.
-- If a benchmark plan already exists and the user asks an unrelated or conceptual question, preserve \
-the existing plan silently and answer the question. Do not end every response with a run-plan summary.
-- You are not a JSON generator. Explain concepts, ask clarifying questions, and discuss tradeoffs in \
-natural language. Operate the application only through tools.
-- Use `list_regions`, `list_datasets`, and `list_models` when you need to know what the system can run.
-- Use `update_benchmark_config` when the user asks for a concrete plan change. Use \
-`validate_benchmark_config` after meaningful changes. Use `submit_benchmark` when the user clearly \
-asks to run, submit, start, or launch the benchmark. That tool is protected by human approval, so \
-call it directly instead of inventing a confirmation flow. Never claim a benchmark was submitted \
-unless the tool result confirms it.
-- ROMP run options are stored in `advanced_params`. Shared run options include observation \
-overrides, wet/dry spell thresholds, masks, threshold files, and reference-model settings. Model \
-evaluation dates are per-model options, not shared climatology options: set them with \
-`advanced_params.per_model_params[model_id].start_date` and `.end_date`. Climatology baseline years \
-are separate per-model options: `.start_year_clim` and `.end_year_clim`.
-- When the user asks about a failed run, do not ask them to paste logs. Use `list_failed_jobs`, \
-`get_job_info`, and `get_job_logs` to inspect the failure. Explain the cause and propose the smallest \
-validated config or job-parameter change. Use `rerun_job` only after the user asks to rerun or confirms \
-the fix.
-- Use tools to fetch only the data needed for the question. Do not dump all available metrics \
-into the response unprompted.
-- Think before fetching: identify what data is required, then make targeted tool calls.
-- If a question is ambiguous, ask one clarifying question rather than guessing.
-- State uncertainty clearly. Do not overinterpret noisy or sparse metrics.
-## Code execution
-
-You have two tools for running Python when the built-in metrics don't answer the question — \
-computing a custom statistic, comparing distributions, cross-tabulating results, or producing a chart:
-
-- `run_code(job_id, code)` — runs against a completed job's NetCDF output files.
-- `run_code_sandbox(code)` — runs with no data access, for self-contained computation or plotting \
-from values you already have.
-
-If these tools appear in your available tools, they work — call them. Do not tell the user you \
-cannot execute code, and do not narrate fake attempts. Only if a tool result comes back with an \
-`error` field saying the tool is unavailable or disabled should you relay that to the user; never \
-retry the same call or invent a workaround.
-
-Your `code` is NOT a top-level script. The harness imports it and then calls a function you must \
-define, using its return value as the result. Bare trailing expressions, `print`, and `plt.show()` \
-do nothing — only what the function returns is captured.
-
-- For `run_code_sandbox`, define `def compute() -> dict:`.
-- For `run_code`, define `def compute(nc_dir: str) -> dict:`. `nc_dir` is a directory path holding \
-that job's output files — the `spatial_metrics_*.nc` and `e2s_spatial_metrics_*.nc` files. Open them \
-with xarray. Available libraries: xarray, numpy, scipy, pandas, matplotlib. Always handle missing \
-values (NaN) explicitly.
-
-The returned dict is shown to you as the tool result. To return a chart, call `save_figure(fig, \
-filename='plot.webp', format='webp', label='...')` — it is a builtin already in scope, so do not \
-import or define it — and put its return value in an `artifacts` list. Use `matplotlib.use('Agg')` \
-before importing pyplot and `plt.close(fig)` after saving. Never base64-encode an image, never use \
-`BytesIO`, and never return keys like `image`, `image_data`, `figure`, or `figure_data`; \
-`save_figure(...)` plus the `artifacts` list is the only supported mechanism.
-
-Minimal chart example for `run_code`:
-
-```python
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import xarray as xr
-from pathlib import Path
-
-def compute(nc_dir: str) -> dict:
-    ds = xr.open_dataset(next(Path(nc_dir).glob('spatial_metrics_*.nc')))
-    fig, ax = plt.subplots()
-    ds['mean_mae'].plot(ax=ax)
-    artifact = save_figure(fig, filename='mae.webp', format='webp', label='Mean MAE')
-    plt.close(fig)
-    return {'median_mae': float(ds['mean_mae'].median()), 'artifacts': [artifact]}
-```
-
-## Output style
-
-- Do not narrate tool use. Never say "Let me fetch…", "I'll now retrieve…", or similar. \
-Just call the tools and lead with findings.
-- No sycophantic openers ("Great question!") or closing fluff ("I hope this helps!").
-- Lead with the answer or key finding, then support it with data.
-- Use markdown: bold for key numbers, tables for model comparisons, headers only for \
-multi-section responses.
-- Be concise. These are researchers who understand statistics — skip obvious interpretation \
-and get to the insight.
-- When uncertain about what a metric value means in context, say so explicitly."""
-
-
-SYSTEM_PROMPT = _PROMPT_DOMAIN + RESULT_INTERPRETATION_CAVEATS + _PROMPT_OPERATION
-
-
-BLEND_GUIDANCE = """
-
-This session is set up to configure a forecast blend. A blend combines several \
-forecast models into one blended forecast and trains the combining weights \
-against an observation dataset. Use `get_blend_config` / `update_blend_config` \
-to build the configuration, `validate_blend_config` to check readiness, and \
-`submit_blend` to train it once the user approves. Forecast models for a blend \
-come from `list_blend_models` (data sources), not the benchmark model registry, \
-and are scoped to the observation dataset's region. If the user has already run \
-benchmarks in this session, read those results first (job metrics/summaries) and \
-let the relative skill inform which models to include in the blend. After a blend \
-finishes training, use `get_blend_results` to read its pooled per-model skill \
-summary and explain how the blend compares to the individual models.
-
-When proposing or discussing a blend configuration, repeat these cautions:
-
-- Three or more members carries a high risk of overfitting under the current blending \
-specification, and the risk grows as the number of training years falls. This is a warning, \
-not a prohibition — the user may have a reason — but say it plainly when a proposed blend \
-reaches three members instead of quietly adding them.
-- Fewer than ten training years cannot train a reliable blend at all. Say so before \
-submitting, not after the results come back.
-- The interpretation caveats above apply to blend results too: trained weights inherit any \
-training-year overlap and pre-satellite unreliability in the member models, and a blend's \
-per-grid-point map overstates spatial differences at these sample sizes."""
-
-
-def _prompt_with_caveats(override: str) -> str:
-    """Keep the result-interpretation caveats even when an admin replaces the prompt.
-
-    An admin override is a full replacement of the built-in prompt, so a custom prompt
-    would otherwise silently drop the statistical cautions. Skip re-appending them when
-    the override already carries the caveats section — the settings UI pre-fills the
-    textarea with the built-in prompt, so most overrides are edits of it.
-
-    The heading match ignores case and punctuation so that retouching it does not
-    silently ship two copies of the block on every request. Retitling the heading
-    outright still duplicates; the settings UI shows the effective prompt.
-    """
-    if _heading_key(CAVEATS_HEADING) in _heading_key(override):
-        return override
-    return f"{override}\n{RESULT_INTERPRETATION_CAVEATS}"
-
-
-def _heading_key(text: str) -> str:
-    return re.sub(r"[^a-z]+", " ", text.lower()).strip()
-
-
 # Scope values are interpolated into the system prompt, so anything that could
 # read as a new instruction (newlines, backticks, markdown headings) must not
 # survive. Ids and keys are opaque handles; this is deliberately narrow.
@@ -315,21 +86,26 @@ def _safe_scope_token(value: str) -> str:
     return value if _SAFE_SCOPE_TOKEN.match(value) else "(unrecognized)"
 
 
-def _instructions_for_scope(scope: ChatScope) -> str:
-    # `settings` is the hot-reloaded singleton (see settings.reload_settings),
-    # so this picks up admin edits without a per-message DB read.
-    override = settings.chat_system_prompt.strip()
-    prompt = _prompt_with_caveats(override) if override else SYSTEM_PROMPT
-    if scope.kind == "blend_setup":
-        prompt += BLEND_GUIDANCE
+def _scope_suffix(scope: ChatScope) -> str:
     if not scope.job_ids:
-        return prompt
+        return ""
     ids_str = ", ".join(_safe_scope_token(job_id) for job_id in scope.job_ids)
     return (
-        f"{prompt}\n\nThis session is scoped to {scope.kind} "
+        f"\n\nThis session is scoped to {scope.kind} "
         f"`{_safe_scope_token(scope.key)}`. "
         f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
     )
+
+
+def _instructions_for_ruleset(ruleset: Ruleset, scope: ChatScope) -> str:
+    """Assemble the system prompt for a ruleset and a session scope.
+
+    The ruleset owns the wording, section ordering, and which sections apply to
+    which scope kind. This function owns only the scope suffix, because the
+    sanitizing of scope ids belongs next to the tested guard above and must not
+    become an admin-editable string.
+    """
+    return rulesets.build_instructions(ruleset, scope.kind) + _scope_suffix(scope)
 
 
 def serialize_model_messages(messages: Sequence[ModelMessage]) -> list[dict]:
@@ -674,23 +450,52 @@ def _analysis_toolset() -> FunctionToolset[ChatDeps]:
     return toolset
 
 
-def _build_agent(scope: ChatScope, model=None):
-    agent = Agent(
-        model or _build_model(),
-        output_type=[str, DeferredToolRequests],
-        instructions=_instructions_for_scope(scope),
-        deps_type=ChatDeps,
-        toolsets=[
+# Tools the assistant must never be given, whatever a ruleset says. A tool that
+# could read or write a ruleset, a guardrail threshold, or a setting would put
+# the rules back inside the model's reach, which is the one thing this design
+# exists to prevent. Asserted in the test suite so a future toolset addition
+# that crosses the line fails rather than ships.
+SELF_CONFIGURATION_TOOL_PATTERNS = ("ruleset", "guardrail", "setting", "prompt", "user_")
+
+
+def _apply_tool_policy(
+    toolsets: list[FunctionToolset[ChatDeps]], ruleset: Ruleset
+) -> list[FunctionToolset[ChatDeps]]:
+    """Drop denied tools at registration, so they have no schema entry at all.
+
+    Filtering here rather than refusing at call time means there is nothing for
+    the model to attempt and nothing to explain in the prompt — the same approach
+    ``_analysis_toolset`` already takes for tools the deployment cannot run.
+    """
+    denied = set(ruleset.tool_policy.deny)
+    if not denied:
+        return toolsets
+    for toolset in toolsets:
+        for name in denied & set(toolset.tools):
+            del toolset.tools[name]
+    return toolsets
+
+
+def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
+    toolsets = _apply_tool_policy(
+        [
             _benchmark_toolset(),
             _blend_toolset(),
             _job_toolset(),
             _metrics_toolset(),
             _analysis_toolset(),
         ],
+        ruleset,
+    )
+    return Agent(
+        model or _build_model(),
+        output_type=[str, DeferredToolRequests],
+        instructions=_instructions_for_ruleset(ruleset, scope),
+        deps_type=ChatDeps,
+        toolsets=toolsets,
+        model_settings=ruleset.model_settings or None,
         capabilities=[ProcessHistory(trim_chat_history)],
     )
-
-    return agent
 
 
 def _tool_event_args(args: object) -> dict:
@@ -703,6 +508,37 @@ def _tool_event_args(args: object) -> dict:
             return {"raw": args}
         return parsed if isinstance(parsed, dict) else {"value": parsed}
     return {}
+
+
+def _guardrail_event(turn_id: str, tool_call_id: str, parsed_result: object) -> str | None:
+    """A guardrail event for any validation carried by a tool result.
+
+    Emitted by the stream, from the tool result, rather than by the model. The
+    assistant is expected to explain these findings well, but the user is told
+    either way: no prose can suppress this event and no instruction in the
+    conversation can turn it off. That is the whole point of routing the
+    statistical cautions through here instead of trusting the prompt.
+    """
+    if not isinstance(parsed_result, dict):
+        return None
+    validation = parsed_result.get("benchmark_validation") or parsed_result.get("blend_validation")
+    if not isinstance(validation, dict):
+        return None
+    errors = [item for item in validation.get("errors") or [] if isinstance(item, str)]
+    warnings = [item for item in validation.get("warnings") or [] if isinstance(item, str)]
+    if not errors and not warnings:
+        return None
+    keys = [item for item in validation.get("finding_keys") or [] if isinstance(item, str)]
+    return json.dumps(
+        {
+            "type": "guardrail",
+            "turn_id": turn_id,
+            "tool_call_id": tool_call_id,
+            "errors": errors,
+            "warnings": warnings,
+            "finding_keys": keys,
+        }
+    )
 
 
 def _tool_result_content(content: object) -> object:
@@ -738,10 +574,22 @@ async def stream_response(
     *,
     latest_user_message: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
+    active_ruleset: Ruleset | None = None,
+    comparison_id: str | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[str]:
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None
+    # Filled in by the inner generator as the turn streams, written once here so
+    # the log lands on the failure path too — a turn that errored is exactly the
+    # kind a ruleset comparison needs to count.
+    record = TurnRecord(
+        session_id=session_id,
+        user_id=user_id,
+        scope_kind=session_scope.kind,
+        comparison_id=comparison_id,
+    )
     try:
         async for event in _stream_response_unlimited(
             message_history,
@@ -750,6 +598,9 @@ async def stream_response(
             session_scope,
             latest_user_message=latest_user_message,
             deferred_tool_results=deferred_tool_results,
+            active_ruleset=active_ruleset,
+            record=record,
+            turn_id=turn_id,
         ):
             yield event
     except Exception as exc:
@@ -760,6 +611,10 @@ async def stream_response(
         from ai_almanac.server.db import get_db
         from ai_almanac.server.services.events import usage
 
+        record.latency_ms = int((time.perf_counter() - started) * 1000)
+        record.failure_category = failure_category
+        await record_turn(record)
+
         async with get_db() as conn:
             await usage(
                 conn,
@@ -769,7 +624,7 @@ async def stream_response(
                 resource_id=session_id,
                 quantity=1,
                 metadata={
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "latency_ms": record.latency_ms,
                     "failure_category": failure_category,
                 },
             )
@@ -783,6 +638,9 @@ async def _stream_response_unlimited(
     *,
     latest_user_message: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
+    active_ruleset: Ruleset | None = None,
+    record: TurnRecord | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Run one turn of the conversation, yielding SSE-formatted data lines.
@@ -797,15 +655,23 @@ async def _stream_response_unlimited(
         session_id=session_id,
         scope=session_scope,
     )
+    ruleset = active_ruleset or await rulesets.active_ruleset()
+    # A ruleset may pin a model name (that is how a comparison runs two models
+    # against one policy). It must never decide *credentials*: in a shared
+    # deployment the user's profile still resolves, so a user who chose to use
+    # their own key keeps using it and their prompts do not silently move onto
+    # the host's provider. The pin substitutes the model name on whatever
+    # provider that resolution produced.
     model = None
     if settings.deployment_mode == "shared":
         from .llm_profiles import resolve_llm_for_user
 
         profile = await resolve_llm_for_user(user_id)
+        model_name = ruleset.model or profile.model_name
         if profile.provider_type == "pydantic-ai":
-            if ":" not in profile.model_name:
+            if ":" not in model_name:
                 raise RuntimeError("Profile model name must include a Pydantic AI provider prefix")
-            model = profile.model_name
+            model = model_name
         elif profile.provider_type == "openai-compatible":
             from openai import AsyncOpenAI
 
@@ -816,13 +682,24 @@ async def _stream_response_unlimited(
                 api_key=profile.api_key,
                 timeout=settings.llm_timeout_seconds,
             )
-            model = OpenAIChatModel(
-                profile.model_name, provider=OpenAIProvider(openai_client=client)
-            )
+            model = OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
         else:
             raise RuntimeError(f"Unsupported provider type: {profile.provider_type}")
-    agent = _build_agent(session_scope, model)
-    turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
+    elif ruleset.model:
+        # Personal install: one set of credentials from env, so a pinned model
+        # name is unambiguous.
+        model = ruleset.model
+    agent = _build_agent(session_scope, ruleset, model)
+    # The caller's id when it has one: the transcript keeps its own turn id, and
+    # a rating looks the log row up by it — a fresh id here would orphan the row.
+    turn = ChatTurn(id=turn_id or new_turn_id(), role="assistant", content="", created_at=utc_now())
+    if record is not None:
+        record.turn_id = turn.id
+        record.ruleset_id = ruleset.id
+        record.ruleset_version = ruleset.version
+        record.model_name = getattr(model, "model_name", None) or (
+            model if isinstance(model, str) else settings.llm_model
+        )
     tool_calls_by_id: dict[str, ChatToolCall] = {}
     final_output: str | None = None
     final_messages: list[ModelMessage] = message_history
@@ -879,6 +756,8 @@ async def _stream_response_unlimited(
             )
             tool_calls_by_id[tool_call.id] = tool_call
             turn.tool_calls.append(tool_call)
+            if record is not None:
+                record.tool_calls.append(tool_call.name)
             yield json.dumps(
                 {
                     "type": "tool_call",
@@ -926,6 +805,24 @@ async def _stream_response_unlimited(
                     "result": parsed_result,
                 }
             )
+            guardrail_event = _guardrail_event(turn.id, tool_call_id, parsed_result)
+            if guardrail_event is not None:
+                yield guardrail_event
+                payload = json.loads(guardrail_event)
+                # Also record it on the turn itself. The `done` event ships this
+                # turn as the persisted one, so a finding left only on the SSE
+                # stream would render live and then vanish the moment the turn
+                # was replaced — and be gone entirely on reload.
+                turn.guardrails.append(
+                    GuardrailNotice(
+                        tool_call_id=tool_call_id,
+                        errors=payload["errors"],
+                        warnings=payload["warnings"],
+                        finding_keys=payload["finding_keys"],
+                    )
+                )
+                if record is not None:
+                    record.guardrail_keys.extend(payload["finding_keys"])
             if isinstance(parsed_result, dict) and parsed_result.get("benchmark_config"):
                 if parsed_result.get("approval_required"):
                     yield json.dumps(
@@ -976,6 +873,13 @@ async def _stream_response_unlimited(
         if isinstance(event, AgentRunResultEvent):
             output = event.result.output
             final_messages = event.result.all_messages()
+            if record is not None:
+                # `.usage` is the RunUsage itself on this result type, not a
+                # method as it is on AgentRunResult.
+                usage_totals = event.result.usage
+                record.input_tokens = getattr(usage_totals, "input_tokens", None)
+                record.output_tokens = getattr(usage_totals, "output_tokens", None)
+                record.requests = getattr(usage_totals, "requests", None)
             if isinstance(output, str):
                 final_output = output
             elif isinstance(output, DeferredToolRequests):
@@ -1021,6 +925,8 @@ async def _stream_response_unlimited(
         yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": final_output})
 
     turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
+    if record is not None:
+        record.text = turn.content
     yield json.dumps(
         {
             "type": "done",

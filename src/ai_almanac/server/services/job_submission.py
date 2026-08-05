@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services import trajectory_sets
+from ai_almanac.server.services import guardrails, trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
@@ -301,10 +301,11 @@ class BlendOut(BaseModel):
 _blend_model_key = blend_model_key
 
 # The onset climatology needs this many observation years before the first
-# forecast year to be estimable. Mirrors ``min_onset_years`` in
+# forecast year to be estimable. Owned by ``services.guardrails`` alongside the
+# other statistical thresholds; also mirrored by ``min_onset_years`` in
 # modal/blending_app.py and ``MIN_ONSET_YEARS`` in
 # web/src/routes/blends/year-coverage.ts.
-MIN_ONSET_YEARS = 10
+MIN_ONSET_YEARS = guardrails.DEFAULT_GUARDRAILS.min_onset_years
 
 # A data source's registered ``(start_year, end_year)``, either side unknown.
 YearRange = tuple[int | None, int | None]
@@ -471,6 +472,28 @@ def _blend_forecast_years(params: BlendParams) -> list[int]:
     )
 
 
+def blend_years(params: BlendParams) -> guardrails.BlendYears:
+    """A blend's three year sets parsed for the guardrail predicates.
+
+    Tolerant of malformed specs on purpose: a bad token is already reported as
+    "Invalid year specification" by ``_blend_forecast_years`` before this is
+    reached, and treating an unparseable spec as empty here keeps the guardrails
+    from turning one syntax error into a second, more confusing complaint.
+    """
+
+    def years(value: str | None) -> list[int]:
+        try:
+            return _parse_year_spec(value)
+        except ValueError:
+            return []
+
+    return guardrails.BlendYears(
+        training=years(params.training_years),
+        cv_holdout=years(params.cv_holdout_years),
+        true_holdout=years(params.true_holdout_years),
+    )
+
+
 def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
     cfg = json.loads(row.get("config_json") or "{}")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
@@ -550,7 +573,19 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if coverage_errors:
         raise HTTPException(status_code=400, detail=" ".join(coverage_errors))
 
-    warnings = historical_only_warning(display_names)
+    # The guardrail chokepoint. Every entry point — the assistant's submit_blend
+    # tool, POST /blends, and the manual UI form — passes through here, so a rule
+    # checked here cannot be talked past in conversation or skipped with a direct
+    # API call. The chat path also surfaces these findings before submitting (see
+    # blend_domain._validation_for_config); this is what actually enforces them.
+    findings = guardrails.check_blend(
+        blend_years(body.params), len(model_names), guardrails.current()
+    )
+    guardrail_errors = guardrails.error_messages(findings)
+    if guardrail_errors:
+        raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))
+
+    warnings = historical_only_warning(display_names) + guardrails.warning_messages(findings)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()

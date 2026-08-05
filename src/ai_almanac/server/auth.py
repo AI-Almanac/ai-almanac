@@ -246,6 +246,14 @@ async def require_forecasting() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
+async def require_assistant_comparisons() -> None:
+    """Gate ruleset comparisons behind their flag. On by default; turning it off
+    hides the feature from admins and users alike, so nothing can spend two
+    model replies on a comparison an operator has switched off."""
+    if not settings.enable_assistant_comparisons:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
 

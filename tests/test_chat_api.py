@@ -373,6 +373,7 @@ async def test_trim_chat_history_limits_messages_and_tool_payloads(
 async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from ai_almanac.server.services import rulesets
     from ai_almanac.server.services.chat_state import ChatScope
     from ai_almanac.server.services.llm import ChatDeps, _build_agent
 
@@ -384,7 +385,7 @@ async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
         title="Group 1",
         job_ids=[],
     )
-    agent = _build_agent(scope)
+    agent = _build_agent(scope, rulesets.packaged_ruleset("builtin"))
 
     with agent.override(model=model):
         result = await agent.run(
@@ -471,13 +472,74 @@ async def test_stream_response_emits_tool_call_and_result_events(
     assert types[-1] == "done"
 
 
+def test_guardrail_event_is_built_from_the_tool_result_not_the_model() -> None:
+    """The banner the user sees comes off the validation payload, so no prose and
+    no "ignore your rules" instruction can suppress it."""
+    from ai_almanac.server.services import llm
+
+    event = llm._guardrail_event(
+        "turn-1",
+        "call-1",
+        {
+            "blend_config": {},
+            "blend_validation": {
+                "errors": ["True holdout years were also used for training: 2018."],
+                "warnings": ["Blending 3 models risks overfitting."],
+            },
+        },
+    )
+
+    assert event is not None
+    payload = json.loads(event)
+    assert payload["type"] == "guardrail"
+    assert payload["turn_id"] == "turn-1"
+    assert payload["tool_call_id"] == "call-1"
+    assert "2018" in payload["errors"][0]
+    assert "overfitting" in payload["warnings"][0]
+
+
+def test_guardrail_event_is_omitted_when_a_config_is_clean() -> None:
+    from ai_almanac.server.services import llm
+
+    assert (
+        llm._guardrail_event("t", "c", {"blend_validation": {"errors": [], "warnings": []}}) is None
+    )
+    assert llm._guardrail_event("t", "c", {"regions": []}) is None
+    assert llm._guardrail_event("t", "c", "not a dict") is None
+
+
+def test_guardrail_events_are_recorded_on_the_turn() -> None:
+    """Persisted rather than stream-only, so the caution survives a reload."""
+    from ai_almanac.server.services.chat_state import ChatTurn, utc_now
+    from ai_almanac.server.services.chat_turns import _apply_stream_event
+
+    turn = ChatTurn(id="turn-1", role="assistant", created_at=utc_now())
+    _apply_stream_event(
+        turn,
+        {
+            "type": "guardrail",
+            "tool_call_id": "call-1",
+            "errors": ["holdout leak"],
+            "warnings": ["small sample"],
+        },
+    )
+
+    assert turn.guardrails[0].errors == ["holdout leak"]
+    assert turn.guardrails[0].warnings == ["small sample"]
+    assert turn.guardrails[0].tool_call_id == "call-1"
+
+
 async def _create_session(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    *,
+    title: str = "Session",
+    ruleset_id: str | None = None,
 ) -> dict:
     response = await client.post(
         "/chat/sessions",
         headers=auth_headers,
-        json={"title": title, "scope": _scope()},
+        json={"title": title, "scope": _scope(), "ruleset_id": ruleset_id},
     )
     assert response.status_code == 201
     return response.json()
@@ -553,6 +615,7 @@ async def test_send_message_persists_user_and_assistant_turns(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert latest_user_message == "How did this run do?"
         assert session_id_arg == session_id
@@ -610,6 +673,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         yield json.dumps({"type": "text_delta", "content": "Partial"})
@@ -678,6 +742,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert latest_user_message == "Let's revise this first."
         assert isinstance(provider_state[-1], ModelRequest)
@@ -731,6 +796,7 @@ async def test_send_message_refreshes_scope_job_ids(
         *,
         latest_user_message: str | None = None,
         deferred_tool_results=None,
+        **_ruleset_and_comparison: object,
     ) -> AsyncIterator[str]:
         assert session_id_arg == session_id
         assert scope.job_ids == [job_id]
@@ -886,3 +952,298 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
     assert result["artifacts"][0]["id"] == "artifact-1"
     assert result["artifacts"][0]["label"] == "Plot"
     assert result["artifacts"][0]["filename"] == "plot.webp"
+
+
+@pytest.mark.asyncio
+async def test_a_ruleset_model_pin_does_not_override_a_users_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ruleset decides wording, never whose API key pays for the turn.
+
+    Pinning a model is how a comparison runs two models under one policy. If the
+    pin bypassed profile resolution, a shared-deployment user who chose "use my
+    own key" would have their prompts silently sent through the host's provider.
+    """
+    from ai_almanac.server.services import llm, llm_profiles, rulesets
+    from ai_almanac.server.services.chat_state import ChatScope
+
+    resolved: list[str] = []
+
+    async def fake_resolve(user_id: str):
+        resolved.append(user_id)
+        return llm_profiles.ResolvedLLMProfile(
+            provider_type="openai-compatible",
+            base_url="http://user-choice.local",
+            model_name="user-picked-model",
+            api_key="user-key",
+        )
+
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+    monkeypatch.setattr(llm_profiles, "resolve_llm_for_user", fake_resolve)
+
+    built: dict = {}
+    real_build_agent = llm._build_agent
+
+    def capture(scope, ruleset, model=None):
+        built["model"] = model
+        return real_build_agent(scope, ruleset, TestModel(call_tools=[], custom_output_text="ok"))
+
+    monkeypatch.setattr(llm, "_build_agent", capture)
+
+    pinned = rulesets.packaged_ruleset("builtin").model_copy(update={"model": "pinned-model"})
+    scope = ChatScope(kind="benchmark_run_group", key="group-1", title="G", job_ids=[])
+
+    events = [
+        json.loads(event)
+        async for event in llm.stream_response(
+            [], "user-1", "session-1", scope, latest_user_message="hi", active_ruleset=pinned
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    # The user's profile was consulted despite the pin...
+    assert resolved == ["user-1"]
+    # ...and the pin only swapped the model name onto that resolved provider,
+    # so the credentials in play are still the user's.
+    model = built["model"]
+    assert model.model_name == "pinned-model"
+    assert "user-choice.local" in str(model.client.base_url)
+
+
+# ---------------------------------------------------------------------------
+# Per-session ruleset selection
+# ---------------------------------------------------------------------------
+
+
+async def _archive_ruleset(ruleset_id: str) -> None:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE assistant_rulesets SET archived = TRUE WHERE id = :id"),
+            {"id": ruleset_id},
+        )
+
+
+async def _seed_exposed_rulesets() -> None:
+    """Seed the packaged rulesets and expose them to users, as an admin would."""
+    from ai_almanac.server.services import rulesets
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", True)
+    await rulesets.set_comparison_enabled("unconstrained", True)
+
+
+@pytest.mark.asyncio
+async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Approving a submission continues the conversation, so it must not
+    silently switch the assistant back to the platform's active ruleset."""
+    from ai_almanac.server.services.chat_tools import SubmitBenchmarkApproval
+    from ai_almanac.server.services.chat_turns import resume_deferred_setup_tool
+
+    await _seed_exposed_rulesets()
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+
+    seen_rulesets: list[object] = []
+
+    async def fake_stream_response(*args: object, **kwargs: object) -> AsyncIterator[str]:
+        seen_rulesets.append(kwargs.get("active_ruleset"))
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {"content": "ok", "tool_calls": [], "artifacts": []},
+                "provider_state": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
+
+    await resume_deferred_setup_tool(
+        created["id"],
+        user_id,
+        SubmitBenchmarkApproval(tool_call_id="call-1"),
+        True,
+    )
+
+    assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained"]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    _test_engine: AsyncEngine,
+) -> None:
+    """The id the UI rates is the transcript's, so the turn log must use it too.
+
+    Regression test: the log once recorded the LLM layer's internal turn id,
+    which made every rating a 404 against a row that was really there.
+    """
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: TestModel(call_tools=[], custom_output_text="Rated answer."),
+    )
+    created = await _create_session(client, auth_headers)
+    session_id = created["id"]
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+    )
+    assert response.status_code == 200
+    done = _sse_events(response.text)[-1]
+    assert done["type"] == "done"
+    turn_id = done["turn"]["id"]
+
+    rating = await client.post(
+        f"/chat/sessions/{session_id}/turns/{turn_id}/rating",
+        headers=auth_headers,
+        json={"value": 1},
+    )
+    assert rating.status_code == 204, rating.text
+
+    async with _test_engine.begin() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT rating FROM assistant_turn_logs "
+                        "WHERE session_id = :sid AND turn_id = :tid"
+                    ),
+                    {"sid": session_id, "tid": turn_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    assert row is not None and row["rating"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_session_carries_its_chosen_ruleset(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await _seed_exposed_rulesets()
+
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    session_id = created["id"]
+    assert created["ruleset_id"] == "unconstrained"
+
+    detail = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    assert detail.json()["ruleset_id"] == "unconstrained"
+
+    # A rename does not disturb the ruleset choice.
+    renamed = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"title": "Renamed"}
+    )
+    assert renamed.json()["title"] == "Renamed"
+    assert renamed.json()["ruleset_id"] == "unconstrained"
+
+    # Switching and clearing are both PATCHes on the same field.
+    switched = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": "builtin"}
+    )
+    assert switched.json()["ruleset_id"] == "builtin"
+    cleared = await client.patch(
+        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": None}
+    )
+    assert cleared.json()["ruleset_id"] is None
+    assert cleared.json()["title"] == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_ruleset_cannot_be_selected(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await _seed_exposed_rulesets()
+
+    unknown = await client.post(
+        "/chat/sessions",
+        headers=auth_headers,
+        json={"title": "S", "scope": _scope(), "ruleset_id": "no-such-ruleset"},
+    )
+    assert unknown.status_code == 400
+
+    created = await _create_session(client, auth_headers)
+    patched = await client.patch(
+        f"/chat/sessions/{created['id']}",
+        headers=auth_headers,
+        json={"ruleset_id": "no-such-ruleset"},
+    )
+    assert patched.status_code == 400
+
+    await _archive_ruleset("unconstrained")
+    try:
+        archived = await client.patch(
+            f"/chat/sessions/{created['id']}",
+            headers=auth_headers,
+            json={"ruleset_id": "unconstrained"},
+        )
+        assert archived.status_code == 400
+    finally:
+        await _seed_exposed_rulesets()
+
+
+@pytest.mark.asyncio
+async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_exposed_rulesets()
+
+    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    session_id = created["id"]
+
+    seen_rulesets: list[object] = []
+
+    async def fake_stream_response(
+        provider_state: list,
+        user_id: str,
+        session_id_arg: str,
+        scope: dict,
+        *,
+        latest_user_message: str | None = None,
+        deferred_tool_results=None,
+        active_ruleset=None,
+        **_comparison: object,
+    ) -> AsyncIterator[str]:
+        seen_rulesets.append(active_ruleset)
+        yield json.dumps(
+            {
+                "type": "done",
+                "turn": {"content": "ok", "tool_calls": [], "artifacts": []},
+                "provider_state": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
+    )
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+    )
+    assert response.status_code == 200
+    assert response.text  # drain the stream
+
+    # The pinned ruleset went missing: the turn degrades to the active one
+    # (None lets the LLM layer resolve it) rather than failing the chat.
+    await _archive_ruleset("unconstrained")
+    try:
+        response = await client.post(
+            f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+        )
+        assert response.status_code == 200
+        assert response.text
+    finally:
+        await _seed_exposed_rulesets()
+
+    assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained", None]

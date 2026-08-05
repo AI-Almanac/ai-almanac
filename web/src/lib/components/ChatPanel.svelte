@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import FigureLightbox from '$lib/components/FigureLightbox.svelte';
 	import ChatHeader from '$lib/components/ChatHeader.svelte';
 	import ChatMessages from '$lib/components/ChatMessages.svelte';
 	import ChatArtifactGallery from '$lib/components/ChatArtifactGallery.svelte';
+	import ChatCompare from '$lib/components/ChatCompare.svelte';
 	import { ChatSessionState } from '$lib/chat/session.svelte';
+	import { ComparisonState, compareBlocker } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
+	import { blindCompare, getRulesetOptions } from '$lib/api';
 	import type {
 		BenchmarkRunSpec,
 		BenchmarkValidation,
@@ -12,7 +16,8 @@
 		BlendRunSpec,
 		BlendValidation,
 		ChatScope,
-		Job
+		Job,
+		RulesetOption
 	} from '$lib/api';
 
 	interface Props {
@@ -34,6 +39,9 @@
 		onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
 		onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
 		onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
+		/** Lets the page widen this column: two answers need more than the
+		 * assistant rail's normal width to be readable side by side. */
+		onComparingChange?: (comparing: boolean) => void;
 	}
 
 	let {
@@ -58,7 +66,8 @@
 		onBenchmarkConfig,
 		onBenchmarkSubmitted,
 		onBlendConfig,
-		onBlendSubmitted
+		onBlendSubmitted,
+		onComparingChange
 	}: Props = $props();
 
 	function titleCase(value: string): string {
@@ -165,14 +174,127 @@
 		}
 	}
 
+	// ponytail: localStorage, not a user preference row — this is a one-time
+	// acknowledgement, and re-showing it on a new device is the harmless failure.
+	const BETA_NOTE_KEY = 'almanac.assistantBetaNoteDismissed';
+	let showBetaNote = $state(false);
+
+	onMount(() => {
+		showBetaNote = localStorage.getItem(BETA_NOTE_KEY) !== '1';
+	});
+
+	function dismissBetaNote() {
+		showBetaNote = false;
+		localStorage.setItem(BETA_NOTE_KEY, '1');
+	}
+
 	function openArtifactInGallery(artifactId: string) {
 		const idx = galleryFigures.findIndex((f) => f.artifactId === artifactId);
 		if (idx !== -1) selectedFigureIndex = idx;
 	}
+
+	// ---- Assistant styles and blind A/B comparison -------------------------
+
+	let rulesetOptions = $state<RulesetOption[]>([]);
+	let comparisonsEnabled = $state(false);
+	let compareAvailable = $state(false);
+	const comparison = new ComparisonState();
+	let comparing = $state(false);
+
+	// ponytail: localStorage, like the beta note — an opt-in view preference,
+	// and re-toggling it on a new device is the harmless failure.
+	const COMPARISON_MODE_KEY = 'almanac.comparisonModeEnabled';
+	let comparisonMode = $state(false);
+	// A stored preference cannot outlive the feature: if an operator switches
+	// comparisons off, the mode it enabled goes with them.
+	const comparisonModeActive = $derived(comparisonMode && comparisonsEnabled);
+
+	function toggleComparisonMode() {
+		comparisonMode = !comparisonMode;
+		localStorage.setItem(COMPARISON_MODE_KEY, comparisonMode ? '1' : '0');
+	}
+
+	// The pair a comparison runs; defaults to the active ruleset vs the first
+	// other exposed one. The user changes it from the ⋯ menu.
+	let compareArmIds = $state<[string, string]>(['', '']);
+
+	onMount(() => {
+		comparisonMode = localStorage.getItem(COMPARISON_MODE_KEY) === '1';
+		getRulesetOptions()
+			.then((options) => {
+				rulesetOptions = options.rulesets;
+				comparisonsEnabled = options.comparisons_enabled;
+				compareAvailable = options.compare_available;
+				const first = options.rulesets.find((r) => r.is_active) ?? options.rulesets[0];
+				const second = options.rulesets.find((r) => r.id !== first?.id);
+				compareArmIds = [first?.id ?? '', second?.id ?? ''];
+			})
+			.catch(() => undefined);
+	});
+
+	const compareReady = $derived(
+		compareAvailable &&
+			compareArmIds[0] !== '' &&
+			compareArmIds[1] !== '' &&
+			compareArmIds[0] !== compareArmIds[1]
+	);
+
+	const lastQuestion = $derived(
+		[...chat.messages].reverse().find((message) => message.role === 'user')?.content ?? ''
+	);
+	// With nothing typed, A/B re-asks the last question. Requiring fresh text
+	// meant you could not compare the answer actually in front of you — the one
+	// case where wanting a second opinion is most obvious.
+	const compareText = $derived(input.trim() || lastQuestion);
+
+	const blocker = $derived(compareBlocker(compareReady, compareText));
+
+	function startCompare() {
+		const text = compareText;
+		if (!text || comparison.running || !compareReady) return;
+		input = '';
+		comparing = true;
+		onComparingChange?.(true);
+		void comparison.start(
+			text,
+			blindCompare(text, compareArmIds, {
+				sourceSessionId: chat.sessionId ?? undefined,
+				scope: sessionScope()
+			})
+		);
+	}
+
+	async function closeCompare() {
+		await comparison.discard();
+		comparing = false;
+		onComparingChange?.(false);
+	}
 </script>
 
 <div class="chat-panel">
-	<ChatHeader {chat} />
+	<ChatHeader
+		{chat}
+		{rulesetOptions}
+		comparisonMode={comparisonModeActive}
+		{comparisonsEnabled}
+		{compareAvailable}
+		{compareArmIds}
+		onToggleComparisonMode={toggleComparisonMode}
+		onCompareArmChange={(index, id) => {
+			compareArmIds[index] = id;
+		}}
+	/>
+
+	{#if showBetaNote}
+		<div class="beta-note">
+			<p>
+				The assistant is in development and can be wrong. It reads real benchmark and blend data
+				through tools, but check any number that matters against the results pages before relying on
+				it.
+			</p>
+			<button class="beta-note-dismiss" onclick={dismissBetaNote} aria-label="Dismiss">×</button>
+		</div>
+	{/if}
 
 	<div class="panel-tabs">
 		<button
@@ -200,11 +322,14 @@
 		{/if}
 	</div>
 
-	{#if activeTab === 'chat'}
+	{#if comparing}
+		<ChatCompare {comparison} onClose={() => void closeCompare()} />
+	{:else if activeTab === 'chat'}
 		<ChatMessages
 			{chat}
 			{emptyMessage}
 			{suggestions}
+			canRate={comparisonModeActive}
 			onSuggestion={(text) => send(text)}
 			onOpenArtifact={openArtifactInGallery}
 		/>
@@ -221,7 +346,19 @@
 		<div class="chat-error">{chat.error}</div>
 	{/if}
 
-	{#if activeTab === 'chat'}
+	{#if activeTab === 'chat' && !comparing}
+		{#if comparisonModeActive && compareAvailable}
+			<p class="compare-hint">
+				{#if blocker}
+					{blocker}.
+				{:else if input.trim()}
+					<strong>A/B</strong> answers this in two assistant styles, side by side, for you to vote on.
+				{:else}
+					<strong>A/B</strong> re-asks your last question in two assistant styles, side by side — or type
+					a new one.
+				{/if}
+			</p>
+		{/if}
 		<div class="input-row">
 			<textarea
 				bind:value={input}
@@ -229,6 +366,17 @@
 				{placeholder}
 				rows={2}
 				disabled={chat.sending}></textarea>
+			{#if comparisonModeActive && compareAvailable}
+				<button
+					class="ab-btn"
+					onclick={startCompare}
+					disabled={chat.sending || chat.loadingSession || !!blocker}
+					title={blocker ??
+						'Answer side by side in two assistant styles and vote on the better one'}
+				>
+					A/B
+				</button>
+			{/if}
 			<button
 				class="send-btn"
 				onclick={() => send()}
@@ -368,5 +516,58 @@
 	}
 	.send-btn:not(:disabled):hover {
 		opacity: 0.85;
+	}
+	.compare-hint {
+		margin: 0;
+		padding: 0.4rem 0.75rem 0;
+		font-size: 0.72rem;
+		line-height: 1.4;
+		color: var(--color-text-muted);
+	}
+	.ab-btn {
+		padding: 0 0.75rem;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		border: 1px solid var(--color-border);
+		border-radius: 6px;
+		font-size: 0.8rem;
+		font-weight: 600;
+		cursor: pointer;
+		align-self: flex-end;
+		height: 2.25rem;
+	}
+	.ab-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.ab-btn:not(:disabled):hover {
+		color: var(--color-accent);
+		border-color: var(--color-accent-border);
+		background: var(--color-accent-light);
+	}
+	.beta-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.5rem;
+		padding: 0.6rem 0.75rem;
+		background: var(--color-status-running-bg);
+		border-bottom: 1px solid var(--color-status-running);
+		color: var(--color-status-running);
+		font-size: 0.78rem;
+		line-height: 1.4;
+	}
+	.beta-note p {
+		margin: 0;
+		flex: 1;
+	}
+	.beta-note-dismiss {
+		background: none;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		font-size: 1.1rem;
+		line-height: 1;
+		padding: 0 0.15rem;
+		flex-shrink: 0;
 	}
 </style>

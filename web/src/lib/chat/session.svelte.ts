@@ -184,7 +184,12 @@ export class ChatSessionState {
 		this.error = null;
 		try {
 			const scope = this.getScope();
-			const session = await createChatSession(scope, scope.title ?? undefined);
+			// A new chat keeps the assistant style the user picked for this one.
+			const session = await createChatSession(
+				scope,
+				scope.title ?? undefined,
+				this.currentSession?.ruleset_id ?? undefined
+			);
 			if (session.benchmark_config) {
 				this.callbacks.onBenchmarkConfig?.(
 					session.benchmark_config,
@@ -216,6 +221,19 @@ export class ChatSessionState {
 			return true;
 		} catch {
 			this.error = 'Failed to rename session.';
+			return false;
+		}
+	}
+
+	async setSessionRuleset(rulesetId: string | null): Promise<boolean> {
+		if (!this.sessionId) return false;
+		this.error = null;
+		try {
+			const updated = await updateChatSession(this.sessionId, { ruleset_id: rulesetId });
+			this.sessions = this.sessions.map((s) => (s.id === updated.id ? updated : s));
+			return true;
+		} catch {
+			this.error = 'Failed to switch the assistant style.';
 			return false;
 		}
 	}
@@ -284,7 +302,8 @@ export class ChatSessionState {
 			content: '',
 			created_at: new Date().toISOString(),
 			tool_calls: [],
-			artifacts: []
+			artifacts: [],
+			guardrails: []
 		};
 	}
 
@@ -325,6 +344,22 @@ export class ChatSessionState {
 						? { ...tc, artifacts: [...(tc.artifacts ?? []), event.artifact] }
 						: tc
 				)
+			};
+		} else if (event.type === 'guardrail') {
+			// Attached to the turn from the backend's validation payload, so the
+			// caution renders even when the assistant's prose omits it.
+			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
+			this.streamingTurn = {
+				...this.streamingTurn,
+				guardrails: [
+					...(this.streamingTurn.guardrails ?? []),
+					{
+						tool_call_id: event.tool_call_id,
+						errors: event.errors,
+						warnings: event.warnings,
+						finding_keys: event.finding_keys
+					}
+				]
 			};
 		} else if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));

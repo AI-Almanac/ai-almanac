@@ -32,6 +32,63 @@ process. The same codebase also deploys to GCP Cloud Run (prod and staging).
   `check` + `test` gate on push. Bypass only in emergencies (`--no-verify`);
   CI enforces the same gates regardless.
 
+## Agents in a sandboxed shell (Cowork)
+
+Sandboxes mount this repo with delete protection: files can be created and
+modified but never unlinked. Git's locking protocol is create-then-unlink, so
+native mutating git commands strand `.lock` files that block git for everyone.
+The scripts below handle that; use them instead of working around it by hand.
+
+### Need a worktree?
+
+Ask the human to run this on the host — not from the sandbox, which would bake
+sandbox paths into git's worktree metadata:
+
+```bash
+scripts/agent-worktree.sh <name>          # off develop; --base <ref> to change
+```
+
+It creates `../ai-almanac-<name>`, copies `.env`, and assigns the worktree its own
+ports and `AI_ALMANAC_DATA_DIR` so parallel worktrees don't collide. It prints the
+path to add as a Cowork folder — the one manual step. `--repair <path>` fixes a
+worktree that was created from a sandbox; `--list` and `--remove <name>` do what
+they say.
+
+To run the dev server in a worktree:
+
+```bash
+set -a && . ./.env.agent && set +a && pixi run dev
+```
+
+### Commit
+
+```bash
+scripts/cowork-git.sh add <paths...>
+scripts/cowork-git.sh commit -m "<message>"
+scripts/cowork-git.sh status | diff | log | show | branch
+```
+
+Works in the main checkout and in worktrees. Everything else — `checkout`,
+`merge`, `rebase`, `pull`, `push` — must run natively on the host; `push` also
+needs network and SSH keys the sandbox lacks.
+
+### Verify
+
+```bash
+scripts/agent-verify.sh                   # --python / --web / --quiet
+```
+
+Runs the real `pixi` gate when pixi works, and otherwise installs what it needs
+and runs everything reachable. It exits non-zero if a check that ran failed, and
+lists what it could not run — so `pytest` and `generate-api-types` needing a host
+run is visible rather than assumed. Do not conclude that verification is
+impossible in a sandbox; it mostly isn't.
+
+### Hand off
+
+Pushes and PRs are host-side. Leave a runnable script and a PR body rather than
+prose instructions.
+
 ## Security and agent conventions
 
 - Never read, copy, echo, or commit secrets: `.env`, `web/.env`, anything in

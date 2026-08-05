@@ -38,3 +38,7 @@ class BlendValidation(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Stable ids of the guardrail findings behind `errors` / `warnings`, so the
+    # UI and the turn log can key on the rule rather than on its wording. See
+    # services.guardrails.
+    finding_keys: list[str] = Field(default_factory=list)

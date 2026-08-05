@@ -142,11 +142,9 @@
 	}
 </script>
 
-<svelte:head><title>AI settings · AI Almanac</title></svelte:head>
-
-<main class="wrap">
+<div class="wrap">
 	<header>
-		<h1>AI assistant</h1>
+		<h2>Model &amp; API keys</h2>
 		<p class="lede">
 			Choose which language model powers the assistant. Use the shared model your administrator
 			provides, or bring your own API key.
@@ -219,9 +217,8 @@
 			<h2>Your API keys</h2>
 			{#if providers.length === 0}
 				<p class="muted">
-					No providers are configured yet.{#if isAdmin}
-						Add one below.{:else}
-						Ask an administrator to add a provider.{/if}
+					No providers are configured yet.
+					{#if isAdmin}Add one below.{:else}Ask an administrator to add a provider.{/if}
 				</p>
 			{:else}
 				{#if profiles.length > 0}
@@ -359,18 +356,17 @@
 			</section>
 		{/if}
 	{/if}
-</main>
+</div>
 
 <style>
 	.wrap {
-		width: min(100% - 2rem, 56rem);
-		margin: 2.5rem auto 4rem;
 		display: flex;
 		flex-direction: column;
-		gap: 2rem;
+		gap: 1.25rem;
 	}
-	header h1 {
-		margin: 0 0 0.5rem;
+	header h2 {
+		margin: 0 0 0.4rem;
+		font-size: 1.15rem;
 	}
 	.lede {
 		margin: 0;

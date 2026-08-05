@@ -17,3 +17,4 @@ export * from './jobs';
 export * from './blends';
 export * from './forecasts';
 export * from './chat';
+export * from './assistant';

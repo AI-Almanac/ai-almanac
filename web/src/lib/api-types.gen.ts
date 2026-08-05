@@ -4,6 +4,309 @@
  */
 
 export interface paths {
+    "/assistant/rulesets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Rulesets */
+        get: operations["list_rulesets_assistant_rulesets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Guardrails */
+        get: operations["read_guardrails_assistant_guardrails_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Ruleset */
+        get: operations["read_ruleset_assistant_rulesets__ruleset_id__get"];
+        /** Save Ruleset */
+        put: operations["save_ruleset_assistant_rulesets__ruleset_id__put"];
+        post?: never;
+        /**
+         * Delete Ruleset
+         * @description Archive a custom ruleset: gone from every list, provenance kept.
+         *
+         *     Packaged rulesets are refused — reseeding would resurrect them on the next
+         *     startup, so a delete would look like it worked and then undo itself. The
+         *     active ruleset is refused because chat must always resolve one.
+         */
+        delete: operations["delete_ruleset_assistant_rulesets__ruleset_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Ruleset
+         * @description Copy a ruleset to a new id, one version up.
+         *
+         *     Cloning rather than editing in place keeps the wording that produced the
+         *     transcripts already logged against the old version.
+         */
+        post: operations["clone_ruleset_assistant_rulesets__ruleset_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate Ruleset */
+        post: operations["activate_ruleset_assistant_rulesets__ruleset_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/comparison-enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Comparison Enabled
+         * @description Expose or hide a ruleset for users — the style picker and comparison
+         *     arms both draw from the exposed set.
+         */
+        post: operations["set_comparison_enabled_assistant_rulesets__ruleset_id__comparison_enabled_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Ruleset
+         * @description The exact system prompt this ruleset produces, for one scope kind.
+         *
+         *     Rendered through the same function the chat path uses, so an unresolved
+         *     ``{{placeholder}}`` or a section left disabled is visible before activating.
+         */
+        post: operations["preview_ruleset_assistant_rulesets__ruleset_id__preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Rulesets
+         * @description Answer one message under two policies at once, merged onto one SSE stream.
+         *
+         *     Every event carries a ``variant`` index, so "constrained vs raw" and "one
+         *     ruleset, two models" are the same mechanism. The submit tools are withheld
+         *     from both arms — see ``services.assistant_compare``.
+         */
+        post: operations["compare_rulesets_assistant_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/ruleset-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Ruleset Options
+         * @description The rulesets an admin has exposed to users, for the style picker and
+         *     the comparison-pair choice.
+         *
+         *     Not gated on the comparison flag: the style picker outlives comparisons.
+         *     The flag is reported instead, so the chat hides the comparison surface
+         *     without a second request.
+         */
+        get: operations["list_ruleset_options_assistant_ruleset_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/compare/blind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare Blind
+         * @description Answer one message under two user-chosen rulesets, columns blinded.
+         *
+         *     The user picks the pair from the exposed rulesets; the server shuffles
+         *     which column is which, so the stream names arms only by index and the
+         *     vote response is where the identities come out.
+         */
+        post: operations["compare_blind_assistant_compare_blind_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/comparisons/{comparison_id}/message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Comparison
+         * @description Run a follow-up message through both arms of a live comparison.
+         *
+         *     Each arm continues its own scratch conversation under the ruleset that
+         *     produced its earlier answers, so the side-by-side view is a dialogue, not a
+         *     single exchange. Identity stays out of the stream either way: a labeled
+         *     client already knows its arms, a blind one must not learn them.
+         */
+        post: operations["continue_comparison_assistant_comparisons__comparison_id__message_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/comparisons/{comparison_id}/vote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vote On Comparison
+         * @description Record which arm won, on both arms' turn logs, and reveal the arms.
+         */
+        post: operations["vote_on_comparison_assistant_comparisons__comparison_id__vote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/comparisons/{comparison_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Comparison
+         * @description Discard a comparison's scratch sessions.
+         */
+        delete: operations["delete_comparison_assistant_comparisons__comparison_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ruleset Feedback
+         * @description Votes, ratings and flags per ruleset version — the read side of the
+         *     turn log, so collected feedback is actually visible.
+         */
+        get: operations["ruleset_feedback_assistant_feedback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/me": {
         parameters: {
             query?: never;
@@ -210,6 +513,31 @@ export interface paths {
         put?: never;
         /** Send Message */
         post: operations["send_message_chat_sessions__session_id__message_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat/sessions/{session_id}/turns/{turn_id}/rating": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rate Chat Turn
+         * @description Rate one assistant turn.
+         *
+         *     Open to any authenticated user for their own conversation — rating your own
+         *     turn is not a privileged action, and the write is scoped by user_id. The
+         *     thumbs are only *rendered* for admins today, so opening the sample wider is a
+         *     UI change rather than an API one.
+         */
+        post: operations["rate_chat_turn_chat_sessions__session_id__turns__turn_id__rating_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1722,6 +2050,8 @@ export interface components {
             errors?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
         };
         /** BlendApprovalIn */
         BlendApprovalIn: {
@@ -1968,6 +2298,26 @@ export interface components {
             errors?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
+        };
+        /**
+         * BlindCompareRequest
+         * @description A user-triggered comparison of two exposed rulesets.
+         *
+         *     The user picks the pair; the server shuffles which column is which, so the
+         *     vote is still cast without knowing which answer came from which ruleset.
+         *     Only admin-exposed rulesets are eligible — there is no way to name a
+         *     draft, archived, or admin-only ruleset here.
+         */
+        BlindCompareRequest: {
+            /** Message */
+            message: string;
+            /** Ruleset Ids */
+            ruleset_ids: string[];
+            /** Source Session Id */
+            source_session_id?: string | null;
+            scope?: components["schemas"]["ChatScope"] | null;
         };
         /**
          * BoundingBox
@@ -2153,6 +2503,28 @@ export interface components {
             tool_calls?: components["schemas"]["ChatToolCall"][];
             /** Artifacts */
             artifacts?: components["schemas"]["ChatArtifact"][];
+            /** Guardrails */
+            guardrails?: components["schemas"]["GuardrailNotice"][];
+        };
+        /** CompareRequest */
+        CompareRequest: {
+            /** Message */
+            message: string;
+            /** Variants */
+            variants: components["schemas"]["VariantIn"][];
+            /** Source Session Id */
+            source_session_id?: string | null;
+            scope?: components["schemas"]["ChatScope"] | null;
+        };
+        /** ComparisonEnabledIn */
+        ComparisonEnabledIn: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** ComparisonMessageIn */
+        ComparisonMessageIn: {
+            /** Message */
+            message: string;
         };
         /** DataSourceIn */
         DataSourceIn: {
@@ -2730,6 +3102,44 @@ export interface components {
             /** Lons */
             lons: number[];
         };
+        /**
+         * GuardrailNotice
+         * @description Statistical findings the platform reported during a turn.
+         *
+         *     Recorded on the turn rather than left to the assistant's prose so the
+         *     caution is shown whatever the model chose to say, and so it survives a page
+         *     reload. See ``services.guardrails`` for why enforcement lives in code.
+         */
+        GuardrailNotice: {
+            /** Tool Call Id */
+            tool_call_id?: string | null;
+            /** Errors */
+            errors?: string[];
+            /** Warnings */
+            warnings?: string[];
+            /** Finding Keys */
+            finding_keys?: string[];
+        };
+        /**
+         * GuardrailThresholds
+         * @description The enforced thresholds, read-only here.
+         *
+         *     Surfaced so an admin editing prose can see the numbers the {{placeholders}}
+         *     will resolve to. Editing them is a platform setting (PATCH /settings), not a
+         *     ruleset edit, because the submission chokepoint reads the same value.
+         */
+        GuardrailThresholds: {
+            /** Min Onset Years */
+            min_onset_years: number;
+            /** Min Training Years */
+            min_training_years: number;
+            /** Blend Member Warn */
+            blend_member_warn: number;
+            /** Small Sample Years */
+            small_sample_years: number;
+            /** Presatellite End Year */
+            presatellite_end_year: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3192,6 +3602,23 @@ export interface components {
             /** Preference */
             preference: string;
         };
+        /** PreviewRequest */
+        PreviewRequest: {
+            /**
+             * Scope Kind
+             * @default blend_setup
+             */
+            scope_kind: string;
+        };
+        /** PreviewResult */
+        PreviewResult: {
+            /** Scope Kind */
+            scope_kind: string;
+            /** Instructions */
+            instructions: string;
+            /** Character Count */
+            character_count: number;
+        };
         /** ProfileIn */
         ProfileIn: {
             /** Provider Id */
@@ -3234,6 +3661,33 @@ export interface components {
             model_name?: string | null;
             /** Api Key */
             api_key?: string | null;
+        };
+        /**
+         * PromptSection
+         * @description One toggleable block of the system prompt.
+         */
+        PromptSection: {
+            /** Key */
+            key: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Body */
+            body: string;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Scope Kinds */
+            scope_kinds?: string[];
         };
         /**
          * Properties
@@ -3421,6 +3875,21 @@ export interface components {
             /** Url */
             url: string;
         };
+        /**
+         * RevealedArm
+         * @description One arm's identity, disclosed after the vote. Nulls mean the turn log
+         *     for that arm never landed — degraded, not an error.
+         */
+        RevealedArm: {
+            /** Session Id */
+            session_id: string;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
+            /** Ruleset Name */
+            ruleset_name?: string | null;
+            /** Ruleset Version */
+            ruleset_version?: number | null;
+        };
         /** RompParams */
         RompParams: {
             /** Obs */
@@ -3486,11 +3955,144 @@ export interface components {
             /** Thresh File */
             thresh_file?: string | null;
         };
+        /** RulesetDetail */
+        RulesetDetail: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /** Source */
+            source: string;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Activatable
+             * @default true
+             */
+            activatable: boolean;
+            /** Prompt Sections */
+            prompt_sections: components["schemas"]["PromptSection"][];
+            tool_policy: components["schemas"]["ToolPolicy"];
+            /** Model */
+            model: string | null;
+            /** Model Settings */
+            model_settings: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** RulesetFeedback */
+        RulesetFeedback: {
+            /** Ruleset Id */
+            ruleset_id: string;
+            /** Ruleset Version */
+            ruleset_version: number | null;
+            /** Turns */
+            turns: number;
+            /** Rated */
+            rated: number;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Ties */
+            ties: number;
+            /** Flag Counts */
+            flag_counts: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * RulesetOption
+         * @description What a non-admin may know about a ruleset: enough to pick one, nothing
+         *     about its prompt or tool policy.
+         */
+        RulesetOption: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Is Active */
+            is_active: boolean;
+        };
+        /** RulesetOptionsOut */
+        RulesetOptionsOut: {
+            /** Rulesets */
+            rulesets: components["schemas"]["RulesetOption"][];
+            /** Comparisons Enabled */
+            comparisons_enabled: boolean;
+            /** Compare Available */
+            compare_available: boolean;
+        };
+        /** RulesetSave */
+        RulesetSave: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** Prompt Sections */
+            prompt_sections: components["schemas"]["PromptSection"][];
+            tool_policy?: components["schemas"]["ToolPolicy"];
+            /** Model */
+            model?: string | null;
+            /** Model Settings */
+            model_settings?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** RulesetSummary */
+        RulesetSummary: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /** Source */
+            source: string;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Comparison Enabled
+             * @default false
+             */
+            comparison_enabled: boolean;
+            /**
+             * Activatable
+             * @default true
+             */
+            activatable: boolean;
+            /** Section Keys */
+            section_keys: string[];
+            /** Denied Tools */
+            denied_tools: string[];
+            /** Model */
+            model: string | null;
+        };
         /** SessionCreate */
         SessionCreate: {
             /** Title */
             title?: string | null;
             scope: components["schemas"]["ChatScope"];
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SessionDetail */
         SessionDetail: {
@@ -3517,6 +4119,8 @@ export interface components {
             blend_validation?: components["schemas"]["BlendValidation"] | null;
             /** Run Id */
             run_id?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
             /** Transcript */
             transcript: components["schemas"]["ChatTurn"][];
         };
@@ -3545,11 +4149,15 @@ export interface components {
             blend_validation?: components["schemas"]["BlendValidation"] | null;
             /** Run Id */
             run_id?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SessionUpdate */
         SessionUpdate: {
             /** Title */
             title?: string | null;
+            /** Ruleset Id */
+            ruleset_id?: string | null;
         };
         /** SettingsPatch */
         SettingsPatch: {
@@ -3885,6 +4493,30 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /**
+         * ToolPolicy
+         * @description Tools withheld from the assistant.
+         *
+         *     Applied at registration, so a denied tool has no schema entry and there is
+         *     nothing for the model to attempt.
+         */
+        ToolPolicy: {
+            /** Deny */
+            deny?: string[];
+        };
+        /**
+         * TurnRatingIn
+         * @description A thumbs up/down on one assistant turn.
+         */
+        TurnRatingIn: {
+            /**
+             * Value
+             * @enum {integer}
+             */
+            value: -1 | 1;
+            /** Note */
+            note?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -3897,6 +4529,36 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * VariantIn
+         * @description One arm of a comparison: a ruleset, optionally on a different model.
+         */
+        VariantIn: {
+            /** Ruleset Id */
+            ruleset_id: string;
+            /** Model */
+            model?: string | null;
+        };
+        /**
+         * VoteIn
+         * @description Which arm won. ``None`` records a tie.
+         */
+        VoteIn: {
+            /** Winner Session Id */
+            winner_session_id?: string | null;
+            /** Note */
+            note?: string | null;
+        };
+        /** VoteOut */
+        VoteOut: {
+            /** Rated Turns */
+            rated_turns: number;
+            /**
+             * Arms
+             * @default []
+             */
+            arms: components["schemas"]["RevealedArm"][];
         };
         /** WindowMetrics */
         WindowMetrics: {
@@ -3976,6 +4638,482 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_rulesets_assistant_rulesets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"][];
+                };
+            };
+        };
+    };
+    read_guardrails_assistant_guardrails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailThresholds"];
+                };
+            };
+        };
+    };
+    read_ruleset_assistant_rulesets__ruleset_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_ruleset_assistant_rulesets__ruleset_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulesetSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_ruleset_assistant_rulesets__ruleset_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_ruleset_assistant_rulesets__ruleset_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulesetSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_ruleset_assistant_rulesets__ruleset_id__activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_comparison_enabled_assistant_rulesets__ruleset_id__comparison_enabled_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonEnabledIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ruleset_assistant_rulesets__ruleset_id__preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_rulesets_assistant_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_ruleset_options_assistant_ruleset_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetOptionsOut"];
+                };
+            };
+        };
+    };
+    compare_blind_assistant_compare_blind_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlindCompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_comparison_assistant_comparisons__comparison_id__message_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonMessageIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vote_on_comparison_assistant_comparisons__comparison_id__vote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_comparison_assistant_comparisons__comparison_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                comparison_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ruleset_feedback_assistant_feedback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetFeedback"][];
+                };
+            };
+        };
+    };
     me_auth_me_get: {
         parameters: {
             query?: never;
@@ -4460,6 +5598,40 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rate_chat_turn_chat_sessions__session_id__turns__turn_id__rating_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                turn_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnRatingIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
