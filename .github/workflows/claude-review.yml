@@ -80,5 +80,5 @@ jobs:
             edit existing comments; each review posts its own):
               gh pr comment ${{ github.event.pull_request.number }} --body "..."
           claude_args: >-
-            --max-turns 25
+            --max-turns 40
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment"
