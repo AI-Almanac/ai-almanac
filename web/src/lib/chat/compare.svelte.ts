@@ -109,7 +109,12 @@ export class ComparisonState {
 		if (event.type === 'text_delta') answer.text += event.content ?? '';
 		if (event.type === 'tool_call') answer.tools.push(event.tool_call.name);
 		if (event.type === 'guardrail') {
-			answer.cautions.push(...(event.errors ?? []), ...(event.warnings ?? []));
+			// Every tool call re-emits the current validation, so one turn that
+			// updates and then validates a config carries the same caution twice —
+			// and the board keys cautions by their text.
+			for (const caution of [...(event.errors ?? []), ...(event.warnings ?? [])]) {
+				if (!answer.cautions.includes(caution)) answer.cautions.push(caution);
+			}
 		}
 		if (event.type === 'error') answer.error = event.message ?? 'Failed';
 		if (event.type === 'done') answer.text = event.turn.content;

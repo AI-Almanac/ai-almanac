@@ -598,7 +598,8 @@ async def test_a_follow_up_message_continues_both_arms(
     done = {event["variant"]: event for event in events if event.get("type") == "done"}
     assert set(done) == {0, 1}
 
-    # Two rounds logged two turns per arm; one vote rates all four.
+    # Two rounds logged two turns per arm, but one vote rates one turn per arm —
+    # otherwise a three-round comparison would outvote three one-round ones.
     async with _test_engine.begin() as conn:
         turns = (
             await conn.execute(
@@ -613,7 +614,18 @@ async def test_a_follow_up_message_continues_both_arms(
         headers=auth_headers,
         json={"winner_session_id": sorted(session_ids)[0]},
     )
-    assert vote.json()["rated_turns"] == 4
+    assert vote.json()["rated_turns"] == 2
+    async with _test_engine.begin() as conn:
+        rated = (
+            await conn.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM assistant_turn_logs "
+                    "WHERE comparison_id = :cid AND rating IS NOT NULL"
+                ),
+                {"cid": comparison_id},
+            )
+        ).scalar_one()
+    assert rated == 2
 
 
 @pytest.mark.asyncio

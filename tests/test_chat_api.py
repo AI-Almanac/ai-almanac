@@ -1035,6 +1035,57 @@ async def _seed_exposed_rulesets() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    _test_engine: AsyncEngine,
+) -> None:
+    """The id the UI rates is the transcript's, so the turn log must use it too.
+
+    Regression test: the log once recorded the LLM layer's internal turn id,
+    which made every rating a 404 against a row that was really there.
+    """
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: TestModel(call_tools=[], custom_output_text="Rated answer."),
+    )
+    created = await _create_session(client, auth_headers)
+    session_id = created["id"]
+
+    response = await client.post(
+        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+    )
+    assert response.status_code == 200
+    done = _sse_events(response.text)[-1]
+    assert done["type"] == "done"
+    turn_id = done["turn"]["id"]
+
+    rating = await client.post(
+        f"/chat/sessions/{session_id}/turns/{turn_id}/rating",
+        headers=auth_headers,
+        json={"value": 1},
+    )
+    assert rating.status_code == 204, rating.text
+
+    async with _test_engine.begin() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT rating FROM assistant_turn_logs "
+                        "WHERE session_id = :sid AND turn_id = :tid"
+                    ),
+                    {"sid": session_id, "tid": turn_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    assert row is not None and row["rating"] == 1
+
+
+@pytest.mark.asyncio
 async def test_a_session_carries_its_chosen_ruleset(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:

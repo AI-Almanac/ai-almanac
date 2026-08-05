@@ -576,6 +576,7 @@ async def stream_response(
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
     comparison_id: str | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[str]:
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
@@ -599,6 +600,7 @@ async def stream_response(
             deferred_tool_results=deferred_tool_results,
             active_ruleset=active_ruleset,
             record=record,
+            turn_id=turn_id,
         ):
             yield event
     except Exception as exc:
@@ -638,6 +640,7 @@ async def _stream_response_unlimited(
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
     record: TurnRecord | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Run one turn of the conversation, yielding SSE-formatted data lines.
@@ -687,7 +690,9 @@ async def _stream_response_unlimited(
         # name is unambiguous.
         model = ruleset.model
     agent = _build_agent(session_scope, ruleset, model)
-    turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
+    # The caller's id when it has one: the transcript keeps its own turn id, and
+    # a rating looks the log row up by it — a fresh id here would orphan the row.
+    turn = ChatTurn(id=turn_id or new_turn_id(), role="assistant", content="", created_at=utc_now())
     if record is not None:
         record.turn_id = turn.id
         record.ruleset_id = ruleset.id

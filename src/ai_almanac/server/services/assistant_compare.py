@@ -349,7 +349,9 @@ async def record_vote(
 
     The vote lands on ``assistant_turn_logs``, the same column a thumbs-up in the
     chat writes, so a comparison and an in-conversation rating aggregate together
-    per ruleset version.
+    per ruleset version. Only each arm's latest turn is rated: one vote covers
+    the whole exchange, and rating every round would let a three-round
+    comparison outvote three single-round ones.
     """
     sessions = await comparison_session_ids(comparison_id, user_id)
     if not sessions:
@@ -358,6 +360,28 @@ async def record_vote(
         raise ValueError(f"{winner_session_id!r} is not part of this comparison")
 
     async with get_db() as conn:
+        rows = (
+            (
+                await conn.execute(
+                    sa.text("""
+                        SELECT id, session_id, created_at
+                        FROM assistant_turn_logs
+                        WHERE comparison_id = :cid AND user_id = :uid
+                    """),
+                    {"cid": comparison_id, "uid": user_id},
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
+        latest: dict[str, dict] = {}
+        for row in rows:
+            best = latest.get(row["session_id"])
+            if best is None or row["created_at"] > best["created_at"]:
+                latest[row["session_id"]] = dict(row)
+        rated_ids = [row["id"] for row in latest.values()]
+        if not rated_ids:
+            return 0
         result = await conn.execute(
             sa.text("""
                 UPDATE assistant_turn_logs
@@ -367,9 +391,9 @@ async def record_vote(
                         ELSE -1
                     END,
                     rating_note = :note
-                WHERE comparison_id = :cid AND user_id = :uid
-            """),
-            {"winner": winner_session_id, "note": note, "cid": comparison_id, "uid": user_id},
+                WHERE id IN :ids
+            """).bindparams(sa.bindparam("ids", expanding=True)),
+            {"winner": winner_session_id, "note": note, "ids": rated_ids},
         )
     return result.rowcount
 

@@ -479,6 +479,7 @@ async def stream_chat_turn(
                 latest_user_message=content,
                 active_ruleset=active_ruleset,
                 comparison_id=comparison_id,
+                turn_id=assistant_turn.id,
             )
         ) as llm_events:
             async for event in llm_events:
