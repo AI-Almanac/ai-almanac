@@ -24,6 +24,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
@@ -51,6 +52,7 @@
 	let chatAvailable = $state(false);
 	// A comparison needs a wider assistant column than the normal rail.
 	let chatComparing = $state(false);
+	let splitEl = $state<HTMLElement | null>(null);
 	const blendSetupKey = crypto.randomUUID();
 
 	// A chat session that follows the user into a blend: either started here in
@@ -689,6 +691,7 @@
 				class="workspace-split"
 				class:is-solo={!(chatAvailable && detailChat)}
 				class:is-comparing={chatComparing}
+				bind:this={splitEl}
 			>
 				<section class="card detail">
 					<header class="detail-header">
@@ -782,6 +785,7 @@
 					{/if}
 				</section>
 				{#if chatAvailable && detailChat}
+					<SplitResizer container={splitEl} comparing={chatComparing} storageKey="blend-detail" />
 					<aside class="workspace-aside">
 						<div class="result-chat">
 							<ChatPanel

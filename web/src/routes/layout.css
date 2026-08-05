@@ -101,11 +101,14 @@ textarea {
 	min-width: 0;
 }
 
+/* Results, a drag handle, then the assistant. `--aside-width` is set by
+   SplitResizer once the user has dragged; until then the assistant sizes
+   itself, wide enough to read prose without crowding the results. */
 .workspace-split {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(22rem, 30rem);
+	grid-template-columns: minmax(0, 1fr) auto var(--aside-width, minmax(22rem, 34rem));
 	gap: 1rem;
-	align-items: start;
+	align-items: stretch;
 }
 
 .workspace-split.is-solo {
@@ -113,10 +116,16 @@ textarea {
 }
 
 /* A comparison puts two answers side by side inside the assistant column, so
-   at the normal 30rem cap each one is an unreadable ribbon. While comparing,
-   the assistant takes the larger share and the results keep their context. */
+   at the normal cap each one is an unreadable ribbon. While comparing, the
+   assistant takes the larger share and the results keep their context.
+   A dragged width still wins — SplitResizer enforces its own floor. */
 .workspace-split.is-comparing {
-	grid-template-columns: minmax(0, 1fr) minmax(30rem, 1.7fr);
+	grid-template-columns: minmax(0, 1fr) auto var(--aside-width, minmax(40rem, 1.7fr));
+}
+
+.workspace-split > .analysis-main,
+.workspace-split > .card.detail {
+	align-self: start;
 }
 
 .workspace-aside {
