@@ -30,6 +30,8 @@
 	let dataLoaded = $state(false);
 	let chatAvailable = $state(false);
 	let resultsSidebarOpen = $state(true);
+	// A comparison needs a wider assistant column than the normal rail.
+	let chatComparing = $state(false);
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
 	let initialized = $state(false);
@@ -205,7 +207,11 @@
 			)}
 			{@const primaryJob = group.jobs[0]}
 
-			<div class="workspace-split" class:is-solo={!resultsSidebarOpen || !chatAvailable}>
+			<div
+				class="workspace-split"
+				class:is-solo={!resultsSidebarOpen || !chatAvailable}
+				class:is-comparing={chatComparing}
+			>
 				<section class="analysis-main">
 					<header class="analysis-header">
 						<div>
@@ -441,6 +447,7 @@
 								scopeKey={group.key}
 								suggestions={chatSuggestions(group.jobs)}
 								preferredSessionId={preferredChatSessionId}
+								onComparingChange={(value) => (chatComparing = value)}
 								onJobsCreated={handleJobsCreated}
 								onBlendSubmitted={(_runId, jobs, sessionId) =>
 									goToBlend(jobs[0]?.id, sessionId, {

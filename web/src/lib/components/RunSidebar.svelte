@@ -19,6 +19,8 @@
 </script>
 
 <script lang="ts">
+	import { onMount } from 'svelte';
+
 	let {
 		newLabel,
 		newActive = false,
@@ -38,54 +40,89 @@
 		onDelete: (id: string) => void;
 		deleteTitle?: string;
 	} = $props();
+
+	// A layout preference worth remembering: collapsed frees ~15rem for the
+	// results and the assistant. The expand control stays on screen, so a
+	// remembered collapse can always be undone.
+	const COLLAPSED_KEY = 'almanac.runListCollapsed';
+	let collapsed = $state(false);
+
+	onMount(() => {
+		collapsed = localStorage.getItem(COLLAPSED_KEY) === '1';
+	});
+
+	function setCollapsed(next: boolean) {
+		collapsed = next;
+		localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
+	}
 </script>
 
-<aside class="sidebar">
-	<button class="new-run-btn" class:active={newActive} onclick={onNew}>{newLabel}</button>
+{#if collapsed}
+	<aside class="sidebar is-collapsed">
+		<button
+			class="rail-btn"
+			title="Show the run list"
+			aria-label="Show the run list"
+			onclick={() => setCollapsed(false)}>»</button
+		>
+		<button class="rail-btn" title={newLabel} aria-label={newLabel} onclick={onNew}>+</button>
+	</aside>
+{:else}
+	<aside class="sidebar">
+		<div class="sidebar-head">
+			<button class="new-run-btn" class:active={newActive} onclick={onNew}>{newLabel}</button>
+			<button
+				class="rail-btn"
+				title="Hide the run list"
+				aria-label="Hide the run list"
+				onclick={() => setCollapsed(true)}>«</button
+			>
+		</div>
 
-	{#each sections as section}
-		<details class="sidebar-section" open={section.open ?? true}>
-			<summary class="sidebar-title">
-				{section.title}
-				<span class="sidebar-count">{section.items.length}</span>
-			</summary>
-			{#if section.items.length > 0}
-				<ul class="run-list">
-					{#each section.items as item (item.id)}
-						<li class="run-list-item">
-							<button
-								class="run-item"
-								class:selected={selectedId === item.id}
-								onclick={() => onSelect(item.id)}
-							>
-								<div class="run-main">
-									<span class="run-title">{item.title}</span>
-									<span class="run-meta">{item.meta}</span>
-								</div>
-								<div class="run-side">
-									<span class="model-count">{item.count}</span>
-									<span class="status-dot {item.status}" title={item.status}></span>
-								</div>
-							</button>
-							{#if item.canDelete}
+		{#each sections as section}
+			<details class="sidebar-section" open={section.open ?? true}>
+				<summary class="sidebar-title">
+					{section.title}
+					<span class="sidebar-count">{section.items.length}</span>
+				</summary>
+				{#if section.items.length > 0}
+					<ul class="run-list">
+						{#each section.items as item (item.id)}
+							<li class="run-list-item">
 								<button
-									class="run-delete"
-									title={deleteTitle}
-									onclick={(e) => {
-										e.stopPropagation();
-										onDelete(item.id);
-									}}>&times;</button
+									class="run-item"
+									class:selected={selectedId === item.id}
+									onclick={() => onSelect(item.id)}
 								>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			{:else}
-				<p class="sidebar-empty">{section.emptyLabel ?? 'Nothing here yet.'}</p>
-			{/if}
-		</details>
-	{/each}
-</aside>
+									<div class="run-main">
+										<span class="run-title">{item.title}</span>
+										<span class="run-meta">{item.meta}</span>
+									</div>
+									<div class="run-side">
+										<span class="model-count">{item.count}</span>
+										<span class="status-dot {item.status}" title={item.status}></span>
+									</div>
+								</button>
+								{#if item.canDelete}
+									<button
+										class="run-delete"
+										title={deleteTitle}
+										onclick={(e) => {
+											e.stopPropagation();
+											onDelete(item.id);
+										}}>&times;</button
+									>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{:else}
+					<p class="sidebar-empty">{section.emptyLabel ?? 'Nothing here yet.'}</p>
+				{/if}
+			</details>
+		{/each}
+	</aside>
+{/if}
 
 <style>
 	.sidebar {
@@ -94,6 +131,35 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.85rem;
+	}
+
+	.sidebar.is-collapsed {
+		width: auto;
+		gap: 0.4rem;
+	}
+
+	.sidebar-head {
+		display: flex;
+		align-items: stretch;
+		gap: 0.4rem;
+	}
+
+	.rail-btn {
+		flex-shrink: 0;
+		padding: 0.4rem 0.5rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.4rem;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.85rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+	.rail-btn:hover {
+		color: var(--color-accent);
+		border-color: var(--color-accent);
+		background: var(--color-accent-light);
 	}
 
 	.new-run-btn {

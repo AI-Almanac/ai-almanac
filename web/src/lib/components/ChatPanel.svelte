@@ -39,6 +39,9 @@
 		onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
 		onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
 		onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
+		/** Lets the page widen this column: two answers need more than the
+		 * assistant rail's normal width to be readable side by side. */
+		onComparingChange?: (comparing: boolean) => void;
 	}
 
 	let {
@@ -63,7 +66,8 @@
 		onBenchmarkConfig,
 		onBenchmarkSubmitted,
 		onBlendConfig,
-		onBlendSubmitted
+		onBlendSubmitted,
+		onComparingChange
 	}: Props = $props();
 
 	function titleCase(value: string): string {
@@ -250,6 +254,7 @@
 		if (!text || comparison.running || !compareReady) return;
 		input = '';
 		comparing = true;
+		onComparingChange?.(true);
 		void comparison.start(
 			text,
 			blindCompare(text, compareArmIds, {
@@ -262,6 +267,7 @@
 	async function closeCompare() {
 		await comparison.discard();
 		comparing = false;
+		onComparingChange?.(false);
 	}
 </script>
 

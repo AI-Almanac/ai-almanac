@@ -158,7 +158,9 @@
 	}
 	.board {
 		display: grid;
-		grid-template-columns: repeat(var(--arms), minmax(0, 1fr));
+		/* Side by side when each answer has room to read, stacked when it does
+		   not — two 12rem ribbons are worse than one column you scroll. */
+		grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
 		gap: 0.6rem;
 	}
 	.arm-head {

@@ -78,7 +78,9 @@ textarea {
 
 .workspace-page {
 	min-height: calc(100vh - 3.5rem);
-	width: min(100% - 2rem, 92rem);
+	/* Wide enough for run list + results + a two-column assistant comparison.
+	   Still capped: past this, lines get too long to read comfortably. */
+	width: min(100% - 2rem, 120rem);
 	margin: 0 auto;
 	padding: 1.25rem 0 2rem;
 	display: flex;
@@ -108,6 +110,13 @@ textarea {
 
 .workspace-split.is-solo {
 	grid-template-columns: minmax(0, 1fr);
+}
+
+/* A comparison puts two answers side by side inside the assistant column, so
+   at the normal 30rem cap each one is an unreadable ribbon. While comparing,
+   the assistant takes the larger share and the results keep their context. */
+.workspace-split.is-comparing {
+	grid-template-columns: minmax(0, 1fr) minmax(30rem, 1.7fr);
 }
 
 .workspace-aside {
