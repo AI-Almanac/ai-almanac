@@ -1,5 +1,18 @@
 import { discardComparison, voteOnComparison, type CompareEvent, type RevealedArm } from '$lib/api';
 
+/**
+ * Why the A/B button is unavailable, or null when it will run.
+ *
+ * `text` is the message that would be compared: what the user typed, or their
+ * last question when the box is empty — comparing the answer already on screen
+ * is the most obvious moment to want a second opinion.
+ */
+export function compareBlocker(ready: boolean, text: string): string | null {
+	if (!ready) return 'Ask an administrator to publish two assistant styles to compare';
+	if (!text.trim()) return 'Type a question first, or ask one and then compare the answer';
+	return null;
+}
+
 export type ComparisonArm = {
 	label: string;
 	sessionId: string;

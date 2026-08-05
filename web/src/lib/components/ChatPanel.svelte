@@ -6,7 +6,7 @@
 	import ChatArtifactGallery from '$lib/components/ChatArtifactGallery.svelte';
 	import ChatCompare from '$lib/components/ChatCompare.svelte';
 	import { ChatSessionState } from '$lib/chat/session.svelte';
-	import { ComparisonState } from '$lib/chat/compare.svelte';
+	import { ComparisonState, compareBlocker } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
 	import { blindCompare, getRulesetOptions } from '$lib/api';
 	import type {
@@ -235,8 +235,18 @@
 			compareArmIds[0] !== compareArmIds[1]
 	);
 
+	const lastQuestion = $derived(
+		[...chat.messages].reverse().find((message) => message.role === 'user')?.content ?? ''
+	);
+	// With nothing typed, A/B re-asks the last question. Requiring fresh text
+	// meant you could not compare the answer actually in front of you — the one
+	// case where wanting a second opinion is most obvious.
+	const compareText = $derived(input.trim() || lastQuestion);
+
+	const blocker = $derived(compareBlocker(compareReady, compareText));
+
 	function startCompare() {
-		const text = input.trim();
+		const text = compareText;
 		if (!text || comparison.running || !compareReady) return;
 		input = '';
 		comparing = true;
@@ -331,6 +341,18 @@
 	{/if}
 
 	{#if activeTab === 'chat' && !comparing}
+		{#if comparisonModeActive && compareAvailable}
+			<p class="compare-hint">
+				{#if blocker}
+					{blocker}.
+				{:else if input.trim()}
+					<strong>A/B</strong> answers this in two assistant styles, side by side, for you to vote on.
+				{:else}
+					<strong>A/B</strong> re-asks your last question in two assistant styles, side by side — or type
+					a new one.
+				{/if}
+			</p>
+		{/if}
 		<div class="input-row">
 			<textarea
 				bind:value={input}
@@ -342,8 +364,9 @@
 				<button
 					class="ab-btn"
 					onclick={startCompare}
-					disabled={chat.sending || !input.trim() || chat.loadingSession || !compareReady}
-					title="Get two answers from the two styles picked in the ⋯ menu and vote on the better one"
+					disabled={chat.sending || chat.loadingSession || !!blocker}
+					title={blocker ??
+						'Answer side by side in two assistant styles and vote on the better one'}
 				>
 					A/B
 				</button>
@@ -487,6 +510,13 @@
 	}
 	.send-btn:not(:disabled):hover {
 		opacity: 0.85;
+	}
+	.compare-hint {
+		margin: 0;
+		padding: 0.4rem 0.75rem 0;
+		font-size: 0.72rem;
+		line-height: 1.4;
+		color: var(--color-text-muted);
 	}
 	.ab-btn {
 		padding: 0 0.75rem;
