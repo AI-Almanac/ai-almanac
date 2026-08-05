@@ -49,6 +49,18 @@
 				</nav>
 			{/if}
 		{/each}
+
+		<!-- Hidden while previewing, so the sidebar looks exactly like a user's.
+		     The banner above the nav is the way back out. -->
+		{#if account.isActuallyAdmin && !account.viewingAsUser}
+			<div class="preview-toggle">
+				<button onclick={() => account.setViewingAsUser(true)}>View as a regular user</button>
+				<p>
+					Hides admin-only navigation and controls so you can check what everyone else sees. This
+					browser only — server permissions are unchanged.
+				</p>
+			</div>
+		{/if}
 	</aside>
 
 	<main class="content">
@@ -122,6 +134,36 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
+	}
+
+	.preview-toggle {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		padding-top: 0.9rem;
+		border-top: 1px solid var(--color-border-subtle);
+	}
+	.preview-toggle button {
+		padding: 0.35rem 0.75rem;
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--color-text);
+		font: inherit;
+		font-size: 0.8rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.preview-toggle button:hover {
+		border-color: var(--color-accent);
+		color: var(--color-accent);
+		background: var(--color-accent-light);
+	}
+	.preview-toggle p {
+		margin: 0;
+		font-size: 0.7rem;
+		line-height: 1.4;
+		color: var(--color-text-muted);
 	}
 
 	.banner.err {
