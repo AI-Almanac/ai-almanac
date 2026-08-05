@@ -43,12 +43,14 @@ describe('viewing as a regular user', () => {
 		expect(account.isAdmin).toBe(true);
 	});
 
-	it('remembers the preview per session', () => {
+	it('keeps no stored state, so a reload always restores admin', () => {
+		// Persisting it stranded an admin: no admin UI after a reload, and none at
+		// all if /auth/me then failed, since the banner with the exit needs the
+		// account. In memory, reloading is the guaranteed way back.
 		account.setViewingAsUser(true);
-		expect(sessionStorage.getItem('almanac.viewAsUser')).toBe('1');
 
-		account.setViewingAsUser(false);
-		expect(sessionStorage.getItem('almanac.viewAsUser')).toBe('0');
+		expect(sessionStorage.length).toBe(0);
+		expect(localStorage.getItem('almanac.viewAsUser')).toBeNull();
 	});
 
 	it('cannot make a non-admin look like an admin', () => {

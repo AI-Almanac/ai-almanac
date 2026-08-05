@@ -5,11 +5,14 @@
 	import { account } from '$lib/account.svelte';
 </script>
 
-{#if account.viewingAsUser && account.isActuallyAdmin}
+<!-- Gated on the preview flag alone, never on the loaded account: only an admin
+     can turn this on, and a failed /auth/me must not take the exit with it. -->
+{#if account.viewingAsUser}
 	<div class="preview-bar" role="status">
 		<span>
 			<strong>Viewing as a regular user.</strong>
-			Admin-only navigation and controls are hidden. Server permissions are unchanged.
+			Admin-only navigation and controls are hidden. Server permissions are unchanged, and reloading the
+			page ends the preview.
 		</span>
 		<button onclick={() => account.setViewingAsUser(false)}>Exit preview</button>
 	</div>

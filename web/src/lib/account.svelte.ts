@@ -2,12 +2,7 @@
 // actions. In personal installs the implicit operator is an admin, so gated UI
 // stays visible; in shared deployments non-admins see a reduced surface.
 
-import { browser } from '$app/environment';
-
 import { getAccount, type Account } from './api';
-
-/** Per-tab, so the preview cannot outlive the session that started it. */
-const VIEW_AS_USER_KEY = 'almanac.viewAsUser';
 
 class AccountState {
 	account = $state<Account | null>(null);
@@ -21,8 +16,13 @@ class AccountState {
 	 * that one flag. It hides admin UI in this browser and changes nothing
 	 * server-side, so it previews the interface, not the permissions: an
 	 * admin-only request made while previewing still succeeds.
+	 *
+	 * Deliberately not persisted. Stored state survived reloads and could strand
+	 * an admin with no admin UI — and with none at all if `/auth/me` then failed,
+	 * because the banner carrying the way out needs a loaded account. In memory,
+	 * a reload is always the escape hatch, and SPA navigation still holds it.
 	 */
-	viewingAsUser = $state(browser ? sessionStorage.getItem(VIEW_AS_USER_KEY) === '1' : false);
+	viewingAsUser = $state(false);
 
 	get isAdmin(): boolean {
 		return this.isActuallyAdmin && !this.viewingAsUser;
@@ -35,7 +35,6 @@ class AccountState {
 
 	setViewingAsUser(viewing: boolean): void {
 		this.viewingAsUser = viewing;
-		if (browser) sessionStorage.setItem(VIEW_AS_USER_KEY, viewing ? '1' : '0');
 	}
 
 	get isShared(): boolean {

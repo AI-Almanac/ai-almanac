@@ -56,8 +56,8 @@
 			<div class="preview-toggle">
 				<button onclick={() => account.setViewingAsUser(true)}>View as a regular user</button>
 				<p>
-					Hides admin-only navigation and controls so you can check what everyone else sees. This
-					browser only — server permissions are unchanged.
+					Hides admin-only navigation and controls so you can check what everyone else sees. Server
+					permissions are unchanged, and reloading the page ends the preview.
 				</p>
 			</div>
 		{/if}
