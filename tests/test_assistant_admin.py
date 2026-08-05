@@ -211,6 +211,8 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
         ("POST", "/assistant/rulesets/builtin/clone"),
         ("POST", "/assistant/rulesets/builtin/activate"),
         ("POST", "/assistant/rulesets/builtin/preview"),
+        ("POST", "/assistant/rulesets/builtin/comparison-enabled"),
+        ("DELETE", "/assistant/rulesets/builtin"),
         ("GET", "/assistant/feedback"),
     ],
 )
@@ -240,3 +242,106 @@ async def test_endpoints_reject_an_unidentified_caller_in_shared(
 
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     assert (await client.get("/assistant/rulesets")).status_code == 401
+
+
+# --- exposure flag and deletion ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_exposure_flag_gates_what_users_see(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", False)
+    await rulesets.set_comparison_enabled("unconstrained", False)
+
+    async def option_ids() -> set[str]:
+        res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+        return {item["id"] for item in res.json()["rulesets"]}
+
+    assert await option_ids() == set()
+
+    enabled = await client.post(
+        "/assistant/rulesets/unconstrained/comparison-enabled",
+        headers=auth_headers,
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["comparison_enabled"] is True
+    assert await option_ids() == {"unconstrained"}
+
+    # The admin listing shows the flag; the user listing never shows hidden rows.
+    listed = await client.get("/assistant/rulesets", headers=auth_headers)
+    flags = {item["id"]: item["comparison_enabled"] for item in listed.json()}
+    assert flags["unconstrained"] is True
+    assert flags["builtin"] is False
+
+    disabled = await client.post(
+        "/assistant/rulesets/unconstrained/comparison-enabled",
+        headers=auth_headers,
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200
+    assert await option_ids() == set()
+
+    missing = await client.post(
+        "/assistant/rulesets/no-such/comparison-enabled",
+        headers=auth_headers,
+        json={"enabled": True},
+    )
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_ruleset_archives_it_and_its_provenance_survives(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+    saved = await client.put(
+        "/assistant/rulesets/doomed",
+        headers=auth_headers,
+        json={
+            "id": "doomed",
+            "name": "Doomed",
+            "prompt_sections": [{"key": "one", "body": "Be brief."}],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+    deleted = await client.delete("/assistant/rulesets/doomed", headers=auth_headers)
+    assert deleted.status_code == 204
+
+    listed = await client.get("/assistant/rulesets", headers=auth_headers)
+    assert "doomed" not in {item["id"] for item in listed.json()}
+    # The row survives for turn-log provenance; only the listings lose it.
+    assert (await rulesets.get_ruleset("doomed")) is not None
+
+    again = await client.delete("/assistant/rulesets/doomed", headers=auth_headers)
+    assert again.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_packaged_and_active_rulesets_cannot_be_deleted(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    await rulesets.seed_packaged_rulesets()
+
+    packaged = await client.delete("/assistant/rulesets/unconstrained", headers=auth_headers)
+    assert packaged.status_code == 409
+
+    saved = await client.put(
+        "/assistant/rulesets/active-custom",
+        headers=auth_headers,
+        json={
+            "id": "active-custom",
+            "name": "Active custom",
+            "prompt_sections": [{"key": "one", "body": "Be brief."}],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    await client.post("/assistant/rulesets/active-custom/activate", headers=auth_headers)
+    try:
+        active = await client.delete("/assistant/rulesets/active-custom", headers=auth_headers)
+        assert active.status_code == 409
+    finally:
+        await client.post("/assistant/rulesets/builtin/activate", headers=auth_headers)

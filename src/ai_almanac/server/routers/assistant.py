@@ -23,7 +23,6 @@ from ai_almanac.server.services import assistant_compare, guardrails, rulesets, 
 from ai_almanac.server.services.chat_state import ChatScope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
-from ai_almanac.settings import settings
 
 from .chat import require_chat_available
 
@@ -40,6 +39,7 @@ class RulesetSummary(BaseModel):
     version: int
     source: str
     is_active: bool
+    comparison_enabled: bool = False
     section_keys: list[str]
     denied_tools: list[str]
     model: str | None
@@ -101,10 +101,16 @@ class CompareRequest(BaseModel):
 
 
 class BlindCompareRequest(BaseModel):
-    """A user-triggered comparison. The server picks the arms — there is no
-    ``variants`` field, so users can never choose or learn what runs."""
+    """A user-triggered comparison of two exposed rulesets.
+
+    The user picks the pair; the server shuffles which column is which, so the
+    vote is still cast without knowing which answer came from which ruleset.
+    Only admin-exposed rulesets are eligible — there is no way to name a
+    draft, archived, or admin-only ruleset here.
+    """
 
     message: str = Field(min_length=1, max_length=8000)
+    ruleset_ids: list[str] = Field(min_length=2, max_length=2)
     source_session_id: str | None = None
     scope: ChatScope | None = None
 
@@ -167,7 +173,7 @@ class PreviewResult(BaseModel):
     character_count: int
 
 
-def _summary(ruleset: Ruleset, is_active: bool) -> RulesetSummary:
+def _summary(ruleset: Ruleset, is_active: bool, comparison_enabled: bool = False) -> RulesetSummary:
     return RulesetSummary(
         id=ruleset.id,
         name=ruleset.name,
@@ -175,6 +181,7 @@ def _summary(ruleset: Ruleset, is_active: bool) -> RulesetSummary:
         version=ruleset.version,
         source=ruleset.source,
         is_active=is_active,
+        comparison_enabled=comparison_enabled,
         section_keys=[section.key for section in ruleset.prompt_sections],
         denied_tools=list(ruleset.tool_policy.deny),
         model=ruleset.model,
@@ -204,7 +211,7 @@ async def _active_id() -> str:
 async def list_rulesets(user: AdminUser) -> list[RulesetSummary]:
     stored = await rulesets.list_rulesets()
     if stored:
-        return [_summary(ruleset, is_active) for ruleset, is_active in stored]
+        return [_summary(row.ruleset, row.is_active, row.comparison_enabled) for row in stored]
     # Before the first seed, report what chat would actually use.
     active = await rulesets.active_ruleset()
     return [_summary(active, True)]
@@ -271,6 +278,49 @@ async def activate_ruleset(ruleset_id: str, user: AdminUser) -> RulesetSummary:
     return _summary(ruleset, True)
 
 
+class ComparisonEnabledIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/rulesets/{ruleset_id}/comparison-enabled", response_model=RulesetSummary)
+async def set_comparison_enabled(
+    ruleset_id: str, body: ComparisonEnabledIn, user: AdminUser
+) -> RulesetSummary:
+    """Expose or hide a ruleset for users — the style picker and comparison
+    arms both draw from the exposed set."""
+    try:
+        await rulesets.set_comparison_enabled(ruleset_id, body.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Ruleset not found") from None
+    ruleset = await rulesets.get_ruleset(ruleset_id)
+    assert ruleset is not None
+    return _summary(ruleset, (await _active_id()) == ruleset_id, body.enabled)
+
+
+@router.delete("/rulesets/{ruleset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ruleset(ruleset_id: str, user: AdminUser) -> None:
+    """Archive a custom ruleset: gone from every list, provenance kept.
+
+    Packaged rulesets are refused — reseeding would resurrect them on the next
+    startup, so a delete would look like it worked and then undo itself. The
+    active ruleset is refused because chat must always resolve one.
+    """
+    try:
+        rulesets.packaged_ruleset(ruleset_id)
+    except KeyError:
+        pass
+    else:
+        raise HTTPException(
+            status_code=409, detail="Packaged rulesets ship with the app and cannot be deleted"
+        )
+    if ruleset_id == await _active_id():
+        raise HTTPException(status_code=409, detail="Deactivate this ruleset before deleting it")
+    try:
+        await rulesets.archive_ruleset(ruleset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Ruleset not found") from None
+
+
 @router.post("/rulesets/{ruleset_id}/preview", response_model=PreviewResult)
 async def preview_ruleset(ruleset_id: str, body: PreviewRequest, user: AdminUser) -> PreviewResult:
     """The exact system prompt this ruleset produces, for one scope kind.
@@ -327,54 +377,40 @@ async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingRe
     )
 
 
-async def _blind_pair() -> tuple[Ruleset, Ruleset] | None:
-    """The (active, candidate) pair user comparisons run, or None when unset,
-    unknown, archived, or the same as the active ruleset."""
-    candidate_id = settings.assistant_comparison_candidate.strip()
-    if not candidate_id:
-        return None
-    active = await rulesets.active_ruleset()
-    if candidate_id == active.id:
-        return None
-    candidate = await rulesets.selectable_ruleset(candidate_id)
-    if candidate is None:
-        return None
-    return active, candidate
-
-
 @router.get("/ruleset-options", response_model=RulesetOptionsOut)
 async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
-    """The rulesets any user may pick for a session, plus whether the blind
-    A/B comparison is currently offered."""
-    stored = await rulesets.list_rulesets()
-    if not stored:
-        stored = [(await rulesets.active_ruleset(), True)]
+    """The rulesets an admin has exposed to users, for the style picker and
+    the comparison-pair choice. Comparisons need two to choose from."""
+    exposed = [row for row in await rulesets.list_rulesets() if row.comparison_enabled]
     return RulesetOptionsOut(
         rulesets=[
             RulesetOption(
-                id=ruleset.id,
-                name=ruleset.name,
-                description=ruleset.description,
-                is_active=is_active,
+                id=row.ruleset.id,
+                name=row.ruleset.name,
+                description=row.ruleset.description,
+                is_active=row.is_active,
             )
-            for ruleset, is_active in stored
+            for row in exposed
         ],
-        compare_available=await _blind_pair() is not None,
+        compare_available=len(exposed) >= 2,
     )
 
 
 @router.post("/compare/blind")
 async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> StreamingResponse:
-    """Answer one message under the active and candidate rulesets, blinded.
+    """Answer one message under two user-chosen rulesets, columns blinded.
 
-    The server picks and shuffles the arms; the stream names them only by
-    index, and the vote response is where the identities come out.
+    The user picks the pair from the exposed rulesets; the server shuffles
+    which column is which, so the stream names arms only by index and the
+    vote response is where the identities come out.
     """
     await require_chat_available(user.id)
-    pair = await _blind_pair()
-    if pair is None:
-        raise HTTPException(status_code=409, detail="Comparisons are not currently available")
-    arms = [assistant_compare.VariantSpec(ruleset_id=ruleset.id) for ruleset in pair]
+    if len(set(body.ruleset_ids)) != 2:
+        raise HTTPException(status_code=400, detail="Pick two different rulesets")
+    for ruleset_id in body.ruleset_ids:
+        if await rulesets.selectable_ruleset(ruleset_id) is None:
+            raise HTTPException(status_code=400, detail=f"Ruleset not available: {ruleset_id}")
+    arms = [assistant_compare.VariantSpec(ruleset_id=rid) for rid in body.ruleset_ids]
     random.shuffle(arms)
     try:
         comparison = await assistant_compare.prepare_comparison(

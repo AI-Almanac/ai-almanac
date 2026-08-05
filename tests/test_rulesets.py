@@ -200,7 +200,7 @@ def test_unconstrained_withholds_no_tools() -> None:
 async def test_seeding_installs_the_packaged_rows_and_activates_the_builtin() -> None:
     await rulesets.seed_packaged_rulesets()
 
-    stored = {ruleset.id: active for ruleset, active in await rulesets.list_rulesets()}
+    stored = {row.ruleset.id: row.is_active for row in await rulesets.list_rulesets()}
     assert {"builtin", "unconstrained"} <= set(stored)
     assert stored["builtin"] is True
     assert stored["unconstrained"] is False
@@ -213,7 +213,7 @@ async def test_seeding_is_idempotent_and_keeps_one_active() -> None:
     await rulesets.seed_packaged_rulesets()
     await rulesets.seed_packaged_rulesets()
 
-    active = [ruleset.id for ruleset, is_active in await rulesets.list_rulesets() if is_active]
+    active = [row.ruleset.id for row in await rulesets.list_rulesets() if row.is_active]
     assert active == ["builtin"]
 
 
@@ -223,7 +223,7 @@ async def test_activating_moves_the_active_flag() -> None:
     await rulesets.activate_ruleset("unconstrained")
 
     assert (await rulesets.active_ruleset()).id == "unconstrained"
-    active = [ruleset.id for ruleset, is_active in await rulesets.list_rulesets() if is_active]
+    active = [row.ruleset.id for row in await rulesets.list_rulesets() if row.is_active]
     assert active == ["unconstrained"]
 
     await rulesets.activate_ruleset("builtin")

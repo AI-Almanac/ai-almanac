@@ -1025,13 +1025,20 @@ async def _archive_ruleset(ruleset_id: str) -> None:
         )
 
 
+async def _seed_exposed_rulesets() -> None:
+    """Seed the packaged rulesets and expose them to users, as an admin would."""
+    from ai_almanac.server.services import rulesets
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", True)
+    await rulesets.set_comparison_enabled("unconstrained", True)
+
+
 @pytest.mark.asyncio
 async def test_a_session_carries_its_chosen_ruleset(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    from ai_almanac.server.services import rulesets
-
-    await rulesets.seed_packaged_rulesets()
+    await _seed_exposed_rulesets()
 
     created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
     session_id = created["id"]
@@ -1063,9 +1070,7 @@ async def test_a_session_carries_its_chosen_ruleset(
 async def test_an_unavailable_ruleset_cannot_be_selected(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    from ai_almanac.server.services import rulesets
-
-    await rulesets.seed_packaged_rulesets()
+    await _seed_exposed_rulesets()
 
     unknown = await client.post(
         "/chat/sessions",
@@ -1091,7 +1096,7 @@ async def test_an_unavailable_ruleset_cannot_be_selected(
         )
         assert archived.status_code == 400
     finally:
-        await rulesets.seed_packaged_rulesets()
+        await _seed_exposed_rulesets()
 
 
 @pytest.mark.asyncio
@@ -1100,9 +1105,7 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
     auth_headers: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_almanac.server.services import rulesets
-
-    await rulesets.seed_packaged_rulesets()
+    await _seed_exposed_rulesets()
 
     created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
     session_id = created["id"]
@@ -1149,6 +1152,6 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
         assert response.status_code == 200
         assert response.text
     finally:
-        await rulesets.seed_packaged_rulesets()
+        await _seed_exposed_rulesets()
 
     assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained", None]

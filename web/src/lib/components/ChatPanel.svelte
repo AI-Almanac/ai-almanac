@@ -206,24 +206,38 @@
 		localStorage.setItem(COMPARISON_MODE_KEY, comparisonMode ? '1' : '0');
 	}
 
+	// The pair a comparison runs; defaults to the active ruleset vs the first
+	// other exposed one. The user changes it from the ⋯ menu.
+	let compareArmIds = $state<[string, string]>(['', '']);
+
 	onMount(() => {
 		comparisonMode = localStorage.getItem(COMPARISON_MODE_KEY) === '1';
 		getRulesetOptions()
 			.then((options) => {
 				rulesetOptions = options.rulesets;
 				compareAvailable = options.compare_available;
+				const first = options.rulesets.find((r) => r.is_active) ?? options.rulesets[0];
+				const second = options.rulesets.find((r) => r.id !== first?.id);
+				compareArmIds = [first?.id ?? '', second?.id ?? ''];
 			})
 			.catch(() => undefined);
 	});
 
+	const compareReady = $derived(
+		compareAvailable &&
+			compareArmIds[0] !== '' &&
+			compareArmIds[1] !== '' &&
+			compareArmIds[0] !== compareArmIds[1]
+	);
+
 	function startCompare() {
 		const text = input.trim();
-		if (!text || comparison.running) return;
+		if (!text || comparison.running || !compareReady) return;
 		input = '';
 		comparing = true;
 		void comparison.start(
 			text,
-			blindCompare(text, {
+			blindCompare(text, compareArmIds, {
 				sourceSessionId: chat.sessionId ?? undefined,
 				scope: sessionScope()
 			})
@@ -241,7 +255,12 @@
 		{chat}
 		{rulesetOptions}
 		{comparisonMode}
+		{compareAvailable}
+		{compareArmIds}
 		onToggleComparisonMode={toggleComparisonMode}
+		onCompareArmChange={(index, id) => {
+			compareArmIds[index] = id;
+		}}
 	/>
 
 	{#if showBetaNote}
@@ -317,8 +336,8 @@
 				<button
 					class="ab-btn"
 					onclick={startCompare}
-					disabled={chat.sending || !input.trim() || chat.loadingSession}
-					title="Get two answers from two assistant styles and vote on the better one"
+					disabled={chat.sending || !input.trim() || chat.loadingSession || !compareReady}
+					title="Get two answers from the two styles picked in the ⋯ menu and vote on the better one"
 				>
 					A/B
 				</button>

@@ -6,11 +6,11 @@
 		getRuleset,
 		getGuardrailThresholds,
 		getRulesetFeedback,
-		getSettings,
-		patchSettings,
 		saveRuleset,
 		cloneRuleset,
 		activateRuleset,
+		deleteRuleset,
+		setRulesetComparisonEnabled,
 		previewRuleset,
 		compareRulesets,
 		PREVIEW_SCOPE_KINDS,
@@ -72,20 +72,29 @@
 		}, 'Comparison discarded. The ratings it produced are kept.');
 	}
 
-	// ---- Candidate for user-facing blind comparisons ---------------------------
+	// ---- User exposure and deletion ---------------------------------------------
 
-	let candidateId = $state('');
+	const selectedSummary = $derived(rulesets.find((r) => r.id === selected?.id));
 
-	function setCandidate(id: string) {
+	function setExposure(id: string, enabled: boolean) {
 		void run(
 			async () => {
-				await patchSettings({ assistant_comparison_candidate: id });
-				candidateId = id;
+				await setRulesetComparisonEnabled(id, enabled);
+				await load(id);
 			},
-			id
-				? 'Candidate set. Users now get a blind A/B button in the chat.'
-				: 'Candidate cleared. User comparisons are off.'
+			enabled
+				? 'Shown to users: available in the style picker and as a comparison arm.'
+				: 'Hidden from users.'
 		);
+	}
+
+	function removeRuleset(id: string) {
+		if (!confirm(`Delete the ruleset "${id}"? Its recorded feedback is kept.`)) return;
+		void run(async () => {
+			await deleteRuleset(id);
+			selected = null;
+			await load();
+		}, 'Ruleset deleted. Its recorded feedback is kept.');
 	}
 
 	// ---- Collected feedback -----------------------------------------------------
@@ -96,15 +105,13 @@
 		loading = true;
 		error = null;
 		try {
-			const [list, limits, state, collected] = await Promise.all([
+			const [list, limits, collected] = await Promise.all([
 				listRulesets(),
 				getGuardrailThresholds(),
-				getSettings(),
 				getRulesetFeedback()
 			]);
 			rulesets = list;
 			thresholds = limits;
-			candidateId = String(state.values.assistant_comparison_candidate ?? '');
 			feedback = collected;
 			armDefaults(list);
 			const target = selectId ?? selected?.id ?? list.find((r) => r.is_active)?.id ?? list[0]?.id;
@@ -256,7 +263,8 @@
 									<span class="tag">v{ruleset.version}</span>
 									<span class="tag">{ruleset.source}</span>
 									{#if ruleset.is_active}<span class="tag active">active</span>{/if}
-									{#if ruleset.id === candidateId}<span class="tag candidate">candidate</span>{/if}
+									{#if ruleset.comparison_enabled}<span class="tag exposed">shown to users</span
+										>{/if}
 								</span>
 								<span class="ruleset-desc">{ruleset.description}</span>
 							</button>
@@ -287,17 +295,29 @@
 						>
 							Save changes
 						</button>
-						{#if candidateId === selected.id}
-							<button onclick={() => setCandidate('')} disabled={busy}>Clear candidate</button>
+						{#if selectedSummary?.comparison_enabled}
+							<button onclick={() => setExposure(selected!.id, false)} disabled={busy}>
+								Hide from users
+							</button>
 						{:else}
 							<button
-								onclick={() => setCandidate(selected!.id)}
+								onclick={() => setExposure(selected!.id, true)}
+								disabled={busy}
+								title="Users see it in the style picker and can pick it as a comparison arm; two exposed rulesets enable A/B in the chat"
+							>
+								Show to users
+							</button>
+						{/if}
+						{#if !isPackaged}
+							<button
+								class="danger"
+								onclick={() => removeRuleset(selected!.id)}
 								disabled={busy || selected.is_active}
 								title={selected.is_active
-									? 'The candidate is compared against the active ruleset, so it must be a different one'
-									: 'Users get a blind A/B button in the chat that compares this against the active ruleset'}
+									? 'Activate another ruleset first'
+									: 'Removes it from every list; recorded feedback is kept'}
 							>
-								Set as blind-test candidate
+								Delete
 							</button>
 						{/if}
 					</div>
@@ -584,9 +604,13 @@
 		border-color: var(--color-status-running);
 		background: var(--color-status-running-bg);
 	}
-	.tag.candidate {
+	.tag.exposed {
 		color: var(--color-status-running);
 		border-color: var(--color-status-running);
+	}
+	button.danger {
+		color: var(--color-danger);
+		border-color: var(--color-danger);
 	}
 	.feedback {
 		border-collapse: collapse;

@@ -17,6 +17,7 @@ import json
 
 import httpx
 import pytest
+import pytest_asyncio
 import sqlalchemy as sa
 from pydantic_ai.models.test import TestModel
 
@@ -310,7 +311,7 @@ async def test_comparison_endpoints_require_admin_in_shared(
     for method, path, payload in (
         ("POST", "/assistant/comparisons/abc/vote", {}),
         ("DELETE", "/assistant/comparisons/abc", None),
-        ("POST", "/assistant/compare/blind", {"message": "hi"}),
+        ("POST", "/assistant/compare/blind", {"message": "hi", "ruleset_ids": ["a", "b"]}),
         ("GET", "/assistant/ruleset-options", None),
     ):
         res = await client.request(method, path, headers=headers, json=payload)
@@ -354,16 +355,16 @@ async def test_a_scratch_session_cannot_submit_a_run(
 
 # --- blind user-facing comparisons -----------------------------------------
 #
-# Regular users compare active-vs-candidate without knowing which is which:
-# the server picks and shuffles the arms, the stream names them only by index,
-# and identities come out in the vote response.
+# Regular users pick two exposed rulesets; the columns stay anonymous — the
+# server shuffles which is which, the stream names arms only by index, and
+# identities come out in the vote response.
 
 
-@pytest.fixture
-def candidate(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.settings import settings
-
-    monkeypatch.setattr(settings, "assistant_comparison_candidate", "unconstrained")
+@pytest_asyncio.fixture
+async def exposed_pair() -> None:
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", True)
+    await rulesets.set_comparison_enabled("unconstrained", True)
 
 
 @pytest.mark.asyncio
@@ -371,14 +372,14 @@ async def test_a_blind_comparison_never_names_its_arms(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     res = await client.post(
         "/assistant/compare/blind",
         headers=auth_headers,
-        json={"message": "which model is best?"},
+        json={"message": "which model is best?", "ruleset_ids": ["builtin", "unconstrained"]},
     )
 
     assert res.status_code == 200, res.text
@@ -404,7 +405,7 @@ async def test_the_arm_order_is_shuffled(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The endpoint really applies the shuffle: force it to reverse and the
@@ -413,7 +414,9 @@ async def test_the_arm_order_is_shuffled(
     monkeypatch.setattr("ai_almanac.server.routers.assistant.random.shuffle", list.reverse)
 
     res = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     started = _sse_events(res.text)[0]
 
@@ -433,12 +436,14 @@ async def test_the_vote_response_reveals_the_arms(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     res = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     started = _sse_events(res.text)[0]
     winner = started["variants"][0]["session_id"]
@@ -456,44 +461,45 @@ async def test_the_vote_response_reveals_the_arms(
 
 
 @pytest.mark.asyncio
-async def test_blind_comparisons_are_offered_only_with_a_usable_candidate(
+async def test_comparison_arms_must_be_two_distinct_exposed_rulesets(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_almanac.settings import settings
-
     await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", False)
+    await rulesets.set_comparison_enabled("unconstrained", False)
 
     async def availability() -> bool:
         res = await client.get("/assistant/ruleset-options", headers=auth_headers)
         return res.json()["compare_available"]
 
-    async def compare_status() -> int:
+    async def compare_status(ruleset_ids: list[str]) -> int:
         res = await client.post(
-            "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+            "/assistant/compare/blind",
+            headers=auth_headers,
+            json={"message": "hi", "ruleset_ids": ruleset_ids},
         )
         return res.status_code
 
-    monkeypatch.setattr(settings, "assistant_comparison_candidate", "")
+    # Nothing exposed: no comparison offer, and naming a hidden ruleset fails.
     assert not await availability()
-    assert await compare_status() == 409
+    assert await compare_status(["builtin", "unconstrained"]) == 400
 
-    monkeypatch.setattr(settings, "assistant_comparison_candidate", "builtin")  # == active
+    # One exposed ruleset is a picker, not a comparison.
+    await rulesets.set_comparison_enabled("builtin", True)
     assert not await availability()
-    assert await compare_status() == 409
+    assert await compare_status(["builtin", "unconstrained"]) == 400
 
-    monkeypatch.setattr(settings, "assistant_comparison_candidate", "no-such-ruleset")
-    assert not await availability()
-    assert await compare_status() == 409
+    await rulesets.set_comparison_enabled("unconstrained", True)
+    assert await availability()
+    assert await compare_status(["builtin", "builtin"]) == 400
+    assert await compare_status(["builtin", "no-such-ruleset"]) == 400
 
 
 @pytest.mark.asyncio
 async def test_ruleset_options_expose_no_prompt_or_policy(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, auth_headers: dict[str, str], exposed_pair: None
 ) -> None:
-    await rulesets.seed_packaged_rulesets()
-
     res = await client.get("/assistant/ruleset-options", headers=auth_headers)
 
     assert res.status_code == 200
@@ -508,12 +514,14 @@ async def test_a_blind_scratch_session_cannot_submit_a_run(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     res = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     session_id = _sse_events(res.text)[0]["variants"][0]["session_id"]
 
@@ -530,12 +538,14 @@ async def test_a_vote_is_scoped_to_the_comparisons_owner(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     res = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     comparison_id = _sse_events(res.text)[0]["comparison_id"]
 
@@ -556,13 +566,15 @@ async def test_a_follow_up_message_continues_both_arms(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
     _test_engine,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     first = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "which model is best?"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "which model is best?", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     started = _sse_events(first.text)[0]
     comparison_id = started["comparison_id"]
@@ -609,13 +621,15 @@ async def test_a_follow_up_arm_still_lacks_the_submit_tools(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
     user_id: str,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     first = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     comparison_id = _sse_events(first.text)[0]["comparison_id"]
 
@@ -629,12 +643,14 @@ async def test_a_comparison_cannot_be_continued_by_someone_else(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     stub_model: None,
-    candidate: None,
+    exposed_pair: None,
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     first = await client.post(
-        "/assistant/compare/blind", headers=auth_headers, json={"message": "hi"}
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     comparison_id = _sse_events(first.text)[0]["comparison_id"]
 

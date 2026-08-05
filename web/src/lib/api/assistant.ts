@@ -30,6 +30,8 @@ export type RulesetSummary = {
 	version: number;
 	source: 'packaged' | 'custom';
 	is_active: boolean;
+	/** Whether users can see this ruleset: in the style picker and as a comparison arm. */
+	comparison_enabled: boolean;
 	section_keys: string[];
 	denied_tools: string[];
 	model: string | null;
@@ -114,6 +116,22 @@ export async function activateRuleset(id: string): Promise<RulesetSummary> {
 	return request<RulesetSummary>(`/assistant/rulesets/${encodeURIComponent(id)}/activate`, {
 		method: 'POST'
 	});
+}
+
+/** Expose or hide a ruleset for users (style picker and comparison arms). */
+export async function setRulesetComparisonEnabled(
+	id: string,
+	enabled: boolean
+): Promise<RulesetSummary> {
+	return request<RulesetSummary>(
+		`/assistant/rulesets/${encodeURIComponent(id)}/comparison-enabled`,
+		{ method: 'POST', body: JSON.stringify({ enabled }) }
+	);
+}
+
+/** Archive a custom ruleset. Packaged and active rulesets are refused (409). */
+export async function deleteRuleset(id: string): Promise<void> {
+	await request<void>(`/assistant/rulesets/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function previewRuleset(id: string, scopeKind: string): Promise<PromptPreview> {
@@ -220,12 +238,12 @@ export async function* compareRulesets(
 }
 
 /**
- * A blind comparison: the server runs the message under the active and the
- * admin-designated candidate rulesets, shuffled — the stream never says which
- * arm is which. Voting is what reveals them.
+ * A blind comparison of two user-chosen rulesets. The server shuffles which
+ * column is which, so the stream never says — voting is what reveals them.
  */
 export async function* blindCompare(
 	message: string,
+	rulesetIds: [string, string],
 	options: { sourceSessionId?: string; scope?: ChatScope } = {}
 ): AsyncGenerator<CompareEvent> {
 	const res = await fetch(`${BASE_URL}/assistant/compare/blind`, {
@@ -233,6 +251,7 @@ export async function* blindCompare(
 		headers: { 'Content-Type': 'application/json', ...authHeaders() },
 		body: JSON.stringify({
 			message,
+			ruleset_ids: rulesetIds,
 			source_session_id: options.sourceSessionId ?? null,
 			scope: options.scope ?? null
 		})

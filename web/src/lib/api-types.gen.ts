@@ -50,7 +50,15 @@ export interface paths {
         /** Save Ruleset */
         put: operations["save_ruleset_assistant_rulesets__ruleset_id__put"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete Ruleset
+         * @description Archive a custom ruleset: gone from every list, provenance kept.
+         *
+         *     Packaged rulesets are refused — reseeding would resurrect them on the next
+         *     startup, so a delete would look like it worked and then undo itself. The
+         *     active ruleset is refused because chat must always resolve one.
+         */
+        delete: operations["delete_ruleset_assistant_rulesets__ruleset_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -90,6 +98,27 @@ export interface paths {
         put?: never;
         /** Activate Ruleset */
         post: operations["activate_ruleset_assistant_rulesets__ruleset_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/rulesets/{ruleset_id}/comparison-enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Comparison Enabled
+         * @description Expose or hide a ruleset for users — the style picker and comparison
+         *     arms both draw from the exposed set.
+         */
+        post: operations["set_comparison_enabled_assistant_rulesets__ruleset_id__comparison_enabled_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -152,8 +181,8 @@ export interface paths {
         };
         /**
          * List Ruleset Options
-         * @description The rulesets any user may pick for a session, plus whether the blind
-         *     A/B comparison is currently offered.
+         * @description The rulesets an admin has exposed to users, for the style picker and
+         *     the comparison-pair choice. Comparisons need two to choose from.
          */
         get: operations["list_ruleset_options_assistant_ruleset_options_get"];
         put?: never;
@@ -175,10 +204,11 @@ export interface paths {
         put?: never;
         /**
          * Compare Blind
-         * @description Answer one message under the active and candidate rulesets, blinded.
+         * @description Answer one message under two user-chosen rulesets, columns blinded.
          *
-         *     The server picks and shuffles the arms; the stream names them only by
-         *     index, and the vote response is where the identities come out.
+         *     The user picks the pair from the exposed rulesets; the server shuffles
+         *     which column is which, so the stream names arms only by index and the
+         *     vote response is where the identities come out.
          */
         post: operations["compare_blind_assistant_compare_blind_post"];
         delete?: never;
@@ -2269,12 +2299,18 @@ export interface components {
         };
         /**
          * BlindCompareRequest
-         * @description A user-triggered comparison. The server picks the arms — there is no
-         *     ``variants`` field, so users can never choose or learn what runs.
+         * @description A user-triggered comparison of two exposed rulesets.
+         *
+         *     The user picks the pair; the server shuffles which column is which, so the
+         *     vote is still cast without knowing which answer came from which ruleset.
+         *     Only admin-exposed rulesets are eligible — there is no way to name a
+         *     draft, archived, or admin-only ruleset here.
          */
         BlindCompareRequest: {
             /** Message */
             message: string;
+            /** Ruleset Ids */
+            ruleset_ids: string[];
             /** Source Session Id */
             source_session_id?: string | null;
             scope?: components["schemas"]["ChatScope"] | null;
@@ -2475,6 +2511,11 @@ export interface components {
             /** Source Session Id */
             source_session_id?: string | null;
             scope?: components["schemas"]["ChatScope"] | null;
+        };
+        /** ComparisonEnabledIn */
+        ComparisonEnabledIn: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** ComparisonMessageIn */
         ComparisonMessageIn: {
@@ -4017,6 +4058,11 @@ export interface components {
             source: string;
             /** Is Active */
             is_active: boolean;
+            /**
+             * Comparison Enabled
+             * @default false
+             */
+            comparison_enabled: boolean;
             /** Section Keys */
             section_keys: string[];
             /** Denied Tools */
@@ -4682,6 +4728,35 @@ export interface operations {
             };
         };
     };
+    delete_ruleset_assistant_rulesets__ruleset_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     clone_ruleset_assistant_rulesets__ruleset_id__clone_post: {
         parameters: {
             query?: never;
@@ -4727,6 +4802,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_comparison_enabled_assistant_rulesets__ruleset_id__comparison_enabled_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonEnabledIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

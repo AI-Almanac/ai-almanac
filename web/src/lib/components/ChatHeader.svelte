@@ -8,14 +8,20 @@
 		chat: ChatSessionState;
 		rulesetOptions?: RulesetOption[];
 		comparisonMode?: boolean;
+		compareAvailable?: boolean;
+		compareArmIds?: [string, string];
 		onToggleComparisonMode?: () => void;
+		onCompareArmChange?: (index: 0 | 1, id: string) => void;
 	}
 
 	const {
 		chat,
 		rulesetOptions = [],
 		comparisonMode = false,
-		onToggleComparisonMode
+		compareAvailable = false,
+		compareArmIds = ['', ''],
+		onToggleComparisonMode,
+		onCompareArmChange
 	}: Props = $props();
 
 	let showSessionList = $state(false);
@@ -204,7 +210,7 @@
 							<small>Rate answers and compare assistant styles side by side.</small>
 						</span>
 					</label>
-					{#if comparisonMode && rulesetOptions.length > 1 && chat.currentSession}
+					{#if comparisonMode && rulesetOptions.length > 0 && chat.currentSession}
 						<div class="menu-divider"></div>
 						<label class="menu-field">
 							<span>Assistant style for this chat</span>
@@ -218,6 +224,26 @@
 								{/each}
 							</select>
 						</label>
+					{/if}
+					{#if comparisonMode && compareAvailable}
+						<div class="menu-divider"></div>
+						<span class="menu-heading">A/B compares these two styles</span>
+						{#each [0, 1] as const as index (index)}
+							<label class="menu-field">
+								<span>{index === 0 ? 'A' : 'B'}</span>
+								<select
+									value={compareArmIds[index]}
+									onchange={(e) => onCompareArmChange?.(index, e.currentTarget.value)}
+								>
+									{#each rulesetOptions as option (option.id)}
+										<option value={option.id}>{option.name}</option>
+									{/each}
+								</select>
+							</label>
+						{/each}
+						{#if compareArmIds[0] === compareArmIds[1]}
+							<span class="menu-warning">Pick two different styles to compare.</span>
+						{/if}
 					{/if}
 				</div>
 			{/if}
@@ -342,6 +368,17 @@
 	.menu-divider {
 		height: 1px;
 		background: var(--color-border-subtle);
+	}
+
+	.menu-heading {
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--color-text-muted);
+	}
+
+	.menu-warning {
+		font-size: 0.68rem;
+		color: var(--color-status-running);
 	}
 
 	.menu-field {

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
@@ -173,7 +174,7 @@ def packaged_ruleset(ruleset_id: str) -> Ruleset:
 IMPORTED_OVERRIDE_ID = "imported-override"
 
 _COLUMNS = (
-    "id, name, description, version, source, is_active, archived, "
+    "id, name, description, version, source, is_active, archived, comparison_enabled, "
     "prompt_sections, tool_policy, model, model_settings"
 )
 
@@ -300,8 +301,17 @@ async def seed_packaged_rulesets() -> None:
             )
 
 
-async def list_rulesets(*, include_archived: bool = False) -> list[tuple[Ruleset, bool]]:
-    """Every stored ruleset with whether it is the active one."""
+@dataclass(frozen=True)
+class StoredRuleset:
+    """A ruleset row with its deployment state, which is not ruleset content."""
+
+    ruleset: Ruleset
+    is_active: bool
+    comparison_enabled: bool
+
+
+async def list_rulesets(*, include_archived: bool = False) -> list[StoredRuleset]:
+    """Every stored ruleset with its deployment state."""
     from ai_almanac.server.db import get_db
 
     query = f"SELECT {_COLUMNS} FROM assistant_rulesets"
@@ -310,7 +320,52 @@ async def list_rulesets(*, include_archived: bool = False) -> list[tuple[Ruleset
     query += " ORDER BY source, id"
     async with get_db() as conn:
         rows = (await conn.execute(sa.text(query))).mappings().fetchall()
-    return [(_row_to_ruleset(row), bool(row["is_active"])) for row in rows]
+    return [
+        StoredRuleset(
+            ruleset=_row_to_ruleset(row),
+            is_active=bool(row["is_active"]),
+            comparison_enabled=bool(row["comparison_enabled"]),
+        )
+        for row in rows
+    ]
+
+
+async def set_comparison_enabled(ruleset_id: str, enabled: bool) -> None:
+    """Expose or hide a ruleset for users. ``KeyError`` when there is no row."""
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.text(
+                "UPDATE assistant_rulesets SET comparison_enabled = :enabled "
+                "WHERE id = :id AND archived = FALSE"
+            ),
+            {"id": ruleset_id, "enabled": enabled},
+        )
+    if result.rowcount == 0:
+        raise KeyError(ruleset_id)
+
+
+async def archive_ruleset(ruleset_id: str) -> None:
+    """Remove a custom ruleset from every list, keeping the row.
+
+    Archive rather than hard delete: turn logs reference ruleset ids, and the
+    feedback rollup should keep naming the wording that produced its numbers.
+    The caller refuses packaged ids (reseeding would resurrect them) and the
+    active ruleset (chat must always resolve one).
+    """
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.text(
+                "UPDATE assistant_rulesets SET archived = TRUE, comparison_enabled = FALSE "
+                "WHERE id = :id AND is_active = FALSE AND archived = FALSE"
+            ),
+            {"id": ruleset_id},
+        )
+    if result.rowcount == 0:
+        raise KeyError(ruleset_id)
 
 
 async def get_ruleset(ruleset_id: str) -> Ruleset | None:
@@ -331,11 +386,12 @@ async def get_ruleset(ruleset_id: str) -> Ruleset | None:
 
 
 async def selectable_ruleset(ruleset_id: str) -> Ruleset | None:
-    """A stored, non-archived ruleset a user may run a session under.
+    """A stored ruleset an admin has exposed to users.
 
     The user-facing counterpart of ``get_ruleset``, which deliberately returns
-    archived rows for admin use. None means the caller falls back to the
-    active ruleset.
+    archived and unexposed rows for admin use. Gates session pinning and
+    user-chosen comparison arms alike; None means the caller falls back to the
+    active ruleset (or refuses, for a comparison arm).
     """
     from ai_almanac.server.db import get_db
 
@@ -345,7 +401,7 @@ async def selectable_ruleset(ruleset_id: str) -> Ruleset | None:
                 await conn.execute(
                     sa.text(
                         f"SELECT {_COLUMNS} FROM assistant_rulesets "
-                        "WHERE id = :id AND archived = FALSE"
+                        "WHERE id = :id AND archived = FALSE AND comparison_enabled = TRUE"
                     ),
                     {"id": ruleset_id},
                 )
