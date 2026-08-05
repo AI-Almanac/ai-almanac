@@ -663,3 +663,70 @@ async def test_a_comparison_cannot_be_continued_by_someone_else(
         json={"message": "hi"},
     )
     assert missing.status_code == 404
+
+
+# --- feature flag -----------------------------------------------------------
+#
+# Comparisons cost two model replies each, so an operator can switch the whole
+# surface off. Off means 404 (the repo's convention for a feature that should
+# look absent), for admins and users alike.
+
+
+@pytest.fixture
+def comparisons_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "enable_assistant_comparisons", False)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("POST", "/assistant/compare", {"message": "hi", "variants": [{"ruleset_id": "builtin"}]}),
+        ("POST", "/assistant/compare/blind", {"message": "hi", "ruleset_ids": ["a", "b"]}),
+        ("POST", "/assistant/comparisons/abc/message", {"message": "hi"}),
+        ("POST", "/assistant/comparisons/abc/vote", {}),
+        ("DELETE", "/assistant/comparisons/abc", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_comparison_route_is_absent_when_the_feature_is_off(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    comparisons_disabled: None,
+    method: str,
+    path: str,
+    payload: dict | None,
+) -> None:
+    res = await client.request(method, path, headers=auth_headers, json=payload)
+
+    assert res.status_code == 404, f"{method} {path} returned {res.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_the_flag_withdraws_the_offer_but_keeps_the_style_picker(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    exposed_pair: None,
+    comparisons_disabled: None,
+) -> None:
+    """Picking an assistant style is a separate feature and outlives the flag."""
+    res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["comparisons_enabled"] is False
+    assert body["compare_available"] is False
+    # Two rulesets are still exposed, so the picker still has something to offer.
+    assert {item["id"] for item in body["rulesets"]} >= {"builtin", "unconstrained"}
+
+
+@pytest.mark.asyncio
+async def test_the_offer_returns_when_the_feature_is_switched_back_on(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], exposed_pair: None
+) -> None:
+    res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+
+    body = res.json()
+    assert body["comparisons_enabled"] is True
+    assert body["compare_available"] is True

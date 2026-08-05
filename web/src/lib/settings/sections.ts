@@ -30,7 +30,10 @@ function isAssistantGroup(group: SettingsGroup): boolean {
  * short list to scan rather than a page to scroll. Config groups come from the
  * schema, so a new backend group appears here without a frontend change.
  */
-export function settingsNav(groups: SettingsGroup[]): SettingsNavGroup[] {
+export function settingsNav(
+	groups: SettingsGroup[],
+	{ comparisonsEnabled = true }: { comparisonsEnabled?: boolean } = {}
+): SettingsNavGroup[] {
 	const link = (group: SettingsGroup): SettingsLink => ({
 		label: group.name,
 		href: `/settings/${sectionSlug(group.name)}`,
@@ -50,7 +53,16 @@ export function settingsNav(groups: SettingsGroup[]): SettingsNavGroup[] {
 				{ label: 'Model & API keys', href: '/settings/ai', adminOnly: false },
 				...groups.filter(isAssistantGroup).map(link),
 				{ label: 'Rulesets', href: '/settings/assistant', adminOnly: true },
-				{ label: 'Compare rulesets', href: '/settings/assistant/comparisons', adminOnly: true },
+				// Hidden with the feature: its endpoints 404 when the flag is off.
+				...(comparisonsEnabled
+					? [
+							{
+								label: 'Compare rulesets',
+								href: '/settings/assistant/comparisons',
+								adminOnly: true
+							}
+						]
+					: []),
 				{ label: 'Feedback', href: '/settings/assistant/feedback', adminOnly: true }
 			]
 		}

@@ -186,6 +186,9 @@ export type RulesetOption = {
 
 export type RulesetOptions = {
 	rulesets: RulesetOption[];
+	/** The comparison feature flag: off hides the whole surface. */
+	comparisons_enabled: boolean;
+	/** Flag on *and* two rulesets exposed, so a comparison can actually run. */
 	compare_available: boolean;
 };
 

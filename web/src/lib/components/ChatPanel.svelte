@@ -192,6 +192,7 @@
 	// ---- Assistant styles and blind A/B comparison -------------------------
 
 	let rulesetOptions = $state<RulesetOption[]>([]);
+	let comparisonsEnabled = $state(false);
 	let compareAvailable = $state(false);
 	const comparison = new ComparisonState();
 	let comparing = $state(false);
@@ -200,6 +201,9 @@
 	// and re-toggling it on a new device is the harmless failure.
 	const COMPARISON_MODE_KEY = 'almanac.comparisonModeEnabled';
 	let comparisonMode = $state(false);
+	// A stored preference cannot outlive the feature: if an operator switches
+	// comparisons off, the mode it enabled goes with them.
+	const comparisonModeActive = $derived(comparisonMode && comparisonsEnabled);
 
 	function toggleComparisonMode() {
 		comparisonMode = !comparisonMode;
@@ -215,6 +219,7 @@
 		getRulesetOptions()
 			.then((options) => {
 				rulesetOptions = options.rulesets;
+				comparisonsEnabled = options.comparisons_enabled;
 				compareAvailable = options.compare_available;
 				const first = options.rulesets.find((r) => r.is_active) ?? options.rulesets[0];
 				const second = options.rulesets.find((r) => r.id !== first?.id);
@@ -254,7 +259,8 @@
 	<ChatHeader
 		{chat}
 		{rulesetOptions}
-		{comparisonMode}
+		comparisonMode={comparisonModeActive}
+		{comparisonsEnabled}
 		{compareAvailable}
 		{compareArmIds}
 		onToggleComparisonMode={toggleComparisonMode}
@@ -307,7 +313,7 @@
 			{chat}
 			{emptyMessage}
 			{suggestions}
-			canRate={comparisonMode}
+			canRate={comparisonModeActive}
 			onSuggestion={(text) => send(text)}
 			onOpenArtifact={openArtifactInGallery}
 		/>
@@ -332,7 +338,7 @@
 				{placeholder}
 				rows={2}
 				disabled={chat.sending}></textarea>
-			{#if comparisonMode && compareAvailable}
+			{#if comparisonModeActive && compareAvailable}
 				<button
 					class="ab-btn"
 					onclick={startCompare}

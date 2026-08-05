@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import random
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.auth import AdminUser, CurrentUser
+from ai_almanac.server.auth import AdminUser, CurrentUser, require_assistant_comparisons
 from ai_almanac.server.services import assistant_compare, guardrails, rulesets, turn_log
 from ai_almanac.server.services.chat_state import ChatScope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
+from ai_almanac.settings import settings
 
 from .chat import require_chat_available
 
@@ -149,6 +150,9 @@ class RulesetOption(BaseModel):
 
 class RulesetOptionsOut(BaseModel):
     rulesets: list[RulesetOption]
+    # Whether the feature is switched on at all, and separately whether a
+    # comparison can actually run (needs two exposed rulesets).
+    comparisons_enabled: bool
     compare_available: bool
 
 
@@ -345,7 +349,7 @@ async def preview_ruleset(ruleset_id: str, body: PreviewRequest, user: AdminUser
     )
 
 
-@router.post("/compare")
+@router.post("/compare", dependencies=[Depends(require_assistant_comparisons)])
 async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingResponse:
     """Answer one message under two policies at once, merged onto one SSE stream.
 
@@ -380,8 +384,14 @@ async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingRe
 @router.get("/ruleset-options", response_model=RulesetOptionsOut)
 async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
     """The rulesets an admin has exposed to users, for the style picker and
-    the comparison-pair choice. Comparisons need two to choose from."""
+    the comparison-pair choice.
+
+    Not gated on the comparison flag: the style picker outlives comparisons.
+    The flag is reported instead, so the chat hides the comparison surface
+    without a second request.
+    """
     exposed = [row for row in await rulesets.list_rulesets() if row.comparison_enabled]
+    comparisons_enabled = settings.enable_assistant_comparisons
     return RulesetOptionsOut(
         rulesets=[
             RulesetOption(
@@ -392,11 +402,12 @@ async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
             )
             for row in exposed
         ],
-        compare_available=len(exposed) >= 2,
+        comparisons_enabled=comparisons_enabled,
+        compare_available=comparisons_enabled and len(exposed) >= 2,
     )
 
 
-@router.post("/compare/blind")
+@router.post("/compare/blind", dependencies=[Depends(require_assistant_comparisons)])
 async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> StreamingResponse:
     """Answer one message under two user-chosen rulesets, columns blinded.
 
@@ -436,7 +447,9 @@ class ComparisonMessageIn(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
 
 
-@router.post("/comparisons/{comparison_id}/message")
+@router.post(
+    "/comparisons/{comparison_id}/message", dependencies=[Depends(require_assistant_comparisons)]
+)
 async def continue_comparison(
     comparison_id: str, body: ComparisonMessageIn, user: CurrentUser
 ) -> StreamingResponse:
@@ -479,7 +492,11 @@ async def _revealed_arms(comparison_id: str, user_id: str) -> list[RevealedArm]:
     return arms
 
 
-@router.post("/comparisons/{comparison_id}/vote", response_model=VoteOut)
+@router.post(
+    "/comparisons/{comparison_id}/vote",
+    response_model=VoteOut,
+    dependencies=[Depends(require_assistant_comparisons)],
+)
 async def vote_on_comparison(comparison_id: str, body: VoteIn, user: CurrentUser) -> VoteOut:
     """Record which arm won, on both arms' turn logs, and reveal the arms."""
     try:
@@ -493,7 +510,11 @@ async def vote_on_comparison(comparison_id: str, body: VoteIn, user: CurrentUser
     return VoteOut(rated_turns=rated, arms=await _revealed_arms(comparison_id, user.id))
 
 
-@router.delete("/comparisons/{comparison_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/comparisons/{comparison_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_assistant_comparisons)],
+)
 async def delete_comparison(comparison_id: str, user: CurrentUser) -> None:
     """Discard a comparison's scratch sessions."""
     if not await assistant_compare.delete_comparison(comparison_id, user.id):

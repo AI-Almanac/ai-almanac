@@ -21,7 +21,13 @@
 		void settings.load();
 	});
 
-	const nav = $derived(settingsNav(settings.groups));
+	// The flag lives in the settings the shell already loaded, so the nav needs no
+	// extra request. Absent (not yet loaded) reads as on, matching the default.
+	const nav = $derived(
+		settingsNav(settings.groups, {
+			comparisonsEnabled: settings.value('enable_assistant_comparisons') !== false
+		})
+	);
 	const currentPath = $derived($page.url.pathname);
 
 	function isCurrent(href: string): boolean {

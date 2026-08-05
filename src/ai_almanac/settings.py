@@ -205,6 +205,11 @@ class Settings(BaseSettings):
     # still turn it off from the Settings page (e.g. an install with no
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
+    # Side-by-side ruleset comparisons: the admin playground and the blind A/B
+    # users run from the chat. Off hides the whole surface — every comparison is
+    # two LLM turns, so an install that cannot afford that, or is not collecting
+    # feedback yet, should not offer it.
+    enable_assistant_comparisons: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 

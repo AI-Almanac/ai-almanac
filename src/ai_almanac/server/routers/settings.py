@@ -161,6 +161,11 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Live forecasting",
                 "Let users generate live AI weather forecasts and score them against a trained blend",
             ),
+            (
+                "enable_assistant_comparisons",
+                "Assistant comparisons",
+                "Let users compare two assistant rulesets side by side and vote; each comparison costs two model replies",
+            ),
         ],
     ),
     (

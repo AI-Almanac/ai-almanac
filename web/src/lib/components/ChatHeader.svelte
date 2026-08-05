@@ -8,6 +8,8 @@
 		chat: ChatSessionState;
 		rulesetOptions?: RulesetOption[];
 		comparisonMode?: boolean;
+		/** The comparison feature flag; off removes the mode toggle entirely. */
+		comparisonsEnabled?: boolean;
 		compareAvailable?: boolean;
 		compareArmIds?: [string, string];
 		onToggleComparisonMode?: () => void;
@@ -18,6 +20,7 @@
 		chat,
 		rulesetOptions = [],
 		comparisonMode = false,
+		comparisonsEnabled = false,
 		compareAvailable = false,
 		compareArmIds = ['', ''],
 		onToggleComparisonMode,
@@ -203,13 +206,17 @@
 			</button>
 			{#if showMenu}
 				<div class="menu-dropdown">
-					<label class="menu-toggle">
-						<input type="checkbox" checked={comparisonMode} onchange={onToggleComparisonMode} />
-						<span>
-							<strong>Comparison mode</strong>
-							<small>Rate answers and compare assistant styles side by side.</small>
-						</span>
-					</label>
+					{#if comparisonsEnabled}
+						<label class="menu-toggle">
+							<input type="checkbox" checked={comparisonMode} onchange={onToggleComparisonMode} />
+							<span>
+								<strong>Comparison mode</strong>
+								<small>Rate answers and compare assistant styles side by side.</small>
+							</span>
+						</label>
+					{:else}
+						<p class="menu-empty">No chat options are available.</p>
+					{/if}
 					{#if comparisonMode && rulesetOptions.length > 0 && chat.currentSession}
 						<div class="menu-divider"></div>
 						<label class="menu-field">
@@ -379,6 +386,12 @@
 	.menu-warning {
 		font-size: 0.68rem;
 		color: var(--color-status-running);
+	}
+
+	.menu-empty {
+		margin: 0;
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
 	}
 
 	.menu-field {

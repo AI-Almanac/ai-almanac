@@ -3,10 +3,13 @@
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import ChatCompare from '$lib/components/ChatCompare.svelte';
 	import { ComparisonState } from '$lib/chat/compare.svelte';
-	import { listRulesets, compareRulesets, type RulesetSummary } from '$lib/api';
+	import { listRulesets, compareRulesets, getRulesetOptions, type RulesetSummary } from '$lib/api';
 
 	let rulesets = $state<RulesetSummary[]>([]);
 	let error = $state<string | null>(null);
+	// Reached by URL after the feature was switched off: the endpoints 404, so
+	// say why rather than surfacing a bare error from the first run attempt.
+	let disabled = $state(false);
 	let compareMessage = $state('');
 	let arms = $state([
 		{ ruleset_id: '', model: '' },
@@ -15,6 +18,11 @@
 	const comparison = new ComparisonState();
 
 	onMount(() => {
+		getRulesetOptions()
+			.then((options) => {
+				disabled = !options.comparisons_enabled;
+			})
+			.catch(() => undefined);
 		listRulesets()
 			.then((list) => {
 				rulesets = list;
@@ -45,6 +53,14 @@
 
 	<section class="card">
 		<h2>Compare rulesets</h2>
+		{#if disabled}
+			<p class="hint">
+				Comparisons are switched off for this deployment. Turn on <strong
+					>Assistant comparisons</strong
+				>
+				under <a href="/settings/features">Features</a> to use them.
+			</p>
+		{/if}
 		<p class="hint">
 			One question, two answers, side by side — with follow-ups going to both. Pick two rulesets, or
 			the same ruleset on two models, and vote on which explained itself better. The vote is
@@ -77,7 +93,10 @@
 		</div>
 
 		<div class="actions">
-			<button onclick={runComparison} disabled={comparison.running || !compareMessage.trim()}>
+			<button
+				onclick={runComparison}
+				disabled={disabled || comparison.running || !compareMessage.trim()}
+			>
 				{comparison.running ? 'Running…' : 'Run comparison'}
 			</button>
 		</div>

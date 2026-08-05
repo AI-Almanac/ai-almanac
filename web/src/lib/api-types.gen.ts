@@ -182,7 +182,11 @@ export interface paths {
         /**
          * List Ruleset Options
          * @description The rulesets an admin has exposed to users, for the style picker and
-         *     the comparison-pair choice. Comparisons need two to choose from.
+         *     the comparison-pair choice.
+         *
+         *     Not gated on the comparison flag: the style picker outlives comparisons.
+         *     The flag is reported instead, so the chat hides the comparison surface
+         *     without a second request.
          */
         get: operations["list_ruleset_options_assistant_ruleset_options_get"];
         put?: never;
@@ -4015,6 +4019,8 @@ export interface components {
         RulesetOptionsOut: {
             /** Rulesets */
             rulesets: components["schemas"]["RulesetOption"][];
+            /** Comparisons Enabled */
+            comparisons_enabled: boolean;
             /** Compare Available */
             compare_available: boolean;
         };
