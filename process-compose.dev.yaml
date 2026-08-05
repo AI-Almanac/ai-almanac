@@ -14,9 +14,15 @@ processes:
     availability:
       restart: exit_on_failure
 
+  # Ports come from ALMANAC_API_PORT / ALMANAC_WEB_PORT so several worktrees can
+  # run dev at once; the defaults are the historical values, so a plain
+  # `pixi run dev` is unchanged. scripts/agent-worktree.sh writes a per-worktree
+  # .env.agent with a unique pair. Expanded by the command shell, not by
+  # process-compose, which is why VITE_API_URL is set inline rather than in
+  # `environment` (that block does not honour :- defaults).
   backend:
     description: FastAPI development server with Python auto-reload
-    command: ai-almanac serve --reload --no-open
+    command: ai-almanac serve --reload --no-open --port "${ALMANAC_API_PORT:-8765}"
     environment:
       - "PYTHONUNBUFFERED=1"
     availability:
@@ -24,10 +30,10 @@ processes:
 
   frontend:
     description: SvelteKit development server with Vite hot module replacement
-    command: npm run dev -- --host localhost
+    command: >
+      VITE_API_URL="http://localhost:${ALMANAC_API_PORT:-8765}"
+      npm run dev -- --host localhost --port "${ALMANAC_WEB_PORT:-5173}"
     working_dir: web
-    environment:
-      - "VITE_API_URL=http://localhost:8765"
     depends_on:
       frontend-dependencies:
         condition: process_completed_successfully
