@@ -5,23 +5,18 @@
 		listRulesets,
 		getRuleset,
 		getGuardrailThresholds,
-		getRulesetFeedback,
 		saveRuleset,
 		cloneRuleset,
 		activateRuleset,
 		deleteRuleset,
 		setRulesetComparisonEnabled,
 		previewRuleset,
-		compareRulesets,
 		PREVIEW_SCOPE_KINDS,
 		type RulesetSummary,
 		type RulesetDetail,
-		type RulesetFeedback,
 		type GuardrailThresholds,
 		type PromptPreview
 	} from '$lib/api';
-	import { ComparisonState } from '$lib/chat/compare.svelte';
-	import ChatCompare from '$lib/components/ChatCompare.svelte';
 
 	let rulesets = $state<RulesetSummary[]>([]);
 	let selected = $state<RulesetDetail | null>(null);
@@ -36,84 +31,15 @@
 	let cloneName = $state('');
 
 	const isPackaged = $derived(selected?.source === 'packaged');
-
-	// ---- Comparison playground ------------------------------------------------
-
-	let compareMessage = $state('');
-	let arms = $state([
-		{ ruleset_id: '', model: '' },
-		{ ruleset_id: '', model: '' }
-	]);
-	const comparison = new ComparisonState();
-
-	function armDefaults(list: RulesetSummary[]) {
-		const active = list.find((r) => r.is_active) ?? list[0];
-		const other = list.find((r) => r.id !== active?.id) ?? active;
-		arms[0].ruleset_id ||= active?.id ?? '';
-		arms[1].ruleset_id ||= other?.id ?? '';
-	}
-
-	async function runComparison() {
-		if (!compareMessage.trim() || comparison.running) return;
-		error = null;
-		notice = null;
-		await comparison.start(
-			compareMessage.trim(),
-			compareRulesets(
-				compareMessage.trim(),
-				arms.map((arm) => ({ ruleset_id: arm.ruleset_id, model: arm.model.trim() || null }))
-			)
-		);
-	}
-
-	function discard() {
-		void run(async () => {
-			await comparison.discard();
-		}, 'Comparison discarded. The ratings it produced are kept.');
-	}
-
-	// ---- User exposure and deletion ---------------------------------------------
-
 	const selectedSummary = $derived(rulesets.find((r) => r.id === selected?.id));
-
-	function setExposure(id: string, enabled: boolean) {
-		void run(
-			async () => {
-				await setRulesetComparisonEnabled(id, enabled);
-				await load(id);
-			},
-			enabled
-				? 'Shown to users: available in the style picker and as a comparison arm.'
-				: 'Hidden from users.'
-		);
-	}
-
-	function removeRuleset(id: string) {
-		if (!confirm(`Delete the ruleset "${id}"? Its recorded feedback is kept.`)) return;
-		void run(async () => {
-			await deleteRuleset(id);
-			selected = null;
-			await load();
-		}, 'Ruleset deleted. Its recorded feedback is kept.');
-	}
-
-	// ---- Collected feedback -----------------------------------------------------
-
-	let feedback = $state<RulesetFeedback[]>([]);
 
 	async function load(selectId?: string) {
 		loading = true;
 		error = null;
 		try {
-			const [list, limits, collected] = await Promise.all([
-				listRulesets(),
-				getGuardrailThresholds(),
-				getRulesetFeedback()
-			]);
+			const [list, limits] = await Promise.all([listRulesets(), getGuardrailThresholds()]);
 			rulesets = list;
 			thresholds = limits;
-			feedback = collected;
-			armDefaults(list);
 			const target = selectId ?? selected?.id ?? list.find((r) => r.is_active)?.id ?? list[0]?.id;
 			if (target) await select(target);
 		} catch (e) {
@@ -178,6 +104,27 @@
 		}, 'Active. New messages use this ruleset — no restart needed.');
 	}
 
+	function setExposure(id: string, enabled: boolean) {
+		void run(
+			async () => {
+				await setRulesetComparisonEnabled(id, enabled);
+				await load(id);
+			},
+			enabled
+				? 'Shown to users: available in the style picker and as a comparison arm.'
+				: 'Hidden from users.'
+		);
+	}
+
+	function removeRuleset(id: string) {
+		if (!confirm(`Delete the ruleset "${id}"? Its recorded feedback is kept.`)) return;
+		void run(async () => {
+			await deleteRuleset(id);
+			selected = null;
+			await load();
+		}, 'Ruleset deleted. Its recorded feedback is kept.');
+	}
+
 	function showPreview() {
 		const detail = selected;
 		if (!detail) return;
@@ -195,146 +142,93 @@
 	});
 </script>
 
-<svelte:head><title>Assistant behavior · ai-almanac</title></svelte:head>
-
 <AdminGuard>
-	<div class="page">
-		<header>
-			<h1>Assistant behavior</h1>
-			<p class="lede">
-				How the assistant explains itself: which prompt sections it gets and which tools it is
-				withheld. This does <strong>not</strong> control what the platform accepts — the statistical guardrails
-				below are enforced server-side on every submission, whatever a ruleset says and whatever a conversation
-				asks for.
+	{#if error}<p class="banner error">{error}</p>{/if}
+	{#if notice}<p class="banner ok">{notice}</p>{/if}
+
+	{#if loading}
+		<p class="empty">Loading…</p>
+	{:else}
+		<section class="card">
+			<h2>Rulesets</h2>
+			<p class="hint">
+				A ruleset is the assistant's wording: which prompt sections it gets and which tools it is
+				withheld. It does <strong>not</strong> control what the platform accepts — the enforced thresholds
+				below apply on every submission whatever a ruleset says.
 			</p>
-		</header>
-
-		{#if loading}
-			<p class="empty">Loading…</p>
-		{:else}
-			{#if error}<p class="banner error">{error}</p>{/if}
-			{#if notice}<p class="banner ok">{notice}</p>{/if}
-
-			{#if thresholds}
-				<section class="card">
-					<h2>Enforced thresholds</h2>
-					<p class="hint">
-						Read-only here. These are the numbers the submission checks apply and the numbers
-						<code>&#123;&#123;placeholders&#125;&#125;</code> in a section body resolve to, so the prose
-						and the check cannot disagree. Change them under Settings.
-					</p>
-					<dl class="thresholds">
-						<div>
-							<dt>Minimum onset years</dt>
-							<dd>{thresholds.min_onset_years}</dd>
-						</div>
-						<div>
-							<dt>Minimum training years</dt>
-							<dd>{thresholds.min_training_years}</dd>
-						</div>
-						<div>
-							<dt>Blend member warning</dt>
-							<dd>{thresholds.blend_member_warn}</dd>
-						</div>
-						<div>
-							<dt>Small-sample threshold</dt>
-							<dd>{thresholds.small_sample_years}</dd>
-						</div>
-						<div>
-							<dt>Pre-satellite era ends</dt>
-							<dd>{thresholds.presatellite_end_year}</dd>
-						</div>
-					</dl>
-				</section>
-			{/if}
-
-			<section class="card">
-				<h2>Rulesets</h2>
-				<ul class="ruleset-list">
-					{#each rulesets as ruleset (ruleset.id)}
-						<li>
-							<button
-								class="ruleset"
-								class:selected={selected?.id === ruleset.id}
-								onclick={() => void select(ruleset.id)}
-							>
-								<span class="ruleset-name">
-									{ruleset.name}
-									<span class="tag">v{ruleset.version}</span>
-									<span class="tag">{ruleset.source}</span>
-									{#if ruleset.is_active}<span class="tag active">active</span>{/if}
-									{#if ruleset.comparison_enabled}<span class="tag exposed">shown to users</span
-										>{/if}
-								</span>
-								<span class="ruleset-desc">{ruleset.description}</span>
-							</button>
-						</li>
-					{/each}
-				</ul>
-			</section>
-
-			{#if selected}
-				<section class="card">
-					<h2>{selected.name}</h2>
-					{#if isPackaged}
-						<p class="hint">
-							This ruleset ships with the app and is rewritten from its YAML on every startup, so it
-							cannot be saved over — an edit would look like it worked and then vanish on the next
-							restart. Clone it below and edit the copy.
-						</p>
-					{/if}
-
-					<div class="actions">
-						<button onclick={activate} disabled={busy || selected.is_active}>
-							{selected.is_active ? 'Active' : 'Make active'}
-						</button>
+			<ul class="ruleset-list">
+				{#each rulesets as ruleset (ruleset.id)}
+					<li>
 						<button
-							onclick={save}
-							disabled={busy || isPackaged}
-							title={isPackaged ? 'Clone this ruleset to edit it' : undefined}
+							class="ruleset"
+							class:selected={selected?.id === ruleset.id}
+							onclick={() => void select(ruleset.id)}
 						>
-							Save changes
+							<span class="ruleset-name">
+								{ruleset.name}
+								<span class="tag">v{ruleset.version}</span>
+								<span class="tag">{ruleset.source}</span>
+								{#if ruleset.is_active}<span class="tag active">active</span>{/if}
+								{#if ruleset.comparison_enabled}<span class="tag exposed">shown to users</span>{/if}
+							</span>
 						</button>
-						{#if selectedSummary?.comparison_enabled}
-							<button onclick={() => setExposure(selected!.id, false)} disabled={busy}>
-								Hide from users
-							</button>
-						{:else}
-							<button
-								onclick={() => setExposure(selected!.id, true)}
-								disabled={busy}
-								title="Users see it in the style picker and can pick it as a comparison arm; two exposed rulesets enable A/B in the chat"
-							>
-								Show to users
-							</button>
-						{/if}
-						{#if !isPackaged}
-							<button
-								class="danger"
-								onclick={() => removeRuleset(selected!.id)}
-								disabled={busy || selected.is_active}
-								title={selected.is_active
-									? 'Activate another ruleset first'
-									: 'Removes it from every list; recorded feedback is kept'}
-							>
-								Delete
-							</button>
-						{/if}
-					</div>
+					</li>
+				{/each}
+			</ul>
+		</section>
 
-					<div class="clone-row">
-						<input bind:value={cloneId} placeholder="new-ruleset-id" maxlength="64" />
-						<input bind:value={cloneName} placeholder="Display name" maxlength="140" />
-						<button onclick={clone} disabled={busy || !cloneId.trim() || !cloneName.trim()}>
-							Clone to new version
-						</button>
-					</div>
+		{#if selected}
+			<section class="card">
+				<h2>{selected.name}</h2>
+				<p class="hint">{selected.description}</p>
+				{#if isPackaged}
 					<p class="hint">
-						Cloning rather than editing in place keeps the wording that produced the conversations
-						already recorded against the current version.
+						This ruleset ships with the app and is rewritten from its YAML on every startup, so it
+						cannot be saved over — an edit would look like it worked and then vanish on the next
+						restart. Clone it below and edit the copy.
 					</p>
+				{/if}
 
-					<h3>Prompt sections</h3>
+				<div class="actions">
+					<button onclick={activate} disabled={busy || selected.is_active}>
+						{selected.is_active ? 'Active' : 'Make active'}
+					</button>
+					<button
+						onclick={save}
+						disabled={busy || isPackaged}
+						title={isPackaged ? 'Clone this ruleset to edit it' : undefined}
+					>
+						Save changes
+					</button>
+					{#if selectedSummary?.comparison_enabled}
+						<button onclick={() => setExposure(selected!.id, false)} disabled={busy}>
+							Hide from users
+						</button>
+					{:else}
+						<button
+							onclick={() => setExposure(selected!.id, true)}
+							disabled={busy}
+							title="Users see it in the style picker and can pick it as a comparison arm; two exposed rulesets enable A/B in the chat"
+						>
+							Show to users
+						</button>
+					{/if}
+					{#if !isPackaged}
+						<button
+							class="danger"
+							onclick={() => removeRuleset(selected!.id)}
+							disabled={busy || selected.is_active}
+							title={selected.is_active
+								? 'Activate another ruleset first'
+								: 'Removes it from every list; recorded feedback is kept'}
+						>
+							Delete
+						</button>
+					{/if}
+				</div>
+
+				<details class="drawer">
+					<summary>Prompt sections ({selected.prompt_sections.length})</summary>
 					{#each selected.prompt_sections as section, i (section.key)}
 						<div class="section">
 							<div class="section-head">
@@ -365,13 +259,15 @@
 							></textarea>
 						</div>
 					{/each}
+				</details>
 
-					<h3>Prompt preview</h3>
+				<details class="drawer">
+					<summary>Prompt preview</summary>
 					<p class="hint">
 						Rendered through the same code path the chat uses, so a typo'd placeholder or a section
 						left off is visible before you activate.
 					</p>
-					<div class="preview-row">
+					<div class="row">
 						<select bind:value={previewScope}>
 							{#each PREVIEW_SCOPE_KINDS as kind}
 								<option value={kind}>{kind}</option>
@@ -383,132 +279,61 @@
 					{#if preview}
 						<pre class="preview">{preview.instructions}</pre>
 					{/if}
-				</section>
-			{/if}
+				</details>
 
-			<section class="card">
-				<h2>Compare rulesets</h2>
-				<p class="hint">
-					One question, two answers, side by side. Pick two rulesets — or the same ruleset with a
-					different model — and vote on which explained itself better. The vote is recorded against
-					both answers' ruleset versions, so wording changes can be judged on evidence rather than
-					impressions. Neither answer can submit anything: the submit tools are withheld from both.
-				</p>
-
-				<textarea
-					rows="3"
-					bind:value={compareMessage}
-					placeholder="e.g. Which model is best for this blend?"></textarea>
-
-				<div class="arms">
-					{#each arms as arm, i (i)}
-						<div class="arm">
-							<span class="arm-label">{i === 0 ? 'A' : 'B'}</span>
-							<select bind:value={arms[i].ruleset_id}>
-								{#each rulesets as ruleset (ruleset.id)}
-									<option value={ruleset.id}>{ruleset.name} (v{ruleset.version})</option>
-								{/each}
-							</select>
-							<input bind:value={arms[i].model} placeholder="model (optional)" maxlength="200" />
-						</div>
-					{/each}
-				</div>
-
-				<div class="actions">
-					<button onclick={runComparison} disabled={comparison.running || !compareMessage.trim()}>
-						{comparison.running ? 'Running…' : 'Run comparison'}
-					</button>
-				</div>
-
-				{#if comparison.arms.length || comparison.running}
-					<ChatCompare {comparison} labeled onClose={discard} />
-				{/if}
-			</section>
-
-			<section class="card">
-				<h2>Collected feedback</h2>
-				<p class="hint">
-					Every rating in one place: thumbs on ordinary chat turns and votes from comparisons — the
-					admin playground above and the blind A/B users run from the benchmark and blend chats —
-					grouped by the ruleset version that produced the answer.
-				</p>
-				{#if feedback.length === 0}
-					<p class="empty">No rated turns yet.</p>
-				{:else}
-					<table class="feedback">
-						<thead>
-							<tr>
-								<th>Ruleset</th>
-								<th>Turns</th>
-								<th>Rated</th>
-								<th>Wins</th>
-								<th>Losses</th>
-								<th>Ties</th>
-								<th>Flags</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each feedback as row (row.ruleset_id + ':' + row.ruleset_version)}
-								<tr>
-									<td>{row.ruleset_id} v{row.ruleset_version ?? '?'}</td>
-									<td>{row.turns}</td>
-									<td>{row.rated}</td>
-									<td>{row.wins}</td>
-									<td>{row.losses}</td>
-									<td>{row.ties}</td>
-									<td>
-										{#each Object.entries(row.flag_counts) as [flag, count] (flag)}
-											<span class="tag">{flag}: {count}</span>
-										{:else}
-											—
-										{/each}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				{/if}
+				<details class="drawer">
+					<summary>Clone to a new version</summary>
+					<p class="hint">
+						Cloning rather than editing in place keeps the wording that produced the conversations
+						already recorded against the current version.
+					</p>
+					<div class="row">
+						<input bind:value={cloneId} placeholder="new-ruleset-id" maxlength="64" />
+						<input bind:value={cloneName} placeholder="Display name" maxlength="140" />
+						<button onclick={clone} disabled={busy || !cloneId.trim() || !cloneName.trim()}>
+							Clone
+						</button>
+					</div>
+				</details>
 			</section>
 		{/if}
-	</div>
+
+		{#if thresholds}
+			<section class="card">
+				<h2>Enforced thresholds</h2>
+				<p class="hint">
+					Read-only here. These are the numbers the submission checks apply and the numbers
+					<code>&#123;&#123;placeholders&#125;&#125;</code> in a section body resolve to, so the prose
+					and the check cannot disagree. Change them under Assistant guardrails.
+				</p>
+				<dl class="thresholds">
+					<div>
+						<dt>Minimum onset years</dt>
+						<dd>{thresholds.min_onset_years}</dd>
+					</div>
+					<div>
+						<dt>Minimum training years</dt>
+						<dd>{thresholds.min_training_years}</dd>
+					</div>
+					<div>
+						<dt>Blend member warning</dt>
+						<dd>{thresholds.blend_member_warn}</dd>
+					</div>
+					<div>
+						<dt>Small-sample threshold</dt>
+						<dd>{thresholds.small_sample_years}</dd>
+					</div>
+					<div>
+						<dt>Pre-satellite era ends</dt>
+						<dd>{thresholds.presatellite_end_year}</dd>
+					</div>
+				</dl>
+			</section>
+		{/if}
+	{/if}
 </AdminGuard>
 
 <style>
-	.page {
-		display: flex;
-		flex-direction: column;
-		gap: 1.25rem;
-		padding: 1.5rem;
-		max-width: 60rem;
-		margin: 0 auto;
-	}
-	h1 {
-		margin: 0 0 0.35rem;
-		font-size: 1.4rem;
-	}
-	h2 {
-		margin: 0 0 0.5rem;
-		font-size: 1rem;
-	}
-	h3 {
-		margin: 1.25rem 0 0.5rem;
-		font-size: 0.9rem;
-	}
-	.lede,
-	.hint {
-		margin: 0 0 0.5rem;
-		font-size: 0.82rem;
-		color: var(--color-text-muted);
-		line-height: 1.5;
-	}
-	.card {
-		border: 1px solid var(--color-border);
-		border-radius: 0.5rem;
-		background: var(--color-surface-raised);
-		padding: 1rem;
-		display: flex;
-		flex-direction: column;
-	}
 	.banner {
 		margin: 0;
 		padding: 0.6rem 0.75rem;
@@ -525,50 +350,23 @@
 		background: var(--color-accent-light);
 		border: 1px solid var(--color-accent-border);
 	}
-	.empty {
-		color: var(--color-text-muted);
-		font-size: 0.9rem;
-	}
-	.thresholds {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem 1.5rem;
-		margin: 0;
-	}
-	.thresholds div {
-		display: flex;
-		flex-direction: column;
-	}
-	.thresholds dt {
-		font-size: 0.72rem;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--color-text-muted);
-	}
-	.thresholds dd {
-		margin: 0;
-		font-size: 1.05rem;
-		font-weight: 600;
-	}
 	.ruleset-list {
 		list-style: none;
 		margin: 0;
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: 0.3rem;
 	}
 	.ruleset {
 		width: 100%;
 		text-align: left;
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-		padding: 0.6rem 0.7rem;
+		padding: 0.45rem 0.6rem;
 		border: 1px solid var(--color-border);
 		border-radius: 0.4rem;
 		background: transparent;
 		cursor: pointer;
+		font: inherit;
 	}
 	.ruleset.selected {
 		border-color: var(--color-accent);
@@ -579,100 +377,69 @@
 		align-items: center;
 		gap: 0.4rem;
 		flex-wrap: wrap;
-		font-size: 0.88rem;
+		font-size: 0.86rem;
+		font-weight: 600;
 	}
-	.ruleset-desc {
-		font-size: 0.78rem;
-		color: var(--color-text-muted);
+	.thresholds {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem 1.75rem;
+		margin: 0;
 	}
-	.tag {
-		font-size: 0.62rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		padding: 0.1rem 0.35rem;
-		border-radius: 3px;
-		border: 1px solid var(--color-border);
-		color: var(--color-text-muted);
+	.thresholds div {
+		display: flex;
+		flex-direction: column;
 	}
-	.tag.active {
-		color: var(--color-accent);
-		border-color: var(--color-accent-border);
-		background: var(--color-accent-light);
-	}
-	.tag.required {
-		color: var(--color-status-running);
-		border-color: var(--color-status-running);
-		background: var(--color-status-running-bg);
-	}
-	.tag.exposed {
-		color: var(--color-status-running);
-		border-color: var(--color-status-running);
-	}
-	button.danger {
-		color: var(--color-danger);
-		border-color: var(--color-danger);
-	}
-	.feedback {
-		border-collapse: collapse;
-		font-size: 0.78rem;
-	}
-	.feedback th,
-	.feedback td {
-		text-align: left;
-		padding: 0.35rem 0.75rem 0.35rem 0;
-		border-bottom: 1px solid var(--color-border);
-	}
-	.feedback th {
+	.thresholds dt {
 		font-size: 0.68rem;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--color-text-muted);
 	}
-	.arms {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		margin: 0.5rem 0;
-	}
-	.arm {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		flex: 1 1 18rem;
-		min-width: 0;
-	}
-	.arm select {
-		flex: 1 1 8rem;
-		min-width: 0;
-	}
-	.arm input {
-		flex: 1 1 6rem;
-		min-width: 0;
-	}
-	.arm-label {
+	.thresholds dd {
+		margin: 0;
+		font-size: 1rem;
 		font-weight: 600;
-		font-size: 0.8rem;
+	}
+	.drawer {
+		border-top: 1px solid var(--color-border-subtle);
+		padding-top: 0.6rem;
+	}
+	.drawer summary {
+		cursor: pointer;
+		font-size: 0.86rem;
+		font-weight: 600;
+	}
+	.drawer > :global(*) {
+		margin-top: 0.5rem;
 	}
 	.actions,
-	.clone-row,
-	.preview-row {
+	.row {
 		display: flex;
 		gap: 0.5rem;
 		flex-wrap: wrap;
 		align-items: center;
-		margin-bottom: 0.5rem;
+	}
+	.row input {
+		flex: 1 1 10rem;
+		min-width: 0;
 	}
 	button {
 		padding: 0.4rem 0.8rem;
 		border-radius: 0.35rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface);
+		font: inherit;
 		font-size: 0.82rem;
 		cursor: pointer;
 	}
 	button:disabled {
 		opacity: 0.45;
 		cursor: not-allowed;
+	}
+	button.danger {
+		color: var(--color-danger);
+		border-color: var(--color-danger);
 	}
 	input,
 	select,
@@ -681,19 +448,17 @@
 		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
 		background: var(--color-surface);
+		color: var(--color-text);
+		font: inherit;
 		font-size: 0.82rem;
-		font-family: inherit;
-	}
-	.clone-row input {
-		flex: 1 1 12rem;
-		min-width: 0;
 	}
 	.section {
-		border-top: 1px solid var(--color-border);
+		border-top: 1px solid var(--color-border-subtle);
 		padding-top: 0.6rem;
 		margin-top: 0.6rem;
 		display: flex;
 		flex-direction: column;
+		gap: 0.35rem;
 	}
 	.section-head {
 		display: flex;
@@ -701,7 +466,6 @@
 		align-items: center;
 		gap: 0.5rem;
 		flex-wrap: wrap;
-		margin-bottom: 0.35rem;
 	}
 	.toggle {
 		display: flex;
@@ -716,7 +480,7 @@
 	textarea {
 		width: 100%;
 		resize: vertical;
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono, ui-monospace, monospace);
 		font-size: 0.75rem;
 		line-height: 1.5;
 	}
@@ -724,12 +488,18 @@
 		margin: 0;
 		max-height: 24rem;
 		overflow: auto;
-		padding: 0.75rem;
+		padding: 0.7rem;
 		border: 1px solid var(--color-border);
 		border-radius: 0.4rem;
 		background: var(--color-surface);
 		font-size: 0.72rem;
 		line-height: 1.55;
 		white-space: pre-wrap;
+	}
+	code {
+		font-size: 0.85em;
+		padding: 0.1rem 0.3rem;
+		border-radius: 0.25rem;
+		background: var(--color-surface);
 	}
 </style>
