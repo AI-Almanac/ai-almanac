@@ -11,6 +11,8 @@ export interface SettingsField {
 	restart_required: boolean;
 	editable: boolean;
 	multiline: boolean;
+	/** Present for enum-valued fields; the form renders a select. */
+	choices: string[] | null;
 }
 
 export interface SettingsGroup {

@@ -125,6 +125,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/rulesets/{ruleset_id}/admin-enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Admin Enabled
+         * @description Expose or hide a ruleset for admins only, so it can be pinned to real
+         *     sessions and compared before any user sees it.
+         */
+        post: operations["set_admin_enabled_assistant_rulesets__ruleset_id__admin_enabled_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assistant/rulesets/{ruleset_id}/preview": {
         parameters: {
             query?: never;
@@ -2307,8 +2328,8 @@ export interface components {
          *
          *     The user picks the pair; the server shuffles which column is which, so the
          *     vote is still cast without knowing which answer came from which ruleset.
-         *     Only admin-exposed rulesets are eligible — there is no way to name a
-         *     draft, archived, or admin-only ruleset here.
+         *     Only exposed rulesets are eligible — a user cannot name a draft, archived,
+         *     or admin-preview ruleset here; an admin's preview set is additionally in.
          */
         BlindCompareRequest: {
             /** Message */
@@ -4019,6 +4040,11 @@ export interface components {
             description: string;
             /** Is Active */
             is_active: boolean;
+            /**
+             * Admin Only
+             * @default false
+             */
+            admin_only: boolean;
         };
         /** RulesetOptionsOut */
         RulesetOptionsOut: {
@@ -4074,6 +4100,11 @@ export interface components {
              * @default false
              */
             comparison_enabled: boolean;
+            /**
+             * Admin Enabled
+             * @default false
+             */
+            admin_enabled: boolean;
             /**
              * Activatable
              * @default true
@@ -4840,6 +4871,41 @@ export interface operations {
         };
     };
     set_comparison_enabled_assistant_rulesets__ruleset_id__comparison_enabled_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComparisonEnabledIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesetSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_admin_enabled_assistant_rulesets__ruleset_id__admin_enabled_post: {
         parameters: {
             query?: never;
             header?: never;

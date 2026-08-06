@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { ChatSession, RulesetOption } from '$lib/api';
+	import { account } from '$lib/account.svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { sessionLabel } from '$lib/chat/format';
 
@@ -26,6 +27,18 @@
 		onToggleComparisonMode,
 		onCompareArmChange
 	}: Props = $props();
+
+	// Admin-preview rulesets come from the server (it knows the requester is an
+	// admin); the view-as-user toggle is client-only, so the filtering that makes
+	// the picker match what a user sees has to happen here.
+	const visibleOptions = $derived(
+		account.viewingAsUser ? rulesetOptions.filter((option) => !option.admin_only) : rulesetOptions
+	);
+	const canCompare = $derived(compareAvailable && visibleOptions.length >= 2);
+
+	function optionLabel(option: RulesetOption): string {
+		return option.admin_only ? `${option.name} (admins only)` : option.name;
+	}
 
 	let showSessionList = $state(false);
 	let showMenu = $state(false);
@@ -217,7 +230,7 @@
 					{:else}
 						<p class="menu-empty">No chat options are available.</p>
 					{/if}
-					{#if comparisonMode && rulesetOptions.length > 0 && chat.currentSession}
+					{#if comparisonMode && visibleOptions.length > 0 && chat.currentSession}
 						<div class="menu-divider"></div>
 						<label class="menu-field">
 							<span>Assistant style for this chat</span>
@@ -226,13 +239,13 @@
 								onchange={(e) => void chat.setSessionRuleset(e.currentTarget.value || null)}
 							>
 								<option value="">Default style</option>
-								{#each rulesetOptions as option (option.id)}
-									<option value={option.id}>{option.name}</option>
+								{#each visibleOptions as option (option.id)}
+									<option value={option.id}>{optionLabel(option)}</option>
 								{/each}
 							</select>
 						</label>
 					{/if}
-					{#if comparisonMode && compareAvailable}
+					{#if comparisonMode && canCompare}
 						<div class="menu-divider"></div>
 						<span class="menu-heading">A/B compares these two styles</span>
 						{#each [0, 1] as const as index (index)}
@@ -242,8 +255,8 @@
 									value={compareArmIds[index]}
 									onchange={(e) => onCompareArmChange?.(index, e.currentTarget.value)}
 								>
-									{#each rulesetOptions as option (option.id)}
-										<option value={option.id}>{option.name}</option>
+									{#each visibleOptions as option (option.id)}
+										<option value={option.id}>{optionLabel(option)}</option>
 									{/each}
 								</select>
 							</label>

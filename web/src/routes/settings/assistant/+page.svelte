@@ -10,6 +10,7 @@
 		activateRuleset,
 		deleteRuleset,
 		setRulesetComparisonEnabled,
+		setRulesetAdminEnabled,
 		previewRuleset,
 		PREVIEW_SCOPE_KINDS,
 		type RulesetSummary,
@@ -116,6 +117,18 @@
 		);
 	}
 
+	function setAdminPreview(id: string, enabled: boolean) {
+		void run(
+			async () => {
+				await setRulesetAdminEnabled(id, enabled);
+				await load(id);
+			},
+			enabled
+				? 'Visible to admins only: test it in the style picker and comparisons before users see it.'
+				: 'Admin preview off.'
+		);
+	}
+
 	function removeRuleset(id: string) {
 		if (!confirm(`Delete the ruleset "${id}"? Its recorded feedback is kept.`)) return;
 		void run(async () => {
@@ -170,6 +183,9 @@
 								<span class="tag">{ruleset.source}</span>
 								{#if ruleset.is_active}<span class="tag active">active</span>{/if}
 								{#if ruleset.comparison_enabled}<span class="tag exposed">shown to users</span>{/if}
+								{#if ruleset.admin_enabled && !ruleset.comparison_enabled}<span class="tag preview"
+										>admins only</span
+									>{/if}
 							</span>
 						</button>
 					</li>
@@ -217,6 +233,19 @@
 							title="Users see it in the style picker and can pick it as a comparison arm; two exposed rulesets enable A/B in the chat"
 						>
 							Show to users
+						</button>
+					{/if}
+					{#if selectedSummary?.admin_enabled}
+						<button onclick={() => setAdminPreview(selected!.id, false)} disabled={busy}>
+							Stop admin preview
+						</button>
+					{:else}
+						<button
+							onclick={() => setAdminPreview(selected!.id, true)}
+							disabled={busy}
+							title="Admins see it in the style picker and comparisons; users don't — test a draft before exposing it"
+						>
+							Preview as admin
 						</button>
 					{/if}
 					{#if !isPackaged}

@@ -466,8 +466,9 @@ async def test_comparison_arms_must_be_two_distinct_exposed_rulesets(
     auth_headers: dict[str, str],
 ) -> None:
     await rulesets.seed_packaged_rulesets()
-    await rulesets.set_comparison_enabled("builtin", False)
-    await rulesets.set_comparison_enabled("unconstrained", False)
+    for ruleset_id in ("builtin", "unconstrained"):
+        await rulesets.set_comparison_enabled(ruleset_id, False)
+        await rulesets.set_admin_enabled(ruleset_id, False)
 
     async def availability() -> bool:
         res = await client.get("/assistant/ruleset-options", headers=auth_headers)
@@ -506,7 +507,7 @@ async def test_ruleset_options_expose_no_prompt_or_policy(
     listed = res.json()["rulesets"]
     assert {item["id"] for item in listed} >= {"builtin", "unconstrained"}
     for item in listed:
-        assert set(item) == {"id", "name", "description", "is_active"}
+        assert set(item) == {"id", "name", "description", "is_active", "admin_only"}
 
 
 @pytest.mark.asyncio
@@ -688,7 +689,7 @@ async def test_a_comparison_cannot_be_continued_by_someone_else(
 def comparisons_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_almanac.settings import settings
 
-    monkeypatch.setattr(settings, "enable_assistant_comparisons", False)
+    monkeypatch.setattr(settings, "assistant_comparisons_audience", "off")
 
 
 @pytest.mark.parametrize(
@@ -742,3 +743,63 @@ async def test_the_offer_returns_when_the_feature_is_switched_back_on(
     body = res.json()
     assert body["comparisons_enabled"] is True
     assert body["compare_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_admins_audience_gates_users_but_not_admins(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    exposed_pair: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "assistant_comparisons_audience", "admins")
+
+    admin_body = (await client.get("/assistant/ruleset-options", headers=auth_headers)).json()
+    assert admin_body["comparisons_enabled"] is True
+    assert admin_body["compare_available"] is True
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+    user_headers = {"X-Forwarded-User": "rando"}
+    user_body = (await client.get("/assistant/ruleset-options", headers=user_headers)).json()
+    assert user_body["comparisons_enabled"] is False
+    assert user_body["compare_available"] is False
+    gone = await client.post("/assistant/comparisons/abc/vote", headers=user_headers, json={})
+    assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_an_admin_can_blind_compare_a_preview_ruleset_a_user_cannot(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.settings import settings
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", True)
+    await rulesets.set_comparison_enabled("unconstrained", False)
+    await rulesets.set_admin_enabled("unconstrained", True)  # preview only
+
+    res = await client.post(
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
+    )
+    assert res.status_code == 200, res.text
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+    refused = await client.post(
+        "/assistant/compare/blind",
+        headers={"X-Forwarded-User": "rando"},
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
+    )
+    assert refused.status_code == 400
+
+    await rulesets.set_admin_enabled("unconstrained", False)

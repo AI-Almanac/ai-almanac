@@ -68,6 +68,44 @@ def test_get_settings_never_exposes_undeclared_fields(
     assert "database_url" not in get_settings(_admin=None).values
 
 
+def test_enum_fields_declare_their_choices() -> None:
+    fields = _fields(get_schema(_admin=None))
+    audience = fields["assistant_comparisons_audience"]
+    assert audience["type"] == "string"
+    assert audience["choices"] == ["off", "admins", "everyone"]
+    # Non-enum fields carry no choices, so the UI keeps its plain inputs.
+    assert fields["llm_model"]["choices"] is None
+
+
+def test_legacy_comparisons_flag_maps_to_audience_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_almanac.settings as settings_module
+
+    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
+    try:
+        monkeypatch.setattr(
+            settings_module,
+            "_load_config_yaml",
+            lambda: {"enable_assistant_comparisons": False},
+        )
+        monkeypatch.setattr(settings_module, "_load_db_overlay", dict)
+        settings_module.reload_settings()
+        assert settings.assistant_comparisons_audience == "off"
+
+        # An explicit audience wins over the deprecated flag.
+        monkeypatch.setattr(
+            settings_module,
+            "_load_db_overlay",
+            lambda: {"assistant_comparisons_audience": "everyone"},
+        )
+        settings_module.reload_settings()
+        assert settings.assistant_comparisons_audience == "everyone"
+    finally:
+        for name, value in snapshot.items():
+            setattr(settings, name, value)
+
+
 def test_secret_overlay_value_is_sealed_at_rest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
