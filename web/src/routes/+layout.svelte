@@ -8,7 +8,6 @@
 	import { afterNavigate } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 	import { addBreadcrumb } from '$lib/breadcrumbs';
-	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
 
 	let { children } = $props();
 
@@ -32,5 +31,4 @@
 <ViewAsUserBanner />
 <Nav />
 {@render children()}
-<FeedbackWidget />
 <Footer />

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
+	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
 </script>
 
 <nav class="site-nav" class:almanac-nav={$page.url.pathname.startsWith('/almanac')}>
@@ -36,16 +37,19 @@
 			{/if}
 			<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
 		</div>
-		{#if account.loaded && account.isShared}
-			<a
-				class="account"
-				href="/user"
-				title={account.account?.email ?? account.account?.subject ?? ''}
-			>
-				<span class="account-name">{account.label}</span>
-				{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
-			</a>
-		{/if}
+		<div class="nav-right">
+			<FeedbackWidget />
+			{#if account.loaded && account.isShared}
+				<a
+					class="account"
+					href="/user"
+					title={account.account?.email ?? account.account?.subject ?? ''}
+				>
+					<span class="account-name">{account.label}</span>
+					{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
+				</a>
+			{/if}
+		</div>
 	</div>
 </nav>
 
@@ -97,6 +101,12 @@
 
 	.links {
 		gap: 0.25rem;
+	}
+
+	.nav-right {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
 	}
 
 	.account {

@@ -4,7 +4,8 @@
 	import { feedbackEnabled, submitFeedback, type FeedbackCategory } from '$lib/api';
 	import { addBreadcrumb, getBreadcrumbs } from '$lib/breadcrumbs';
 
-	let open = $state(false);
+	let dialog = $state<HTMLDialogElement>();
+	let textareaEl = $state<HTMLTextAreaElement>();
 	let message = $state('');
 	let category = $state<FeedbackCategory>('bug');
 	let submitting = $state(false);
@@ -12,6 +13,12 @@
 	let issueUrl = $state('');
 
 	const enabled = feedbackEnabled();
+
+	const placeholders: Record<FeedbackCategory, string> = {
+		bug: 'What happened? What did you expect to happen?',
+		idea: 'What would make Almanac more useful for you?',
+		other: "What's on your mind?"
+	};
 
 	function snapshot(): Record<string, unknown> {
 		const config = typeof window !== 'undefined' ? window.__ALMANAC_CONFIG__ : undefined;
@@ -31,15 +38,16 @@
 	}
 
 	function openModal() {
-		open = true;
 		error = '';
 		issueUrl = '';
 		addBreadcrumb('action', 'Opened feedback form');
+		dialog?.showModal();
+		textareaEl?.focus();
 	}
 
 	function close() {
-		open = false;
-		submitting = false;
+		if (submitting) return;
+		dialog?.close();
 	}
 
 	async function submit(event: SubmitEvent) {
@@ -69,100 +77,111 @@
 </script>
 
 {#if enabled}
-	<button class="feedback-fab" onclick={openModal} title="Send feedback"> Feedback </button>
+	<button class="feedback-trigger" onclick={openModal}>Feedback</button>
 {/if}
 
-{#if open}
-	<div
-		class="overlay"
-		role="presentation"
-		onclick={(e) => {
-			if (e.target === e.currentTarget) close();
-		}}
-	>
-		<div class="modal" role="dialog" aria-modal="true" aria-label="Send feedback">
-			{#if issueUrl}
-				<h2>Thanks!</h2>
-				<p class="sent">Your feedback was recorded.</p>
-				<div class="actions">
-					<button class="primary" onclick={close}>Done</button>
+<!-- Native <dialog> renders in the top layer: the nav's backdrop-filter makes
+     it the containing block for fixed-position children, which clipped a
+     position:fixed overlay to the nav's box. -->
+<dialog
+	bind:this={dialog}
+	aria-label="Send feedback"
+	oncancel={(e) => {
+		if (submitting) e.preventDefault();
+	}}
+	onclick={(e) => {
+		if (e.target === dialog) close();
+	}}
+>
+	<div class="modal-body">
+		{#if issueUrl}
+			<h2>Thanks!</h2>
+			<p class="sent">Your feedback went straight to the team.</p>
+			<div class="actions">
+				<button class="primary" onclick={close}>Done</button>
+			</div>
+		{:else}
+			<h2>Send feedback</h2>
+			<p class="subtitle">Spotted a bug or have an idea? Tell us — it goes straight to the team.</p>
+			<form onsubmit={submit}>
+				<div class="categories" role="radiogroup" aria-label="Category">
+					{#each [['bug', 'Bug'], ['idea', 'Idea'], ['other', 'Other']] as [value, label] (value)}
+						<label class:selected={category === value}>
+							<input type="radio" name="category" {value} bind:group={category} />
+							{label}
+						</label>
+					{/each}
 				</div>
-			{:else}
-				<h2>Send feedback</h2>
-				<form onsubmit={submit}>
-					<div class="categories" role="radiogroup" aria-label="Category">
-						{#each [['bug', 'Bug'], ['idea', 'Idea'], ['other', 'Other']] as [value, label] (value)}
-							<label class:selected={category === value}>
-								<input type="radio" name="category" {value} bind:group={category} />
-								{label}
-							</label>
-						{/each}
-					</div>
-					<textarea
-						bind:value={message}
-						rows="5"
-						maxlength="5000"
-						placeholder="What happened? What did you expect?"
-						disabled={submitting}></textarea>
-					<p class="hint">
-						Your report includes your recent activity in the app (pages visited, API calls, errors)
-						to help us reproduce the issue.
-					</p>
-					{#if error}<p class="error">{error}</p>{/if}
-					<div class="actions">
-						<button type="button" onclick={close} disabled={submitting}>Cancel</button>
-						<button type="submit" class="primary" disabled={submitting || !message.trim()}>
-							{submitting ? 'Sending…' : 'Send'}
-						</button>
-					</div>
-				</form>
-			{/if}
-		</div>
+				<textarea
+					bind:this={textareaEl}
+					bind:value={message}
+					rows="12"
+					maxlength="5000"
+					placeholder={placeholders[category]}
+					disabled={submitting}></textarea>
+				<p class="hint">
+					Reports are posted to our public GitHub issue tracker along with your recent activity in
+					the app (pages visited, API calls, errors) so we can reproduce issues. Don't include
+					anything you wouldn't share publicly.
+				</p>
+				{#if error}<p class="error">{error}</p>{/if}
+				<div class="actions">
+					<button type="button" onclick={close} disabled={submitting}>Cancel</button>
+					<button type="submit" class="primary" disabled={submitting || !message.trim()}>
+						{submitting ? 'Sending…' : 'Send feedback'}
+					</button>
+				</div>
+			</form>
+		{/if}
 	</div>
-{/if}
+</dialog>
 
 <style>
-	.feedback-fab {
-		position: fixed;
-		right: 1.25rem;
-		bottom: 1.25rem;
-		z-index: 60;
-		padding: 0.55rem 1rem;
-		border: 0.0625rem solid var(--color-border);
-		border-radius: 2rem;
-		background: var(--color-accent);
-		color: white;
-		font-size: 0.85rem;
-		font-weight: 700;
+	.feedback-trigger {
+		padding: 0.45rem 0.7rem;
+		border: none;
+		border-radius: 0.4rem;
+		background: transparent;
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.92rem;
+		font-weight: 650;
 		cursor: pointer;
-		box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 0.15);
+		white-space: nowrap;
 	}
 
-	.feedback-fab:hover {
-		filter: brightness(1.08);
+	.feedback-trigger:hover {
+		color: var(--color-text);
+		background: var(--color-surface-muted);
 	}
 
-	.overlay {
-		position: fixed;
-		inset: 0;
-		z-index: 70;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: rgb(0 0 0 / 0.4);
-	}
-
-	.modal {
-		width: min(100% - 2rem, 28rem);
-		padding: 1.25rem 1.5rem;
+	dialog {
+		margin: auto;
+		width: min(100% - 2rem, 44rem);
+		padding: 0;
 		border: 0.0625rem solid var(--color-border);
 		border-radius: 0.75rem;
 		background: var(--color-bg, white);
+		color: inherit;
+	}
+
+	dialog::backdrop {
+		background: rgb(0 0 0 / 0.4);
+	}
+
+	.modal-body {
+		padding: 1.75rem 2rem;
 	}
 
 	h2 {
-		margin: 0 0 0.75rem;
+		margin: 0 0 0.25rem;
 		font-size: 1.1rem;
+	}
+
+	.subtitle {
+		margin: 0 0 0.85rem;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
 	}
 
 	.categories {

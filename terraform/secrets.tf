@@ -11,6 +11,7 @@
 #   gcloud secrets versions add credential-encryption-key --data-file=<(echo -n "$KEY")
 #   gcloud secrets versions add modal-token-id --data-file=<(echo -n "TOKEN_ID")
 #   gcloud secrets versions add modal-token-secret --data-file=<(echo -n "TOKEN_SECRET")
+#   gcloud secrets versions add feedback-github-token --data-file=<(echo -n "TOKEN")
 # ---------------------------------------------------------------------------
 
 resource "google_secret_manager_secret" "globus_client_id" {
@@ -65,6 +66,16 @@ resource "google_secret_manager_secret" "modal_token_id" {
 
 resource "google_secret_manager_secret" "modal_token_secret" {
   secret_id = "modal-token-secret"
+
+  replication {
+    auto {}
+  }
+}
+
+# GitHub token with issue-write access to the feedback target repo; in-app
+# feedback submissions become GitHub issues. Feedback is disabled when unset.
+resource "google_secret_manager_secret" "feedback_github_token" {
+  secret_id = "feedback-github-token"
 
   replication {
     auto {}
