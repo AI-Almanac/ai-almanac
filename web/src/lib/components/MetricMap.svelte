@@ -2,6 +2,7 @@
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
+	import '$lib/maplibre-worker';
 	import { type Job } from '$lib/api';
 	import { getCachedJobGrid } from '$lib/benchmarks.svelte';
 	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
