@@ -72,9 +72,11 @@ const maplibre = vi.hoisted(() => {
 vi.mock('maplibre-gl', () => ({
 	Map: maplibre.FakeMap,
 	NavigationControl: class {},
-	AttributionControl: class {}
+	AttributionControl: class {},
+	setWorkerUrl: () => {}
 }));
 vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}));
+vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: '' }));
 
 const api = vi.hoisted(() => ({ getBlendCellMetrics: vi.fn() }));
 vi.mock('../src/lib/api', async () => {
