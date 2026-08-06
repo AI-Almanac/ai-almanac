@@ -97,6 +97,12 @@ variable "admin_subjects" {
   default     = ""
 }
 
+variable "admin_groups" {
+  description = "Comma-separated Globus group UUIDs whose members are admins. Membership is managed in the Globus UI, so admin changes need no redeploy. Requires the Groups view scope as a dependent of the API scope."
+  type        = string
+  default     = ""
+}
+
 variable "staging_custom_domain" {
   description = "Custom domain for the staging frontend. Leave empty to skip."
   type        = string

@@ -108,6 +108,54 @@ def _introspect_globus_token(token: str) -> dict:
     return result
 
 
+_globus_groups_cache: dict[str, tuple[set[str], float]] = {}
+_globus_groups_cache_lock = Lock()
+_GLOBUS_GROUPS_CACHE_TTL = 300.0  # memberships change rarely; also spaces out retries on failure
+
+
+def _globus_user_groups(token: str) -> set[str]:
+    """Resolve the Globus group ids for the token's user, cached.
+
+    Exchanges the API token for a dependent Groups API token and lists the
+    user's memberships. Requires the Groups view scope registered as a
+    dependent of the API scope in the Globus app registration. Skipped
+    entirely unless ADMIN_GROUPS is configured. Failures resolve to no groups
+    (cached like a success so a Groups outage isn't re-queried per request),
+    degrading to the subject/email allow-lists rather than failing auth.
+    """
+    if not _split_csv(settings.admin_groups) or not settings.globus_client_id:
+        return set()
+
+    now = time.monotonic()
+    with _globus_groups_cache_lock:
+        cached = _globus_groups_cache.get(token)
+        if cached and now < cached[1]:
+            return cached[0]
+
+    try:
+        import globus_sdk
+
+        client = globus_sdk.ConfidentialAppAuthClient(
+            settings.globus_client_id, settings.globus_client_secret
+        )
+        dependent = client.oauth2_get_dependent_tokens(token).by_resource_server
+        groups_client = globus_sdk.GroupsClient(
+            authorizer=globus_sdk.AccessTokenAuthorizer(
+                dependent["groups.api.globus.org"]["access_token"]
+            )
+        )
+        # Active memberships only — an invited/pending member of the admin group
+        # must not become admin, and the API default should not decide that.
+        groups = {group["id"] for group in groups_client.get_my_groups(statuses="active")}
+    except Exception:
+        logger.warning("Globus group lookup failed; admin group checks skipped", exc_info=True)
+        groups = set()
+
+    with _globus_groups_cache_lock:
+        _globus_groups_cache[token] = (groups, time.monotonic() + _GLOBUS_GROUPS_CACHE_TTL)
+    return groups
+
+
 async def _resolve_globus_token(token: str | None) -> AuthenticatedUser:
     if not token:
         raise _MissingIdentity
@@ -119,9 +167,10 @@ async def _resolve_globus_token(token: str | None) -> AuthenticatedUser:
 
     email = introspection.get("email")
     display_name = introspection.get("name") or introspection.get("username")
-    # Globus introspection carries identities, not application groups; admit any
-    # valid identity and authorize via the admin allow-lists.
-    role: Role = "admin" if _is_admin(subject, email, set()) else "user"
+    # Globus introspection carries identities, not group memberships; those come
+    # from a dependent-token Groups API call when admin groups are configured.
+    groups = await asyncio.to_thread(_globus_user_groups, token)
+    role: Role = "admin" if _is_admin(subject, email, groups) else "user"
 
     async with get_db() as conn:
         row = await get_or_create_user(
@@ -131,7 +180,7 @@ async def _resolve_globus_token(token: str | None) -> AuthenticatedUser:
             subject=subject,
             email=email,
             display_name=display_name,
-            groups=[],
+            groups=sorted(groups),
         )
     return AuthenticatedUser(
         id=row["id"],
@@ -139,7 +188,7 @@ async def _resolve_globus_token(token: str | None) -> AuthenticatedUser:
         issuer="globus",
         email=email or row.get("email"),
         display_name=display_name,
-        groups=(),
+        groups=tuple(sorted(groups)),
         role=role,
     )
 

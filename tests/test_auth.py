@@ -360,6 +360,89 @@ async def test_auth_me_globus_admin_by_email_from_introspection(
 
 
 @pytest.mark.asyncio
+async def test_auth_me_globus_admin_by_group_membership(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "admin_groups", "grp-admins")
+    monkeypatch.setattr(auth_module, "_globus_user_groups", lambda token: {"grp-admins", "grp-x"})
+    body = (await client.get("/auth/me", headers={"Authorization": "Bearer member"})).json()
+    assert body["role"] == "admin"
+    assert body["groups"] == ["grp-admins", "grp-x"]
+
+
+def test_globus_user_groups_via_dependent_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import globus_sdk
+
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "admin_groups", "grp-admins")
+    monkeypatch.setattr(settings, "globus_client_id", "cid")
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+
+    class FakeAuthClient:
+        def __init__(self, *args): ...
+
+        def oauth2_get_dependent_tokens(self, token):
+            class Resp:
+                by_resource_server = {"groups.api.globus.org": {"access_token": "gt"}}
+
+            return Resp()
+
+    class FakeGroupsClient:
+        def __init__(self, authorizer): ...
+
+        def get_my_groups(self, statuses):
+            assert statuses == "active"
+            return [{"id": "grp-admins"}, {"id": "grp-x"}]
+
+    monkeypatch.setattr(globus_sdk, "ConfidentialAppAuthClient", FakeAuthClient)
+    monkeypatch.setattr(globus_sdk, "GroupsClient", FakeGroupsClient)
+    assert auth_module._globus_user_groups("tok") == {"grp-admins", "grp-x"}
+    # Cached: a second call must not construct new clients.
+    monkeypatch.setattr(
+        globus_sdk, "ConfidentialAppAuthClient", lambda *a: pytest.fail("cache miss")
+    )
+    assert auth_module._globus_user_groups("tok") == {"grp-admins", "grp-x"}
+
+
+def test_globus_user_groups_failure_degrades_to_no_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import globus_sdk
+
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "admin_groups", "grp-admins")
+    monkeypatch.setattr(settings, "globus_client_id", "cid")
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+
+    def boom(*args):
+        raise RuntimeError("groups api down")
+
+    monkeypatch.setattr(globus_sdk, "ConfidentialAppAuthClient", boom)
+    assert auth_module._globus_user_groups("tok") == set()
+
+
+def test_globus_user_groups_skipped_without_admin_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import globus_sdk
+
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "admin_groups", "")
+    monkeypatch.setattr(settings, "globus_client_id", "cid")
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+    monkeypatch.setattr(
+        globus_sdk, "ConfidentialAppAuthClient", lambda *a: pytest.fail("should not call Globus")
+    )
+    assert auth_module._globus_user_groups("tok") == set()
+
+
+@pytest.mark.asyncio
 async def test_auth_me_globus_rejects_inactive_token(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -154,6 +154,10 @@ variable "admin_subjects" {
   type = string
 }
 
+variable "admin_groups" {
+  type = string
+}
+
 variable "llm_base_url" {
   type = string
 }
