@@ -98,10 +98,12 @@ async def submit_feedback(body: FeedbackSubmission, user: CurrentUser) -> Feedba
             detail="Feedback is not configured on this deployment.",
         )
 
-    user_label = user.email or user.subject or user.id
+    # The target repo may be public, so the issue body carries only an opaque
+    # submitter id; the email→submission mapping stays in server logs.
+    public_label = user.subject or user.id
     payload = {
         "title": _issue_title(body),
-        "body": _issue_body(body, user_label),
+        "body": _issue_body(body, public_label),
         "labels": ["demo-feedback", f"feedback:{body.category}"],
     }
 
@@ -135,5 +137,5 @@ async def submit_feedback(body: FeedbackSubmission, user: CurrentUser) -> Feedba
         )
 
     issue_url = res.json().get("html_url", "")
-    logger.info("feedback: created issue %s for %s", issue_url, user_label)
+    logger.info("feedback: created issue %s for %s", issue_url, user.email or public_label)
     return FeedbackResult(issue_url=issue_url)

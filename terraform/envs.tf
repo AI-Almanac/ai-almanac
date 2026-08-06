@@ -37,6 +37,10 @@ locals {
       id        = google_secret_manager_secret.modal_token_secret.id
       secret_id = google_secret_manager_secret.modal_token_secret.secret_id
     }
+    feedback_github_token = {
+      id        = google_secret_manager_secret.feedback_github_token.id
+      secret_id = google_secret_manager_secret.feedback_github_token.secret_id
+    }
   }
 
   env_config = {
