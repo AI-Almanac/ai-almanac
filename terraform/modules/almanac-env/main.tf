@@ -376,6 +376,18 @@ resource "google_cloud_run_v2_service" "backend" {
         }
       }
 
+      # In-app feedback → GitHub issues; the router disables feedback when
+      # the token is empty.
+      env {
+        name = "FEEDBACK_GITHUB_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = var.shared_secrets["feedback_github_token"].secret_id
+            version = "latest"
+          }
+        }
+      }
+
       env {
         name  = "ROMP_IMAGE"
         value = var.romp_image
