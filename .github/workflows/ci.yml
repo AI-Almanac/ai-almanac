@@ -43,7 +43,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: prefix-dev/setup-pixi@14c8aabd75893f83f4ab30c03e7cf853c8208961 # v0.8.10
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
         with:
           # Install the environments the check/test tasks resolve to: dev (ruff,
           # pytest) and default (node-backed web tasks). pixi.lock is committed,
