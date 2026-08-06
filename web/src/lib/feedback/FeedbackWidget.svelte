@@ -115,7 +115,7 @@
 				<textarea
 					bind:this={textareaEl}
 					bind:value={message}
-					rows="7"
+					rows="12"
 					maxlength="5000"
 					placeholder={placeholders[category]}
 					disabled={submitting}></textarea>
@@ -156,7 +156,8 @@
 	}
 
 	dialog {
-		width: min(100% - 2rem, 34rem);
+		margin: auto;
+		width: min(100% - 2rem, 44rem);
 		padding: 0;
 		border: 0.0625rem solid var(--color-border);
 		border-radius: 0.75rem;
@@ -169,7 +170,7 @@
 	}
 
 	.modal-body {
-		padding: 1.25rem 1.5rem;
+		padding: 1.75rem 2rem;
 	}
 
 	h2 {
