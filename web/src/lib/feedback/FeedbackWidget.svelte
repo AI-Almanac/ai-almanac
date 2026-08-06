@@ -13,6 +13,12 @@
 
 	const enabled = feedbackEnabled();
 
+	const placeholders: Record<FeedbackCategory, string> = {
+		bug: 'What happened? What did you expect to happen?',
+		idea: 'What would make Almanac more useful for you?',
+		other: "What's on your mind?"
+	};
+
 	function snapshot(): Record<string, unknown> {
 		const config = typeof window !== 'undefined' ? window.__ALMANAC_CONFIG__ : undefined;
 		return {
@@ -38,8 +44,12 @@
 	}
 
 	function close() {
+		if (submitting) return;
 		open = false;
-		submitting = false;
+	}
+
+	function focusOnMount(el: HTMLElement) {
+		el.focus();
 	}
 
 	async function submit(event: SubmitEvent) {
@@ -68,8 +78,14 @@
 	}
 </script>
 
+<svelte:window
+	onkeydown={(e) => {
+		if (open && e.key === 'Escape') close();
+	}}
+/>
+
 {#if enabled}
-	<button class="feedback-fab" onclick={openModal} title="Send feedback"> Feedback </button>
+	<button class="feedback-trigger" onclick={openModal}>Feedback</button>
 {/if}
 
 {#if open}
@@ -83,12 +99,15 @@
 		<div class="modal" role="dialog" aria-modal="true" aria-label="Send feedback">
 			{#if issueUrl}
 				<h2>Thanks!</h2>
-				<p class="sent">Your feedback was recorded.</p>
+				<p class="sent">Your feedback went straight to the team.</p>
 				<div class="actions">
 					<button class="primary" onclick={close}>Done</button>
 				</div>
 			{:else}
 				<h2>Send feedback</h2>
+				<p class="subtitle">
+					Spotted a bug or have an idea? Tell us — it goes straight to the team.
+				</p>
 				<form onsubmit={submit}>
 					<div class="categories" role="radiogroup" aria-label="Category">
 						{#each [['bug', 'Bug'], ['idea', 'Idea'], ['other', 'Other']] as [value, label] (value)}
@@ -100,19 +119,20 @@
 					</div>
 					<textarea
 						bind:value={message}
+						use:focusOnMount
 						rows="5"
 						maxlength="5000"
-						placeholder="What happened? What did you expect?"
+						placeholder={placeholders[category]}
 						disabled={submitting}></textarea>
 					<p class="hint">
-						Your report includes your recent activity in the app (pages visited, API calls, errors)
-						to help us reproduce the issue.
+						Sent along with your recent activity in the app (pages visited, API calls, errors) so we
+						can reproduce issues.
 					</p>
 					{#if error}<p class="error">{error}</p>{/if}
 					<div class="actions">
 						<button type="button" onclick={close} disabled={submitting}>Cancel</button>
 						<button type="submit" class="primary" disabled={submitting || !message.trim()}>
-							{submitting ? 'Sending…' : 'Send'}
+							{submitting ? 'Sending…' : 'Send feedback'}
 						</button>
 					</div>
 				</form>
@@ -122,24 +142,22 @@
 {/if}
 
 <style>
-	.feedback-fab {
-		position: fixed;
-		right: 1.25rem;
-		bottom: 1.25rem;
-		z-index: 60;
-		padding: 0.55rem 1rem;
-		border: 0.0625rem solid var(--color-border);
-		border-radius: 2rem;
-		background: var(--color-accent);
-		color: white;
-		font-size: 0.85rem;
-		font-weight: 700;
+	.feedback-trigger {
+		padding: 0.45rem 0.7rem;
+		border: none;
+		border-radius: 0.4rem;
+		background: transparent;
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.92rem;
+		font-weight: 650;
 		cursor: pointer;
-		box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 0.15);
+		white-space: nowrap;
 	}
 
-	.feedback-fab:hover {
-		filter: brightness(1.08);
+	.feedback-trigger:hover {
+		color: var(--color-text);
+		background: var(--color-surface-muted);
 	}
 
 	.overlay {
@@ -161,8 +179,14 @@
 	}
 
 	h2 {
-		margin: 0 0 0.75rem;
+		margin: 0 0 0.25rem;
 		font-size: 1.1rem;
+	}
+
+	.subtitle {
+		margin: 0 0 0.85rem;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
 	}
 
 	.categories {
