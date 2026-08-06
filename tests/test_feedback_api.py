@@ -76,6 +76,10 @@ async def test_feedback_creates_github_issue(
     assert captured["json"]["title"] == "[bug] The blend page crashed"
     assert "demo-feedback" in captured["json"]["labels"]
     assert "Breadcrumb trail (2 events)" in captured["json"]["body"]
+    # The target repo may be public: the body must carry the opaque subject,
+    # never an email address.
+    assert "**Submitted by:** local" in captured["json"]["body"]
+    assert "@" not in captured["json"]["body"].split("---")[1]
 
 
 @pytest.mark.asyncio
