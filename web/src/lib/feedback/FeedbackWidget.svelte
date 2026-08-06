@@ -4,7 +4,8 @@
 	import { feedbackEnabled, submitFeedback, type FeedbackCategory } from '$lib/api';
 	import { addBreadcrumb, getBreadcrumbs } from '$lib/breadcrumbs';
 
-	let open = $state(false);
+	let dialog = $state<HTMLDialogElement>();
+	let textareaEl = $state<HTMLTextAreaElement>();
 	let message = $state('');
 	let category = $state<FeedbackCategory>('bug');
 	let submitting = $state(false);
@@ -37,19 +38,16 @@
 	}
 
 	function openModal() {
-		open = true;
 		error = '';
 		issueUrl = '';
 		addBreadcrumb('action', 'Opened feedback form');
+		dialog?.showModal();
+		textareaEl?.focus();
 	}
 
 	function close() {
 		if (submitting) return;
-		open = false;
-	}
-
-	function focusOnMount(el: HTMLElement) {
-		el.focus();
+		dialog?.close();
 	}
 
 	async function submit(event: SubmitEvent) {
@@ -78,68 +76,65 @@
 	}
 </script>
 
-<svelte:window
-	onkeydown={(e) => {
-		if (open && e.key === 'Escape') close();
-	}}
-/>
-
 {#if enabled}
 	<button class="feedback-trigger" onclick={openModal}>Feedback</button>
 {/if}
 
-{#if open}
-	<div
-		class="overlay"
-		role="presentation"
-		onclick={(e) => {
-			if (e.target === e.currentTarget) close();
-		}}
-	>
-		<div class="modal" role="dialog" aria-modal="true" aria-label="Send feedback">
-			{#if issueUrl}
-				<h2>Thanks!</h2>
-				<p class="sent">Your feedback went straight to the team.</p>
-				<div class="actions">
-					<button class="primary" onclick={close}>Done</button>
+<!-- Native <dialog> renders in the top layer: the nav's backdrop-filter makes
+     it the containing block for fixed-position children, which clipped a
+     position:fixed overlay to the nav's box. -->
+<dialog
+	bind:this={dialog}
+	aria-label="Send feedback"
+	oncancel={(e) => {
+		if (submitting) e.preventDefault();
+	}}
+	onclick={(e) => {
+		if (e.target === dialog) close();
+	}}
+>
+	<div class="modal-body">
+		{#if issueUrl}
+			<h2>Thanks!</h2>
+			<p class="sent">Your feedback went straight to the team.</p>
+			<div class="actions">
+				<button class="primary" onclick={close}>Done</button>
+			</div>
+		{:else}
+			<h2>Send feedback</h2>
+			<p class="subtitle">Spotted a bug or have an idea? Tell us — it goes straight to the team.</p>
+			<form onsubmit={submit}>
+				<div class="categories" role="radiogroup" aria-label="Category">
+					{#each [['bug', 'Bug'], ['idea', 'Idea'], ['other', 'Other']] as [value, label] (value)}
+						<label class:selected={category === value}>
+							<input type="radio" name="category" {value} bind:group={category} />
+							{label}
+						</label>
+					{/each}
 				</div>
-			{:else}
-				<h2>Send feedback</h2>
-				<p class="subtitle">
-					Spotted a bug or have an idea? Tell us — it goes straight to the team.
+				<textarea
+					bind:this={textareaEl}
+					bind:value={message}
+					rows="7"
+					maxlength="5000"
+					placeholder={placeholders[category]}
+					disabled={submitting}></textarea>
+				<p class="hint">
+					Reports are posted to our public GitHub issue tracker along with your recent activity in
+					the app (pages visited, API calls, errors) so we can reproduce issues. Don't include
+					anything you wouldn't share publicly.
 				</p>
-				<form onsubmit={submit}>
-					<div class="categories" role="radiogroup" aria-label="Category">
-						{#each [['bug', 'Bug'], ['idea', 'Idea'], ['other', 'Other']] as [value, label] (value)}
-							<label class:selected={category === value}>
-								<input type="radio" name="category" {value} bind:group={category} />
-								{label}
-							</label>
-						{/each}
-					</div>
-					<textarea
-						bind:value={message}
-						use:focusOnMount
-						rows="5"
-						maxlength="5000"
-						placeholder={placeholders[category]}
-						disabled={submitting}></textarea>
-					<p class="hint">
-						Sent along with your recent activity in the app (pages visited, API calls, errors) so we
-						can reproduce issues.
-					</p>
-					{#if error}<p class="error">{error}</p>{/if}
-					<div class="actions">
-						<button type="button" onclick={close} disabled={submitting}>Cancel</button>
-						<button type="submit" class="primary" disabled={submitting || !message.trim()}>
-							{submitting ? 'Sending…' : 'Send feedback'}
-						</button>
-					</div>
-				</form>
-			{/if}
-		</div>
+				{#if error}<p class="error">{error}</p>{/if}
+				<div class="actions">
+					<button type="button" onclick={close} disabled={submitting}>Cancel</button>
+					<button type="submit" class="primary" disabled={submitting || !message.trim()}>
+						{submitting ? 'Sending…' : 'Send feedback'}
+					</button>
+				</div>
+			</form>
+		{/if}
 	</div>
-{/if}
+</dialog>
 
 <style>
 	.feedback-trigger {
@@ -160,22 +155,21 @@
 		background: var(--color-surface-muted);
 	}
 
-	.overlay {
-		position: fixed;
-		inset: 0;
-		z-index: 70;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: rgb(0 0 0 / 0.4);
-	}
-
-	.modal {
-		width: min(100% - 2rem, 28rem);
-		padding: 1.25rem 1.5rem;
+	dialog {
+		width: min(100% - 2rem, 34rem);
+		padding: 0;
 		border: 0.0625rem solid var(--color-border);
 		border-radius: 0.75rem;
 		background: var(--color-bg, white);
+		color: inherit;
+	}
+
+	dialog::backdrop {
+		background: rgb(0 0 0 / 0.4);
+	}
+
+	.modal-body {
+		padding: 1.25rem 1.5rem;
 	}
 
 	h2 {
