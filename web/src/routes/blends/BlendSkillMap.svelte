@@ -10,6 +10,7 @@
 	import { untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
+	import '$lib/maplibre-worker';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { getBlendCellMetrics, type BlendCellGrid, type BlendCellMetrics } from '$lib/api';
 	import SegmentedTabs, { type SegmentedTabOption } from '$lib/components/SegmentedTabs.svelte';
