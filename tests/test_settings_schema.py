@@ -10,8 +10,11 @@ from ai_almanac.settings import (
     LOCAL_ONLY_FIELDS,
     SENSITIVE_FIELDS,
     SHARED_ENV_ONLY_FIELDS,
+    _load_config_yaml,
+    _load_db_overlay,
     _seal_secret,
     _unseal_secret,
+    reload_settings,
     settings,
 )
 
@@ -80,26 +83,24 @@ def test_enum_fields_declare_their_choices() -> None:
 def test_legacy_comparisons_flag_maps_to_audience_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import ai_almanac.settings as settings_module
-
     snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
     try:
         monkeypatch.setattr(
-            settings_module,
-            "_load_config_yaml",
+            _load_config_yaml,
+            "__call__",
             lambda: {"enable_assistant_comparisons": False},
         )
-        monkeypatch.setattr(settings_module, "_load_db_overlay", dict)
-        settings_module.reload_settings()
+        monkeypatch.setattr(_load_db_overlay, "__call__", dict)
+        reload_settings()
         assert settings.assistant_comparisons_audience == "off"
 
         # An explicit audience wins over the deprecated flag.
         monkeypatch.setattr(
-            settings_module,
-            "_load_db_overlay",
+            _load_db_overlay,
+            "__call__",
             lambda: {"assistant_comparisons_audience": "everyone"},
         )
-        settings_module.reload_settings()
+        reload_settings()
         assert settings.assistant_comparisons_audience == "everyone"
     finally:
         for name, value in snapshot.items():
