@@ -118,6 +118,7 @@ module "env" {
   ci_sa_email             = google_service_account.ci.email
   admin_emails            = var.admin_emails
   admin_subjects          = var.admin_subjects
+  admin_groups            = var.admin_groups
   llm_base_url            = var.llm_base_url
   llm_model               = var.llm_model
   enable_run_code         = var.enable_run_code
