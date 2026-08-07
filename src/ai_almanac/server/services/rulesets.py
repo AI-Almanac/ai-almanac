@@ -440,7 +440,9 @@ async def selectable_ruleset(ruleset_id: str, *, for_admin: bool = False) -> Rul
     The user-facing counterpart of ``get_ruleset``, which deliberately returns
     archived and unexposed rows for admin use. Gates session pinning and
     user-chosen comparison arms alike; None means the caller falls back to the
-    active ruleset (or refuses, for a comparison arm). Admins additionally see
+    active ruleset (or refuses, for a comparison arm). The active ruleset is
+    always selectable — it is what every user already talks to, and the baseline
+    any exposed alternative gets compared against. Admins additionally see
     admin-preview rulesets, so a draft can be tested end to end before users do.
     """
     from ai_almanac.server.db import get_db
@@ -452,7 +454,8 @@ async def selectable_ruleset(ruleset_id: str, *, for_admin: bool = False) -> Rul
                     sa.text(
                         f"SELECT {_COLUMNS} FROM assistant_rulesets "
                         "WHERE id = :id AND archived = FALSE "
-                        "AND (comparison_enabled = TRUE OR (:for_admin AND admin_enabled = TRUE))"
+                        "AND (comparison_enabled = TRUE OR is_active = TRUE "
+                        "     OR (:for_admin AND admin_enabled = TRUE))"
                     ),
                     {"id": ruleset_id, "for_admin": for_admin},
                 )

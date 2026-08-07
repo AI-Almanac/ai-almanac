@@ -482,11 +482,12 @@ async def test_comparison_arms_must_be_two_distinct_exposed_rulesets(
         )
         return res.status_code
 
-    # Nothing exposed: no comparison offer, and naming a hidden ruleset fails.
+    # Nothing exposed beyond the active built-in: no comparison offer, and
+    # naming a hidden ruleset fails.
     assert not await availability()
     assert await compare_status(["builtin", "unconstrained"]) == 400
 
-    # One exposed ruleset is a picker, not a comparison.
+    # Exposing the ruleset that is already active adds nothing to compare.
     await rulesets.set_comparison_enabled("builtin", True)
     assert not await availability()
     assert await compare_status(["builtin", "unconstrained"]) == 400
@@ -495,6 +496,34 @@ async def test_comparison_arms_must_be_two_distinct_exposed_rulesets(
     assert await availability()
     assert await compare_status(["builtin", "builtin"]) == 400
     assert await compare_status(["builtin", "no-such-ruleset"]) == 400
+
+
+@pytest.mark.asyncio
+async def test_the_active_ruleset_is_always_a_valid_arm(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    stub_model: None,
+) -> None:
+    """One exposed alternative is enough: the active built-in is the baseline."""
+    await rulesets.seed_packaged_rulesets()
+    for ruleset_id in ("builtin", "unconstrained"):
+        await rulesets.set_comparison_enabled(ruleset_id, False)
+        await rulesets.set_admin_enabled(ruleset_id, False)
+    await rulesets.set_comparison_enabled("unconstrained", True)
+
+    res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+    body = res.json()
+    assert body["compare_available"] is True
+    listed = {item["id"]: item for item in body["rulesets"]}
+    assert listed["builtin"]["is_active"]
+    assert not listed["builtin"]["admin_only"]
+
+    compared = await client.post(
+        "/assistant/compare/blind",
+        headers=auth_headers,
+        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
+    )
+    assert compared.status_code == 200, compared.text
 
 
 @pytest.mark.asyncio

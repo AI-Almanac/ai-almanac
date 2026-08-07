@@ -380,23 +380,25 @@ async def record_vote(
             best = latest.get(row["session_id"])
             if best is None or row["created_at"] > best["created_at"]:
                 latest[row["session_id"]] = dict(row)
-        rated_ids = [row["id"] for row in latest.values()]
-        if not rated_ids:
+        if not latest:
             return 0
-        result = await conn.execute(
-            sa.text("""
-                UPDATE assistant_turn_logs
-                SET rating = CASE
-                        WHEN :winner IS NULL THEN 0
-                        WHEN session_id = :winner THEN 1
-                        ELSE -1
-                    END,
-                    rating_note = :note
-                WHERE id IN :ids
-            """).bindparams(sa.bindparam("ids", expanding=True)),
-            {"winner": winner_session_id, "note": note, "ids": rated_ids},
-        )
-    return result.rowcount
+        # Ratings are computed here rather than in a SQL CASE: Postgres cannot
+        # infer the type of a parameter compared only against NULL.
+        rated = 0
+        for row in latest.values():
+            if winner_session_id is None:
+                rating = 0
+            else:
+                rating = 1 if row["session_id"] == winner_session_id else -1
+            result = await conn.execute(
+                sa.text(
+                    "UPDATE assistant_turn_logs "
+                    "SET rating = :rating, rating_note = :note WHERE id = :id"
+                ),
+                {"rating": rating, "note": note, "id": row["id"]},
+            )
+            rated += result.rowcount
+    return rated
 
 
 async def delete_comparison(comparison_id: str, user_id: str) -> int:

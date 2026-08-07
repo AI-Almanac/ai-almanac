@@ -435,10 +435,12 @@ async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
     The flag is reported instead, so the chat hides the comparison surface
     without a second request.
     """
+    # The active ruleset always counts: it is what every user already talks to,
+    # so it is the baseline any exposed alternative should be comparable against.
     visible = [
         row
         for row in await rulesets.list_rulesets()
-        if row.comparison_enabled or (user.is_admin and row.admin_enabled)
+        if row.is_active or row.comparison_enabled or (user.is_admin and row.admin_enabled)
     ]
     comparisons_enabled = settings.comparisons_allowed(user.is_admin)
     return RulesetOptionsOut(
@@ -448,7 +450,7 @@ async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
                 name=row.ruleset.name,
                 description=row.ruleset.description,
                 is_active=row.is_active,
-                admin_only=not row.comparison_enabled,
+                admin_only=not (row.comparison_enabled or row.is_active),
             )
             for row in visible
         ],
