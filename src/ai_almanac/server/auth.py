@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from threading import Lock
 from typing import Annotated, Literal
@@ -69,9 +70,45 @@ def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
     return bool(email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)})
 
 
-_globus_cache: dict[str, tuple[dict, float]] = {}
-_globus_cache_lock = Lock()
-_GLOBUS_CACHE_TTL = 60.0  # seconds
+class _TTLCache[T]:
+    """A bounded token-keyed cache: per-entry TTL, LRU eviction at capacity.
+
+    The bound matters because keys are bearer tokens: a long-running shared
+    deployment sees a new token on every refresh, so an unbounded dict grows
+    with login volume forever. 1024 entries comfortably covers the tokens
+    active within any TTL window.
+    """
+
+    def __init__(self, ttl: float, max_entries: int = 1024) -> None:
+        self._ttl = ttl
+        self._max_entries = max_entries
+        self._entries: OrderedDict[str, tuple[T, float]] = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key: str) -> T | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            value, expires = entry
+            if time.monotonic() >= expires:
+                del self._entries[key]
+                return None
+            self._entries.move_to_end(key)
+            return value
+
+    def set(self, key: str, value: T) -> None:
+        with self._lock:
+            self._entries[key] = (value, time.monotonic() + self._ttl)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+_globus_cache: _TTLCache[dict] = _TTLCache(ttl=60.0)
 
 
 def _bearer_token(headers: Headers) -> str | None:
@@ -87,11 +124,9 @@ def _introspect_globus_token(token: str) -> dict:
     With no client id configured, runs in stub mode (the token is treated as the
     subject) so local development works without Globus credentials.
     """
-    now = time.monotonic()
-    with _globus_cache_lock:
-        cached = _globus_cache.get(token)
-        if cached and now < cached[1]:
-            return cached[0]
+    cached = _globus_cache.get(token)
+    if cached is not None:
+        return cached
 
     if not settings.globus_client_id:
         result: dict = {"active": True, "sub": token, "email": None}
@@ -103,14 +138,12 @@ def _introspect_globus_token(token: str) -> dict:
         )
         result = dict(client.oauth2_token_introspect(token, include="identity_set").data)
 
-    with _globus_cache_lock:
-        _globus_cache[token] = (result, time.monotonic() + _GLOBUS_CACHE_TTL)
+    _globus_cache.set(token, result)
     return result
 
 
-_globus_groups_cache: dict[str, tuple[set[str], float]] = {}
-_globus_groups_cache_lock = Lock()
-_GLOBUS_GROUPS_CACHE_TTL = 300.0  # memberships change rarely; also spaces out retries on failure
+# Memberships change rarely; the TTL also spaces out retries on failure.
+_globus_groups_cache: _TTLCache[set[str]] = _TTLCache(ttl=300.0)
 
 
 def _globus_user_groups(token: str) -> set[str]:
@@ -126,11 +159,9 @@ def _globus_user_groups(token: str) -> set[str]:
     if not _split_csv(settings.admin_groups) or not settings.globus_client_id:
         return set()
 
-    now = time.monotonic()
-    with _globus_groups_cache_lock:
-        cached = _globus_groups_cache.get(token)
-        if cached and now < cached[1]:
-            return cached[0]
+    cached = _globus_groups_cache.get(token)
+    if cached is not None:
+        return cached
 
     try:
         import globus_sdk
@@ -151,8 +182,7 @@ def _globus_user_groups(token: str) -> set[str]:
         logger.warning("Globus group lookup failed; admin group checks skipped", exc_info=True)
         groups = set()
 
-    with _globus_groups_cache_lock:
-        _globus_groups_cache[token] = (groups, time.monotonic() + _GLOBUS_GROUPS_CACHE_TTL)
+    _globus_groups_cache.set(token, groups)
     return groups
 
 

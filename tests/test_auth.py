@@ -380,7 +380,7 @@ def test_globus_user_groups_via_dependent_token(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(settings, "admin_groups", "grp-admins")
     monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
 
     class FakeAuthClient:
         def __init__(self, *args): ...
@@ -417,7 +417,7 @@ def test_globus_user_groups_failure_degrades_to_no_groups(
 
     monkeypatch.setattr(settings, "admin_groups", "grp-admins")
     monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
 
     def boom(*args):
         raise RuntimeError("groups api down")
@@ -435,11 +435,30 @@ def test_globus_user_groups_skipped_without_admin_groups(
 
     monkeypatch.setattr(settings, "admin_groups", "")
     monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", {})
+    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
     monkeypatch.setattr(
         globus_sdk, "ConfidentialAppAuthClient", lambda *a: pytest.fail("should not call Globus")
     )
     assert auth_module._globus_user_groups("tok") == set()
+
+
+def test_ttl_cache_evicts_lru_at_capacity_and_expires_entries() -> None:
+    from ai_almanac.server.auth import _TTLCache
+
+    cache: _TTLCache[str] = _TTLCache(ttl=300.0, max_entries=2)
+    cache.set("a", "1")
+    cache.set("b", "2")
+    assert cache.get("a") == "1"  # refreshes a's recency
+    cache.set("c", "3")  # over capacity: b (least recent) is evicted
+    assert cache.get("b") is None
+    assert cache.get("a") == "1"
+    assert cache.get("c") == "3"
+    assert len(cache) == 2
+
+    expired: _TTLCache[str] = _TTLCache(ttl=-1.0)  # already expired on write
+    expired.set("a", "1")
+    assert expired.get("a") is None
+    assert len(expired) == 0
 
 
 @pytest.mark.asyncio
