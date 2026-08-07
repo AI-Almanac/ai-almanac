@@ -145,6 +145,38 @@ async def test_cloning_onto_an_existing_id_conflicts(
 
 
 @pytest.mark.asyncio
+async def test_cloning_reclaims_a_deleted_ruleset_id(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Delete is an archive that keeps the row, so without reclaiming, a
+    deleted id would block that name forever (issue #122). The new clone's
+    version must stay above the buried row's: turn-log rollups key on
+    (id, version)."""
+    await rulesets.seed_packaged_rulesets()
+
+    first = await client.post(
+        "/assistant/rulesets/builtin/clone",
+        headers=auth_headers,
+        json={"id": "test", "name": "Test", "prompt_sections": []},
+    )
+    assert first.status_code == 200, first.text
+    await rulesets.archive_ruleset("test")
+
+    again = await client.post(
+        "/assistant/rulesets/unconstrained/clone",
+        headers=auth_headers,
+        json={"id": "test", "name": "Test", "prompt_sections": []},
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["version"] > first.json()["version"]
+
+    stored = {row.ruleset.id: row for row in await rulesets.list_rulesets()}
+    assert "test" in stored  # resurrected, no longer archived
+
+    await rulesets.archive_ruleset("test")
+
+
+@pytest.mark.asyncio
 async def test_saving_cannot_disable_a_required_section(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:

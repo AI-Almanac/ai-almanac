@@ -395,6 +395,28 @@ async def archive_ruleset(ruleset_id: str) -> None:
         raise KeyError(ruleset_id)
 
 
+async def archived_version(ruleset_id: str) -> int | None:
+    """Version of the archived row holding this id; None when the id is free
+    or belongs to a live ruleset.
+
+    Lets a clone reclaim an id whose ruleset was deleted (archive keeps the
+    row, so the id would otherwise be blocked forever). The caller must keep
+    the new version above this one: turn-log rollups key on (id, version).
+    """
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        row = (
+            await conn.execute(
+                sa.text(
+                    "SELECT version FROM assistant_rulesets WHERE id = :id AND archived = TRUE"
+                ),
+                {"id": ruleset_id},
+            )
+        ).fetchone()
+    return row[0] if row else None
+
+
 async def get_ruleset(ruleset_id: str) -> Ruleset | None:
     from ai_almanac.server.db import get_db
 
