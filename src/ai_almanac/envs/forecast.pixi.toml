@@ -43,18 +43,23 @@ zarr = "*"
 numpy = "*"
 pyyaml = "*"
 
+# Pinned to a main SHA rather than a release: 0.17.0 lacks the AIFS2/AIFS2ENS
+# time-forcing fix (earth2studio PR #1009); re-pin to 0.18.0 once it's tagged.
+# This SHA also brings the 0.17.0 GFS fetch hardening (async_workers/retries,
+# retries=3 by default).
+
 # base: everything whose deps coexist — the non-AIFS models plus AIFS v1
 # (anemoi-models 0.5.1, as proven in the 0.14.0 single-env build).
 [feature.base.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
 
 # aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
 [feature.aifs2.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs2", "data"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs2", "data"] }
 
 # aifs2ens: AIFS-ENS v2 (anemoi-models 0.11.2).
 [feature.aifs2ens.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "0.16.0", extras = ["aifs2ens", "data"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs2ens", "data"] }
 
 [environments]
 base = ["base"]
