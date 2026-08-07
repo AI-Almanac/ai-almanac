@@ -280,11 +280,16 @@ async def clone_ruleset(ruleset_id: str, body: RulesetSave, user: AdminUser) -> 
             source = rulesets.packaged_ruleset(ruleset_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="Ruleset not found") from None
-    if await rulesets.get_ruleset(body.id) is not None:
+    buried = await rulesets.archived_version(body.id)
+    if buried is None and await rulesets.get_ruleset(body.id) is not None:
         raise HTTPException(status_code=409, detail=f"A ruleset named {body.id!r} already exists")
-    saved = await rulesets.save_ruleset(
-        rulesets.next_version(source, body.id, body.name), created_by=user.email or user.id
-    )
+    clone = rulesets.next_version(source, body.id, body.name)
+    if buried is not None:
+        # Reclaiming a deleted (archived) id: keep the version above the buried
+        # row's so turn-log rollups keyed by (id, version) never merge old and
+        # new wording.
+        clone = clone.model_copy(update={"version": max(clone.version, buried + 1)})
+    saved = await rulesets.save_ruleset(clone, created_by=user.email or user.id)
     return _detail(saved, False)
 
 
