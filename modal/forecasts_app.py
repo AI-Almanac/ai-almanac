@@ -275,29 +275,6 @@ def _forecast_inference_impl(job_id: str, model_id: str, config: dict) -> dict:
     return run_info
 
 
-def _make_forecast_inference_fn(env_name: str, image: modal.Image):
-    @app.function(
-        name=f"run_forecast_inference_{env_name}",
-        image=image,
-        gpu="A100-80GB",
-        cpu=(8, 16),
-        memory=(32768, 65536),
-        timeout=7200,
-        secrets=[gcp_secret],
-        volumes={"/cache": forecast_volume},
-    )
-    def _fn(job_id: str, model_id: str, config: dict) -> dict:
-        return _forecast_inference_impl(job_id, model_id, config)
-
-    return _fn
-
-
-# Per-env variants; dispatch by the model's `env` (see _model_env).
-FORECAST_INFERENCE_FNS = {
-    env: _make_forecast_inference_fn(env, image) for env, image in INFERENCE_IMAGES.items()
-}
-
-
 def _warm_model_weights_impl(env_name: str) -> None:
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
@@ -316,25 +293,38 @@ def _warm_model_weights_impl(env_name: str) -> None:
     print(f"==> Weight cache warmed; volume commit took {time.perf_counter() - t0:.1f}s")
 
 
-def _make_warm_fn(env_name: str, image: modal.Image):
+# Per-env inference and weight-warming functions, one pair per image. Defined
+# in a module-level loop rather than a factory: Modal requires @app.function
+# targets in global scope (a def inside a module-level for loop qualifies; one
+# inside a helper function does not). Callers dispatch by registered name —
+# the server via Function.from_name, warming via `modal run ...::warm_model_
+# weights_<env>` — so nothing needs the Python handles.
+for _env, _image in INFERENCE_IMAGES.items():
+
     @app.function(
-        name=f"warm_model_weights_{env_name}",
-        image=image,
+        name=f"run_forecast_inference_{_env}",
+        image=_image,
+        gpu="A100-80GB",
+        cpu=(8, 16),
+        memory=(32768, 65536),
+        timeout=7200,
+        secrets=[gcp_secret],
+        volumes={"/cache": forecast_volume},
+    )
+    def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
+        return _forecast_inference_impl(job_id, model_id, config)
+
+    @app.function(
+        name=f"warm_model_weights_{_env}",
+        image=_image,
         gpu="A100-80GB",
         cpu=(8, 16),
         memory=(32768, 65536),
         timeout=7200,
         volumes={"/cache": forecast_volume},
     )
-    def _fn() -> None:
+    def warm_model_weights(env_name: str = _env) -> None:
         _warm_model_weights_impl(env_name)
-
-    return _fn
-
-
-# One warm function per environment (its own image). Run manually after adding a
-# model or when upstream weights change — see the module docstring.
-WARM_FNS = {env: _make_warm_fn(env, image) for env, image in INFERENCE_IMAGES.items()}
 
 
 @app.function(
@@ -404,10 +394,14 @@ def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params:
     return pipeline.bundle_files([out_path])
 
 
-def _make_season_bundle_fn(env_name: str, image: modal.Image):
+# Per-env variants, module-level loop for the same global-scope reason as the
+# inference/warm functions above; the orchestrator spawns these by env.
+SEASON_BUNDLE_FNS = {}
+for _env, _image in INFERENCE_IMAGES.items():
+
     @app.function(
-        name=f"run_season_forecast_bundle_{env_name}",
-        image=image,
+        name=f"run_season_forecast_bundle_{_env}",
+        image=_image,
         gpu="A100-80GB",
         cpu=(8, 16),
         memory=(32768, 65536),
@@ -417,16 +411,12 @@ def _make_season_bundle_fn(env_name: str, image: modal.Image):
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
-    def _fn(job_id: str, model_id: str, config: dict, season_params: dict) -> bytes:
+    def run_season_forecast_bundle(
+        job_id: str, model_id: str, config: dict, season_params: dict
+    ) -> bytes:
         return _season_bundle_impl(job_id, model_id, config, season_params)
 
-    return _fn
-
-
-# Per-env variants; the orchestrator dispatches each model by its `env`.
-SEASON_BUNDLE_FNS = {
-    env: _make_season_bundle_fn(env, image) for env, image in INFERENCE_IMAGES.items()
-}
+    SEASON_BUNDLE_FNS[_env] = run_season_forecast_bundle
 
 
 @app.function(
