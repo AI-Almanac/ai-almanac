@@ -41,6 +41,7 @@ class RulesetSummary(BaseModel):
     source: str
     is_active: bool
     comparison_enabled: bool = False
+    admin_enabled: bool = False
     activatable: bool = True
     section_keys: list[str]
     denied_tools: list[str]
@@ -108,8 +109,8 @@ class BlindCompareRequest(BaseModel):
 
     The user picks the pair; the server shuffles which column is which, so the
     vote is still cast without knowing which answer came from which ruleset.
-    Only admin-exposed rulesets are eligible — there is no way to name a
-    draft, archived, or admin-only ruleset here.
+    Only exposed rulesets are eligible — a user cannot name a draft, archived,
+    or admin-preview ruleset here; an admin's preview set is additionally in.
     """
 
     message: str = Field(min_length=1, max_length=8000)
@@ -148,6 +149,9 @@ class RulesetOption(BaseModel):
     name: str
     description: str
     is_active: bool
+    # Visible only because the requester is an admin previewing it; lets the
+    # picker badge it and the view-as-user mode hide it.
+    admin_only: bool = False
 
 
 class RulesetOptionsOut(BaseModel):
@@ -179,7 +183,12 @@ class PreviewResult(BaseModel):
     character_count: int
 
 
-def _summary(ruleset: Ruleset, is_active: bool, comparison_enabled: bool = False) -> RulesetSummary:
+def _summary(
+    ruleset: Ruleset,
+    is_active: bool,
+    comparison_enabled: bool = False,
+    admin_enabled: bool = False,
+) -> RulesetSummary:
     return RulesetSummary(
         id=ruleset.id,
         name=ruleset.name,
@@ -188,6 +197,7 @@ def _summary(ruleset: Ruleset, is_active: bool, comparison_enabled: bool = False
         source=ruleset.source,
         is_active=is_active,
         comparison_enabled=comparison_enabled,
+        admin_enabled=admin_enabled,
         activatable=ruleset.activatable,
         section_keys=[section.key for section in ruleset.prompt_sections],
         denied_tools=list(ruleset.tool_policy.deny),
@@ -219,7 +229,10 @@ async def _active_id() -> str:
 async def list_rulesets(user: AdminUser) -> list[RulesetSummary]:
     stored = await rulesets.list_rulesets()
     if stored:
-        return [_summary(row.ruleset, row.is_active, row.comparison_enabled) for row in stored]
+        return [
+            _summary(row.ruleset, row.is_active, row.comparison_enabled, row.admin_enabled)
+            for row in stored
+        ]
     # Before the first seed, report what chat would actually use.
     active = await rulesets.active_ruleset()
     return [_summary(active, True)]
@@ -305,9 +318,27 @@ async def set_comparison_enabled(
         await rulesets.set_comparison_enabled(ruleset_id, body.enabled)
     except KeyError:
         raise HTTPException(status_code=404, detail="Ruleset not found") from None
-    ruleset = await rulesets.get_ruleset(ruleset_id)
-    assert ruleset is not None
-    return _summary(ruleset, (await _active_id()) == ruleset_id, body.enabled)
+    return await _stored_summary(ruleset_id)
+
+
+@router.post("/rulesets/{ruleset_id}/admin-enabled", response_model=RulesetSummary)
+async def set_admin_enabled(
+    ruleset_id: str, body: ComparisonEnabledIn, user: AdminUser
+) -> RulesetSummary:
+    """Expose or hide a ruleset for admins only, so it can be pinned to real
+    sessions and compared before any user sees it."""
+    try:
+        await rulesets.set_admin_enabled(ruleset_id, body.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Ruleset not found") from None
+    return await _stored_summary(ruleset_id)
+
+
+async def _stored_summary(ruleset_id: str) -> RulesetSummary:
+    stored = next(row for row in await rulesets.list_rulesets() if row.ruleset.id == ruleset_id)
+    return _summary(
+        stored.ruleset, stored.is_active, stored.comparison_enabled, stored.admin_enabled
+    )
 
 
 @router.delete("/rulesets/{ruleset_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -399,8 +430,12 @@ async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
     The flag is reported instead, so the chat hides the comparison surface
     without a second request.
     """
-    exposed = [row for row in await rulesets.list_rulesets() if row.comparison_enabled]
-    comparisons_enabled = settings.enable_assistant_comparisons
+    visible = [
+        row
+        for row in await rulesets.list_rulesets()
+        if row.comparison_enabled or (user.is_admin and row.admin_enabled)
+    ]
+    comparisons_enabled = settings.comparisons_allowed(user.is_admin)
     return RulesetOptionsOut(
         rulesets=[
             RulesetOption(
@@ -408,11 +443,12 @@ async def list_ruleset_options(user: CurrentUser) -> RulesetOptionsOut:
                 name=row.ruleset.name,
                 description=row.ruleset.description,
                 is_active=row.is_active,
+                admin_only=not row.comparison_enabled,
             )
-            for row in exposed
+            for row in visible
         ],
         comparisons_enabled=comparisons_enabled,
-        compare_available=comparisons_enabled and len(exposed) >= 2,
+        compare_available=comparisons_enabled and len(visible) >= 2,
     )
 
 
@@ -428,7 +464,7 @@ async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> Streami
     if len(set(body.ruleset_ids)) != 2:
         raise HTTPException(status_code=400, detail="Pick two different rulesets")
     for ruleset_id in body.ruleset_ids:
-        if await rulesets.selectable_ruleset(ruleset_id) is None:
+        if await rulesets.selectable_ruleset(ruleset_id, for_admin=user.is_admin) is None:
             raise HTTPException(status_code=400, detail=f"Ruleset not available: {ruleset_id}")
     arms = [assistant_compare.VariantSpec(ruleset_id=rid) for rid in body.ruleset_ids]
     random.shuffle(arms)

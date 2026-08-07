@@ -314,6 +314,70 @@ async def test_the_exposure_flag_gates_what_users_see(
 
 
 @pytest.mark.asyncio
+async def test_admin_preview_is_visible_to_admins_only(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.settings import settings
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_comparison_enabled("builtin", True)
+
+    enabled = await client.post(
+        "/assistant/rulesets/unconstrained/admin-enabled",
+        headers=auth_headers,
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["admin_enabled"] is True
+
+    missing = await client.post(
+        "/assistant/rulesets/no-such/admin-enabled", headers=auth_headers, json={"enabled": True}
+    )
+    assert missing.status_code == 404
+
+    # The admin's picker includes the preview, badged, and it counts toward
+    # comparison availability for the admin.
+    res = (await client.get("/assistant/ruleset-options", headers=auth_headers)).json()
+    options = {item["id"]: item for item in res["rulesets"]}
+    assert options["unconstrained"]["admin_only"] is True
+    assert options["builtin"]["admin_only"] is False
+    assert res["compare_available"] is True
+
+    # A plain user's picker never shows it.
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+    user_res = (
+        await client.get("/assistant/ruleset-options", headers={"X-Forwarded-User": "rando"})
+    ).json()
+    assert {item["id"] for item in user_res["rulesets"]} == {"builtin"}
+    assert user_res["compare_available"] is False
+
+    await rulesets.set_admin_enabled("unconstrained", False)
+
+
+@pytest.mark.asyncio
+async def test_admin_preview_selectability_and_archive_clears_it(
+    client: httpx.AsyncClient,
+) -> None:
+    from ai_almanac.server.services.rulesets import Ruleset
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.set_admin_enabled("unconstrained", True)
+    assert await rulesets.selectable_ruleset("unconstrained") is None
+    assert await rulesets.selectable_ruleset("unconstrained", for_admin=True) is not None
+
+    await rulesets.save_ruleset(Ruleset(id="draft-preview", name="Draft"))
+    await rulesets.set_admin_enabled("draft-preview", True)
+    await rulesets.archive_ruleset("draft-preview")
+    stored = {row.ruleset.id: row for row in await rulesets.list_rulesets(include_archived=True)}
+    assert stored["draft-preview"].admin_enabled is False
+    assert await rulesets.selectable_ruleset("draft-preview", for_admin=True) is None
+
+    await rulesets.set_admin_enabled("unconstrained", False)
+
+
+@pytest.mark.asyncio
 async def test_deleting_a_ruleset_archives_it_and_its_provenance_survives(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:

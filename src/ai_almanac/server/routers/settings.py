@@ -15,7 +15,7 @@ or clear it.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args, get_origin
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -162,9 +162,9 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Let users generate live AI weather forecasts and score them against a trained blend",
             ),
             (
-                "enable_assistant_comparisons",
+                "assistant_comparisons_audience",
                 "Assistant comparisons",
-                "Let users compare two assistant rulesets side by side and vote; each comparison costs two model replies",
+                "Who can compare two assistant rulesets side by side and vote; each comparison costs two model replies. 'admins' lets admins test before exposing it to everyone",
             ),
         ],
     ),
@@ -219,6 +219,8 @@ class FieldSchema(BaseModel):
     restart_required: bool
     editable: bool
     multiline: bool
+    # Set for enum-valued fields (Literal annotations); the UI renders a select.
+    choices: list[str] | None = None
 
 
 class SettingsSchema(BaseModel):
@@ -242,6 +244,14 @@ def _python_type_name(annotation) -> str:
     if annotation is float:
         return "float"
     return "string"
+
+
+def _choices(annotation) -> list[str] | None:
+    if get_origin(annotation) is Literal:
+        values = get_args(annotation)
+        if all(isinstance(value, str) for value in values):
+            return list(values)
+    return None
 
 
 def _read_settings() -> SettingsValues:
@@ -291,6 +301,7 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     restart_required=field_name in RESTART_REQUIRED_FIELDS,
                     editable=not (shared and field_name in SHARED_ENV_ONLY_FIELDS),
                     multiline=field_name in MULTILINE_FIELDS,
+                    choices=_choices(info.annotation),
                 )
             )
         if rendered:

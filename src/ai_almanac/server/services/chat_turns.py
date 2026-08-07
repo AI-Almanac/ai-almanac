@@ -339,6 +339,7 @@ async def resume_deferred_setup_tool(
     approval_result: bool | ToolDenied,
     *,
     config_event: str = "benchmark_config",
+    for_admin: bool = False,
 ) -> tuple[list[dict], dict | None]:
     """Resume a human-approved deferred setup tool (benchmark or blend submit).
 
@@ -351,7 +352,11 @@ async def resume_deferred_setup_tool(
     # The approval continues a conversation, so it runs under the same pinned
     # ruleset as the turns around it — falling back to the active one exactly
     # as send_message does when the pin has since been archived.
-    session_ruleset = await selectable_ruleset(row["ruleset_id"]) if row["ruleset_id"] else None
+    session_ruleset = (
+        await selectable_ruleset(row["ruleset_id"], for_admin=for_admin)
+        if row["ruleset_id"]
+        else None
+    )
     deferred_results = DeferredToolResults(
         approvals={approval.tool_call_id: approval_result},
         metadata={approval.tool_call_id: _approval_metadata(approval)},

@@ -178,7 +178,7 @@ IMPORTED_OVERRIDE_ID = "imported-override"
 
 _COLUMNS = (
     "id, name, description, version, source, is_active, archived, comparison_enabled, "
-    "prompt_sections, tool_policy, model, model_settings, activatable"
+    "admin_enabled, prompt_sections, tool_policy, model, model_settings, activatable"
 )
 
 
@@ -315,6 +315,7 @@ class StoredRuleset:
     ruleset: Ruleset
     is_active: bool
     comparison_enabled: bool
+    admin_enabled: bool
 
 
 async def list_rulesets(*, include_archived: bool = False) -> list[StoredRuleset]:
@@ -332,6 +333,7 @@ async def list_rulesets(*, include_archived: bool = False) -> list[StoredRuleset
             ruleset=_row_to_ruleset(row),
             is_active=bool(row["is_active"]),
             comparison_enabled=bool(row["comparison_enabled"]),
+            admin_enabled=bool(row["admin_enabled"]),
         )
         for row in rows
     ]
@@ -353,6 +355,23 @@ async def set_comparison_enabled(ruleset_id: str, enabled: bool) -> None:
         raise KeyError(ruleset_id)
 
 
+async def set_admin_enabled(ruleset_id: str, enabled: bool) -> None:
+    """Expose or hide a ruleset for admins only — the preview half of
+    ``set_comparison_enabled``. ``KeyError`` when there is no row."""
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.text(
+                "UPDATE assistant_rulesets SET admin_enabled = :enabled "
+                "WHERE id = :id AND archived = FALSE"
+            ),
+            {"id": ruleset_id, "enabled": enabled},
+        )
+    if result.rowcount == 0:
+        raise KeyError(ruleset_id)
+
+
 async def archive_ruleset(ruleset_id: str) -> None:
     """Remove a custom ruleset from every list, keeping the row.
 
@@ -366,7 +385,8 @@ async def archive_ruleset(ruleset_id: str) -> None:
     async with get_db() as conn:
         result = await conn.execute(
             sa.text(
-                "UPDATE assistant_rulesets SET archived = TRUE, comparison_enabled = FALSE "
+                "UPDATE assistant_rulesets "
+                "SET archived = TRUE, comparison_enabled = FALSE, admin_enabled = FALSE "
                 "WHERE id = :id AND is_active = FALSE AND archived = FALSE"
             ),
             {"id": ruleset_id},
@@ -392,13 +412,14 @@ async def get_ruleset(ruleset_id: str) -> Ruleset | None:
     return _row_to_ruleset(row) if row else None
 
 
-async def selectable_ruleset(ruleset_id: str) -> Ruleset | None:
-    """A stored ruleset an admin has exposed to users.
+async def selectable_ruleset(ruleset_id: str, *, for_admin: bool = False) -> Ruleset | None:
+    """A stored ruleset exposed to the requester.
 
     The user-facing counterpart of ``get_ruleset``, which deliberately returns
     archived and unexposed rows for admin use. Gates session pinning and
     user-chosen comparison arms alike; None means the caller falls back to the
-    active ruleset (or refuses, for a comparison arm).
+    active ruleset (or refuses, for a comparison arm). Admins additionally see
+    admin-preview rulesets, so a draft can be tested end to end before users do.
     """
     from ai_almanac.server.db import get_db
 
@@ -408,9 +429,10 @@ async def selectable_ruleset(ruleset_id: str) -> Ruleset | None:
                 await conn.execute(
                     sa.text(
                         f"SELECT {_COLUMNS} FROM assistant_rulesets "
-                        "WHERE id = :id AND archived = FALSE AND comparison_enabled = TRUE"
+                        "WHERE id = :id AND archived = FALSE "
+                        "AND (comparison_enabled = TRUE OR (:for_admin AND admin_enabled = TRUE))"
                     ),
-                    {"id": ruleset_id},
+                    {"id": ruleset_id, "for_admin": for_admin},
                 )
             )
             .mappings()

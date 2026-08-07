@@ -295,8 +295,8 @@ def _session_detail(row, user_id: str) -> SessionDetail:
 # ---------------------------------------------------------------------------
 
 
-async def _require_selectable_ruleset(ruleset_id: str) -> None:
-    if await selectable_ruleset(ruleset_id) is None:
+async def _require_selectable_ruleset(ruleset_id: str, *, for_admin: bool) -> None:
+    if await selectable_ruleset(ruleset_id, for_admin=for_admin) is None:
         raise HTTPException(status_code=400, detail=f"Ruleset not available: {ruleset_id}")
 
 
@@ -304,7 +304,7 @@ async def _require_selectable_ruleset(ruleset_id: str) -> None:
 async def create_session(body: SessionCreate, user: CurrentUser):
     await require_chat_available(user.id)
     if body.ruleset_id is not None:
-        await _require_selectable_ruleset(body.ruleset_id)
+        await _require_selectable_ruleset(body.ruleset_id, for_admin=user.is_admin)
 
     session_id = str(uuid.uuid4())
     now = _now()
@@ -405,7 +405,7 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
         assignments.append("title = :title")
     if "ruleset_id" in updates:
         if updates["ruleset_id"] is not None:
-            await _require_selectable_ruleset(updates["ruleset_id"])
+            await _require_selectable_ruleset(updates["ruleset_id"], for_admin=user.is_admin)
         params["ruleset_id"] = updates["ruleset_id"]
         assignments.append("ruleset_id = :ruleset_id")
 
@@ -442,6 +442,7 @@ async def submit_session_benchmark(
             user.id,
             body.approval,
             True,
+            for_admin=user.is_admin,
         )
         if payload is None:
             raise HTTPException(status_code=400, detail="Benchmark approval did not submit a run")
@@ -469,6 +470,7 @@ async def deny_session_benchmark_approval(
         user.id,
         body.approval,
         ToolDenied(body.message),
+        for_admin=user.is_admin,
     )
     await save_provider_state(session_id, user.id, final_provider_state)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -521,6 +523,7 @@ async def submit_session_blend(
             body.approval,
             True,
             config_event="blend_config",
+            for_admin=user.is_admin,
         )
         if payload is None:
             raise HTTPException(status_code=400, detail="Blend approval did not submit a run")
@@ -545,6 +548,7 @@ async def deny_session_blend_approval(session_id: str, body: BlendApprovalIn, us
         body.approval,
         ToolDenied(body.message),
         config_event="blend_config",
+        for_admin=user.is_admin,
     )
     await save_provider_state(session_id, user.id, final_provider_state)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -608,7 +612,11 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
     # A pinned ruleset that has since been archived or deleted degrades to the
     # active one — same never-raise spirit as rulesets.active_ruleset().
-    session_ruleset = await selectable_ruleset(row["ruleset_id"]) if row["ruleset_id"] else None
+    session_ruleset = (
+        await selectable_ruleset(row["ruleset_id"], for_admin=user.is_admin)
+        if row["ruleset_id"]
+        else None
+    )
 
     return StreamingResponse(
         stream_chat_turn(
