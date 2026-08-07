@@ -272,6 +272,10 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.admin_subjects
       }
       env {
+        name  = "ADMIN_GROUPS"
+        value = var.admin_groups
+      }
+      env {
         name = "CREDENTIAL_ENCRYPTION_KEY"
         value_source {
           secret_key_ref {
