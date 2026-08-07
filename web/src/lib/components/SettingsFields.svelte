@@ -58,6 +58,17 @@
 							/>
 							<span>{Boolean(settings.value(field.name)) ? 'enabled' : 'disabled'}</span>
 						</label>
+					{:else if field.choices}
+						<select
+							id={`f-${field.name}`}
+							value={String(settings.value(field.name) ?? field.default ?? '')}
+							disabled={!field.editable}
+							onchange={(e) => settings.setValue(field, e.currentTarget.value)}
+						>
+							{#each field.choices as choice (choice)}
+								<option value={choice}>{choice}</option>
+							{/each}
+						</select>
 					{:else if field.multiline}
 						<details class="long-editor">
 							<summary>Edit ({String(settings.value(field.name) ?? '').length} characters)</summary>
@@ -184,7 +195,8 @@
 	}
 	input[type='text'],
 	input[type='password'],
-	input[type='number'] {
+	input[type='number'],
+	select {
 		flex: 1;
 		min-width: 0;
 		padding: 0.45rem 0.6rem;

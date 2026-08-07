@@ -12,6 +12,7 @@ import os
 import re
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -206,9 +207,14 @@ class Settings(BaseSettings):
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
     # Side-by-side ruleset comparisons: the admin playground and the blind A/B
-    # users run from the chat. Off hides the whole surface — every comparison is
-    # two LLM turns, so an install that cannot afford that, or is not collecting
-    # feedback yet, should not offer it.
+    # users run from the chat. "off" hides the whole surface — every comparison
+    # is two LLM turns, so an install that cannot afford that, or is not
+    # collecting feedback yet, should not offer it. "admins" lets admins test
+    # comparisons before exposing them to everyone.
+    assistant_comparisons_audience: Literal["off", "admins", "everyone"] = "everyone"
+    # Deprecated in favor of assistant_comparisons_audience; read once in
+    # reload_settings() to map a stored False to audience "off". Remove next
+    # release, once no overlay row or env still sets it.
     enable_assistant_comparisons: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
@@ -217,6 +223,11 @@ class Settings(BaseSettings):
     max_active_jobs_per_user: int = 10
     max_concurrent_llm_requests_per_user: int = 2
     max_llm_requests_per_minute: int = 30
+
+    def comparisons_allowed(self, is_admin: bool) -> bool:
+        if self.assistant_comparisons_audience == "everyone":
+            return True
+        return self.assistant_comparisons_audience == "admins" and is_admin
 
     def resolve_database_url(self) -> str:
         if self.database_url:
@@ -429,8 +440,19 @@ def reload_settings() -> Settings:
     env/defaults.
     """
     fresh = Settings()  # defaults + env (no overlay)
-    _apply_overlay(fresh, _load_config_yaml())  # config.yaml seed
-    _apply_overlay(fresh, _load_db_overlay())  # DB overlay wins over the seed
+    yaml_overlay = _load_config_yaml()
+    db_overlay = _load_db_overlay()
+    _apply_overlay(fresh, yaml_overlay)  # config.yaml seed
+    _apply_overlay(fresh, db_overlay)  # DB overlay wins over the seed
+    # Deprecated-flag shim: a deployment that had switched comparisons off via
+    # the old boolean stays off until it sets the audience explicitly.
+    audience_set = (
+        "ASSISTANT_COMPARISONS_AUDIENCE" in os.environ
+        or "assistant_comparisons_audience" in yaml_overlay
+        or "assistant_comparisons_audience" in db_overlay
+    )
+    if not fresh.enable_assistant_comparisons and not audience_set:
+        fresh.assistant_comparisons_audience = "off"
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
     return settings

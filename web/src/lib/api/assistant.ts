@@ -32,6 +32,8 @@ export type RulesetSummary = {
 	is_active: boolean;
 	/** Whether users can see this ruleset: in the style picker and as a comparison arm. */
 	comparison_enabled: boolean;
+	/** Whether admins can see it for testing, without exposing it to users. */
+	admin_enabled: boolean;
 	/** False for a comparison control arm, which can never be made active. */
 	activatable: boolean;
 	section_keys: string[];
@@ -133,6 +135,17 @@ export async function setRulesetComparisonEnabled(
 	);
 }
 
+/** Expose or hide a ruleset for admins only, so it can be tested before users see it. */
+export async function setRulesetAdminEnabled(
+	id: string,
+	enabled: boolean
+): Promise<RulesetSummary> {
+	return request<RulesetSummary>(`/assistant/rulesets/${encodeURIComponent(id)}/admin-enabled`, {
+		method: 'POST',
+		body: JSON.stringify({ enabled })
+	});
+}
+
 /** Archive a custom ruleset. Packaged and active rulesets are refused (409). */
 export async function deleteRuleset(id: string): Promise<void> {
 	await request<void>(`/assistant/rulesets/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -186,6 +199,8 @@ export type RulesetOption = {
 	name: string;
 	description: string;
 	is_active: boolean;
+	/** Visible only because the requester is an admin previewing it. */
+	admin_only: boolean;
 };
 
 export type RulesetOptions = {

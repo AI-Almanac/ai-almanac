@@ -25,7 +25,7 @@
 	// extra request. Absent (not yet loaded) reads as on, matching the default.
 	const nav = $derived(
 		settingsNav(settings.groups, {
-			comparisonsEnabled: settings.value('enable_assistant_comparisons') !== false
+			comparisonsEnabled: settings.value('assistant_comparisons_audience') !== 'off'
 		})
 	);
 	const currentPath = $derived($page.url.pathname);
@@ -230,6 +230,10 @@
 	.content :global(.tag.required) {
 		color: var(--color-status-running);
 		border-color: var(--color-status-running);
+	}
+	.content :global(.tag.preview) {
+		color: var(--color-status-pending, var(--color-text-muted));
+		border-color: currentcolor;
 	}
 
 	/* Narrow viewports: the nav becomes a scrollable strip above the content
