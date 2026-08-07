@@ -97,7 +97,11 @@ def _inference_image(extras: list[str]) -> modal.Image:
         .run_commands(
             "python -m pip install --upgrade uv",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-            f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git@0.16.0'",
+            # Main SHA, not a release: 0.17.0 lacks the AIFS2/AIFS2ENS time-forcing
+            # fix (earth2studio PR #1009). Re-pin to 0.18.0 once tagged. Keep in
+            # sync with src/ai_almanac/envs/forecast.pixi.toml.
+            f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git"
+            "@96a9bd607013783da8560fbb7a0bb13a00018b66'",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
             "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs h5netcdf onnxruntime-gpu pyyaml",
         )
