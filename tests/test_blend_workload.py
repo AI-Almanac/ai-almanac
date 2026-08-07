@@ -81,13 +81,18 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
             "cv_holdout_years": "2022",
             "threshold_mm": 25.0,
         },
+        "cache_dir": str(tmp_path / "blend-intermediates"),
     }
 
     run(config, output_dir, workflow)
 
     prep_args, prep_kwargs = prepare.calls[0]
     assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]})
-    assert prep_kwargs == {"return_outputs": True, "threshold_mm": 25.0}
+    assert prep_kwargs == {
+        "return_outputs": True,
+        "threshold_mm": 25.0,
+        "cache_dir": str(tmp_path / "blend-intermediates"),
+    }
     _, train_kwargs = train.calls[0]
     assert train_kwargs["model_names"] == ["aifs"]
     assert train_kwargs["training_years"] == [2020, 2021]

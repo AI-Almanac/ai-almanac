@@ -90,7 +90,13 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
     live_year = datetime.now(UTC).year
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
     csv_bytes = workflow.score_live_forecast.local(
-        obs_bundle, forecast_bundles, model_names, params, live_year, coef_pkl=coef_pkl
+        obs_bundle,
+        forecast_bundles,
+        model_names,
+        params,
+        live_year,
+        coef_pkl=coef_pkl,
+        cache_dir=str(cache_dir() / "blend-intermediates"),
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)

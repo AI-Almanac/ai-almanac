@@ -603,6 +603,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": body.params.model_dump(exclude_none=True),
+        "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }
 

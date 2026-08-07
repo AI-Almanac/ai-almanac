@@ -133,6 +133,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         obs_bundle,
         forecast_bundles,
         return_outputs=True,
+        cache_dir=config.get("cache_dir"),
         **prep_kwargs,
     )
     combined = workflow._read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
