@@ -312,7 +312,8 @@ async def test_the_exposure_flag_gates_what_users_see(
         res = await client.get("/assistant/ruleset-options", headers=auth_headers)
         return {item["id"] for item in res.json()["rulesets"]}
 
-    assert await option_ids() == set()
+    # The active built-in is always listed; everything else needs the flag.
+    assert await option_ids() == {"builtin"}
 
     enabled = await client.post(
         "/assistant/rulesets/unconstrained/comparison-enabled",
@@ -321,7 +322,7 @@ async def test_the_exposure_flag_gates_what_users_see(
     )
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["comparison_enabled"] is True
-    assert await option_ids() == {"unconstrained"}
+    assert await option_ids() == {"builtin", "unconstrained"}
 
     # The admin listing shows the flag; the user listing never shows hidden rows.
     listed = await client.get("/assistant/rulesets", headers=auth_headers)
@@ -335,7 +336,7 @@ async def test_the_exposure_flag_gates_what_users_see(
         json={"enabled": False},
     )
     assert disabled.status_code == 200
-    assert await option_ids() == set()
+    assert await option_ids() == {"builtin"}
 
     missing = await client.post(
         "/assistant/rulesets/no-such/comparison-enabled",
