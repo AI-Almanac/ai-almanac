@@ -40,7 +40,7 @@
 	},
 	"dependencies": {
 		"@globus/sdk": "^6.3.1",
-		"dompurify": "^3.4.0",
+		"dompurify": "^3.4.13",
 		"maplibre-gl": "^6.1.0",
 		"marked": "^18.0.0",
 		"svelte-floating-ui": "^1.6.2",
