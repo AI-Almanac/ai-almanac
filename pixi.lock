@@ -1814,7 +1814,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0
-  sha256: e90bf3f9c065fbbcf7c6f7a797932d8dd9c309081bc73036982781160e92fb68
+  sha256: 5baa004025af3414f23207ebd859270324bc25b43f916d2ae9b2268c48889874
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0
@@ -1836,7 +1836,7 @@ packages:
   - httpx>=0.28.1
   - matplotlib>=3.10.9
   - psycopg[binary]>=3.3.4,<4
-  - cryptography>=48.0.1,<50
+  - cryptography>=48.0.1,<51
   - google-cloud-storage>=3.12.0,<4
   - gcsfs>=2026.5.0,<2027
   - modal>=1.5.0,<2
