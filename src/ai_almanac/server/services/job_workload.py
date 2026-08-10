@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from ai_almanac.envs.manager import run as pixi_run
 from ai_almanac.envs.manager import run_blending as blending_pixi_run
 from ai_almanac.envs.manager import run_forecast as forecast_pixi_run
-from ai_almanac.paths import blending_env_dir
+from ai_almanac.paths import blending_env_dir, cache_dir
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
 from ai_almanac.server.services.romp import write_romp_config
@@ -74,6 +74,7 @@ def _run_blend(job_id: str, config: dict) -> None:
     output_dir_raw, _ = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     config_path = output_dir.parent / "blend-config.json"
+    config = {**config, "cache_dir": str(cache_dir() / "blend-intermediates")}
     config_path.write_text(json.dumps(config))
     entrypoint = Path(__file__).parents[2] / "envs" / "blend_entrypoint.py"
     process_env = os.environ.copy()
