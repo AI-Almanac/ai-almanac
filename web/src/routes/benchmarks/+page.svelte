@@ -237,7 +237,7 @@
 									aria-expanded={resultsSidebarOpen}
 									onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
 								>
-									{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
+									{resultsSidebarOpen ? 'Hide assistant' : 'Show assistant'}
 								</button>
 							{/if}
 							{#if activeJobs.length > 0}
