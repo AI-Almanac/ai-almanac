@@ -381,6 +381,13 @@
 	@media (max-width: 1050px) {
 		.sidebar {
 			width: 100%;
+			max-height: 16rem;
+			overflow-y: auto;
+		}
+
+		.sidebar.is-collapsed {
+			max-height: none;
+			overflow-y: visible;
 		}
 	}
 </style>
