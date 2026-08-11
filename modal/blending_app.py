@@ -212,6 +212,26 @@ def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) 
     )
 
 
+def _print_manifest_tails(manifest: dict, label: str) -> None:
+    """Print a failed pipeline's captured subprocess output into the run log.
+
+    The training subprocesses run with capture_output=True, so their
+    stdout/stderr only exist in the manifest tails — without this, a failed
+    run's actual error never reaches run.log or the Modal container log.
+    """
+    print(
+        f"==> {label} failed: returncode={manifest.get('returncode')}"
+        f" final_fit_returncode={manifest.get('final_fit_returncode')}"
+    )
+    for stream in ("stdout_tail", "stderr_tail"):
+        lines = manifest.get(stream) or []
+        if lines:
+            print(f"----- {stream} -----")
+            for line in lines:
+                print(line)
+    print(f"----- end {label} output -----")
+
+
 def _read_tar_member_bytes(tar_bytes: bytes, member_name: str) -> bytes:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
         extracted = tar.extractfile(member_name)
@@ -411,8 +431,9 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             )
             print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
             if not training["manifest"].get("ok"):
+                _print_manifest_tails(training["manifest"], "Blend training pipeline")
                 raise RuntimeError(
-                    "Blend training pipeline failed; see manifest stderr_tail in run.log"
+                    "Blend training pipeline failed; stderr tail printed above (see run.log)"
                 )
 
             out_local = stage_root / "output"
@@ -557,7 +578,7 @@ def _has_adm3_dimension(path: Path) -> bool:
     return bool(names & {"adm3", "adm3_name"})
 
 
-def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
+def _remap_bundle_to_adm3(bundle: bytes, label: str, cache_dir: str | None = None) -> bytes:
     import sys
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -569,24 +590,50 @@ def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
     out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
     output_paths: list[Path] = []
 
+    cache_prefix = None
+    if cache_dir and str(cache_dir).startswith("gs://"):
+        cache_prefix = (
+            f"{str(cache_dir).rstrip('/')}"
+            f"/v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/adm3_nc"
+        )
+
     for src in sorted(input_dir.glob("*.nc")):
+        target = out_dir / src.name
+
         if _has_adm3_dimension(src):
-            target = out_dir / src.name
             target.write_bytes(src.read_bytes())
             output_paths.append(target)
             continue
 
-        normalized = _normalize_grid_dims(src, remap_dir / src.name)
-        batch_aggregate_to_adm3_matrix(
-            str(remap_dir),
-            str(mapping_path),
-            input_file=str(normalized),
-        )
-        remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
-        if not remapped.is_file():
-            raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
-        target = out_dir / src.name
-        shutil.move(str(remapped), target)
+        cached_bytes = None
+        cache_blob = None
+        if cache_prefix:
+            file_hash = _file_sha256(src)
+            cache_blob = _cache_gcs_blob(f"{cache_prefix}/{file_hash}.nc")
+            if cache_blob.exists():
+                print(f"==> cache hit adm3_nc {file_hash[:8]}", flush=True)
+                cached_bytes = cache_blob.download_as_bytes()
+            else:
+                print(f"==> cache miss adm3_nc {file_hash[:8]}", flush=True)
+
+        if cached_bytes is not None:
+            target.write_bytes(cached_bytes)
+        else:
+            normalized = _normalize_grid_dims(src, remap_dir / src.name)
+            batch_aggregate_to_adm3_matrix(
+                str(remap_dir),
+                str(mapping_path),
+                input_file=str(normalized),
+            )
+            remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
+            if not remapped.is_file():
+                raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
+            shutil.move(str(remapped), target)
+            if cache_blob is not None:
+                cache_blob.upload_from_string(
+                    target.read_bytes(), content_type="application/octet-stream"
+                )
+
         output_paths.append(target)
 
     if not output_paths:
@@ -1137,9 +1184,9 @@ def build_lat_lon_intermediates_bundle(
             f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
             flush=True,
         )
-        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs")
+        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs", cache_dir=cache_dir)
         forecast_bundles = {
-            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}")
+            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}", cache_dir=cache_dir)
             for model_name, bundle in forecast_bundles.items()
         }
 
@@ -2204,7 +2251,8 @@ def score_live_forecast(
     )
     print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
     if not training["manifest"].get("ok"):
-        raise RuntimeError("Blend scoring pipeline failed; see manifest stderr_tail in run.log")
+        _print_manifest_tails(training["manifest"], "Blend scoring pipeline")
+        raise RuntimeError("Blend scoring pipeline failed; stderr tail printed above (see run.log)")
 
     result_files = training["manifest"]["result_files"]
     cv_preds_name = _find_result_file(result_files, "cv_preds_blended_model_global")
