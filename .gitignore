@@ -70,3 +70,4 @@ __marimo__/
 node_modules/
 process-compose-dev.log
 uv.lock
+__MACOSX
