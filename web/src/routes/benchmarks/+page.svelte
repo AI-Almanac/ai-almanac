@@ -237,7 +237,7 @@
 									aria-expanded={resultsSidebarOpen}
 									onclick={() => (resultsSidebarOpen = !resultsSidebarOpen)}
 								>
-									{resultsSidebarOpen ? 'Hide sidebar' : 'Show assistant'}
+									{resultsSidebarOpen ? 'Hide assistant' : 'Show assistant'}
 								</button>
 							{/if}
 							{#if activeJobs.length > 0}
@@ -249,19 +249,6 @@
 									{activeJobs.some((job) => job.status === 'canceling')
 										? 'Canceling…'
 										: 'Cancel run'}
-								</button>
-							{/if}
-							{#if account.isShared && (account.isAdmin || group.jobs.some((job) => job.is_owner))}
-								{@const shared = group.jobs.every((job) => job.visibility === 'shared')}
-								<button
-									type="button"
-									class="new-analysis"
-									title={shared
-										? 'Visible to other users — click to make private'
-										: 'Let other users view these results read-only'}
-									onclick={() => store.shareGroup(group.key, !shared)}
-								>
-									{shared ? 'Make private' : 'Share results'}
 								</button>
 							{/if}
 							<button type="button" class="new-analysis" onclick={startNew}>New analysis</button>
@@ -858,6 +845,10 @@
 	}
 
 	@media (max-width: 1050px) {
+		.workspace-page {
+			flex-direction: column;
+		}
+
 		.analysis-header {
 			flex-direction: column;
 		}
