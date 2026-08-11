@@ -54,7 +54,8 @@
 			<span class="brand-text">AI Almanac</span>
 			{#if canFeedback}
 				<span class="m-4">
-					This platform is under active development. Encountered a bug or want to request a feature? Submit
+					This platform is under active development. Encountered a bug or want to request a feature?
+					Submit
 					<button class="footer-feedback-link" onclick={openFeedback}>feedback</button>.
 				</span>
 			{/if}
@@ -130,6 +131,4 @@
 	.footer-feedback-link:hover {
 		color: var(--color-accent-hover);
 	}
-
-
 </style>
