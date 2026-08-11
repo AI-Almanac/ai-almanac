@@ -55,6 +55,11 @@ DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
 # Written by train_blending_model_bundle's final fit; applied by
 # apply_blend_coefs_bundle to score live seasons without retraining.
 FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
+
+# Bump to invalidate cached blend intermediates when the builder's schema or
+# hardcoded onset options change; onset_blending code bumps invalidate via the
+# repo-ref key segment instead.
+BLEND_INTERMEDIATES_CACHE_VERSION = 1
 GCP_SECRET_NAME = "gcp-service-account"
 ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
@@ -207,12 +212,126 @@ def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) 
     )
 
 
+def _print_manifest_tails(manifest: dict, label: str) -> None:
+    """Print a failed pipeline's captured subprocess output into the run log.
+
+    The training subprocesses run with capture_output=True, so their
+    stdout/stderr only exist in the manifest tails — without this, a failed
+    run's actual error never reaches run.log or the Modal container log.
+    """
+    print(
+        f"==> {label} failed: returncode={manifest.get('returncode')}"
+        f" final_fit_returncode={manifest.get('final_fit_returncode')}"
+    )
+    for stream in ("stdout_tail", "stderr_tail"):
+        lines = manifest.get(stream) or []
+        if lines:
+            print(f"----- {stream} -----")
+            for line in lines:
+                print(line)
+    print(f"----- end {label} output -----")
+
+
 def _read_tar_member_bytes(tar_bytes: bytes, member_name: str) -> bytes:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
         extracted = tar.extractfile(member_name)
         if extracted is None:
             raise FileNotFoundError(f"{member_name!r} missing from intermediates bundle")
         return extracted.read()
+
+
+_cache_gcs_client = None
+_blending_repo_ref_cached: str | None = None
+
+
+def _cache_gcs_blob(gs_uri: str):
+    """Resolve a gs:// URI to a Blob, reusing one client across cache lookups."""
+    global _cache_gcs_client
+    from google.cloud import storage as gcs
+
+    if _cache_gcs_client is None:
+        _cache_gcs_client = gcs.Client()
+    bucket_name, key = _split_gcs_uri(gs_uri, "cache_dir")
+    return _cache_gcs_client.bucket(bucket_name).blob(key)
+
+
+def _blending_repo_ref() -> str:
+    """The onset_blending checkout's commit — processing output depends on the
+    science code, so it belongs in every cache key. Both the Modal image and
+    the local managed checkout keep .git metadata."""
+    global _blending_repo_ref_cached
+    if _blending_repo_ref_cached is None:
+        import subprocess
+
+        try:
+            _blending_repo_ref_cached = subprocess.run(
+                ["git", "-C", str(BLENDING_ROOT), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except Exception:
+            _blending_repo_ref_cached = os.environ.get(
+                "ALMANAC_BLENDING_REPO_REF", DEFAULT_REPO_REF
+            )
+    return _blending_repo_ref_cached
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    with path.open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, compute):
+    """Read-through cache for one blend intermediate; returns (obj, was_cached).
+
+    cache_dir is a local path or gs:// URI ending in .../blend-intermediates,
+    or None to disable. Keys are content hashes (input-file sha256 +
+    preprocessing params) plus the onset_blending ref and a schema version, so
+    re-uploaded files, param changes, and science-code bumps all miss instead
+    of returning stale results. Entries are self-produced pickles in our own
+    bucket/data dir — the same trust model as combined_wide.pkl.
+    """
+    import hashlib
+    import pickle
+    import uuid
+
+    if not cache_dir:
+        return compute(), False
+
+    digest = hashlib.sha256(
+        json.dumps(key_material, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    rel = f"v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/{scope}/{digest}.pkl"
+    cache_uri = str(cache_dir)
+
+    # ponytail: no eviction — entries are one small pickle per (file, params,
+    # ref); stale ref prefixes are deletable by hand if the bucket ever grows.
+    if cache_uri.startswith("gs://"):
+        blob = _cache_gcs_blob(f"{cache_uri.rstrip('/')}/{rel}")
+        if blob.exists():
+            print(f"==> cache hit {scope} {digest[:8]}", flush=True)
+            return pickle.loads(blob.download_as_bytes()), True
+        print(f"==> cache miss {scope} {digest[:8]}", flush=True)
+        obj = compute()
+        blob.upload_from_string(pickle.dumps(obj))
+        return obj, False
+
+    cache_file = Path(cache_uri) / rel
+    if cache_file.exists():
+        print(f"==> cache hit {scope} {digest[:8]}", flush=True)
+        with cache_file.open("rb") as f:
+            return pickle.load(f), True
+    print(f"==> cache miss {scope} {digest[:8]}", flush=True)
+    obj = compute()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
+    with tmp_path.open("wb") as f:
+        pickle.dump(obj, f)
+    os.replace(tmp_path, cache_file)
+    return obj, False
 
 
 @app.function(
@@ -282,10 +401,16 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             }
             if config.get("region_id"):
                 prep_kwargs["region_id"] = config["region_id"]
+            cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
+            cache_dir = f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
             intermediates = build_lat_lon_intermediates_bundle.local(
-                obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
+                obs_bundle,
+                forecast_bundles,
+                return_outputs=True,
+                cache_dir=cache_dir,
+                **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
@@ -306,8 +431,9 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             )
             print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
             if not training["manifest"].get("ok"):
+                _print_manifest_tails(training["manifest"], "Blend training pipeline")
                 raise RuntimeError(
-                    "Blend training pipeline failed; see manifest stderr_tail in run.log"
+                    "Blend training pipeline failed; stderr tail printed above (see run.log)"
                 )
 
             out_local = stage_root / "output"
@@ -452,7 +578,7 @@ def _has_adm3_dimension(path: Path) -> bool:
     return bool(names & {"adm3", "adm3_name"})
 
 
-def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
+def _remap_bundle_to_adm3(bundle: bytes, label: str, cache_dir: str | None = None) -> bytes:
     import sys
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -464,24 +590,50 @@ def _remap_bundle_to_adm3(bundle: bytes, label: str) -> bytes:
     out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
     output_paths: list[Path] = []
 
+    cache_prefix = None
+    if cache_dir and str(cache_dir).startswith("gs://"):
+        cache_prefix = (
+            f"{str(cache_dir).rstrip('/')}"
+            f"/v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/adm3_nc"
+        )
+
     for src in sorted(input_dir.glob("*.nc")):
+        target = out_dir / src.name
+
         if _has_adm3_dimension(src):
-            target = out_dir / src.name
             target.write_bytes(src.read_bytes())
             output_paths.append(target)
             continue
 
-        normalized = _normalize_grid_dims(src, remap_dir / src.name)
-        batch_aggregate_to_adm3_matrix(
-            str(remap_dir),
-            str(mapping_path),
-            input_file=str(normalized),
-        )
-        remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
-        if not remapped.is_file():
-            raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
-        target = out_dir / src.name
-        shutil.move(str(remapped), target)
+        cached_bytes = None
+        cache_blob = None
+        if cache_prefix:
+            file_hash = _file_sha256(src)
+            cache_blob = _cache_gcs_blob(f"{cache_prefix}/{file_hash}.nc")
+            if cache_blob.exists():
+                print(f"==> cache hit adm3_nc {file_hash[:8]}", flush=True)
+                cached_bytes = cache_blob.download_as_bytes()
+            else:
+                print(f"==> cache miss adm3_nc {file_hash[:8]}", flush=True)
+
+        if cached_bytes is not None:
+            target.write_bytes(cached_bytes)
+        else:
+            normalized = _normalize_grid_dims(src, remap_dir / src.name)
+            batch_aggregate_to_adm3_matrix(
+                str(remap_dir),
+                str(mapping_path),
+                input_file=str(normalized),
+            )
+            remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
+            if not remapped.is_file():
+                raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
+            shutil.move(str(remapped), target)
+            if cache_blob is not None:
+                cache_blob.upload_from_string(
+                    target.read_bytes(), content_type="application/octet-stream"
+                )
+
         output_paths.append(target)
 
     if not output_paths:
@@ -1002,8 +1154,15 @@ def build_lat_lon_intermediates_bundle(
     region_id: str | None = None,
     use_adm3_domain: bool | None = None,
     return_outputs: bool = True,
+    cache_dir: str | None = None,
 ) -> dict:
-    """Build real blending intermediate pickle files from staged NetCDF bundles."""
+    """Build real blending intermediate pickle files from staged NetCDF bundles.
+
+    cache_dir enables a read-through cache (local path or gs:// URI) of the
+    per-file processed parts and the climatology — the expensive,
+    weights-independent work — so repeat runs over the same inputs (live
+    forecast updates especially) skip recomputation. See _cached_pickle.
+    """
     import pickle
     import sys
 
@@ -1025,9 +1184,9 @@ def build_lat_lon_intermediates_bundle(
             f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
             flush=True,
         )
-        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs")
+        obs_bundle = _remap_bundle_to_adm3(obs_bundle, "obs", cache_dir=cache_dir)
         forecast_bundles = {
-            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}")
+            model_name: _remap_bundle_to_adm3(bundle, f"forecast-{model_name}", cache_dir=cache_dir)
             for model_name, bundle in forecast_bundles.items()
         }
 
@@ -1121,24 +1280,59 @@ def build_lat_lon_intermediates_bundle(
         "forecasts": {},
     }
 
-    obs_wide_parts = []
-    obs_long_parts = []
-    for path in sorted(obs_dir.glob("*.nc")):
+    def process_obs_file(path: Path) -> dict:
         df = nc_read_groundtruth_long(
             nc_path=str(path),
             var_name=obs_value_col,
             dim_rename_map=obs_spec["dimensions"]["rename"],
         )
         df = _add_lat_lon_id(df, precision=id_precision)
-        processed = process_ground_truth_rainfall_id(
+        return process_ground_truth_rainfall_id(
             df,
             obs_spec,
             mok_dt=mok_for(df),
             thr_dt=float(threshold_mm),
             value_col=obs_value_col.lower(),
         )
-        obs_wide_parts.append(processed["wide"])
-        obs_long_parts.append(processed["long"])
+
+    # Everything that shapes a processed part besides the input file itself;
+    # hardcoded onset options are covered by the repo-ref + version segments.
+    static_cache_params = {
+        "id_precision": int(id_precision),
+        "threshold_mm": float(threshold_mm),
+        "min_day": int(min_day),
+        "max_day": int(max_day),
+        "cutoff_month_day": cutoff_month_day,
+        "mok_month_day": mok_month_day,
+        "adm3_domain": bool(adm3_domain),
+    }
+    cache_hits = 0
+    cache_misses = 0
+    obs_file_digests: list[str] = []
+
+    obs_wide_parts = []
+    obs_long_parts = []
+    for path in sorted(obs_dir.glob("*.nc")):
+        if cache_dir:
+            obs_file_digests.append(_file_sha256(path))
+        if cache_dir and not include_long:
+            wide, was_cached = _cached_pickle(
+                cache_dir,
+                "obs",
+                {
+                    **static_cache_params,
+                    "obs_value_col": obs_value_col,
+                    "file_sha256": obs_file_digests[-1],
+                },
+                lambda p=path: process_obs_file(p)["wide"],
+            )
+            cache_hits += was_cached
+            cache_misses += not was_cached
+            obs_wide_parts.append(wide)
+        else:
+            processed = process_obs_file(path)
+            obs_wide_parts.append(processed["wide"])
+            obs_long_parts.append(processed["long"])
 
     obs_wide = pd.concat(obs_wide_parts, ignore_index=True)
     obs_wide_path = output_dir / "ground_truth_wide.pkl"
@@ -1163,28 +1357,45 @@ def build_lat_lon_intermediates_bundle(
         manifest["outputs"][obs_long_path.name] = {"bytes": obs_long_path.stat().st_size}
         manifest["obs"]["long_rows"] = int(len(obs_long))
 
+    def process_forecast_file(path: Path) -> dict:
+        df = nc_read_forecast_wide(
+            nc_path=str(path),
+            var_name=forecast_value_col,
+            dim_rename_map=forecast_spec["dimensions"]["rename"],
+            spec=forecast_spec,
+            day_dim="day",
+            prefix="rain",
+        )
+        df = _add_lat_lon_id(df, precision=id_precision)
+        member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
+        processed = process_rainfall_forecast_id(
+            df,
+            forecast_spec,
+            mok_dt=mok_for(df),
+            thr_dt=float(threshold_mm),
+        )
+        return {"wide": processed["wide"], "member_counts": member_counts}
+
     for model_name, input_dir in forecast_dirs.items():
         forecast_wide_parts = []
         member_counts_all = []
         for path in sorted(input_dir.glob("*.nc")):
-            df = nc_read_forecast_wide(
-                nc_path=str(path),
-                var_name=forecast_value_col,
-                dim_rename_map=forecast_spec["dimensions"]["rename"],
-                spec=forecast_spec,
-                day_dim="day",
-                prefix="rain",
+            # The forecast spec is model-agnostic, so the key needs no model
+            # name: identical files reuse one entry across models.
+            entry, was_cached = _cached_pickle(
+                cache_dir,
+                "fc",
+                {
+                    **static_cache_params,
+                    "forecast_value_col": forecast_value_col,
+                    "file_sha256": _file_sha256(path) if cache_dir else None,
+                },
+                lambda p=path: process_forecast_file(p),
             )
-            df = _add_lat_lon_id(df, precision=id_precision)
-            if "number" in df.columns:
-                member_counts_all.extend(df.groupby(["id", "time"]).size().tolist())
-            processed = process_rainfall_forecast_id(
-                df,
-                forecast_spec,
-                mok_dt=mok_for(df),
-                thr_dt=float(threshold_mm),
-            )
-            forecast_wide_parts.append(processed["wide"])
+            cache_hits += was_cached
+            cache_misses += not was_cached
+            forecast_wide_parts.append(entry["wide"])
+            member_counts_all.extend(entry["member_counts"])
 
         forecast_wide = pd.concat(forecast_wide_parts, ignore_index=True)
         forecast_path = output_dir / f"{model_name}_wide.pkl"
@@ -1259,42 +1470,74 @@ def build_lat_lon_intermediates_bundle(
             else default_train_max
         )
 
-        gt = read_gt_onset_from_tbl(obs_wide, onset_col="mr_onset_day")
-        gt_train = filter_gt_training(gt, train_year_min, train_year_max)
-        onset_counts = gt_train.groupby("id")["onset_day"].size()
-        eligible_ids = onset_counts[onset_counts >= int(min_onset_years)].index
-        gt_train = gt_train[gt_train["id"].isin(eligible_ids)].copy()
-        if gt_train.empty:
-            raise ValueError(
-                "No cells have enough historical onset years for climatology. "
-                f"min_onset_years={min_onset_years}, "
-                f"train_years={train_year_min}:{train_year_max}"
-            )
+        def compute_climatology() -> dict:
+            gt = read_gt_onset_from_tbl(obs_wide, onset_col="mr_onset_day")
+            gt_train = filter_gt_training(gt, train_year_min, train_year_max)
+            onset_counts = gt_train.groupby("id")["onset_day"].size()
+            eligible_ids = onset_counts[onset_counts >= int(min_onset_years)].index
+            gt_train = gt_train[gt_train["id"].isin(eligible_ids)].copy()
+            if gt_train.empty:
+                raise ValueError(
+                    "No cells have enough historical onset years for climatology. "
+                    f"min_onset_years={min_onset_years}, "
+                    f"train_years={train_year_min}:{train_year_max}"
+                )
 
-        issue_grid = build_issue_grid(
-            test_year_min,
-            test_year_max,
-            cutoff_month_day,
-            issue_end_month_day,
+            issue_grid = build_issue_grid(
+                test_year_min,
+                test_year_max,
+                cutoff_month_day,
+                issue_end_month_day,
+            )
+            clim = compute_all_forecasts(
+                gt_train,
+                issue_grid,
+                cutoff_month_day,
+                int(forecast_window),
+                horizons=None,
+                conditional=True,
+                cv_by_year=False,
+            )["forecasts"]
+            clim_unc = compute_all_forecasts(
+                gt_train,
+                issue_grid,
+                cutoff_month_day,
+                int(forecast_window),
+                horizons=None,
+                conditional=False,
+                cv_by_year=False,
+            )["forecasts"]
+            return {
+                "clim": clim,
+                "clim_unc": clim_unc,
+                "eligible_cells": int(len(eligible_ids)),
+            }
+
+        # Climatology derives only from obs_wide plus these params, so the
+        # obs file digests fully identify its data input. The resolved year
+        # windows are in the key: the live year moves test_year_max once per
+        # season, so updates 2..N hit.
+        climatology, was_cached = _cached_pickle(
+            cache_dir,
+            "clim",
+            {
+                **static_cache_params,
+                "obs_value_col": obs_value_col,
+                "obs_files_sha256": obs_file_digests,
+                "issue_end_month_day": issue_end_month_day,
+                "forecast_window": int(forecast_window),
+                "min_onset_years": int(min_onset_years),
+                "train_year_min": train_year_min,
+                "train_year_max": train_year_max,
+                "test_year_min": test_year_min,
+                "test_year_max": test_year_max,
+            },
+            compute_climatology,
         )
-        clim = compute_all_forecasts(
-            gt_train,
-            issue_grid,
-            cutoff_month_day,
-            int(forecast_window),
-            horizons=None,
-            conditional=True,
-            cv_by_year=False,
-        )["forecasts"]
-        clim_unc = compute_all_forecasts(
-            gt_train,
-            issue_grid,
-            cutoff_month_day,
-            int(forecast_window),
-            horizons=None,
-            conditional=False,
-            cv_by_year=False,
-        )["forecasts"]
+        cache_hits += was_cached
+        cache_misses += not was_cached
+        clim = climatology["clim"]
+        clim_unc = climatology["clim_unc"]
 
         clim_path = output_dir / "climatology_issue.pkl"
         clim_unc_path = output_dir / "climatology_issue_unc.pkl"
@@ -1312,7 +1555,7 @@ def build_lat_lon_intermediates_bundle(
             "min_onset_years": int(min_onset_years),
             "forecast_window": int(forecast_window),
             "issue_end_month_day": issue_end_month_day,
-            "eligible_cells": int(len(eligible_ids)),
+            "eligible_cells": climatology["eligible_cells"],
             "conditional_rows": int(len(clim)),
             "unconditional_rows": int(len(clim_unc)),
             "conditional_non_null_cells": int(
@@ -1442,6 +1685,9 @@ def build_lat_lon_intermediates_bundle(
             "sample_ids": combined["id"].head(5).tolist(),
             "first_columns": list(combined.columns[:60]),
         }
+
+    if cache_dir:
+        manifest["cache"] = {"hits": cache_hits, "misses": cache_misses}
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
@@ -1926,6 +2172,7 @@ def score_live_forecast(
     blend_params: dict,
     live_year: int,
     coef_pkl: bytes | None = None,
+    cache_dir: str | None = None,
 ) -> bytes:
     """Score a live/in-progress season against an already-trained blend, given
     already-staged bundles (no GCS or local-file knowledge here — that's the
@@ -1963,7 +2210,7 @@ def score_live_forecast(
     if blend_params.get("region_id"):
         prep_kwargs["region_id"] = blend_params["region_id"]
     intermediates = build_lat_lon_intermediates_bundle.local(
-        obs_bundle, forecast_bundles, return_outputs=True, **prep_kwargs
+        obs_bundle, forecast_bundles, return_outputs=True, cache_dir=cache_dir, **prep_kwargs
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
     combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
@@ -2004,7 +2251,8 @@ def score_live_forecast(
     )
     print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
     if not training["manifest"].get("ok"):
-        raise RuntimeError("Blend scoring pipeline failed; see manifest stderr_tail in run.log")
+        _print_manifest_tails(training["manifest"], "Blend scoring pipeline")
+        raise RuntimeError("Blend scoring pipeline failed; stderr tail printed above (see run.log)")
 
     result_files = training["manifest"]["result_files"]
     cv_preds_name = _find_result_file(result_files, "cv_preds_blended_model_global")
@@ -2096,6 +2344,7 @@ def score_live_forecast_bundle(
                         "falling back to retrain-based scoring"
                     )
 
+            cache_bucket = (blend_config.get("gcs_cache_bucket") or "").strip()
             csv_bytes = score_live_forecast.local(
                 obs_bundle,
                 forecast_bundles,
@@ -2103,6 +2352,7 @@ def score_live_forecast_bundle(
                 params,
                 live_year,
                 coef_pkl=coef_pkl,
+                cache_dir=f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None,
             )
 
             out_local = stage_root / "output"

@@ -488,7 +488,13 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
                     live_year = datetime.now(UTC).year
                     modal.Function.from_name(
                         "almanac-blending", "score_live_forecast_bundle"
-                    ).remote(job_id, blend_config, live_forecast_bundles, live_year, outputs_bucket)
+                    ).remote(
+                        job_id,
+                        {**blend_config, "gcs_cache_bucket": config.get("gcs_cache_bucket")},
+                        live_forecast_bundles,
+                        live_year,
+                        outputs_bucket,
+                    )
                 except Exception as exc:
                     failures["blend_scoring"] = str(exc)
                     traceback.print_exc()

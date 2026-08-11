@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import { feedbackEnabled, submitFeedback, type FeedbackCategory } from '$lib/api';
@@ -13,6 +14,13 @@
 	let issueUrl = $state('');
 
 	const enabled = feedbackEnabled();
+
+	onMount(() => {
+		if (!enabled) return;
+		const handler = () => openModal();
+		window.addEventListener('almanac-open-feedback', handler);
+		return () => window.removeEventListener('almanac-open-feedback', handler);
+	});
 
 	const placeholders: Record<FeedbackCategory, string> = {
 		bug: 'What happened? What did you expect to happen?',
