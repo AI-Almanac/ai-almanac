@@ -34,11 +34,6 @@
 		<p class="eyebrow">{eyebrow}</p>
 		<h1>{title}</h1>
 		<p class="lede">{summary}</p>
-		<div class="ornament" aria-hidden="true">
-			<span></span>
-			<i></i>
-			<span></span>
-		</div>
 	</section>
 
 	<div class="detail-grid">
@@ -90,7 +85,6 @@
 	.detail-hero {
 		max-width: 42rem;
 		margin: 0 auto;
-		border-bottom: 0.0625rem solid var(--color-border);
 		padding: clamp(0.75rem, 2.4vw, 1.4rem) 0 clamp(1.25rem, 3vw, 2.25rem);
 		text-align: center;
 	}
@@ -128,28 +122,6 @@
 		line-height: 1.5;
 	}
 
-	.ornament {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 1rem;
-		width: min(100%, 13rem);
-		margin: 1rem auto 0;
-		color: var(--color-border);
-	}
-
-	.ornament span {
-		flex: 1;
-		border-top: 0.0625rem solid currentColor;
-	}
-
-	.ornament i {
-		width: 0.5rem;
-		aspect-ratio: 1;
-		background: var(--color-accent);
-		transform: rotate(45deg);
-	}
-
 	.detail-grid {
 		display: grid;
 		grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr);
@@ -160,10 +132,6 @@
 	.detail-grid :global(section) {
 		border-top: 0.0625rem solid var(--color-border);
 		padding: 0.85rem 0 1rem;
-	}
-
-	.detail-grid :global(section:first-child) {
-		border-top: 0.14rem solid var(--color-accent);
 	}
 
 	.detail-grid :global(h2) {

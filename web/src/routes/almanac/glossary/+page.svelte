@@ -68,12 +68,11 @@
 	}
 
 	header {
-		display: grid;
-		grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr);
-		gap: 1rem;
-		align-items: end;
-		border-bottom: 0.0625rem solid var(--color-border);
-		padding-bottom: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		align-items: flex-start;
+		padding-bottom: 1.1rem;
 	}
 
 	.eyebrow {
@@ -85,11 +84,6 @@
 		text-transform: uppercase;
 	}
 
-	header h1,
-	header p {
-		grid-column: 2;
-	}
-
 	h1,
 	h2,
 	h3,
@@ -98,7 +92,7 @@
 	}
 
 	h1 {
-		margin-bottom: 0.2rem;
+		margin-bottom: 0;
 		font-family: var(--font-display);
 		font-size: clamp(1.5rem, 3vw, 1.85rem);
 		font-weight: 550;
@@ -116,7 +110,6 @@
 
 	.term-groups {
 		border-top: 0.0625rem solid var(--color-border);
-		margin-top: 0.55rem;
 	}
 
 	section {
@@ -185,15 +178,9 @@
 			width: min(100% - 2rem, 72rem);
 		}
 
-		header,
 		section,
 		article {
 			grid-template-columns: 1fr;
-		}
-
-		header h1,
-		header p {
-			grid-column: auto;
 		}
 	}
 </style>

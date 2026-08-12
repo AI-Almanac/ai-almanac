@@ -40,13 +40,12 @@
 	}
 
 	.hero {
-		border-bottom: 0.0625rem solid var(--color-border);
 		display: grid;
 		grid-template-columns: minmax(15rem, 21rem) minmax(17rem, 1fr);
 		column-gap: clamp(1rem, 4vw, 2.4rem);
 		row-gap: 0.45rem;
 		align-items: center;
-		padding: 0 0 0.9rem;
+		padding: 0 0 1.4rem;
 	}
 
 	.eyebrow {
@@ -84,7 +83,6 @@
 
 	.directory {
 		display: grid;
-		margin-top: 0.75rem;
 		border-top: 0.0625rem solid var(--color-border);
 	}
 
