@@ -62,47 +62,41 @@
 
 <style>
 	.architecture-page {
-		--almanac-rule: #bbb4a8;
-		--almanac-ink: #2c2924;
-		--almanac-red: #8b3f3d;
 		width: min(100% - 3rem, 72rem);
 		margin: 0 auto;
 		padding: clamp(1rem, 3vw, 2rem) 0;
-		color: var(--almanac-ink);
+		color: var(--color-text);
 	}
 
 	.back-link {
 		display: inline-flex;
 		margin-bottom: 0.65rem;
-		color: #736c60;
-		font-size: 0.74rem;
-		font-weight: 800;
-		letter-spacing: 0.12em;
+		color: var(--color-text-muted);
+		font-size: 0.8rem;
+		font-weight: 650;
 		text-decoration: none;
-		text-transform: uppercase;
+	}
+
+	.back-link:hover {
+		color: var(--color-text);
+		text-decoration: underline;
 	}
 
 	header {
-		display: grid;
-		grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr);
-		gap: 1rem;
-		align-items: end;
-		border-bottom: 0.0625rem solid var(--almanac-rule);
-		padding-bottom: 0.6rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		align-items: flex-start;
+		padding-bottom: 1.1rem;
 	}
 
 	.eyebrow {
 		margin: 0;
-		color: var(--almanac-red);
-		font-size: 0.68rem;
-		font-weight: 800;
-		letter-spacing: 0.14em;
+		color: var(--color-accent);
+		font-size: 0.72rem;
+		font-weight: 750;
+		letter-spacing: 0.1em;
 		text-transform: uppercase;
-	}
-
-	header h1,
-	header p {
-		grid-column: 2;
 	}
 
 	h1,
@@ -113,27 +107,28 @@
 	}
 
 	h1 {
-		margin-bottom: 0.2rem;
-		font-size: clamp(1.45rem, 3vw, 2.35rem);
-		line-height: 1;
-		letter-spacing: 0;
+		margin-bottom: 0;
+		font-family: var(--font-display);
+		font-size: clamp(1.5rem, 3vw, 1.85rem);
+		font-weight: 550;
+		line-height: 1.2;
+		letter-spacing: -0.025em;
 	}
 
 	header p {
 		max-width: 38rem;
 		margin-bottom: 0;
-		color: #514c43;
-		font-size: 0.9rem;
-		font-weight: 600;
+		color: var(--color-text-muted);
+		font-size: 0.92rem;
+		line-height: 1.5;
 	}
 
 	.architecture-list {
-		border-top: 0.0625rem solid var(--almanac-rule);
-		margin-top: 0.55rem;
+		border-top: 0.0625rem solid var(--color-border);
 	}
 
 	section {
-		border-bottom: 0.0625rem solid var(--almanac-rule);
+		border-bottom: 0.0625rem solid var(--color-border-subtle);
 		padding: 0.62rem 0;
 	}
 
@@ -144,24 +139,26 @@
 	}
 
 	.row-number {
-		color: #736c60;
+		color: var(--color-text-dim);
 		font-family: var(--font-mono);
-		font-size: 0.7rem;
+		font-size: 0.72rem;
 	}
 
 	h2 {
 		margin-bottom: 0.25rem;
+		font-family: var(--font-display);
 		font-size: 1.05rem;
-		line-height: 1.1;
+		font-weight: 650;
+		line-height: 1.3;
+		letter-spacing: -0.015em;
 	}
 
 	.entry-heading p {
 		max-width: 48rem;
 		margin-bottom: 0;
-		color: #3d3932;
-		font-size: 0.84rem;
-		font-weight: 600;
-		line-height: 1.35;
+		color: var(--color-text-muted);
+		font-size: 0.88rem;
+		line-height: 1.45;
 	}
 
 	.entry-body {
@@ -174,20 +171,19 @@
 
 	h3 {
 		margin-bottom: 0.22rem;
-		color: var(--almanac-red);
-		font-size: 0.62rem;
-		font-weight: 800;
-		letter-spacing: 0.12em;
+		color: var(--color-text-muted);
+		font-size: 0.68rem;
+		font-weight: 750;
+		letter-spacing: 0.1em;
 		text-transform: uppercase;
 	}
 
 	ul {
 		margin: 0;
 		padding-left: 1rem;
-		color: #514c43;
-		font-size: 0.84rem;
-		font-weight: 600;
-		line-height: 1.3;
+		color: var(--color-text-muted);
+		font-size: 0.88rem;
+		line-height: 1.45;
 	}
 
 	.model-links {
@@ -196,30 +192,19 @@
 	}
 
 	.model-links a {
-		color: var(--almanac-ink);
-		font-weight: 800;
-		text-decoration-color: var(--almanac-red);
-		text-decoration-thickness: 0.08rem;
+		color: var(--color-accent);
+		font-weight: 600;
+		text-decoration-thickness: 0.0625rem;
 		text-underline-offset: 0.16rem;
 	}
 
 	.model-links a:hover {
-		color: var(--almanac-red);
+		color: var(--color-accent-hover);
 	}
 
 	@media (max-width: 820px) {
 		.architecture-page {
 			width: min(100% - 2rem, 72rem);
-		}
-
-		header {
-			grid-template-columns: 1fr;
-			gap: 0.25rem;
-		}
-
-		header h1,
-		header p {
-			grid-column: auto;
 		}
 
 		.entry-body {

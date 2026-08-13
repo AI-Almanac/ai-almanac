@@ -4,7 +4,7 @@
 	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
 </script>
 
-<nav class="site-nav" class:almanac-nav={$page.url.pathname.startsWith('/almanac')}>
+<nav class="site-nav">
 	<div class="nav-inner">
 		<a href="/" class="brand">
 			<span class="brand-mark">AI</span>
@@ -156,59 +156,6 @@
 		background: var(--color-surface-muted);
 	}
 
-	.almanac-nav {
-		position: static;
-		border-bottom-color: #bbb4a8;
-		background: #f7f4ef;
-		backdrop-filter: none;
-		-webkit-backdrop-filter: none;
-	}
-
-	.almanac-nav .nav-inner {
-		width: min(100% - 4rem, 94rem);
-		min-height: 4.5rem;
-	}
-
-	.almanac-nav .brand,
-	.almanac-nav .links a {
-		font-weight: 800;
-		letter-spacing: 0;
-		text-transform: none;
-	}
-
-	.almanac-nav .brand {
-		font-size: 0.92rem;
-	}
-
-	.almanac-nav .brand-mark {
-		width: 1.45rem;
-		border: 0.0625rem solid #8b3f3d;
-		border-radius: 0;
-		background: transparent;
-		color: #8b3f3d;
-		font-family: var(--font-mono);
-		font-size: 0.68rem;
-	}
-
-	.almanac-nav .links {
-		gap: 1.1rem;
-	}
-
-	.almanac-nav .links a {
-		border-bottom: 0.14rem solid transparent;
-		border-radius: 0;
-		color: #2c2924;
-		font-size: 0.92rem;
-		padding: 0.3rem 0 0.55rem;
-	}
-
-	.almanac-nav .links a:hover,
-	.almanac-nav .links a.active {
-		background: transparent;
-		border-bottom-color: #8b3f3d;
-		color: #8b3f3d;
-	}
-
 	@media (max-width: 680px) {
 		.nav-inner {
 			align-items: flex-start;
@@ -219,10 +166,6 @@
 		.links {
 			width: 100%;
 			overflow-x: auto;
-		}
-
-		.almanac-nav .nav-inner {
-			width: min(100% - 2rem, 94rem);
 		}
 	}
 </style>
