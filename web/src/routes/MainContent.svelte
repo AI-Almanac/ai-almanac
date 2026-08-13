@@ -39,7 +39,7 @@
 
 <main class="landing">
 	<section class="search-hero">
-		<h1>AI Almanac</h1>
+		<h1>Laude AI Almanac</h1>
 		<p class="lede">Human-centric Climate Insights using the latest AI Weather Prediction Models</p>
 
 		<form class="search-box" action="/benchmarks" method="GET">
