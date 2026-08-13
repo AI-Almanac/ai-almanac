@@ -19,22 +19,22 @@
 		gap: 0;
 		margin: 0;
 		padding-left: 0;
-		border-top: 0.0625rem solid #bbb4a8;
+		border-top: 0.0625rem solid var(--color-border-subtle);
 		list-style: none;
 	}
 
 	.tag-list li {
-		border-bottom: 0.0625rem solid #bbb4a8;
-		color: #2c2924;
+		border-bottom: 0.0625rem solid var(--color-border-subtle);
+		color: var(--color-text);
 		padding: 0.28rem 0.55rem 0.28rem 0;
 		font-family: var(--font-body);
-		font-size: 0.86rem;
-		font-weight: 800;
+		font-size: 0.88rem;
+		font-weight: 600;
 	}
 
 	.empty {
 		margin: 0;
-		color: #736c60;
+		color: var(--color-text-dim);
 		font-family: var(--font-body);
 		font-style: italic;
 	}

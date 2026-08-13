@@ -16,16 +16,15 @@
 	.bullet-list {
 		margin: 0;
 		padding-left: 1.1rem;
-		color: #514c43;
+		color: var(--color-text-muted);
 		font-family: var(--font-body);
-		font-size: 0.95rem;
-		font-weight: 600;
-		line-height: 1.42;
+		font-size: 0.92rem;
+		line-height: 1.5;
 	}
 
 	.empty {
 		margin: 0;
-		color: #736c60;
+		color: var(--color-text-dim);
 		font-family: var(--font-body);
 		font-style: italic;
 	}
