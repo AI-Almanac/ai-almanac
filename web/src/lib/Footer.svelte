@@ -60,6 +60,10 @@
 				</span>
 			{/if}
 		</div>
+		<nav class="footer-links" aria-label="Site policies">
+			<a href="/attribution">Attribution</a>
+			<a href="/privacy">Data privacy</a>
+		</nav>
 		<span>&copy; {new Date().getFullYear()} &mdash; University of Chicago</span>
 	</div>
 </footer>
@@ -114,6 +118,24 @@
 		color: var(--color-text-dim);
 		text-decoration: none;
 		letter-spacing: 0.01em;
+	}
+
+	.footer-links {
+		display: flex;
+		align-items: center;
+		gap: 1.1rem;
+		white-space: nowrap;
+	}
+
+	.footer-links a {
+		color: var(--color-text-dim);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+		text-decoration-color: var(--color-border);
+	}
+
+	.footer-links a:hover {
+		color: var(--color-text-muted);
 	}
 
 	.footer-feedback-link {
