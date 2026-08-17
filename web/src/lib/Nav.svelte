@@ -7,6 +7,7 @@
 <nav class="site-nav">
 	<div class="nav-inner">
 		<a href="/" class="brand">
+			<span>Laude</span>
 			<span class="brand-mark">AI</span>
 			<span>Almanac</span>
 		</a>
