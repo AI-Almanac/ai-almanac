@@ -15,9 +15,9 @@
 		<p class="eyebrow">Credits and licenses</p>
 		<h1>Model and dataset attribution</h1>
 		<p>
-			AI Almanac uses publicly available forecast models and observations by default.
-			Every default source is listed below with its provider, corresponding citation,
-			and the license that governs the artifact used on this site.
+			AI Almanac uses publicly available forecast models and observations by default. Every default
+			source is listed below with its provider, corresponding citation, and the license that governs
+			the artifact used on this site.
 		</p>
 	</header>
 
@@ -66,8 +66,8 @@
 			authoritative if they disagree with this page.
 		</p>
 		<p>
-			Something credited incorrectly or missing? See <a href="/privacy">Data privacy</a> for how we handle user data,
-			and the feedback link below to suggest improvements.
+			Something credited incorrectly or missing? See <a href="/privacy">Data privacy</a> for how we handle
+			user data, and the feedback link below to suggest improvements.
 		</p>
 	</footer>
 </main>
