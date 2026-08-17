@@ -7,8 +7,7 @@
 <nav class="site-nav">
 	<div class="nav-inner">
 		<a href="/" class="brand">
-			<span class="brand-mark">AI</span>
-			<span>Almanac</span>
+			<img class="brand" src="/laude-ai-almanac-logo.png" />
 		</a>
 		<div class="links" aria-label="Primary navigation">
 			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
@@ -81,10 +80,8 @@
 	}
 
 	.brand {
-		gap: 0.65rem;
-		color: var(--color-text);
-		font-weight: 800;
-		text-decoration: none;
+		display: flex;
+		height: 2rem;
 	}
 
 	.brand-mark {
