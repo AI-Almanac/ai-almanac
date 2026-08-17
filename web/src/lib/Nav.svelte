@@ -16,7 +16,7 @@
 				<img
 					class="brand-logo"
 					src="/laude-ai-almanac-logo.png"
-					alt="AI Almanac"
+					alt="Laude AI Almanac"
 					onerror={() => (logoFailed = true)}
 				/>
 			{/if}
