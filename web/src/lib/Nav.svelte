@@ -2,12 +2,24 @@
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
+
+	let logoFailed = $state(false);
 </script>
 
 <nav class="site-nav">
 	<div class="nav-inner">
 		<a href="/" class="brand">
-			<img class="brand" src="/laude-ai-almanac-logo.png" />
+			{#if logoFailed}
+				<span class="brand-mark">AI</span>
+				<span>Almanac</span>
+			{:else}
+				<img
+					class="brand-logo"
+					src="/laude-ai-almanac-logo.png"
+					alt="AI Almanac"
+					onerror={() => (logoFailed = true)}
+				/>
+			{/if}
 		</a>
 		<div class="links" aria-label="Primary navigation">
 			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
@@ -80,7 +92,15 @@
 	}
 
 	.brand {
-		display: flex;
+		gap: 0.65rem;
+		color: var(--color-text);
+		font-weight: 800;
+		text-decoration: none;
+	}
+
+	.brand-logo {
+		display: block;
+		width: auto;
 		height: 2rem;
 	}
 
