@@ -10,6 +10,7 @@
 	<div class="nav-inner">
 		<a href="/" class="brand">
 			{#if logoFailed}
+				<span>Laude</span>
 				<span class="brand-mark">AI</span>
 				<span>Almanac</span>
 			{:else}
