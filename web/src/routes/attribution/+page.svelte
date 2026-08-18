@@ -63,11 +63,11 @@
 		<p>
 			Most of the AI models above were trained on the ECMWF ERA5 reanalysis, distributed through the
 			Copernicus Climate Change Service. Licenses can change upstream; the provider links are
-			authoritative if they disagree with this page.
+			authoritative if they differ from this page.
 		</p>
 		<p>
-			Something credited incorrectly or missing? See <a href="/privacy">Data privacy</a> for how we handle
-			user data, and the feedback link below to suggest improvements.
+			See <a href="/privacy">Data privacy</a> for how we handle user data, and the feedback link below
+			to suggest improvements.
 		</p>
 	</footer>
 </main>

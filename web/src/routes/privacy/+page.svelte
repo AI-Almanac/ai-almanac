@@ -27,7 +27,7 @@
 	<header>
 		<p class="eyebrow">Policy</p>
 		<h1>Data privacy</h1>
-		<p>The short version, which is also the whole version.</p>
+		<p>How AI Almanac handles user-provided data, and where its default data comes from.</p>
 	</header>
 
 	<div class="points">
