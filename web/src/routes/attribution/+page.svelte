@@ -66,8 +66,8 @@
 			authoritative if they differ from this page.
 		</p>
 		<p>
-			See <a href="/privacy">Data privacy</a> for how we handle
-			user data, and the feedback link below to suggest improvements.
+			See <a href="/privacy">Data privacy</a> for how we handle user data, and the feedback link below
+			to suggest improvements.
 		</p>
 	</footer>
 </main>
