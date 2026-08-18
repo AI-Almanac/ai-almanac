@@ -6,6 +6,8 @@ asyncio.to_thread() from the async route handlers in routers/jobs.py.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from pydantic import BaseModel
 
 from .storage import StorageBackend
@@ -200,6 +202,10 @@ def compute_job_metrics(
     return JobMetrics(job_id=job_id, windows=windows, grid=grid_info, bbox=actual_bbox)
 
 
+# ponytail: job outputs are immutable once written, so cache whole responses
+# with no invalidation; move caching into StorageBackend if cell/metrics
+# endpoints need the same treatment.
+@lru_cache(maxsize=64)
 def compute_job_grid(
     job_id: str,
     storage: StorageBackend,

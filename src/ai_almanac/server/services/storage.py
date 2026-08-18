@@ -395,11 +395,16 @@ class GCSStorage:
         return [f"gs://{match}" for match in sorted(fs.glob(f"{base}/{glob}"))]
 
     def open_nc_dataset(self, path):
+        import io
+
         import xarray as xr
 
-        fs = self._fs()
-        with _nc_lock, fs.open(str(path).removeprefix("gs://"), "rb") as handle:
-            return xr.load_dataset(handle, engine="h5netcdf")
+        # One GET for the whole object, outside the lock: h5netcdf over a
+        # streaming gcsfs handle turns every internal seek into a separate
+        # GCS range request, all serialized behind _nc_lock.
+        data = self._fs().cat_file(str(path).removeprefix("gs://"))
+        with _nc_lock:
+            return xr.load_dataset(io.BytesIO(data), engine="h5netcdf")
 
     def save_chat_figure(self, figure_id: str, data: bytes) -> None:
         ext, content_type = detect_chat_figure_format(data)
