@@ -8,7 +8,7 @@ ROMP-specific concerns never leak into execution or supervision.
 
 from __future__ import annotations
 
-from ai_almanac.paths import benchmark_env_dir
+from ai_almanac.paths import data_root
 from ai_almanac.settings import settings
 
 
@@ -30,5 +30,5 @@ def build_job_env(config: dict, output_dir: str, figure_dir: str) -> dict[str, s
         env["CDSAPI_KEY"] = settings.cdsapi_key
         env["CDSAPI_URL"] = settings.cdsapi_url
     # Benchmark env reads its data from the app data dir for caching.
-    env["AI_ALMANAC_DATA_DIR"] = str(benchmark_env_dir().parent)
+    env["AI_ALMANAC_DATA_DIR"] = str(data_root())
     return env

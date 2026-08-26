@@ -9,6 +9,7 @@ directive in pyproject.toml.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import time
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -88,10 +89,22 @@ def _should_auto_migrate() -> bool:
     return settings.deployment_mode == "personal" and settings.auto_migrate
 
 
+def _bootstrap_local_secrets() -> None:
+    """Generate missing secrets for personal-mode installs; reload if written."""
+    if settings.deployment_mode != "personal":
+        return
+    from ai_almanac.secrets_bootstrap import ensure_local_secrets
+    from ai_almanac.settings import reload_settings
+
+    if ensure_local_secrets():
+        reload_settings()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_layout()
     _reload_user_config()
+    _bootstrap_local_secrets()
     _enforce_deployment()
     await _wait_for_database()
     if _should_auto_migrate():
@@ -324,6 +337,71 @@ async def _spa_navigation_fallback(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         return response
     return await call_next(request)
+
+
+_TOKEN_COOKIE = "almanac_token"
+_TOKEN_MAX_AGE = 2592000  # 30 days
+
+
+@app.middleware("http")
+async def enforce_access_token(request: Request, call_next):
+    """Bearer-token gate for personal installs on shared hosts.
+
+    No-op when serve_access_token is empty. When set:
+    - /health is exempt (liveness probes must not require a token).
+    - Accepts cookie almanac_token, Authorization: Bearer <t>, or ?token= on GETs.
+    - ?token= on a GET → 303 redirect stripping the param + Set-Cookie (HttpOnly,
+      SameSite=Lax). The token never appears in logs (log_requests logs path only).
+    - All comparisons use hmac.compare_digest to prevent timing attacks.
+
+    DNS-rebinding: loopback binding + SameSite=Lax is the protection boundary;
+    full Host-header checking (Jupyter-style) is out of scope for this feature.
+    """
+    token = settings.serve_access_token
+    if not token:
+        return await call_next(request)
+
+    if request.url.path == "/health":
+        return await call_next(request)
+
+    def _valid(candidate: str | None) -> bool:
+        if not candidate:
+            return False
+        return hmac.compare_digest(candidate, token)
+
+    # Cookie
+    if _valid(request.cookies.get(_TOKEN_COOKIE)):
+        return await call_next(request)
+
+    # Authorization: Bearer
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and _valid(auth_header[7:]):
+        return await call_next(request)
+
+    # ?token= on GET only
+    if request.method == "GET":
+        query_token = request.query_params.get("token")
+        if _valid(query_token):
+            redirect_url = str(request.url.remove_query_params("token"))
+            response = RedirectResponse(redirect_url, status_code=303)
+            response.set_cookie(
+                _TOKEN_COOKIE,
+                token,
+                httponly=True,
+                samesite="lax",
+                path="/",
+                max_age=_TOKEN_MAX_AGE,
+            )
+            return response
+
+    # Reject
+    if _is_page_navigation(request):
+        return HTMLResponse(
+            "<html><body><p>Access token required — open the URL printed "
+            "in the terminal where <code>ai-almanac serve</code> is running.</p></body></html>",
+            status_code=401,
+        )
+    return JSONResponse({"detail": "Access token required"}, status_code=401)
 
 
 app.include_router(assistant.router)

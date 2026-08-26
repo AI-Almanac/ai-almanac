@@ -21,7 +21,8 @@ from ai_almanac.envs.pixi_bootstrap import (
     _current_pixi_platform,
     ensure_pixi,
 )
-from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
+from ai_almanac.locking import file_lock
+from ai_almanac.paths import benchmark_env_dir, blending_env_dir, env_root, forecast_env_dir
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
@@ -138,6 +139,14 @@ def _install(
 def ensure_blending_env(progress: ProgressCallback | None = None) -> Path:
     """Install the blend dependencies and materialize its pinned source tree."""
     progress = progress or _default_progress
+    with file_lock(
+        env_root() / ".prepare.lock",
+        message="another instance is preparing environments in this env root; waiting…",
+    ):
+        return _ensure_blending_env(progress)
+
+
+def _ensure_blending_env(progress: ProgressCallback) -> Path:
     env_dir = blending_env_dir()
     _install(_blending_pixi_spec(), env_dir, "blending", progress)
     source_dir = env_dir / "onset-blending"
@@ -203,6 +212,14 @@ def ensure_forecast_env(progress: ProgressCallback | None = None) -> Path | None
     Skipped (not an error) on platforms forecast.pixi.toml doesn't support.
     """
     progress = progress or _default_progress
+    with file_lock(
+        env_root() / ".prepare.lock",
+        message="another instance is preparing environments in this env root; waiting…",
+    ):
+        return _ensure_forecast_env(progress)
+
+
+def _ensure_forecast_env(progress: ProgressCallback) -> Path | None:
     current = _current_pixi_platform()
     if current not in _FORECAST_PLATFORMS:
         progress(
@@ -234,11 +251,15 @@ def ensure_env(progress: ProgressCallback | None = None) -> tuple[Path, Path, Pa
     None when skipped on an unsupported platform (see ensure_forecast_env).
     """
     progress = progress or _default_progress
-    _ensure_pixi(progress)
-    env_dir = benchmark_env_dir()
-    _install(_pixi_spec(), env_dir, "benchmark", progress)
-    blending_dir = ensure_blending_env(progress)
-    forecast_dir = ensure_forecast_env(progress)
+    with file_lock(
+        env_root() / ".prepare.lock",
+        message="another instance is preparing environments in this env root; waiting…",
+    ):
+        _ensure_pixi(progress)
+        env_dir = benchmark_env_dir()
+        _install(_pixi_spec(), env_dir, "benchmark", progress)
+        blending_dir = _ensure_blending_env(progress)
+        forecast_dir = _ensure_forecast_env(progress)
     return env_dir, blending_dir, forecast_dir
 
 
