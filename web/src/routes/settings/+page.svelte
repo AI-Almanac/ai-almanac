@@ -17,8 +17,9 @@
 			</p>
 		{:else}
 			<p class="lede">
-				Changes are saved to <code>{settings.configPath || 'config.yaml'}</code> and take effect immediately
-				for most settings. Environment variables still override values set here.
+				Changes are saved to the database and take effect immediately. Environment variables still
+				override values set here. The file <code>{settings.configPath || 'config.yaml'}</code> is the
+				hand-editable seed — values set through this page take precedence over it.
 			</p>
 		{/if}
 		<dl class="facts">

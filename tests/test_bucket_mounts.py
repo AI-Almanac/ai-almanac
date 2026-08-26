@@ -12,7 +12,7 @@ def _clear_mounts(monkeypatch: pytest.MonkeyPatch):
     """Start each test with no bucket_mounts and no shared_cache_dir."""
     monkeypatch.setattr("ai_almanac.settings.settings.bucket_mounts", {})
     monkeypatch.setattr("ai_almanac.settings.settings.shared_cache_dir", "")
-    monkeypatch.setattr("ai_almanac.settings.settings.job_outputs_dir", "")
+    monkeypatch.setattr("ai_almanac.settings.settings.output_dir", "")
 
 
 def _set_mounts(monkeypatch: pytest.MonkeyPatch, mounts: dict[str, str]) -> None:
@@ -80,13 +80,13 @@ def test_shorter_mount_still_matches_other_paths(monkeypatch: pytest.MonkeyPatch
 
 
 def test_outputs_bucket_name_no_mapping_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("ai_almanac.settings.settings.job_outputs_dir", "/mnt/outputs")
+    monkeypatch.setattr("ai_almanac.settings.settings.output_dir", "/mnt/outputs")
     assert bm.outputs_bucket_name() is None
 
 
 def test_outputs_bucket_name_bare_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_mounts(monkeypatch, {"/mnt/outputs": "gs://outputs-bucket"})
-    monkeypatch.setattr("ai_almanac.settings.settings.job_outputs_dir", "/mnt/outputs")
+    monkeypatch.setattr("ai_almanac.settings.settings.output_dir", "/mnt/outputs")
     assert bm.outputs_bucket_name() == "outputs-bucket"
 
 
@@ -95,7 +95,7 @@ def test_outputs_bucket_name_with_key_prefix_returns_none(
 ) -> None:
     # A gs:// URI with a key prefix violates the bare-bucket invariant.
     _set_mounts(monkeypatch, {"/mnt/data": "gs://data-bucket"})
-    monkeypatch.setattr("ai_almanac.settings.settings.job_outputs_dir", "/mnt/data/outputs")
+    monkeypatch.setattr("ai_almanac.settings.settings.output_dir", "/mnt/data/outputs")
     assert bm.outputs_bucket_name() is None
 
 

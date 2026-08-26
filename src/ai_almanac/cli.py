@@ -249,6 +249,146 @@ def backup(
 
 
 @app.command()
+def init(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompts.")] = False,
+    llm_base_url: Annotated[str, typer.Option(help="OpenAI-compatible base URL.")] = "",
+    llm_model: Annotated[str, typer.Option(help="Model name.")] = "",
+    llm_api_key: Annotated[str, typer.Option(help="API key (sealed in DB overlay).")] = "",
+    dataset_mount_roots: Annotated[
+        str, typer.Option(help="Comma-separated dataset mount root paths.")
+    ] = "",
+    output_dir: Annotated[str, typer.Option(help="Job output directory.")] = "",
+    prepare_envs: Annotated[
+        bool, typer.Option("--prepare-envs/--no-prepare-envs", help="Install environments.")
+    ] = False,
+    include_forecast: Annotated[
+        bool,
+        typer.Option("--include-forecast/--no-include-forecast", help="Include forecast envs."),
+    ] = False,
+    skip_llm_test: Annotated[
+        bool, typer.Option("--skip-llm-test", help="Save LLM config without testing.")
+    ] = False,
+) -> None:
+    """Interactive first-run configuration (headless-friendly with --yes)."""
+    import asyncio
+
+    from ai_almanac.secrets_bootstrap import ensure_local_secrets
+    from ai_almanac.server.app import _apply_migrations
+    from ai_almanac.server.services.setup import (
+        detect_platform,
+        finish_setup,
+        grandfather_existing_install,
+        probe_gpu,
+        save_llm,
+        save_storage,
+        setup_required,
+        test_llm_connection,
+    )
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    ensure_layout()
+    _apply_migrations()
+    if ensure_local_secrets():
+        reload_settings()
+
+    grandfather_existing_install()
+    reload_settings()
+
+    if not setup_required():
+        if yes:
+            typer.echo("setup already complete — re-running with --yes.")
+        else:
+            typer.confirm("Setup already complete. Re-run anyway?", abort=True)
+
+    # System info
+    plat = detect_platform()
+    gpu = probe_gpu()
+    typer.echo(f"platform : {plat.get('platform')} ({plat.get('machine')})")
+    typer.echo(f"gpu      : {gpu['name'] if gpu else 'none detected'}")
+    typer.echo(f"data dir : {data_root()}")
+    typer.echo("")
+
+    # Storage
+    out_dir_val = output_dir.strip() or None
+    mounts_val = [r.strip() for r in dataset_mount_roots.split(",") if r.strip()]
+    if not yes:
+        out_dir_val = (
+            typer.prompt("Job output directory (leave blank for default)", default="") or None
+        )
+        mounts_input = typer.prompt(
+            "Dataset mount roots (comma-separated, blank for none)", default=""
+        )
+        mounts_val = [r.strip() for r in mounts_input.split(",") if r.strip()]
+    save_storage(out_dir_val, mounts_val if mounts_val else None)
+    typer.echo("storage settings saved")
+
+    # LLM
+    base_url_val = llm_base_url.strip()
+    model_val = llm_model.strip()
+    key_val = llm_api_key.strip() or None
+
+    if not base_url_val and not yes:
+        base_url_val = typer.prompt("LLM base URL", default="http://localhost:11434/v1")
+    if not model_val and not yes:
+        model_val = typer.prompt("LLM model name")
+    if not key_val and not yes:
+        key_val = typer.prompt("LLM API key (blank if not required)", default="") or None
+
+    if base_url_val and model_val:
+        if not skip_llm_test:
+            typer.echo("testing LLM connection…")
+            result = asyncio.run(test_llm_connection(base_url_val, model_val, key_val))
+            if not result.ok:
+                typer.secho(f"LLM test failed: {result.error}", fg=typer.colors.RED, err=True)
+                if yes:
+                    raise typer.Exit(code=1)
+                typer.confirm("Save anyway?", abort=True)
+        save_llm(base_url_val, model_val, key_val)
+        typer.echo("LLM settings saved")
+    else:
+        typer.secho("skipping LLM configuration (no URL/model provided)", fg=typer.colors.YELLOW)
+
+    # Env prepare
+    if not prepare_envs and not yes:
+        prepare_envs = typer.confirm("Install benchmark environments now?", default=False)
+
+    if prepare_envs:
+        from ai_almanac.envs.manager import ensure_env
+
+        def _progress(evt: object) -> None:
+            from ai_almanac.envs.manager import EnvProgressEvent
+
+            if isinstance(evt, EnvProgressEvent):
+                if evt.kind == "line" and evt.line:
+                    typer.echo(f"  {evt.line}")
+                elif evt.kind in ("phase_started", "phase_finished", "phase_failed"):
+                    typer.echo(f"▸ [{evt.phase}] {evt.detail or evt.kind}")
+
+        try:
+            benchmark_dir, blending_dir, forecast_dir = ensure_env(
+                progress=_progress, include_forecast=include_forecast
+            )
+            typer.echo(f"benchmark env ready at {benchmark_dir}")
+            typer.echo(f"blending env ready at {blending_dir}")
+            if forecast_dir:
+                typer.echo(f"forecast env ready at {forecast_dir}")
+        except RuntimeError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            if yes:
+                typer.secho("continuing despite env error", fg=typer.colors.YELLOW)
+            else:
+                typer.confirm("Environment install failed. Continue to finish setup?", abort=True)
+
+    # Finish
+    finish_setup()
+    typer.secho("✓ setup complete", fg=typer.colors.GREEN)
+    typer.echo(
+        f"next step: {typer.style('ai-almanac serve', fg=typer.colors.BRIGHT_WHITE, bold=True)}"
+    )
+
+
+@app.command()
 def reset(
     confirm: Annotated[
         bool,
