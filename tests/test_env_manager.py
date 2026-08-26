@@ -6,21 +6,17 @@ replaced with a synthetic asset so sha256s are always computable.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import io
 import os
-import stat
 import subprocess
 import tarfile as _tarfile
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
 from ai_almanac.envs import manager as mgr
 from ai_almanac.envs import pixi_bootstrap as pb
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -220,7 +216,6 @@ def test_run_streaming_failure_includes_tail(tmp_path: Path) -> None:
 
 def test_install_event_sequence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mgr, "_ensure_pixi", lambda progress=None: "/bin/echo")
-    from importlib.resources import files
 
     monkeypatch.setattr(
         "ai_almanac.envs.manager._pixi_spec",

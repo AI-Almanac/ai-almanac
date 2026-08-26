@@ -20,7 +20,7 @@ import logging
 import os
 import secrets
 import stat
-from pathlib import Path
+from contextlib import suppress
 
 from ai_almanac.locking import file_lock
 from ai_almanac.paths import data_root, secrets_env_path
@@ -156,8 +156,6 @@ def _write_secrets_file(values: dict[str, str]) -> None:
             os.close(fd)
         os.replace(str(tmp_path), str(path))
     except Exception:
-        try:
+        with suppress(OSError):
             tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise

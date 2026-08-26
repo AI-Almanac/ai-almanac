@@ -60,6 +60,8 @@ def runtime_spa_config() -> Response:
     payload would technically be valid but a global assignment is the simplest
     contract for the frontend.
     """
+    from ai_almanac.server.services.setup import setup_required
+
     payload = {
         "apiUrl": "",  # same-origin by default
         "authMode": settings.auth_mode,
@@ -67,6 +69,7 @@ def runtime_spa_config() -> Response:
         "submittedByHeader": settings.submitted_by_header,
         "version": _app_version(),
         "feedbackEnabled": feedback_enabled(),
+        "setupRequired": setup_required(),
     }
     body = f"window.__ALMANAC_CONFIG__ = {json.dumps(payload)};\n"
     return Response(

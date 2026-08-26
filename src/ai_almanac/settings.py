@@ -235,6 +235,12 @@ class Settings(BaseSettings):
     # excluded from _FIELD_GROUPS so it never reaches the settings UI schema.
     serve_access_token: str = ""
 
+    # Whether first-run setup has been completed. Set via the web wizard or
+    # `ai-almanac init`. Never a settings-UI field; grandfathered to True on
+    # existing installs (see server.services.setup.grandfather_existing_install).
+    # SETUP_COMPLETE=1 env var wins (used by conftest.py and cloud deploys).
+    setup_complete: bool = False
+
     # Shared-host quotas.
     max_active_jobs_per_user: int = 10
     max_concurrent_llm_requests_per_user: int = 2

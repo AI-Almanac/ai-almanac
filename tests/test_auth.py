@@ -494,7 +494,7 @@ def test_enforce_shared_globus_needs_no_groups_and_keeps_mode(
     assert settings.auth_mode == "globus"  # not forced to proxy
 
 
-def test_enforce_shared_requires_mount_roots(
+def test_enforce_shared_requires_mount_roots_globus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")

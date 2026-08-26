@@ -32,7 +32,12 @@ def test_longest_prefix_wins(tmp_path: Path) -> None:
 
 
 def test_no_match_returns_none() -> None:
-    result = _match_mounts(_SAMPLE_MOUNTS, Path("/nonexistent/path"))
+    # Sample without a root mount so paths outside /mnt have no match
+    mounts_no_root = """\
+server:/data /mnt/data nfs4 rw,relatime 0 0
+//server/share /mnt/smb cifs rw,relatime 0 0
+"""
+    result = _match_mounts(mounts_no_root, Path("/home/user/file.nc"))
     assert result is None
 
 

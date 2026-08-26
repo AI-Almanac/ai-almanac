@@ -29,6 +29,9 @@ os.environ["RUNNER_MODE"] = "stub"
 # Set via env (not a settings mutation) so it survives `reload_settings()` when
 # a test exercises the real app lifespan (e.g. TestClient-based WebSocket tests).
 os.environ["LLM_BASE_URL"] = "http://test-llm.local"
+# Disable the setup gate for the entire test suite. Setup-specific tests
+# monkeypatch.delenv this and set settings.setup_complete = False explicitly.
+os.environ["SETUP_COMPLETE"] = "1"
 
 
 @pytest.fixture(scope="session", autouse=True)

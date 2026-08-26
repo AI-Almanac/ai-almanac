@@ -11,7 +11,6 @@ from fastapi import (
     HTTPException,
     status,
 )
-
 from pydantic import BaseModel
 
 from ai_almanac.server.auth import CurrentUser

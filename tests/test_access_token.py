@@ -88,7 +88,7 @@ def test_query_token_redirects_and_sets_cookie(client: TestClient) -> None:
     cookie = resp.headers.get("set-cookie", "")
     assert "almanac_token=" in cookie
     assert "HttpOnly" in cookie
-    assert "SameSite=lax" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
 
 
 def test_query_token_not_accepted_on_post(client: TestClient) -> None:

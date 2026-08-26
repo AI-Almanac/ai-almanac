@@ -131,17 +131,27 @@ def serve(
     url = f"http://{bind if bind != '0.0.0.0' else 'localhost'}:{port}/"
     open_url = f"{url}?token={effective_token}" if effective_token else url
 
-    # 4. Startup print
+    # 4. First-run setup check
+    from ai_almanac.server.services.setup import get_or_create_bootstrap_token, setup_required
+
+    setup_url: str | None = None
+    if setup_required():
+        bootstrap_token = get_or_create_bootstrap_token()
+        setup_url = f"http://127.0.0.1:{port}/setup?token={bootstrap_token}"
+
+    # 5. Startup print
     typer.echo(f"ai-almanac {__version__} serving at {url}")
     typer.echo(f"  data dir: {data_root()}")
     if env_root() != data_root():
         typer.echo(f"  env root: {env_root()}")
     if effective_token:
         typer.echo(f"  access token required — open: {open_url}")
+    if setup_url:
+        typer.echo(f"  first-run setup: {setup_url}")
 
     if open_browser and not reload:
         with suppress(Exception):
-            webbrowser.open(open_url)
+            webbrowser.open(setup_url if setup_url else open_url)
 
     import uvicorn
 

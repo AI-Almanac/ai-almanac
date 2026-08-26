@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import subprocess
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 from ai_almanac.envs.pixi_bootstrap import (
     _current_pixi_platform,
@@ -244,11 +245,14 @@ def _ensure_forecast_env(progress: ProgressCallback) -> Path | None:
     return env_dir
 
 
-def ensure_env(progress: ProgressCallback | None = None) -> tuple[Path, Path, Path | None]:
+def ensure_env(
+    progress: ProgressCallback | None = None,
+    include_forecast: bool = True,
+) -> tuple[Path, Path, Path | None]:
     """Idempotently prepare all local workload environments.
 
     Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
-    None when skipped on an unsupported platform (see ensure_forecast_env).
+    None when skipped on an unsupported platform or when include_forecast=False.
     """
     progress = progress or _default_progress
     with file_lock(
@@ -259,7 +263,7 @@ def ensure_env(progress: ProgressCallback | None = None) -> tuple[Path, Path, Pa
         env_dir = benchmark_env_dir()
         _install(_pixi_spec(), env_dir, "benchmark", progress)
         blending_dir = _ensure_blending_env(progress)
-        forecast_dir = _ensure_forecast_env(progress)
+        forecast_dir = _ensure_forecast_env(progress) if include_forecast else None
     return env_dir, blending_dir, forecast_dir
 
 

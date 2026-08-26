@@ -9,7 +9,6 @@ import pytest
 from typer.testing import CliRunner
 
 from ai_almanac.cli import app
-from ai_almanac.paths import data_root
 
 
 @pytest.fixture(autouse=True)
@@ -99,9 +98,14 @@ def test_backup_custom_dest(tmp_path: Path) -> None:
 
 
 def test_backup_fails_for_non_sqlite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Patch resolve_database_url to return a postgres URL without touching env
+    # (env-var changes leak through reload_settings() into subsequent tests).
+    from ai_almanac.settings import Settings
+
     monkeypatch.setattr(
-        "ai_almanac.settings.settings.database_url",
-        "postgresql+asyncpg://user:pass@localhost/db",
+        Settings,
+        "resolve_database_url",
+        lambda self: "postgresql+asyncpg://user:pass@localhost/db",
     )
     result = runner.invoke(app, ["backup"])
     assert result.exit_code == 1

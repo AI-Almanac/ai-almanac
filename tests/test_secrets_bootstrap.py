@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 
@@ -18,7 +17,15 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_ALMANAC_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
     monkeypatch.delenv("CHAT_FIGURE_SIGNING_SECRET", raising=False)
-    # Reload with a clean slate before and restore after.
+    # Reload first so settings.database_url reflects the new data dir before
+    # _apply_migrations() uses it.
+    reload_settings()
+    # Apply migrations to the isolated DB so write_settings_overlay works.
+    from ai_almanac.paths import ensure_layout
+    from ai_almanac.server.app import _apply_migrations
+
+    ensure_layout()
+    _apply_migrations()
     reload_settings()
     yield
     reload_settings()
@@ -135,7 +142,7 @@ def test_shared_mode_generates_nothing(tmp_path: Path, monkeypatch: pytest.Monke
     # (ensure_local_secrets itself checks settings.deployment_mode via
     # _ensure_local_secrets_locked reading settings — so this tests the guard.)
     # We set deployment_mode directly; the function reads from settings.
-    result = sb.ensure_local_secrets()
+    sb.ensure_local_secrets()
     # shared mode: the function still runs, but skips because effective values
     # are already non-default (shared mode requires a real key to be set via env).
     # Since no key is set in this test, it would try to generate — but the spec
