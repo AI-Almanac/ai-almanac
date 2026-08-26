@@ -5,7 +5,6 @@ Entry point exposed via `pyproject.toml [project.scripts]` as `ai-almanac`.
 
 from __future__ import annotations
 
-import shutil
 import webbrowser
 from contextlib import suppress
 from typing import Annotated
@@ -104,17 +103,13 @@ app.add_typer(env_app, name="env")
 @env_app.command("prepare")
 def env_prepare() -> None:
     """Install or update the benchmark, blending, and forecast environments."""
-    if shutil.which("pixi") is None:
-        typer.secho(
-            "pixi is not installed. Install it from https://pixi.sh and re-run.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     from ai_almanac.envs.manager import ensure_env
 
-    benchmark_dir, blending_dir, forecast_dir = ensure_env()
+    try:
+        benchmark_dir, blending_dir, forecast_dir = ensure_env()
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo(f"benchmark env ready at {benchmark_dir}")
     typer.echo(f"blending env ready at {blending_dir}")
     if forecast_dir is not None:

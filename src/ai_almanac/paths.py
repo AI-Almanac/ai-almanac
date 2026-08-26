@@ -40,6 +40,10 @@ def job_dir(job_id: str) -> Path:
     return jobs_dir() / job_id
 
 
+def bin_dir() -> Path:
+    return data_root() / "bin"
+
+
 def benchmark_env_dir() -> Path:
     return data_root() / "benchmark-env"
 

@@ -10,44 +10,89 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
-import platform
-import shutil
 import subprocess
+from collections import deque
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import Callable, Literal
 
+from ai_almanac.envs.pixi_bootstrap import (
+    _current_pixi_platform,
+    ensure_pixi,
+)
 from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
 BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 
-# Platforms forecast.pixi.toml declares — earth2studio's GPU extras (e.g.
-# fuxi's onnxruntime-gpu) ship no macOS/Windows wheels at all, and
-# forecast_pipeline.load_model() hard-requires CUDA regardless, so there's no
-# point solving (or running) this env anywhere else.
 _FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
-
-# The forecast manifest defines one pixi environment per model group — the AIFS
-# families pin incompatible anemoi-models versions and cannot share a solve (see
-# forecast.pixi.toml). A model's `env` field in forecast_models.yaml selects one.
 FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
 
+EventKind = Literal["phase_started", "line", "phase_finished", "phase_skipped", "phase_failed"]
 
-def _current_pixi_platform() -> str:
-    system = platform.system()
-    machine = platform.machine().lower()
-    if system == "Linux":
-        return "linux-aarch64" if machine in ("aarch64", "arm64") else "linux-64"
-    if system == "Darwin":
-        return "osx-arm64" if machine == "arm64" else "osx-64"
-    if system == "Windows":
-        return "win-64"
-    return f"{system.lower()}-{machine}"
+
+@dataclass(frozen=True, slots=True)
+class EnvProgressEvent:
+    kind: EventKind
+    phase: str
+    line: str | None = None
+    detail: str | None = None
+
+
+ProgressCallback = Callable[[EnvProgressEvent], None]
+
+
+def _default_progress(event: EnvProgressEvent) -> None:
+    if event.kind == "phase_started":
+        print(f"==> {event.phase}" + (f": {event.detail}" if event.detail else ""))
+    elif event.kind == "line":
+        print(event.line or "", end="" if (event.line or "").endswith("\n") else "\n", flush=True)
+    elif event.kind == "phase_finished":
+        print(f"==> {event.phase} ready at {event.detail}")
+    elif event.kind == "phase_skipped":
+        print(f"==> {event.phase} skipped: {event.detail}")
+    elif event.kind == "phase_failed":
+        print(f"==> {event.phase} FAILED")
+        if event.detail:
+            print(event.detail)
+
+
+def _ensure_pixi(progress: ProgressCallback | None = None) -> str:
+    return ensure_pixi(progress=progress)
+
+
+def _run_streaming(
+    cmd: list[str],
+    phase: str,
+    progress: ProgressCallback,
+    *,
+    cwd: Path | None = None,
+) -> None:
+    progress(EnvProgressEvent(kind="phase_started", phase=phase))
+    tail: deque[str] = deque(maxlen=30)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        cwd=cwd,
+    )
+    assert proc.stdout is not None
+    for raw_line in proc.stdout:
+        tail.append(raw_line)
+        progress(EnvProgressEvent(kind="line", phase=phase, line=raw_line))
+    proc.wait()
+    if proc.returncode != 0:
+        tail_str = "".join(tail)
+        progress(EnvProgressEvent(kind="phase_failed", phase=phase, detail=tail_str))
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=tail_str)
+    progress(EnvProgressEvent(kind="phase_finished", phase=phase))
 
 
 def _pixi_spec() -> Path:
-    """Return the packaged `benchmark.pixi.toml` path."""
     spec = files("ai_almanac.envs").joinpath("benchmark.pixi.toml")
     return Path(str(spec))
 
@@ -62,31 +107,42 @@ def _forecast_pixi_spec() -> Path:
     return Path(str(spec))
 
 
-def _require_pixi() -> str:
-    pixi = shutil.which("pixi")
-    if not pixi:
-        raise RuntimeError("pixi is not installed. Install it from https://pixi.sh and re-run.")
-    return pixi
-
-
-def _install(spec: Path, env_dir: Path) -> None:
-    pixi = _require_pixi()
+def _install(
+    spec: Path,
+    env_dir: Path,
+    phase: str,
+    progress: ProgressCallback,
+    environments: tuple[str, ...] | None = None,
+) -> None:
+    pixi = _ensure_pixi(progress)
     env_dir.mkdir(parents=True, exist_ok=True)
     target_spec = env_dir / "pixi.toml"
     target_spec.write_text(spec.read_text())
-    subprocess.run(
-        [pixi, "install", "--manifest-path", str(target_spec)],
-        check=True,
-    )
+    if environments:
+        for env in environments:
+            _run_streaming(
+                [pixi, "install", "--manifest-path", str(target_spec), "-e", env],
+                phase=f"forecast:{env}",
+                progress=progress,
+                cwd=env_dir,
+            )
+    else:
+        _run_streaming(
+            [pixi, "install", "--manifest-path", str(target_spec)],
+            phase=phase,
+            progress=progress,
+            cwd=env_dir,
+        )
 
 
-def ensure_blending_env() -> Path:
+def ensure_blending_env(progress: ProgressCallback | None = None) -> Path:
     """Install the blend dependencies and materialize its pinned source tree."""
+    progress = progress or _default_progress
     env_dir = blending_env_dir()
-    _install(_blending_pixi_spec(), env_dir)
+    _install(_blending_pixi_spec(), env_dir, "blending", progress)
     source_dir = env_dir / "onset-blending"
     if not (source_dir / ".git").exists():
-        subprocess.run(
+        _run_streaming(
             [
                 "git",
                 "clone",
@@ -94,7 +150,8 @@ def ensure_blending_env() -> Path:
                 BLENDING_REPO_URL,
                 str(source_dir),
             ],
-            check=True,
+            phase="blending-source",
+            progress=progress,
         )
     current = subprocess.run(
         ["git", "-C", str(source_dir), "rev-parse", "HEAD"],
@@ -105,22 +162,22 @@ def ensure_blending_env() -> Path:
     source_ready = (source_dir / BLENDING_SOURCE_MARKER).is_file()
     if current.returncode == 0 and current.stdout.strip() == BLENDING_REPO_REF and source_ready:
         return env_dir
-    if current.returncode != 0 or current.stdout.strip() != BLENDING_REPO_REF or not source_ready:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(source_dir),
-                "fetch",
-                "--refetch",
-                "--depth",
-                "1",
-                "origin",
-                BLENDING_REPO_REF,
-            ],
-            check=True,
-        )
-    subprocess.run(
+    _run_streaming(
+        [
+            "git",
+            "-C",
+            str(source_dir),
+            "fetch",
+            "--refetch",
+            "--depth",
+            "1",
+            "origin",
+            BLENDING_REPO_REF,
+        ],
+        phase="blending-source",
+        progress=progress,
+    )
+    _run_streaming(
         [
             "git",
             "-C",
@@ -130,7 +187,8 @@ def ensure_blending_env() -> Path:
             "--force",
             BLENDING_REPO_REF,
         ],
-        check=True,
+        phase="blending-source",
+        progress=progress,
     )
     if not (source_dir / BLENDING_SOURCE_MARKER).is_file():
         raise RuntimeError(
@@ -139,58 +197,54 @@ def ensure_blending_env() -> Path:
     return env_dir
 
 
-def ensure_forecast_env() -> Path | None:
+def ensure_forecast_env(progress: ProgressCallback | None = None) -> Path | None:
     """Install the live-forecast dependencies (earth2studio + torch + geo stack).
 
-    By far the heaviest of the three environments (CUDA/PyTorch + AI model
-    checkpoints, downloaded lazily by earth2studio on first real run) — still
-    chained from ensure_env() for consistency with benchmark/blending, but
-    expect `ai-almanac env prepare` to take noticeably longer as a result.
-
-    Skipped (not an error) on platforms forecast.pixi.toml doesn't support —
-    a developer running `env prepare` on a Mac still gets benchmark/blending
-    installed; only a Linux GPU host (see `self-host-local-gpu`) or Modal can
-    actually run live forecasts.
+    Skipped (not an error) on platforms forecast.pixi.toml doesn't support.
     """
+    progress = progress or _default_progress
     current = _current_pixi_platform()
     if current not in _FORECAST_PLATFORMS:
-        print(
-            f"Skipping forecast env: unsupported on {current}. Live forecast generation "
-            "needs a Linux GPU host (see the `self-host-local-gpu` deployment profile) "
-            "or the Modal job runner."
+        progress(
+            EnvProgressEvent(
+                kind="phase_skipped",
+                phase="forecast",
+                detail=(
+                    f"unsupported on {current}. Live forecast generation needs a Linux "
+                    "GPU host (see `self-host-local-gpu`) or the Modal job runner."
+                ),
+            )
         )
         return None
-    pixi = _require_pixi()
     env_dir = forecast_env_dir()
-    env_dir.mkdir(parents=True, exist_ok=True)
-    target_spec = env_dir / "pixi.toml"
-    target_spec.write_text(_forecast_pixi_spec().read_text())
-    # One solve per model-group environment (they can't share one — see
-    # FORECAST_ENVIRONMENTS). Each is heavy; expect this to take a while.
-    for environment in FORECAST_ENVIRONMENTS:
-        subprocess.run(
-            [pixi, "install", "--manifest-path", str(target_spec), "-e", environment],
-            check=True,
-        )
+    _install(
+        _forecast_pixi_spec(),
+        env_dir,
+        phase="forecast",
+        progress=progress,
+        environments=FORECAST_ENVIRONMENTS,
+    )
     return env_dir
 
 
-def ensure_env() -> tuple[Path, Path, Path | None]:
+def ensure_env(progress: ProgressCallback | None = None) -> tuple[Path, Path, Path | None]:
     """Idempotently prepare all local workload environments.
 
     Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
     None when skipped on an unsupported platform (see ensure_forecast_env).
     """
+    progress = progress or _default_progress
+    _ensure_pixi(progress)
     env_dir = benchmark_env_dir()
-    _install(_pixi_spec(), env_dir)
-    blending_dir = ensure_blending_env()
-    forecast_dir = ensure_forecast_env()
+    _install(_pixi_spec(), env_dir, "benchmark", progress)
+    blending_dir = ensure_blending_env(progress)
+    forecast_dir = ensure_forecast_env(progress)
     return env_dir, blending_dir, forecast_dir
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
     """Spawn a process inside the benchmark env. Streams stdout/stderr."""
-    pixi = _require_pixi()
+    pixi = _ensure_pixi()
     env_dir = benchmark_env_dir()
     full_cmd = [pixi, "run", "--manifest-path", str(env_dir / "pixi.toml"), "--", *cmd]
     return subprocess.Popen(
@@ -205,7 +259,7 @@ def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
 
 def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
     """Spawn a process inside the blending environment."""
-    pixi = _require_pixi()
+    pixi = _ensure_pixi()
     env_dir = blending_env_dir()
     full_cmd = [
         pixi,
@@ -228,9 +282,8 @@ def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subproces
 def run_forecast(
     cmd: list[str], env: dict[str, str] | None = None, environment: str = "base"
 ) -> subprocess.Popen:
-    """Spawn a process inside one forecast model-group environment (see
-    FORECAST_ENVIRONMENTS). `environment` is the model's `env` field."""
-    pixi = _require_pixi()
+    """Spawn a process inside one forecast model-group environment."""
+    pixi = _ensure_pixi()
     env_dir = forecast_env_dir()
     full_cmd = [
         pixi,
@@ -254,11 +307,11 @@ def run_forecast(
 
 def env_versions() -> dict[str, str]:
     """Report installed versions of the key packages in the benchmark env."""
-    pixi = _require_pixi()
     env_dir = benchmark_env_dir()
     if not (env_dir / "pixi.toml").exists():
         return {"<env>": "not prepared — run `ai-almanac env prepare`"}
 
+    pixi = _ensure_pixi()
     proc = subprocess.run(
         [
             pixi,
