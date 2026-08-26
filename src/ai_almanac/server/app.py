@@ -265,16 +265,14 @@ def _cors_origins() -> list[str]:
 
 
 def _storage_ready() -> bool:
-    if settings.storage_backend.lower() == "gcs":
-        return all(
-            (
-                settings.gcs_data_bucket.strip(),
-                settings.gcs_uploads_bucket.strip(),
-                settings.gcs_outputs_bucket.strip(),
-            )
-        )
-    data_dir = Path(settings.upload_dir)
-    return data_dir.exists() and os.access(data_dir, os.W_OK)
+    upload_dir = Path(settings.upload_dir)
+    outputs_dir = Path(settings.job_outputs_dir)
+    return (
+        upload_dir.exists()
+        and os.access(upload_dir, os.W_OK)
+        and outputs_dir.exists()
+        and os.access(outputs_dir, os.W_OK)
+    )
 
 
 def _auth_ready() -> bool:

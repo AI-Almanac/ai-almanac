@@ -69,8 +69,6 @@ def _run_pixi(job_id: str, config: dict) -> None:
 
 def _run_blend(job_id: str, config: dict) -> None:
     storage = get_storage()
-    if not storage.is_local:
-        raise RuntimeError("Local blend execution requires local storage")
     output_dir_raw, _ = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     config_path = output_dir.parent / "blend-config.json"
@@ -113,8 +111,6 @@ def _group_forecast_models_by_env(model_ids: list[str]) -> dict[str, list[str]]:
 
 def _run_forecast(job_id: str, config: dict) -> None:
     storage = get_storage()
-    if not storage.is_local:
-        raise RuntimeError("Local forecast execution requires local storage")
     output_dir_raw, _ = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     config_path = output_dir.parent / "forecast-config.json"

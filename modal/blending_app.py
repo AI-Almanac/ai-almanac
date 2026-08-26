@@ -338,7 +338,7 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
     image=blending_image,
     cpu=(4, 8),
     memory=(16384, 32768),
-    timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
+    timeout=36000,  # 10h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
 )
 def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -401,8 +401,11 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             }
             if config.get("region_id"):
                 prep_kwargs["region_id"] = config["region_id"]
-            cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
-            cache_dir = f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None
+            cache_dir = config.get("cache_uri") or (
+                f"gs://{cache_bucket}/blend-intermediates"
+                if (cache_bucket := (config.get("gcs_cache_bucket") or "").strip())
+                else None
+            )  # gcs_cache_bucket fallback: remove next release
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
             intermediates = build_lat_lon_intermediates_bundle.local(
@@ -2164,7 +2167,7 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
     return matches[0]
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600)
+@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=36000)
 def score_live_forecast(
     obs_bundle: bytes,
     forecast_bundles: dict[str, bytes],
@@ -2268,7 +2271,7 @@ def score_live_forecast(
 
 
 @app.function(
-    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret]
+    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=36000, secrets=[gcp_secret]
 )
 def score_live_forecast_bundle(
     job_id: str,
@@ -2344,7 +2347,11 @@ def score_live_forecast_bundle(
                         "falling back to retrain-based scoring"
                     )
 
-            cache_bucket = (blend_config.get("gcs_cache_bucket") or "").strip()
+            cache_dir_live = blend_config.get("cache_uri") or (
+                f"gs://{cache_bucket}/blend-intermediates"
+                if (cache_bucket := (blend_config.get("gcs_cache_bucket") or "").strip())
+                else None
+            )  # gcs_cache_bucket fallback: remove next release
             csv_bytes = score_live_forecast.local(
                 obs_bundle,
                 forecast_bundles,
@@ -2352,7 +2359,7 @@ def score_live_forecast_bundle(
                 params,
                 live_year,
                 coef_pkl=coef_pkl,
-                cache_dir=f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None,
+                cache_dir=cache_dir_live,
             )
 
             out_local = stage_root / "output"

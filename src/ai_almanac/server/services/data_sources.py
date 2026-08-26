@@ -224,29 +224,6 @@ def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
     return _finalize_inspection(kind, metadata, files, lambda: xr.open_dataset(files[0]))
 
 
-def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
-    from ai_almanac.server.services.storage import get_storage
-
-    storage = get_storage()
-    pattern = _source_file_pattern(kind, metadata)
-    try:
-        identifiers = storage.list_dataset_files(path, _file_glob(pattern))
-    except Exception as exc:
-        return (
-            "invalid",
-            f"Cannot read {path}: {type(exc).__name__}: {exc}. "
-            "Check that the path exists and is readable by the service account.",
-            metadata,
-        )
-    if not identifiers:
-        return "invalid", f"No files match {pattern!r} under {path}.", metadata
-
-    files = [Path(identifier) for identifier in identifiers]
-    return _finalize_inspection(
-        kind, metadata, files, lambda: storage.open_nc_dataset(identifiers[0])
-    )
-
-
 # Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
 _ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
 
@@ -347,8 +324,7 @@ async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
     # their metadata (arco_url, variable, bounds) is the contract.
     if (metadata or {}).get("provider") not in (None, "local"):
         return "ready", None, dict(metadata)
-    inspect = _inspect_gcs_source if str(path).startswith("gs://") else _inspect_local_source
-    return await asyncio.to_thread(inspect, kind, path, metadata)
+    return await asyncio.to_thread(_inspect_local_source, kind, path, metadata)
 
 
 async def list_sources(
@@ -408,7 +384,7 @@ async def create_source(
                 "region": normalized_region,
                 # SQLite's JSON column doesn't auto-serialize Python dicts; emit a string.
                 "metadata": json.dumps(normalized_metadata),
-                "location_type": "gcs" if path.startswith("gs://") else "local_directory",
+                "location_type": "local_directory",
                 "status": status,
                 "validation_error": validation_error,
                 "owner_id": owner_id,

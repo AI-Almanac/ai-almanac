@@ -113,7 +113,14 @@ def _year_errors(spec: BlendRunSpec, coverage: dict | None) -> list[str]:
     forecast_years = explicit or (
         parsed["training_years"] + parsed["cv_holdout_years"] + parsed["true_holdout_years"]
     )
-    return job_submission.blend_coverage_errors(forecast_years, coverage)
+    return job_submission.blend_coverage_errors(
+        forecast_years, coverage
+    ) + job_submission.blend_split_errors(
+        forecast_years,
+        parsed["training_years"],
+        parsed["cv_holdout_years"],
+        parsed["true_holdout_years"],
+    )
 
 
 # --------------------------------------------------------------------------

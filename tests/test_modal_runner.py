@@ -88,14 +88,15 @@ def _install_fake_modal(monkeypatch, *, get_behavior="complete", record=None):
 
 
 def _runner() -> mr.ModalRunner:
-    return mr.ModalRunner("almanac-romp", "run_benchmark", "out-bucket")
+    return mr.ModalRunner("almanac-romp", "run_benchmark")
 
 
 # --- preflight ---------------------------------------------------------------
 
 
 def test_preflight_requires_outputs_bucket() -> None:
-    assert "gcs_outputs_bucket" in mr._preflight_error(_GCS_CONFIG, "")
+    error = mr._preflight_error(_GCS_CONFIG, "")
+    assert error and "bucket_mounts" in error
 
 
 def test_preflight_rejects_local_obs_dir() -> None:
@@ -176,6 +177,7 @@ async def test_submit_spawns_and_records_call_id(monkeypatch: pytest.MonkeyPatch
         return _GCS_CONFIG
 
     monkeypatch.setattr(mr, "_job_config", fake_config)
+    monkeypatch.setattr(mr, "outputs_bucket_name", lambda: "out-bucket")
 
     handle = await _runner().submit(_request("job-xyz"))
 
@@ -196,6 +198,7 @@ async def test_submit_routes_blend_app_and_function(
         return _BLEND_CONFIG
 
     monkeypatch.setattr(mr, "_job_config", fake_config)
+    monkeypatch.setattr(mr, "outputs_bucket_name", lambda: "out-bucket")
 
     handle = await _runner().submit(_request("blend-1"))
 

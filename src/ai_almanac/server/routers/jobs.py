@@ -11,7 +11,7 @@ from fastapi import (
     HTTPException,
     status,
 )
-from fastapi.responses import StreamingResponse
+
 from pydantic import BaseModel
 
 from ai_almanac.server.auth import CurrentUser
@@ -43,7 +43,7 @@ from ..services.metrics import (
     compute_job_metrics,
 )
 from ..services.skill_scores import JobSkillScores, compute_job_skill_scores
-from ..services.storage import GCSStorage, get_storage
+from ..services.storage import get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
@@ -347,29 +347,16 @@ async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetr
 
 @router.get("/{job_id}/results/{kind}/{filename:path}")
 async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJob):
-    """Serve a result file from this origin — a local file or a proxied GCS stream."""
+    """Serve a result file — supports nested paths for forecast outputs."""
     if kind not in ("output", "figure"):
         raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
     _require_complete(job)
-    storage = get_storage()
-    local_path = storage.result_file_path(job_id, kind, filename)
+    from fastapi.responses import FileResponse
 
-    if local_path is not None:
-        if not local_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        from fastapi.responses import FileResponse
-
-        return FileResponse(local_path)
-
-    # Remote (GCS): proxy the bytes so the browser never reads the bucket
-    # cross-origin, which has no CORS policy for the frontend origin.
-    assert isinstance(storage, GCSStorage)
-    stream = await asyncio.to_thread(storage.open_result_stream, job_id, kind, filename)
-    if stream is None:
+    path = get_storage().result_file_path(job_id, kind, filename)
+    if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    body, media_type, size = stream
-    headers = {"Content-Length": str(size)} if size else {}
-    return StreamingResponse(body, media_type=media_type, headers=headers)
+    return FileResponse(path)
 
 
 @router.get("/{job_id}/metrics", response_model=JobMetrics)

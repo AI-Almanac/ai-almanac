@@ -382,13 +382,19 @@ def enforce_deployment_invariants() -> None:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":
         raise RuntimeError("shared deployment rejects the development signing secret")
-    # Mount roots only constrain the local filesystem resolver; GCS sources are
-    # gs:// URIs validated against the bucket, so the list is irrelevant there.
-    if settings.storage_backend == "local" and not settings.dataset_mount_roots.strip():
+    if not settings.dataset_mount_roots.strip():
         raise RuntimeError(
             "shared deployment requires DATASET_MOUNT_ROOTS; without it admins "
             "could register data sources anywhere on the host filesystem"
         )
+    if settings.job_runner == "modal":
+        from ai_almanac.server.services.bucket_mounts import outputs_bucket_name
+
+        if not outputs_bucket_name():
+            raise RuntimeError(
+                "job_runner=modal requires job_outputs_dir to be mapped in "
+                "BUCKET_MOUNTS as a bare-bucket gs:// URI (no key prefix)"
+            )
     for field in ("enable_fs_browser", "enable_run_code"):
         if getattr(settings, field):
             logger.warning("shared deployment: forcing %s=false", field)

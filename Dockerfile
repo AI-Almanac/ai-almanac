@@ -22,7 +22,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY modal ./modal
 COPY --from=frontend /build/web/build ./web/build
-RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
+RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels ".[cloud]"
 
 FROM python:3.14-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \

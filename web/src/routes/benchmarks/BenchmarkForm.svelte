@@ -58,31 +58,56 @@
 		return () => clearTimeout(timer);
 	});
 
+	type ConfigSection = 'plan' | 'models';
+	let panelFocusSection = $state<ConfigSection | null>(null);
+
+	function openConfig(section: ConfigSection | null = null) {
+		panelFocusSection = section;
+		advancedPanelOpen = true;
+	}
+
 	const specSlots = $derived([
-		{ label: 'Mode', value: form.spec?.intent ? 'Chat-assisted setup' : 'Manual setup' },
-		{
-			label: 'Region',
-			value: form.selectedRegion?.display_name ?? form.spec?.region_name ?? 'Not set'
-		},
 		{
 			label: 'Ground truth',
-			value: form.selectedDataset?.name ?? form.spec?.dataset_name ?? 'Not set'
+			value: form.selectedDataset?.name ?? form.spec?.dataset_name ?? null,
+			section: 'plan' as const
+		},
+		{
+			label: 'Region',
+			value: form.selectedRegion?.display_name ?? form.spec?.region_name ?? null,
+			section: 'plan' as const
 		},
 		{
 			label: 'Models',
 			value:
 				form.selectedModels.length > 0
 					? form.selectedModels.map((model) => model.display_name).join(', ')
-					: (form.spec?.model_names.join(', ') ?? 'Not set')
+					: (form.spec?.model_names.join(', ') || null),
+			section: 'models' as const
 		},
 		{
 			label: 'Forecast window',
-			value: form.forecastWindowDays ? `Days 1-${form.forecastWindowDays}` : 'All days'
+			value: form.forecastWindowDays ? `Days 1-${form.forecastWindowDays}` : 'All days',
+			section: null
 		}
 	]);
 
+	const missingSteps = $derived(
+		[
+			!form.selectedDatasetId && 'a ground-truth dataset',
+			!form.selectedRegionId && 'a region',
+			form.selectedModelIds.length === 0 && 'at least one model'
+		].filter((step): step is string => Boolean(step))
+	);
+
+	function listPhrase(items: string[]): string {
+		if (items.length <= 1) return items[0] ?? '';
+		return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+	}
+
 	function closeManualConfig() {
 		advancedPanelOpen = false;
+		panelFocusSection = null;
 		void form.syncBenchmarkConfig({ showErrors: true });
 	}
 
@@ -116,11 +141,11 @@
 			/>
 		{:else}
 			<div class="manual-setup">
-				<p class="eyebrow">Manual setup</p>
+				<p class="eyebrow">Benchmark setup</p>
 				<h1>Configure a benchmark</h1>
 				<p>
-					The AI assistant is unavailable until an LLM is set up. Use manual configuration to select
-					observations, models, and benchmark parameters, or
+					The AI assistant is unavailable until an LLM is set up. Use the benchmark settings to
+					select observations, models, and benchmark parameters, or
 					<a href="/settings/ai">set up your AI provider</a>.
 				</p>
 				<button type="button" onclick={() => (advancedPanelOpen = true)}>
@@ -136,27 +161,42 @@
 				<p class="eyebrow">Current setup</p>
 				<span class="state-pill" class:runnable={form.runState === 'runnable'}>
 					{form.runState === 'runnable'
-						? 'Runnable'
+						? 'Ready to run'
 						: form.runState === 'running'
 							? 'Starting'
-							: 'Needs info'}
+							: missingSteps.length > 0
+								? `${missingSteps.length} step${missingSteps.length === 1 ? '' : 's'} left`
+								: 'Needs info'}
 				</span>
 			</div>
 			<h2>Benchmark plan</h2>
-			<p>{form.selectedRegion?.display_name ?? form.spec?.region_name ?? 'No region selected'}</p>
+			<p>
+				{#if chatAvailable}
+					Describe the benchmark you want in the chat and the assistant will fill this plan in —
+					or configure it yourself.
+				{:else}
+					Fill in the plan with the benchmark settings below.
+				{/if}
+			</p>
 		</div>
 
 		<div class="spec-list">
 			{#each specSlots as slot}
 				<div>
 					<span>{slot.label}</span>
-					<strong>{slot.value}</strong>
+					{#if slot.value !== null}
+						<strong>{slot.value}</strong>
+					{:else}
+						<button class="slot-action" type="button" onclick={() => openConfig(slot.section)}>
+							Choose →
+						</button>
+					{/if}
 				</div>
 			{/each}
 		</div>
 
-		<button class="advanced-button" type="button" onclick={() => (advancedPanelOpen = true)}>
-			<span>Manual configuration</span>
+		<button class="advanced-button" type="button" onclick={() => openConfig()}>
+			<span>Configure it yourself</span>
 			<small>
 				{#if form.syncingConfig}
 					Validating...
@@ -178,18 +218,28 @@
 			<p class="form-error">{form.error}</p>
 		{/if}
 
-		<button
-			class="run-button"
-			type="button"
-			disabled={!form.canRun || form.submitting}
-			onclick={form.runBenchmark}
-		>
-			{form.submitting ? 'Starting run...' : 'Run benchmark'}
-		</button>
+		<div class="run-footer">
+			{#if !form.canRun && missingSteps.length > 0 && !form.submitting}
+				<p class="run-hint">To run, choose {listPhrase(missingSteps)}.</p>
+			{/if}
+			<button
+				class="run-button"
+				type="button"
+				disabled={!form.canRun || form.submitting}
+				onclick={form.runBenchmark}
+			>
+				{form.submitting ? 'Starting run...' : 'Run benchmark'}
+			</button>
+		</div>
 	</aside>
 </section>
 
-<AdvancedRompConfigPanel open={advancedPanelOpen} {form} onClose={closeManualConfig} />
+<AdvancedRompConfigPanel
+	open={advancedPanelOpen}
+	{form}
+	onClose={closeManualConfig}
+	focusSection={panelFocusSection}
+/>
 
 <style>
 	.setup-workspace {
@@ -338,6 +388,22 @@
 		text-align: right;
 	}
 
+	.slot-action {
+		justify-self: end;
+		border: 0;
+		background: transparent;
+		padding: 0;
+		color: var(--color-accent);
+		font: inherit;
+		font-weight: 800;
+		text-align: right;
+		cursor: pointer;
+	}
+
+	.slot-action:hover {
+		text-decoration: underline;
+	}
+
 	.advanced-button {
 		display: flex;
 		align-items: center;
@@ -396,8 +462,21 @@
 		margin: 0.25rem 0;
 	}
 
-	.run-button {
+	.run-footer {
 		margin-top: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.run-hint {
+		margin: 0;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
+		text-align: center;
+	}
+
+	.run-button {
 		border: 0;
 		border-radius: 0.45rem;
 		background: var(--color-accent);

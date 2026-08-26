@@ -153,9 +153,7 @@
 	const insufficientData = $derived(coverage != null && coverage.earliestForecast > coverage.end);
 
 	const yearError = $derived(
-		coverage
-			? yearSpecError(coverage, trainingYears, cvHoldoutYears, forecastYears, trueHoldoutYears)
-			: null
+		yearSpecError(coverage, trainingYears, cvHoldoutYears, forecastYears, trueHoldoutYears)
 	);
 
 	// Prefill a working training/holdout split once obs + models are chosen, until

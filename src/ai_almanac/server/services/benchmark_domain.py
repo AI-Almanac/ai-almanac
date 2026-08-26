@@ -57,6 +57,10 @@ def tool_unavailable_reason(name: str) -> str | None:
             return "run_code is disabled by configuration"
         if settings.job_runner != "modal":
             return "run_code is not available in local builds (requires a remote execution backend)"
+        from ai_almanac.server.services.bucket_mounts import outputs_bucket_name
+
+        if not outputs_bucket_name():
+            return "run_code requires the outputs dir to be mapped in bucket_mounts"
         return None
 
     return None
@@ -1089,8 +1093,6 @@ async def _exec_run_code_sandbox(args: dict, user_id: str, scope: BenchmarkScope
 async def _exec_run_code(args: dict, user_id: str, scope: BenchmarkScope) -> dict | str:
     from ai_almanac.server.db import get_db
 
-    from ..services.storage import get_storage
-
     reason = tool_unavailable_reason("run_code")
     if reason:
         return json.dumps({"error": reason})
@@ -1115,13 +1117,15 @@ async def _exec_run_code(args: dict, user_id: str, scope: BenchmarkScope) -> dic
     if row["status"] != "complete":
         return json.dumps({"error": f"Job {job_id} is not complete"})
 
-    storage = get_storage()
+    from ai_almanac.server.services.bucket_mounts import outputs_bucket_name
+
+    bucket = outputs_bucket_name()
 
     def _run():
         import modal
 
         fn = modal.Function.from_name("almanac-romp", "run_code")
-        return fn.remote(job_id, storage._outputs_bucket, code)
+        return fn.remote(job_id, bucket, code)
 
     try:
         result = await asyncio.to_thread(_run)

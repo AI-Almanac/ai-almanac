@@ -115,13 +115,23 @@ class Settings(BaseSettings):
     # Empty string = use the default under the data dir.
     output_dir: str = ""
 
-    # Storage backend. `local` keeps artifacts on disk (default). `gcs` stores
-    # uploads, job outputs, chat figures, and logs in the buckets below and
-    # serves downloads via signed URLs (used by Cloud Run deployments).
-    storage_backend: str = "local"
-    gcs_uploads_bucket: str = ""
-    gcs_outputs_bucket: str = ""
-    gcs_data_bucket: str = ""
+    # Storage backend and GCS bucket settings have been removed. Cloud deployments
+    # now use GCS FUSE volumes mounted at local paths; configure those paths with
+    # OUTPUT_DIR, BUCKET_MOUNTS, SHARED_CACHE_DIR, and DATASET_MOUNT_ROOTS.
+    # If any of these removed keys appear in config.yaml or the DB overlay,
+    # reload_settings() logs a deprecation warning and ignores them.
+
+    # Bucket mounts: mapping of absolute mount path → gs://bucket[/prefix].
+    # Used by the Modal dispatch layer to translate mount-path job configs to
+    # gs:// URIs that Modal workers can read. Set from env as JSON:
+    #   BUCKET_MOUNTS='{"mnt/outputs":"gs://my-outputs","mnt/data":"gs://my-data"}'
+    # Meaningless in personal installs (job_runner=local); env-managed in cloud.
+    bucket_mounts: dict[str, str] = {}
+
+    # Shared cache root for blend intermediates and season-forecast trajectories.
+    # Cloud deployments: /mnt/data/cache (on the FUSE-mounted data bucket).
+    # Empty = use the local cache_dir() under AI_ALMANAC_DATA_DIR.
+    shared_cache_dir: str = ""
 
     # Whether the serving process applies database migrations on startup.
     # Local/personal installs default to True for zero-setup launch. Managed
@@ -344,6 +354,10 @@ SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
         # since env wins over config.yaml, so surface them read-only instead.
         "enable_run_code",
         "enable_run_code_sandbox",
+        # FUSE-mount topology is determined by the deployment environment; there
+        # is no meaningful per-user override for these.
+        "bucket_mounts",
+        "shared_cache_dir",
     }
 )
 
@@ -429,6 +443,27 @@ def _apply_overlay(target: Settings, data: dict) -> None:
             continue
 
 
+_REMOVED_SETTINGS = frozenset(
+    {"storage_backend", "gcs_uploads_bucket", "gcs_outputs_bucket", "gcs_data_bucket"}
+)
+
+
+def _warn_removed_settings(overlay: dict, source: str) -> None:
+    import logging
+    import warnings
+
+    found = [k for k in overlay if k in _REMOVED_SETTINGS]
+    if found:
+        msg = (
+            f"Deprecated settings found in {source}: {', '.join(found)}. "
+            "These were removed in the storage-convergence release. "
+            "Configure storage via BUCKET_MOUNTS, OUTPUT_DIR, SHARED_CACHE_DIR, "
+            "and DATASET_MOUNT_ROOTS instead."
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=3)
+        logging.getLogger(__name__).warning(msg)
+
+
 def reload_settings() -> Settings:
     """Re-resolve defaults + env + config.yaml + DB overlay; mutate the
     singleton in place.
@@ -442,6 +477,8 @@ def reload_settings() -> Settings:
     fresh = Settings()  # defaults + env (no overlay)
     yaml_overlay = _load_config_yaml()
     db_overlay = _load_db_overlay()
+    _warn_removed_settings(yaml_overlay, "config.yaml")
+    _warn_removed_settings(db_overlay, "DB overlay")
     _apply_overlay(fresh, yaml_overlay)  # config.yaml seed
     _apply_overlay(fresh, db_overlay)  # DB overlay wins over the seed
     # Deprecated-flag shim: a deployment that had switched comparisons off via

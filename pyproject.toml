@@ -27,8 +27,20 @@ dependencies = [
     "openai>=2.32.0",
     "httpx>=0.28.1",
     "matplotlib>=3.10.9",
+    "cryptography>=48.0.1,<51",
+    "titiler-core>=2.0.5,<3",
+    "certifi",
+]
+
+[project.optional-dependencies]
+# Cloud deployment extras — modal runner, PostgreSQL, Globus auth. Installed
+# in Cloud Run images (pip install ".[cloud]") and the dev pixi environment.
+# Personal installs (uv tool install ai-almanac) get the bare wheel without
+# these heavy cloud SDK deps.
+cloud = [
+    "modal>=1.5.0,<2",
     "psycopg[binary]>=3.3.4,<4",
-    "cryptography>=48.0.1,<51", "google-cloud-storage>=3.12.0,<4", "gcsfs>=2026.5.0,<2027", "modal>=1.5.0,<2", "globus-sdk>=4.8.0,<5", "titiler-core>=2.0.5,<3", "certifi",
+    "globus-sdk>=4.8.0,<5",
 ]
 
 [project.scripts]
@@ -80,7 +92,7 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 
 [tool.pixi.pypi-dependencies]
-ai-almanac = { path = ".", editable = true }
+ai-almanac = { path = ".", editable = true, extras = ["cloud"] }
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
@@ -105,8 +117,7 @@ test-compose-e2e = { cmd = "./scripts/e2e-compose.sh", description = "Run the co
 eval-assistant = { cmd = "python evals/assistant/run.py", default-environment = "dev", description = "Score the assistant's guardrails against adversarial prompts (calls a real model; --offline to check the harness for free)" }
 self-host-local = { cmd = "./scripts/self-host-local.sh", description = "Start the local shared-mode development stack" }
 self-host-local-gpu = { cmd = "./scripts/self-host-local.sh gpu", description = "Start local shared mode with the real Pixi GPU runner" }
-self-host-local-gcs = { cmd = "./scripts/self-host-local.sh --storage gcs", description = "Start local shared mode with GCS storage" }
-self-host-local-modal = { cmd = "./scripts/self-host-local.sh --storage gcs --runner modal", description = "Start local shared mode with GCS storage and Modal jobs" }
+self-host-local-modal = { cmd = "./scripts/self-host-local.sh --runner modal", description = "Start local shared mode with the Modal job runner" }
 self-host-local-down = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml down", description = "Stop the local shared-mode development stack" }
 self-host-local-reset = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml down --volumes", description = "Stop and delete local shared-mode development data" }
 self-host-local-logs = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml logs --follow", description = "Follow local shared-mode development logs" }

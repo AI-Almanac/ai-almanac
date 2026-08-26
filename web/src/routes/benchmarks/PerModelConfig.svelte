@@ -9,6 +9,26 @@
 	}
 
 	const { modelId, cfg, getOverride, setOverride }: Props = $props();
+
+	// Mirrors the server guardrail defaults (services/guardrails.py). Advisory
+	// only — the server enforces the real checks at submit time.
+	const SMALL_SAMPLE_SEASONS = 10;
+	const PRESATELLITE_END_YEAR = 1978;
+
+	function yearOf(date: string): number | null {
+		const year = Number(date.slice(0, 4));
+		return Number.isInteger(year) && year > 0 ? year : null;
+	}
+
+	const startYear = $derived(yearOf(getOverride(modelId, 'start_date', cfg?.start_date ?? '')));
+	const endYear = $derived(yearOf(getOverride(modelId, 'end_date', cfg?.end_date ?? '')));
+	const seasons = $derived(
+		startYear !== null && endYear !== null && endYear >= startYear
+			? endYear - startYear + 1
+			: null
+	);
+	const smallSample = $derived(seasons !== null && seasons < SMALL_SAMPLE_SEASONS);
+	const presatellite = $derived(startYear !== null && startYear <= PRESATELLITE_END_YEAR);
 </script>
 
 <fieldset class="nested-fieldset">
@@ -131,6 +151,19 @@
 			</label>
 		{/if}
 	</div>
+	{#if seasons !== null}
+		<p class="season-note" class:warn={smallSample || presatellite}>
+			Scores {seasons} onset season{seasons === 1 ? '' : 's'}.
+			{#if smallSample}
+				Under {SMALL_SAMPLE_SEASONS} seasons the scores are noisy — differences between models may
+				not be real.
+			{/if}
+			{#if presatellite}
+				Includes pre-satellite years (up to {PRESATELLITE_END_YEAR}), where AI-model skill is
+				understated.
+			{/if}
+		</p>
+	{/if}
 </fieldset>
 
 <style>
@@ -169,6 +202,16 @@
 		flex-wrap: wrap;
 		gap: 0.75rem;
 		align-items: flex-end;
+	}
+
+	.season-note {
+		margin: 0.6rem 0 0;
+		font-size: 0.78rem;
+		color: var(--color-text-muted);
+	}
+
+	.season-note.warn {
+		color: var(--color-status-running);
 	}
 
 	label {

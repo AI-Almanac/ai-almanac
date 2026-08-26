@@ -494,7 +494,7 @@ def test_enforce_shared_globus_needs_no_groups_and_keeps_mode(
     assert settings.auth_mode == "globus"  # not forced to proxy
 
 
-def test_enforce_shared_gcs_skips_mount_roots(
+def test_enforce_shared_requires_mount_roots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "shared")
@@ -503,10 +503,27 @@ def test_enforce_shared_gcs_skips_mount_roots(
     monkeypatch.setattr(settings, "admin_subjects", "admin")
     monkeypatch.setattr(settings, "credential_encryption_key", "k")
     monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "")  # irrelevant for gcs
+    monkeypatch.setattr(settings, "dataset_mount_roots", "")
     monkeypatch.setattr(settings, "globus_client_id", "configured")
-    enforce_deployment_invariants()  # must not raise
+    with pytest.raises(RuntimeError, match="DATASET_MOUNT_ROOTS"):
+        enforce_deployment_invariants()
+
+
+def test_enforce_shared_modal_runner_requires_outputs_bucket_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
+    monkeypatch.setattr(settings, "admin_subjects", "admin")
+    monkeypatch.setattr(settings, "credential_encryption_key", "k")
+    monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
+    monkeypatch.setattr(settings, "dataset_mount_roots", "/mnt/data")
+    monkeypatch.setattr(settings, "globus_client_id", "configured")
+    monkeypatch.setattr(settings, "job_runner", "modal")
+    monkeypatch.setattr(settings, "bucket_mounts", {})  # no mapping → no outputs bucket
+    with pytest.raises(RuntimeError, match="BUCKET_MOUNTS"):
+        enforce_deployment_invariants()
 
 
 def test_ready_auth_accepts_globus_shared_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -518,14 +535,3 @@ def test_ready_auth_accepts_globus_shared_mode(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(settings, "globus_client_id", "configured")
 
     assert _auth_ready() is True
-
-
-def test_ready_storage_accepts_gcs_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.app import _storage_ready
-
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
-    monkeypatch.setattr(settings, "gcs_data_bucket", "data")
-    monkeypatch.setattr(settings, "gcs_uploads_bucket", "uploads")
-    monkeypatch.setattr(settings, "gcs_outputs_bucket", "outputs")
-
-    assert _storage_ready() is True

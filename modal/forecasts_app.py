@@ -307,7 +307,7 @@ for _env, _image in INFERENCE_IMAGES.items():
         gpu="A100-80GB",
         cpu=(8, 16),
         memory=(32768, 65536),
-        timeout=7200,
+        timeout=36000,
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
@@ -331,7 +331,7 @@ for _env, _image in INFERENCE_IMAGES.items():
     image=render_image,
     cpu=(4, 8),
     memory=(16384, 32768),
-    timeout=3600,
+    timeout=36000,
     secrets=[gcp_secret],
     volumes={"/cache": forecast_volume},
 )
@@ -366,10 +366,14 @@ def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params:
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
 
-    cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
-    if cache_bucket:
+    cache_dir_uri = config.get("trajectory_cache_uri")
+    if not cache_dir_uri:
+        # gcs_cache_bucket fallback: remove next release
+        cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
+        cache_dir_uri = f"gs://{cache_bucket}/season-forecasts" if cache_bucket else None
+    if cache_dir_uri and str(cache_dir_uri).startswith("gs://"):
         _write_gcp_credentials_from_secret()
-        cache_dir = f"gs://{cache_bucket}/season-forecasts"
+        cache_dir = cache_dir_uri
     else:
         cache_dir = Path("/cache/season-forecasts")
 
@@ -407,7 +411,7 @@ for _env, _image in INFERENCE_IMAGES.items():
         memory=(32768, 65536),
         # Many sequential issue-date runs per season, not one — a much longer
         # ceiling than the single-run map-visualization inference function.
-        timeout=21600,
+        timeout=36000,
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
@@ -423,7 +427,7 @@ for _env, _image in INFERENCE_IMAGES.items():
     image=render_image,
     cpu=(0.25, 1),
     memory=1024,
-    timeout=10800,
+    timeout=36000,
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -490,7 +494,13 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
                         "almanac-blending", "score_live_forecast_bundle"
                     ).remote(
                         job_id,
-                        {**blend_config, "gcs_cache_bucket": config.get("gcs_cache_bucket")},
+                        {
+                            **blend_config,
+                            "cache_uri": blend_config.get("cache_uri"),
+                            "gcs_cache_bucket": config.get(
+                                "gcs_cache_bucket"
+                            ),  # fallback: remove next release
+                        },
                         live_forecast_bundles,
                         live_year,
                         outputs_bucket,

@@ -11,20 +11,31 @@ from pydantic import BaseModel, Field
 from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
+from ai_almanac.server.services.dataset_resolver import mount_roots
 from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
 def _normalized_path(raw: str) -> str:
-    raw = raw.strip()
-    return raw if raw.startswith("gs://") else str(Path(raw).expanduser().resolve())
+    return str(Path(raw.strip()).expanduser().resolve())
 
 
 def _check_path_allowed(user, path: str) -> None:
-    """Non-admin sources in shared deployments must live in cloud storage."""
-    if not user.is_admin and settings.deployment_mode == "shared" and not path.startswith("gs://"):
-        raise HTTPException(status_code=400, detail="user datasets must be gs:// URLs")
+    """Non-admin sources in shared deployments must be within the dataset mount roots."""
+    if user.is_admin or settings.deployment_mode != "shared":
+        return
+    from pathlib import Path as _Path
+
+    from ai_almanac.server.services.dataset_resolver import is_within
+
+    resolved = _Path(path)
+    roots = mount_roots()
+    if roots and not is_within(resolved, roots):
+        raise HTTPException(
+            status_code=400,
+            detail="user datasets must be under the configured dataset mount roots",
+        )
 
 
 async def _owned_source_or_404(source_id: str, user) -> dict:

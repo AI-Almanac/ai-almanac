@@ -378,6 +378,41 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     return errors
 
 
+def _year_span(years: list[int]) -> str:
+    return str(years[0]) if years[0] == years[-1] else f"{years[0]}-{years[-1]}"
+
+
+def blend_split_errors(
+    forecast_years: list[int],
+    training: list[int],
+    cv_holdout: list[int],
+    true_holdout: list[int],
+) -> list[str]:
+    """Split years with no forecast data staged for them.
+
+    The blend trains and validates only on rows with forecast data, so a
+    training/holdout year outside ``forecast_years`` contributes zero rows —
+    an all-outside split reaches the final fit with an empty training set and
+    crashes it. Trivially satisfied when ``forecast_years`` defaults to the
+    union of the splits; only an explicit ``forecast_years`` can violate it.
+    Mirrored by web/src/routes/blends/year-coverage.ts.
+    """
+    staged = set(forecast_years)
+    errors: list[str] = []
+    for label, years in (
+        ("Training", training),
+        ("CV holdout", cv_holdout),
+        ("True holdout", true_holdout),
+    ):
+        missing = sorted(set(years) - staged)
+        if missing:
+            errors.append(
+                f"{label} years {_year_span(missing)} have no forecast data — "
+                f"forecast years cover {_year_span(sorted(staged))}."
+            )
+    return errors
+
+
 def models_without_live_forecast(model_names: Iterable[str]) -> list[str]:
     """Blend members with no entry in the live forecast model registry.
 
@@ -569,7 +604,10 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         model_years.append(source_year_range(source))
 
     coverage = blend_year_coverage(source_year_range(obs_source), model_years)
-    coverage_errors = blend_coverage_errors(forecast_years, coverage)
+    splits = blend_years(body.params)
+    coverage_errors = blend_coverage_errors(forecast_years, coverage) + blend_split_errors(
+        forecast_years, splits.training, splits.cv_holdout, splits.true_holdout
+    )
     if coverage_errors:
         raise HTTPException(status_code=400, detail=" ".join(coverage_errors))
 
@@ -603,7 +641,6 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": body.params.model_dump(exclude_none=True),
-        "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }
 
@@ -864,10 +901,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
 
     init_source = body.params.init_source or "gfs"
     season = str(datetime.now(UTC).year)
+    from ai_almanac.paths import cache_dir as _cache_dir
+
     season_store_prefix = (
-        f"gs://{settings.gcs_data_bucket}/season-forecasts"
-        if settings.gcs_data_bucket
-        else "season-forecasts"
+        f"{settings.shared_cache_dir}/season-forecasts"
+        if settings.shared_cache_dir
+        else f"{_cache_dir()}/season-forecasts"
     )
 
     # Same computation the completion markers use, so a set the rollout marks
@@ -915,7 +954,6 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "init_time": body.params.init_time,
         "lead_hours": lead_hours,
         "variables": variables,
-        "gcs_cache_bucket": settings.gcs_data_bucket,
     }
 
     async with get_db() as conn:
@@ -1207,8 +1245,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         )
 
     storage = get_storage()
-    # Remote runners (Modal) have no local workspace; only the local runner does.
-    workspace = storage.job_dir(job_id) if storage.is_local else None
+    workspace = storage.job_dir(job_id)
     try:
         handle = await get_job_runner().submit(
             ExecutionRequest(

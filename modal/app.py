@@ -1114,7 +1114,7 @@ if ENABLE_GCS_FUNCTIONS:
         image=benchmark_image,
         cpu=(6, 12),
         memory=(16384, 32768),
-        timeout=7200,
+        timeout=36000,
         secrets=[secret for secret in (gcp_secret, e2s_secret) if secret is not None],
     )
     def run_benchmark(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -1172,7 +1172,7 @@ if ENABLE_GCS_FUNCTIONS:
     image=benchmark_image,
     cpu=(6, 12),
     memory=(16384, 32768),
-    timeout=7200,
+    timeout=36000,
 )
 def run_benchmark_local(
     job_id: str,

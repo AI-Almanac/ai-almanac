@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
-from ai_almanac.server.services.storage import GCSStorage, LocalStorage, get_storage
+from ai_almanac.server.services.storage import LocalStorage, get_storage
 
 _READ_CHUNK = 1 << 20  # 1 MiB
 _MEDIA_TYPE_OVERRIDES = {".nc": "application/x-netcdf"}
@@ -120,52 +120,5 @@ class FilesystemArtifactStore:
             shutil.rmtree(job_dir)
 
 
-class GcsArtifactStore:
-    """Artifact store over GCS outputs written by a remote runner.
-
-    The remote runner (Modal) writes results straight into the outputs bucket,
-    so there is no local workspace and nothing to open locally — results are
-    served via signed URLs. Checksums are the objects' GCS MD5 hashes, read from
-    object metadata without downloading.
-    """
-
-    def __init__(self, storage: GCSStorage) -> None:
-        self._storage = storage
-
-    def create_workspace(self, job_id: str) -> Path:
-        raise NotImplementedError("GCS jobs run on a remote runner that writes to the bucket")
-
-    def publish(self, job_id: str, workspace: Path | None = None) -> list[JobArtifact]:
-        now = datetime.now(UTC).isoformat()
-        artifacts: list[JobArtifact] = []
-        for kind, filename in self._storage.list_result_files(job_id):
-            size, checksum = self._storage.stat_result_file(job_id, kind, filename)
-            artifacts.append(
-                JobArtifact(
-                    id=str(uuid.uuid4()),
-                    job_id=job_id,
-                    kind=kind,
-                    filename=filename,
-                    media_type=_media_type(filename),
-                    size_bytes=size,
-                    checksum=checksum,
-                    storage_key=f"{job_id}/{kind}/{filename}",
-                    created_at=now,
-                )
-            )
-        return artifacts
-
-    def open(self, artifact: JobArtifact) -> BinaryIO:
-        raise NotImplementedError("GCS artifacts are served via signed URL, not opened locally")
-
-    def delete_job(self, job_id: str) -> None:
-        self._storage.delete_job(job_id)
-
-
 def get_artifact_store() -> ArtifactStore:
-    # Thin wrapper over the (separately cached) storage singleton; rebuilt each
-    # call so a backend/output_dir change is always reflected.
-    storage = get_storage()
-    if isinstance(storage, GCSStorage):
-        return GcsArtifactStore(storage)
-    return FilesystemArtifactStore(storage)
+    return FilesystemArtifactStore(get_storage())

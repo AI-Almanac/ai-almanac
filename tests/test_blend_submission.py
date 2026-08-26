@@ -179,6 +179,37 @@ async def test_post_blends_accepts_sufficient_coverage(
 
 
 @pytest.mark.asyncio
+async def test_post_blends_rejects_splits_outside_explicit_forecast_years(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    """The blend trains only on years with staged forecast data, so training/
+    holdout years outside an explicit forecast_years spec must be rejected —
+    even when the sources carry no year metadata (coverage unenforceable).
+    Otherwise the run reaches the final fit with zero training rows and dies
+    on an opaque numpy error."""
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "disjoint split",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {
+                "training_years": "1998:2015",
+                "cv_holdout_years": "2023",
+                "forecast_years": "2020:2024",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Training years 1998-2015 have no forecast data" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_create_blend_warns_when_a_member_cannot_forecast_live(
     client, user_id: str, _stub_runner
 ) -> None:

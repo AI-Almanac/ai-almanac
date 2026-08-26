@@ -61,7 +61,7 @@ class DatasetResolver(Protocol):
     async def resolve(self, source: DataSource, workspace: Path) -> ResolvedDataset: ...
 
 
-def _mount_roots() -> list[Path]:
+def mount_roots() -> list[Path]:
     return [
         Path(item.strip()).expanduser().resolve()
         for item in settings.dataset_mount_roots.split(",")
@@ -69,8 +69,12 @@ def _mount_roots() -> list[Path]:
     ]
 
 
+def is_within(path: Path, roots: list[Path]) -> bool:
+    return not roots or any(path == root or path.is_relative_to(root) for root in roots)
+
+
 def _assert_within(path: Path, roots: list[Path]) -> None:
-    if roots and not any(path == root or path.is_relative_to(root) for root in roots):
+    if not is_within(path, roots):
         raise DatasetAccessError(f"path {path} is outside the configured dataset mount roots")
 
 
@@ -86,7 +90,7 @@ class FilesystemDatasetResolver:
 
     def _resolve_mounted(self, raw_path: str) -> Path:
         path = Path(raw_path).expanduser().resolve()
-        _assert_within(path, _mount_roots())
+        _assert_within(path, mount_roots())
         if not path.exists():
             raise DatasetAccessError(f"path does not exist: {path}")
         return path
