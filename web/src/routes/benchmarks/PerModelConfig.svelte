@@ -23,9 +23,7 @@
 	const startYear = $derived(yearOf(getOverride(modelId, 'start_date', cfg?.start_date ?? '')));
 	const endYear = $derived(yearOf(getOverride(modelId, 'end_date', cfg?.end_date ?? '')));
 	const seasons = $derived(
-		startYear !== null && endYear !== null && endYear >= startYear
-			? endYear - startYear + 1
-			: null
+		startYear !== null && endYear !== null && endYear >= startYear ? endYear - startYear + 1 : null
 	);
 	const smallSample = $derived(seasons !== null && seasons < SMALL_SAMPLE_SEASONS);
 	const presatellite = $derived(startYear !== null && startYear <= PRESATELLITE_END_YEAR);
@@ -155,8 +153,8 @@
 		<p class="season-note" class:warn={smallSample || presatellite}>
 			Scores {seasons} onset season{seasons === 1 ? '' : 's'}.
 			{#if smallSample}
-				Under {SMALL_SAMPLE_SEASONS} seasons the scores are noisy — differences between models may
-				not be real.
+				Under {SMALL_SAMPLE_SEASONS} seasons the scores are noisy — differences between models may not
+				be real.
 			{/if}
 			{#if presatellite}
 				Includes pre-satellite years (up to {PRESATELLITE_END_YEAR}), where AI-model skill is

@@ -82,7 +82,7 @@
 			value:
 				form.selectedModels.length > 0
 					? form.selectedModels.map((model) => model.display_name).join(', ')
-					: (form.spec?.model_names.join(', ') || null),
+					: form.spec?.model_names.join(', ') || null,
 			section: 'models' as const
 		},
 		{
@@ -172,8 +172,8 @@
 			<h2>Benchmark plan</h2>
 			<p>
 				{#if chatAvailable}
-					Describe the benchmark you want in the chat and the assistant will fill this plan in —
-					or configure it yourself.
+					Describe the benchmark you want in the chat and the assistant will fill this plan in — or
+					configure it yourself.
 				{:else}
 					Fill in the plan with the benchmark settings below.
 				{/if}

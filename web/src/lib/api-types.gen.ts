@@ -4,6 +4,108 @@
  */
 
 export interface paths {
+    "/api/setup/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get State */
+        get: operations["get_state_api_setup_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Storage */
+        post: operations["post_storage_api_setup_storage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Llm */
+        post: operations["post_llm_api_setup_llm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/envs/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Prepare */
+        post: operations["post_prepare_api_setup_envs_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/envs/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Envs Events */
+        get: operations["get_envs_events_api_setup_envs_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Finish */
+        post: operations["post_finish_api_setup_finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assistant/rulesets": {
         parameters: {
             query?: never;
@@ -1087,7 +1189,7 @@ export interface paths {
         };
         /**
          * Get Result File
-         * @description Serve a result file from this origin — a local file or a proxied GCS stream.
+         * @description Serve a result file — supports nested paths for forecast outputs.
          */
         get: operations["get_result_file_jobs__job_id__results__kind___filename__get"];
         put?: never;
@@ -2843,6 +2945,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** FinishOut */
+        FinishOut: {
+            /** Ok */
+            ok: boolean;
+        };
         /** ForecastCreate */
         ForecastCreate: {
             /** Blend Id */
@@ -3449,6 +3556,33 @@ export interface components {
             /** Length */
             length?: number | null;
         };
+        /** LlmInput */
+        LlmInput: {
+            /** Base Url */
+            base_url: string;
+            /** Model */
+            model: string;
+            /** Api Key */
+            api_key?: string | null;
+            /**
+             * Test Only
+             * @default false
+             */
+            test_only: boolean;
+        };
+        /** LlmTestOut */
+        LlmTestOut: {
+            /** Ok */
+            ok: boolean;
+            /** Models Ok */
+            models_ok: boolean;
+            /** Completion Ok */
+            completion_ok: boolean;
+            /** Models */
+            models: string[];
+            /** Error */
+            error: string | null;
+        };
         /** MessageIn */
         MessageIn: {
             /** Content */
@@ -3622,6 +3756,21 @@ export interface components {
         PreferenceIn: {
             /** Preference */
             preference: string;
+        };
+        /** PrepareInput */
+        PrepareInput: {
+            /**
+             * Include Forecast
+             * @default true
+             */
+            include_forecast: boolean;
+        };
+        /** PrepareStatus */
+        PrepareStatus: {
+            /** Status */
+            status: string;
+            /** Started */
+            started: boolean;
         };
         /** PreviewRequest */
         PreviewRequest: {
@@ -4217,6 +4366,35 @@ export interface components {
                 [key: string]: boolean;
             };
         };
+        /** SetupState */
+        SetupState: {
+            /** Platform */
+            platform: {
+                [key: string]: unknown;
+            };
+            /** Gpu */
+            gpu: {
+                [key: string]: unknown;
+            } | null;
+            /** Data Dir */
+            data_dir: string;
+            /** Config Yaml Path */
+            config_yaml_path: string;
+            /** Dataset Mount Roots */
+            dataset_mount_roots: string[];
+            /** Llm */
+            llm: {
+                [key: string]: unknown;
+            };
+            /** Envs */
+            envs: {
+                [key: string]: unknown;
+            };
+            /** Prepare */
+            prepare: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * SkillBin
          * @description One lead-time bin's scores, from binned_skill_scores_*.csv.
@@ -4252,6 +4430,13 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /** StorageInput */
+        StorageInput: {
+            /** Output Dir */
+            output_dir?: string | null;
+            /** Dataset Mount Roots */
+            dataset_mount_roots?: string[] | null;
         };
         /**
          * Style
@@ -4669,6 +4854,174 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_state_api_setup_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+        };
+    };
+    post_storage_api_setup_storage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_llm_api_setup_llm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LlmInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmTestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_prepare_api_setup_envs_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_envs_events_api_setup_envs_events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_finish_api_setup_finish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinishOut"];
+                };
+            };
+        };
+    };
     list_rulesets_assistant_rulesets_get: {
         parameters: {
             query?: never;

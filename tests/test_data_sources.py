@@ -485,8 +485,9 @@ async def test_shared_deployment_rejects_non_admin_local_paths(
 async def test_gs_path_survives_registration_unmangled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ai_almanac.server.services import storage as storage_mod
     from tests.test_gcs_source_validation import _FakeGcsStorage
+
+    from ai_almanac.server.services import storage as storage_mod
 
     gs_path = "gs://bucket/ethiopia/obs"
     fake = _FakeGcsStorage(_OBS_ROOT, gs_path)

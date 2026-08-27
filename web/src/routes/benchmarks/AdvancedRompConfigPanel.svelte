@@ -264,10 +264,9 @@
 										<div>
 											<h3>Which years count <span class="section-badge">Defaults applied</span></h3>
 											<p>
-												More evaluation years give more trustworthy scores — but years that
-												overlap a model's training look better than they should, and pre-satellite
-												years (before 1979) look worse. Defaults use each model's full available
-												range.
+												More evaluation years give more trustworthy scores — but years that overlap
+												a model's training look better than they should, and pre-satellite years
+												(before 1979) look worse. Defaults use each model's full available range.
 											</p>
 										</div>
 										<strong>
@@ -320,188 +319,191 @@
 								</summary>
 
 								<div class="details-body settings-columns">
-								<fieldset>
-									<legend>Event detection</legend>
-									<label>
-										<span class="label-with-help">
-											Wet-day threshold
-											<span
-												class="tip"
-												title="Rainfall amount used to classify a day as wet when detecting onset behavior."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											type="number"
-											step="any"
-											placeholder={defaultValue(parameterDefaults?.wet_threshold)}
-											value={sharedAdvancedParams.wet_threshold ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_threshold', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_threshold)} mm</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Minimum wet-day rainfall
-											<span
-												class="tip"
-												title="Minimum daily rainfall counted toward a wet spell during onset detection."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											type="number"
-											step="any"
-											placeholder={defaultValue(parameterDefaults?.wet_init)}
-											value={sharedAdvancedParams.wet_init ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_init)} mm</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Wet spell length
-											<span
-												class="tip"
-												title="Number of consecutive wet days required before a wet spell can support onset."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.wet_spell)}
-											value={sharedAdvancedParams.wet_spell ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_spell)} days</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Dry spell limit
-											<span
-												class="tip"
-												title="Consecutive dry days used to reject false onsets after an initial wet period."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.dry_spell)}
-											value={sharedAdvancedParams.dry_spell ?? ''}
-											oninput={(e) =>
-												setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.dry_spell)} days</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Dry spell search extension
-											<span
-												class="tip"
-												title="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.dry_extent)}
-											value={sharedAdvancedParams.dry_extent ?? ''}
-											oninput={(e) =>
-												setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.dry_extent)} days</small>
-									</label>
-								</fieldset>
+									<fieldset>
+										<legend>Event detection</legend>
+										<label>
+											<span class="label-with-help">
+												Wet-day threshold
+												<span
+													class="tip"
+													title="Rainfall amount used to classify a day as wet when detecting onset behavior."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												type="number"
+												step="any"
+												placeholder={defaultValue(parameterDefaults?.wet_threshold)}
+												value={sharedAdvancedParams.wet_threshold ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_threshold', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_threshold)} mm</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Minimum wet-day rainfall
+												<span
+													class="tip"
+													title="Minimum daily rainfall counted toward a wet spell during onset detection."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												type="number"
+												step="any"
+												placeholder={defaultValue(parameterDefaults?.wet_init)}
+												value={sharedAdvancedParams.wet_init ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_init)} mm</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Wet spell length
+												<span
+													class="tip"
+													title="Number of consecutive wet days required before a wet spell can support onset."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.wet_spell)}
+												value={sharedAdvancedParams.wet_spell ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_spell)} days</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Dry spell limit
+												<span
+													class="tip"
+													title="Consecutive dry days used to reject false onsets after an initial wet period."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.dry_spell)}
+												value={sharedAdvancedParams.dry_spell ?? ''}
+												oninput={(e) =>
+													setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.dry_spell)} days</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Dry spell search extension
+												<span
+													class="tip"
+													title="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.dry_extent)}
+												value={sharedAdvancedParams.dry_extent ?? ''}
+												oninput={(e) =>
+													setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.dry_extent)} days</small>
+										</label>
+									</fieldset>
 
-								<fieldset>
-									<legend>Masks and baseline</legend>
-									<label>
-										<span class="label-with-help">
-											Area mask file
-											<span
-												class="tip"
-												title="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
-												>ⓘ</span
+									<fieldset>
+										<legend>Masks and baseline</legend>
+										<label>
+											<span class="label-with-help">
+												Area mask file
+												<span
+													class="tip"
+													title="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
+												value={sharedAdvancedParams.nc_mask ?? ''}
+												oninput={(e) =>
+													setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.nc_mask, 'No mask')}</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Onset threshold file
+												<span
+													class="tip"
+													title="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												placeholder={defaultValue(
+													parameterDefaults?.thresh_file,
+													'Dataset default'
+												)}
+												value={sharedAdvancedParams.thresh_file ?? ''}
+												oninput={(e) =>
+													setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(
+													parameterDefaults?.thresh_file,
+													'Dataset default'
+												)}</small
 											>
-										</span>
-										<input
-											placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
-											value={sharedAdvancedParams.nc_mask ?? ''}
-											oninput={(e) =>
-												setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.nc_mask, 'No mask')}</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Onset threshold file
-											<span
-												class="tip"
-												title="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
-												>ⓘ</span
+										</label>
+										<label>
+											<span class="label-with-help">
+												Baseline forecast
+												<span
+													class="tip"
+													title="Reference forecast used for skill comparisons; climatology is the standard baseline."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												value={sharedAdvancedParams.ref_model ?? ''}
+												placeholder={defaultValue(parameterDefaults?.ref_model, 'climatology')}
+												oninput={(e) =>
+													setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(parameterDefaults?.ref_model, 'climatology')}</small
 											>
-										</span>
-										<input
-											placeholder={defaultValue(parameterDefaults?.thresh_file, 'Dataset default')}
-											value={sharedAdvancedParams.thresh_file ?? ''}
-											oninput={(e) =>
-												setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(
-												parameterDefaults?.thresh_file,
-												'Dataset default'
-											)}</small
-										>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Baseline forecast
-											<span
-												class="tip"
-												title="Reference forecast used for skill comparisons; climatology is the standard baseline."
-												>ⓘ</span
+										</label>
+										<label>
+											<span class="label-with-help">
+												Baseline data path
+												<span
+													class="tip"
+													title="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
+													>ⓘ</span
+												>
+											</span>
+											<input
+												placeholder={defaultValue(
+													parameterDefaults?.ref_model_dir,
+													'Ground truth path'
+												)}
+												value={sharedAdvancedParams.ref_model_dir ?? ''}
+												oninput={(e) =>
+													setSharedParam('ref_model_dir', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(
+													parameterDefaults?.ref_model_dir,
+													'Ground truth path'
+												)}</small
 											>
-										</span>
-										<input
-											value={sharedAdvancedParams.ref_model ?? ''}
-											placeholder={defaultValue(parameterDefaults?.ref_model, 'climatology')}
-											oninput={(e) =>
-												setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(parameterDefaults?.ref_model, 'climatology')}</small
-										>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Baseline data path
-											<span
-												class="tip"
-												title="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
-												>ⓘ</span
-											>
-										</span>
-										<input
-											placeholder={defaultValue(
-												parameterDefaults?.ref_model_dir,
-												'Ground truth path'
-											)}
-											value={sharedAdvancedParams.ref_model_dir ?? ''}
-											oninput={(e) =>
-												setSharedParam('ref_model_dir', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(
-												parameterDefaults?.ref_model_dir,
-												'Ground truth path'
-											)}</small
-										>
-									</label>
-								</fieldset>
+										</label>
+									</fieldset>
 								</div>
 							</details>
 						</div>
