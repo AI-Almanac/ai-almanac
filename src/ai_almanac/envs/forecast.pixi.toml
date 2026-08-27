@@ -27,21 +27,46 @@ channels = ["conda-forge"]
 # needs a Linux GPU host (see the `self-host-local-gpu` deployment profile).
 platforms = ["linux-64", "linux-aarch64"]
 
+# onnxruntime-gpu (fuxi extra) ships its only aarch64 wheel as
+# manylinux_2_34; without this floor pixi assumes an older glibc and the
+# pypi solve finds no compatible wheel. Requires hosts with glibc >= 2.34
+# (Ubuntu 22.04+).
+[system-requirements]
+libc = { family = "glibc", version = "2.34" }
+# Without an explicit cuda requirement pixi hides the __cuda virtual
+# package from the solver and conda-forge resolves CPU-only pytorch.
+# Requires a CUDA 13 driver on forecast hosts; keeps the solved pytorch,
+# cuda-nvcc, and flash-attn build all on the same CUDA major.
+cuda = "13"
+
 # Shared conda base — the PyTorch/CUDA + geo stack every environment needs. Only
 # the earth2studio extras (with their conflicting anemoi pins) differ per group.
 [dependencies]
 python = "3.11.*"
 pip = "*"
 pytorch = "*"
+# Prebuilt from conda-forge so the pypi solve never compiles the flash-attn
+# sdist (a 30+ minute CUDA build needing an in-env toolchain). Satisfies the
+# `flash-attn` requirement of every earth2studio AIFS extra — pixi maps the
+# conda package onto the pypi requirement — and is ABI-matched to conda-forge
+# pytorch, unlike upstream's release wheels (pypi-torch-only, no py311 aarch64).
+flash-attn = "*"
 gdal = "*"
 proj = "*"
 rasterio = "*"
 netcdf4 = "<1.7.3"
 h5netcdf = "*"
-xarray = "*"
+# earth2studio's gencast/graphcast extras cap xarray<2026.4.0
+# (google-deepmind/graphcast#213); an uncapped conda solve picks a newer
+# xarray and makes the pypi solve unsatisfiable.
+xarray = "<2026.4.0"
 zarr = "*"
 numpy = "*"
 pyyaml = "*"
+# forecast_entrypoint imports ai_almanac (paths/settings/forecast_pipeline)
+# via PYTHONPATH; these are that import chain's only non-stdlib deps.
+platformdirs = "*"
+pydantic-settings = "*"
 
 # Pinned to a main SHA rather than a release: 0.17.0 lacks the AIFS2/AIFS2ENS
 # time-forcing fix (earth2studio PR #1009); re-pin to 0.18.0 once it's tagged.

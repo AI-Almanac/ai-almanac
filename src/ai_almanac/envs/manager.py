@@ -10,6 +10,7 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections import deque
 from collections.abc import Callable
@@ -71,6 +72,7 @@ def _run_streaming(
     progress: ProgressCallback,
     *,
     cwd: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> None:
     progress(EnvProgressEvent(kind="phase_started", phase=phase))
     tail: deque[str] = deque(maxlen=30)
@@ -81,6 +83,7 @@ def _run_streaming(
         text=True,
         bufsize=1,
         cwd=cwd,
+        env=env,
     )
     assert proc.stdout is not None
     for raw_line in proc.stdout:
@@ -122,11 +125,23 @@ def _install(
     target_spec.write_text(spec.read_text())
     if environments:
         for env in environments:
+            # pixi runs pypi build hooks without activating the env, so
+            # no-build-isolation sdists (flash-attn) can't find the env's
+            # conda toolchain. Point CUDA_HOME/PATH at the env prefix —
+            # its conda packages (nvcc, ninja) are installed before the
+            # pypi build phase of the same `pixi install` run.
+            prefix = env_dir / ".pixi" / "envs" / env
+            build_env = {
+                **os.environ,
+                "CUDA_HOME": str(prefix),
+                "PATH": f"{prefix / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
             _run_streaming(
                 [pixi, "install", "--manifest-path", str(target_spec), "-e", env],
                 phase=f"forecast:{env}",
                 progress=progress,
                 cwd=env_dir,
+                env=build_env,
             )
     else:
         _run_streaming(

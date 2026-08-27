@@ -16,7 +16,6 @@ from typing import Literal
 
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
 
 from ai_almanac.paths import (
     config_yaml_path,
@@ -252,6 +251,10 @@ class Settings(BaseSettings):
         return self.assistant_comparisons_audience == "admins" and is_admin
 
     def resolve_database_url(self) -> str:
+        # Local import: settings is also imported inside the forecast envs
+        # (via forecast_entrypoint), which don't ship sqlalchemy.
+        from sqlalchemy.engine import make_url
+
         if self.database_url:
             if self.db_password:
                 url = make_url(self.database_url)
