@@ -8,59 +8,72 @@
 
 <nav class="site-nav">
 	<div class="nav-inner">
-		<a href="/" class="brand">
-			{#if logoFailed}
-				<span>Laude</span>
-				<span class="brand-mark">AI</span>
-				<span>Almanac</span>
-			{:else}
+		<div class="logo-row">
+			<a href="/" class="brand">
+				{#if logoFailed}
+					<span>Laude</span>
+					<span class="brand-mark">AI</span>
+					<span>Almanac</span>
+				{:else}
+					<img
+						class="brand-logo"
+						src="/laude-ai-almanac-logo.png"
+						alt="Laude AI Almanac"
+						onerror={() => (logoFailed = true)}
+					/>
+				{/if}
+			</a>
+			<a href="https://uchicago.edu" target="_blank" rel="noopener noreferrer">
 				<img
-					class="brand-logo"
-					src="/laude-ai-almanac-logo.png"
-					alt="Laude AI Almanac"
-					onerror={() => (logoFailed = true)}
+					class="uchicago-logo"
+					src="/partners/uchicago-wordmark.svg"
+					alt="University of Chicago"
 				/>
-			{/if}
-		</a>
-		<div class="links" aria-label="Primary navigation">
-			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
-			<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
-			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
-			<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
-			{#if account.canUseForecasting}
-				<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
-			{/if}
-			{#if account.canUseForecasting && account.isAdmin}
-				<a href="/forecast-data" class:active={$page.url.pathname.startsWith('/forecast-data')}>
-					Forecast data
-				</a>
-			{/if}
-			{#if account.canManageData}
-				<a
-					href="/data-sources"
-					class:active={$page.url.pathname.startsWith('/data-sources') ||
-						$page.url.pathname.startsWith('/regions')}
-				>
-					Data
-				</a>
-			{/if}
-			{#if account.isAdmin}
-				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
-			{/if}
-			<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
+			</a>
 		</div>
-		<div class="nav-right">
-			<FeedbackWidget />
-			{#if account.loaded && account.isShared}
-				<a
-					class="account"
-					href="/user"
-					title={account.account?.email ?? account.account?.subject ?? ''}
-				>
-					<span class="account-name">{account.label}</span>
-					{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
-				</a>
-			{/if}
+		<div class="nav-row">
+			<div class="links" aria-label="Primary navigation">
+				<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
+				<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
+				<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
+				<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
+				{#if account.canUseForecasting}
+					<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
+				{/if}
+				{#if account.canUseForecasting && account.isAdmin}
+					<a href="/forecast-data" class:active={$page.url.pathname.startsWith('/forecast-data')}>
+						Forecast data
+					</a>
+				{/if}
+				{#if account.canManageData}
+					<a
+						href="/data-sources"
+						class:active={$page.url.pathname.startsWith('/data-sources') ||
+							$page.url.pathname.startsWith('/regions')}
+					>
+						Data
+					</a>
+				{/if}
+				{#if account.isAdmin}
+					<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
+						Settings
+					</a>
+				{/if}
+				<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
+			</div>
+			<div class="nav-right">
+				<FeedbackWidget />
+				{#if account.loaded && account.isShared}
+					<a
+						class="account"
+						href="/user"
+						title={account.account?.email ?? account.account?.subject ?? ''}
+					>
+						<span class="account-name">{account.label}</span>
+						{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
+					</a>
+				{/if}
+			</div>
 		</div>
 	</div>
 </nav>
@@ -78,12 +91,33 @@
 
 	.nav-inner {
 		width: min(100% - 2rem, 76rem);
-		min-height: 4rem;
 		margin: 0 auto;
+		padding: 0.75rem 0 0.5rem;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.5rem;
+	}
+
+	.logo-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
+		justify-content: center;
+		gap: 1.5rem;
+	}
+
+	.nav-row {
+		position: relative;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.nav-right {
+		position: absolute;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
 	}
 
 	.brand,
@@ -125,6 +159,12 @@
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
+	}
+
+	.uchicago-logo {
+		display: block;
+		width: auto;
+		height: 2.5rem;
 	}
 
 	.account {
@@ -175,10 +215,15 @@
 	}
 
 	@media (max-width: 680px) {
-		.nav-inner {
-			align-items: flex-start;
-			flex-direction: column;
-			padding: 0.8rem 0;
+		.nav-row {
+			flex-wrap: wrap;
+			justify-content: flex-start;
+			gap: 0.5rem;
+		}
+
+		.nav-right {
+			position: static;
+			transform: none;
 		}
 
 		.links {
