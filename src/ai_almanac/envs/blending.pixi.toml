@@ -20,5 +20,7 @@ pyproj = ">=3.7.2,<4"
 shapely = ">=2.1.2,<3"
 geopandas = ">=1.1.3,<2"
 tqdm = ">=4.68.3,<5"
+# forecast_entrypoint's score phase runs here and imports ai_almanac.paths.
+platformdirs = ">=4"
 cartopy = ">=0.25.0,<0.26"
 kdepy = ">=1.1.12,<2"

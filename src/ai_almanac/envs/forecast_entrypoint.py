@@ -31,10 +31,13 @@ from pathlib import Path
 from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
 from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
-from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
 
 
 def _registry_entry(model_id: str) -> dict:
+    # Inference-only import: ai_almanac.settings needs pydantic-settings, which
+    # the blending env (score phase) doesn't install.
+    from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+
     entry = resolve_forecast_model(get_packaged_forecast_models(), model_id)
     if entry is None:
         raise KeyError(f"Unknown forecast model id: {model_id!r}")

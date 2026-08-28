@@ -78,6 +78,22 @@ pydantic-settings = "*"
 [feature.base.pypi-dependencies]
 earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
 
+# onnxruntime-gpu (fuxi extra) pin, linux-aarch64 only. earth2studio's uv
+# source maps onnxruntime-gpu to the ort-cuda-13-nightly feed, whose current
+# builds (1.25.0.dev–1.28.0.dev and the 1.26.0 release) ship no GB10 (sm_121)
+# SASS — only sm_120a, which is arch-exact and won't run on sm_121 — plus PTX
+# compiled by CUDA 13.1 (ISA 9.1), which a CUDA 13.0 driver's JIT rejects with
+# cudaErrorUnsupportedPtxVersion (seen on DGX Spark, driver 580.x). The 1.29.0
+# release on the onnxruntime-cuda-13 feed ships native sm_121a SASS, so it
+# runs without any PTX JIT and works on 13.0 drivers. linux-64 keeps the
+# earth2studio default: the 1.29.0 aarch64 wheel drops sm_75/80/86 SASS and
+# all PTX, and x86 hosts (e.g. A100 = sm_80) still need those. Pinned as a
+# direct wheel URL (PyPI hosts the identical CUDA-13 build as of 1.29) because
+# a version+index pin conflicts with earth2studio's uv source for the package.
+# cp311 matches the python = "3.11.*" pin above.
+[feature.base.target.linux-aarch64.pypi-dependencies]
+onnxruntime-gpu = { url = "https://files.pythonhosted.org/packages/d5/83/07e4e4cef9329fcdbc42035f36f7a9128edd1281264b69054d0bd43a546c/onnxruntime_gpu-1.29.0-cp311-cp311-manylinux_2_34_aarch64.whl" }
+
 # aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
 [feature.aifs2.pypi-dependencies]
 earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs2", "data"] }

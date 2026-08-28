@@ -156,7 +156,7 @@ def _run_forecast(job_id: str, config: dict) -> None:
     # Scoring runs once, in the blending env — it only needs blending's stack,
     # which conflicts with earth2studio's pins and so can't live in a forecast env.
     print("==> Scoring against trained blend...", flush=True)
-    score_env = os.environ.copy()
+    score_env = process_env.copy()
     score_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
     process = blending_pixi_run(
         [
