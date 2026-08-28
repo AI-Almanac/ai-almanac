@@ -464,63 +464,40 @@ async def test_admin_source_is_shared(
 
 
 @pytest.mark.asyncio
-async def test_shared_deployment_rejects_non_admin_local_paths(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_shared_deployment_rejects_non_admin_paths_outside_mount_roots(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from ai_almanac.settings import settings
 
     _proxy_users(monkeypatch)
     monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "dataset_mount_roots", str(tmp_path))
+    alice = {"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"}
 
-    response = await client.post(
-        "/data-sources",
-        json=_obs_body("Local sneak"),
-        headers={"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"},
-    )
+    response = await client.post("/data-sources", json=_obs_body("Local sneak"), headers=alice)
     assert response.status_code == 400
-    assert "gs://" in response.json()["detail"]
+    assert "dataset mount roots" in response.json()["detail"]
 
-
-@pytest.mark.asyncio
-async def test_gs_path_survives_registration_unmangled(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from tests.test_gcs_source_validation import _FakeGcsStorage
-
-    from ai_almanac.server.services import storage as storage_mod
-
-    gs_path = "gs://bucket/ethiopia/obs"
-    fake = _FakeGcsStorage(_OBS_ROOT, gs_path)
-    monkeypatch.setattr(storage_mod, "get_storage", lambda: fake)
-
-    created = await client.post("/data-sources", json=_obs_body("GCS obs", path=gs_path))
+    # The same path is accepted once the mount roots cover it.
+    monkeypatch.setattr(settings, "dataset_mount_roots", str(_OBS_ROOT.parent))
+    created = await client.post("/data-sources", json=_obs_body("Mounted obs"), headers=alice)
     assert created.status_code == 201
-    row = created.json()
-    assert row["path"] == gs_path
-    assert row["location_type"] == "gcs"
-    assert row["status"] == "ready"
 
-    await client.delete(f"/data-sources/{row['id']}")
+    await client.delete(f"/data-sources/{created.json()['id']}", headers=alice)
 
 
 @pytest.mark.asyncio
-async def test_unreadable_gcs_path_reports_clear_validation_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_gs_path_validates_invalid_without_gcs_backend() -> None:
+    # Phase 1 removed GCSStorage: gs:// prefixes are no longer inspectable at
+    # registration. Cloud deployments register FUSE-mounted local paths instead;
+    # translation back to gs:// happens only at Modal dispatch (bucket_mounts).
     from ai_almanac.server.services import data_sources as svc
-    from ai_almanac.server.services import storage as storage_mod
-
-    class _DeniedStorage:
-        def list_dataset_files(self, path: str, glob: str) -> list[str]:
-            raise PermissionError("403 forbidden")
-
-    monkeypatch.setattr(storage_mod, "get_storage", lambda: _DeniedStorage())
 
     status, error, _ = await svc.validate_source(
-        "obs", "gs://locked-bucket/obs", {"obs_file_pattern": "{}.nc"}
+        "obs", "gs://bucket/ethiopia/obs", {"obs_file_pattern": "{}.nc"}
     )
     assert status == "invalid"
-    assert "readable by the service account" in error
+    assert error
 
 
 @pytest.mark.asyncio
