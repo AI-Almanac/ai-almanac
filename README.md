@@ -54,29 +54,29 @@ Once a homebrew tap / .deb is published, `brew install ai-almanac` and
 `apt install ai-almanac` will be available too. The PyPI package is the
 source of truth — those channels are thin wrappers.
 
-### Prerequisites for running real benchmarks and blends
-
-Actual benchmark and model-blending execution need separate scientific Python
-stacks. Those dependencies live in isolated Pixi-managed environments to keep
-the core install small:
+### First-run setup
 
 ```bash
-# Install pixi (one-time): https://pixi.sh
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Materialize both workload environments (takes a few minutes the first time)
-ai-almanac env prepare
+ai-almanac init
 ```
 
-This also checks out the blending workflow at the version pinned by AI Almanac.
-Subsequent `ai-almanac serve` runs reuse both environments. `ai-almanac env
-info` prints the installed benchmark package versions.
+This walks through first-run configuration (storage, LLM endpoint) and
+installs the isolated Pixi-managed workload environments that benchmark,
+blending, and forecast execution run in — including downloading pixi itself
+if it isn't on your PATH. The forecast environments are included by default
+when an NVIDIA GPU is detected (`--include-forecast` forces them). Expect the
+first install to take a few minutes; `--yes` runs it headless.
+
+Subsequent `ai-almanac serve` runs reuse the environments. `ai-almanac env
+prepare` reinstalls or updates them later, and `ai-almanac env info` prints
+the installed benchmark package versions.
 
 ---
 
 ## Usage
 
 ```bash
+ai-almanac init                        # first-run setup: config + environments
 ai-almanac serve                       # default: 127.0.0.1:8765, opens browser
 ai-almanac serve --port 9000           # alternate port
 ai-almanac serve --no-open             # don't auto-launch a browser tab

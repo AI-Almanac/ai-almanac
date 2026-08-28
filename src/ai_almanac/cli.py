@@ -259,12 +259,19 @@ def init(
     ] = "",
     output_dir: Annotated[str, typer.Option(help="Job output directory.")] = "",
     prepare_envs: Annotated[
-        bool, typer.Option("--prepare-envs/--no-prepare-envs", help="Install environments.")
-    ] = False,
+        bool | None,
+        typer.Option(
+            "--prepare-envs/--no-prepare-envs",
+            help="Install environments (default: yes).",
+        ),
+    ] = None,
     include_forecast: Annotated[
-        bool,
-        typer.Option("--include-forecast/--no-include-forecast", help="Include forecast envs."),
-    ] = False,
+        bool | None,
+        typer.Option(
+            "--include-forecast/--no-include-forecast",
+            help="Include forecast envs (default: yes when an NVIDIA GPU is detected).",
+        ),
+    ] = None,
     skip_llm_test: Annotated[
         bool, typer.Option("--skip-llm-test", help="Save LLM config without testing.")
     ] = False,
@@ -349,12 +356,30 @@ def init(
     else:
         typer.secho("skipping LLM configuration (no URL/model provided)", fg=typer.colors.YELLOW)
 
-    # Env prepare
-    if not prepare_envs and not yes:
-        prepare_envs = typer.confirm("Install benchmark environments now?", default=False)
+    # Env prepare — on by default so init leaves a runnable install behind.
+    if prepare_envs is None:
+        if yes:
+            prepare_envs = True
+        else:
+            prepare_envs = typer.confirm("Install benchmark environments now?", default=True)
 
     if prepare_envs:
         from ai_almanac.envs.manager import ensure_env
+
+        if include_forecast is None:
+            has_gpu = gpu is not None
+            if yes:
+                include_forecast = has_gpu
+            else:
+                include_forecast = typer.confirm(
+                    "Install forecast environments (large download, needs an NVIDIA GPU)?",
+                    default=has_gpu,
+                )
+        if not include_forecast:
+            typer.echo(
+                "skipping forecast environments"
+                + ("" if gpu else " (no GPU detected; pass --include-forecast to force)")
+            )
 
         def _progress(evt: object) -> None:
             from ai_almanac.envs.manager import EnvProgressEvent
