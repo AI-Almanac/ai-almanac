@@ -16,12 +16,12 @@
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
-		"@iconify-json/lucide": "^1.2.121",
+		"@iconify-json/lucide": "^1.2.126",
 		"@iconify/tailwind4": "^1.2.3",
 		"@sveltejs/adapter-auto": "^7.0.0",
 		"@sveltejs/adapter-static": "^3.0.10",
-		"@sveltejs/kit": "^2.70.2",
-		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/vite-plugin-svelte": "^7.3.0",
 		"@tailwindcss/vite": "^4.1.18",
 		"@testing-library/svelte": "^5.3.1",
 		"@types/dompurify": "^3.2.0",
@@ -31,18 +31,18 @@
 		"prettier": "^3.8.1",
 		"prettier-plugin-svelte": "^4.1.1",
 		"prettier-plugin-tailwindcss": "^0.8.1",
-		"svelte": "^5.54.0",
-		"svelte-check": "^4.7.5",
+		"svelte": "^5.56.10",
+		"svelte-check": "^4.7.6",
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.9.3",
-		"vite": "^8.2.1",
-		"vitest": "^4.1.10"
+		"vite": "^8.2.2",
+		"vitest": "^4.1.11"
 	},
 	"dependencies": {
 		"@globus/sdk": "^6.3.1",
-		"dompurify": "^3.4.13",
-		"maplibre-gl": "^6.2.0",
-		"marked": "^18.0.9",
+		"dompurify": "^3.4.14",
+		"maplibre-gl": "^6.6.0",
+		"marked": "^18.0.11",
 		"svelte-floating-ui": "^1.6.2",
 		"uplot": "^1.6.32"
 	}
