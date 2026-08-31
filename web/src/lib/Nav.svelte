@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
+	import { login } from '$lib/auth';
 	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
 
 	let logoFailed = $state(false);
@@ -63,7 +64,9 @@
 			</div>
 			<div class="nav-right">
 				<FeedbackWidget />
-				{#if account.loaded && account.isShared}
+				{#if account.isAnonymous}
+					<button class="signin-btn" onclick={() => login()}>Sign in</button>
+				{:else if account.loaded && account.isShared}
 					<a
 						class="account"
 						href="/user"
@@ -186,6 +189,22 @@
 		max-width: 12rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.signin-btn {
+		padding: 0.35rem 0.8rem;
+		border: none;
+		border-radius: 0.4rem;
+		background: var(--color-accent);
+		color: white;
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 650;
+		cursor: pointer;
+	}
+
+	.signin-btn:hover {
+		background: var(--color-accent-hover);
 	}
 
 	.role-badge {

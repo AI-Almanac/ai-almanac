@@ -13,9 +13,14 @@ from __future__ import annotations
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, status
 
-from ai_almanac.server.auth import AdminUser, CurrentUser, require_forecasting
+from ai_almanac.server.auth import (
+    AdminUser,
+    CurrentUser,
+    OptionalCurrentUser,
+    require_forecasting,
+)
 from ai_almanac.server.db import get_db
-from ai_almanac.server.services import trajectory_sets
+from ai_almanac.server.services import job_access, trajectory_sets
 from ai_almanac.server.services.forecast_models import (
     load_forecast_model_registry,
     load_init_sources,
@@ -60,20 +65,23 @@ async def list_trajectory_sets(_admin: AdminUser):
 
 
 @router.get("", response_model=list[ForecastOut])
-async def list_forecasts(user: CurrentUser):
+async def list_forecasts(user: OptionalCurrentUser):
     async with get_db() as conn:
         rows = (
             (
                 await conn.execute(
                     sa.select(jobs)
-                    .where(jobs.c.user_id == user.id, jobs.c.job_type == "forecast")
+                    .where(
+                        job_access.listing_filter(user.id if user else None),
+                        jobs.c.job_type == "forecast",
+                    )
                     .order_by(jobs.c.created_at.desc())
                 )
             )
             .mappings()
             .fetchall()
         )
-    return [forecast_row_to_out(dict(r), user.id) for r in rows]
+    return [forecast_row_to_out(dict(r), user.id if user else "") for r in rows]
 
 
 @router.get("/models")

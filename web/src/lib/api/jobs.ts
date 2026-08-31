@@ -24,7 +24,7 @@ export type Job = {
 	completed_at?: string;
 	error?: string | null;
 	is_owner?: boolean;
-	visibility?: 'private' | 'shared';
+	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
 };
 
@@ -149,6 +149,10 @@ export async function shareJob(id: string): Promise<Job> {
 
 export async function unshareJob(id: string): Promise<Job> {
 	return request<Job>(`/jobs/${id}/unshare`, { method: 'POST' });
+}
+
+export async function promoteJobToExample(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/example`, { method: 'POST' });
 }
 
 export async function getJobArtifacts(id: string): Promise<JobArtifact[]> {

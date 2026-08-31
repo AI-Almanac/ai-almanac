@@ -258,8 +258,9 @@ settings = Settings()
 # Resolution order, lowest to highest precedence:
 #   1. Code defaults (the Settings field defaults above)
 #   2. config.yaml at $AI_ALMANAC_DATA_DIR/config.yaml (hand-editable seed)
-#   3. The `app_config` database overlay (written by the admin Settings UI)
-#   4. Environment variables / .env files
+#   3. Environment variables / .env files
+#   4. The `app_config` database overlay (written by the admin Settings UI),
+#      except SHARED_ENV_ONLY_FIELDS, which the environment always owns
 #
 # The database overlay is where UI edits land. It lives in the application
 # database, which is the persistent store in every deployment (the SQLite file
@@ -267,8 +268,13 @@ settings = Settings()
 # admin changes survive redeploys — unlike config.yaml, which sits on the
 # container's ephemeral filesystem in managed deployments.
 #
-# config.yaml remains a hand-editable seed/override for local installs. Env vars
-# still win so headless / CI deployments can override anything via env.
+# config.yaml remains a hand-editable seed/override for local installs; env vars
+# beat it so headless / CI deployments can override the file. The DB overlay
+# beats env for the fields the Settings UI declares editable: the env value is
+# the deployment's seed, and an admin's saved change must actually take effect
+# (issue #179 — a save that silently loses to LLM_MODEL). Fields the
+# environment must own in shared deployments are listed in
+# SHARED_ENV_ONLY_FIELDS, which the UI surfaces read-only.
 
 
 # Fields that need a server restart to fully take effect (e.g. baked into the
@@ -411,14 +417,16 @@ def _load_db_overlay() -> dict:
         return {}
 
 
-def _apply_overlay(target: Settings, data: dict) -> None:
-    """Overlay `data` onto `target`, but never overwrite a field whose
-    corresponding environment variable is set."""
+def _apply_overlay(target: Settings, data: dict, *, env_wins: bool = True) -> None:
+    """Overlay `data` onto `target`. With `env_wins` (the config.yaml seed), a
+    field whose corresponding environment variable is set is left alone. The DB
+    overlay is applied with `env_wins=False` so admin Settings-UI edits take
+    effect even when the deployment also seeds the field via env."""
     for key, value in data.items():
         if key not in type(target).model_fields:
             continue
-        if key.upper() in os.environ:
-            continue  # env wins
+        if env_wins and key.upper() in os.environ:
+            continue
         if target.deployment_mode == "shared" and key in SHARED_ENV_ONLY_FIELDS:
             continue
         try:
@@ -442,8 +450,8 @@ def reload_settings() -> Settings:
     fresh = Settings()  # defaults + env (no overlay)
     yaml_overlay = _load_config_yaml()
     db_overlay = _load_db_overlay()
-    _apply_overlay(fresh, yaml_overlay)  # config.yaml seed
-    _apply_overlay(fresh, db_overlay)  # DB overlay wins over the seed
+    _apply_overlay(fresh, yaml_overlay)  # config.yaml seed; env beats it
+    _apply_overlay(fresh, db_overlay, env_wins=False)  # admin UI edits beat env
     # Deprecated-flag shim: a deployment that had switched comparisons off via
     # the old boolean stays off until it sets the audience explicitly.
     audience_set = (

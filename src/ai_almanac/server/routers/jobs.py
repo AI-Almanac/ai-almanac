@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -14,7 +15,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ai_almanac.server.auth import CurrentUser
+from ai_almanac.server.auth import AdminUser, CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import blend_cells, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
@@ -32,7 +33,7 @@ from ai_almanac.server.services.job_submission import (
     row_to_job_out,
 )
 from ai_almanac.server.services.registry import load_catalog, load_model_registry
-from ai_almanac.server.tables import job_artifacts, jobs
+from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
 
 from ..services.metrics import (
     JobCellResponse,
@@ -104,13 +105,16 @@ async def create_job(body: JobCreate, user: CurrentUser):
 
 
 @router.get("", response_model=list[JobOut])
-async def list_jobs(user: CurrentUser):
+async def list_jobs(user: OptionalCurrentUser):
     async with get_db() as conn:
         rows = (
             (
                 await conn.execute(
                     sa.select(jobs)
-                    .where(jobs.c.user_id == user.id, jobs.c.run_id.is_not(None))
+                    .where(
+                        job_access.listing_filter(user.id if user else None),
+                        jobs.c.run_id.is_not(None),
+                    )
                     .order_by(jobs.c.created_at.desc())
                 )
             )
@@ -118,15 +122,16 @@ async def list_jobs(user: CurrentUser):
             .fetchall()
         )
     catalog = await load_catalog()
-    return [row_to_job_out(dict(r), user.id, catalog) for r in rows]
+    # Anonymous callers pass "" (never None — the converters treat None as owner).
+    return [row_to_job_out(dict(r), user.id if user else "", catalog) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
-async def get_job(job: ReadableJob, user: CurrentUser):
-    return row_to_job_out(job, user.id, await load_catalog())
+async def get_job(job: ReadableJob, user: OptionalCurrentUser):
+    return row_to_job_out(job, user.id if user else "", await load_catalog())
 
 
-async def readable_job(job_id: str, user: CurrentUser) -> dict:
+async def readable_job(job_id: str, user: OptionalCurrentUser) -> dict:
     job = await job_access.fetch_job(job_id)
     if not job or not job_access.can_read(job, user):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -482,14 +487,53 @@ async def get_cell(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+async def _hide_example_job(job_id: str, user: CurrentUser) -> None:
+    async with get_db() as conn:
+        # Upsert so concurrent deletes of the same example stay idempotent
+        # (valid on both SQLite and Postgres, like get_or_create_user).
+        result = await conn.execute(
+            sa.text(
+                "INSERT INTO user_hidden_jobs (user_id, job_id, created_at) "
+                "VALUES (:user_id, :job_id, :now) "
+                "ON CONFLICT (user_id, job_id) DO NOTHING"
+            ),
+            {
+                "user_id": user.id,
+                "job_id": job_id,
+                "now": datetime.now(UTC).isoformat(),
+            },
+        )
+        if result.rowcount:
+            await audit(
+                conn,
+                "job.hidden",
+                user_id=user.id,
+                resource_type="job",
+                resource_id=job_id,
+            )
+
+
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_job(job_id: str, job: ModifiableJob):
+async def delete_job(job_id: str, user: CurrentUser):
+    job = await job_access.fetch_job(job_id)
+    if not job or not job_access.can_read(job, user):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if (job.get("visibility") or "private") == "example":
+        # Examples are shared with everyone; deleting only hides the job from
+        # the caller's view — even for the owner or an admin. Demote it first
+        # (POST /jobs/{id}/unshare) to actually delete it.
+        await _hide_example_job(job_id, user)
+        return
+    if not job_access.can_modify(job, user):
+        raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] in ACTIVE_STATUSES:
         raise HTTPException(status_code=409, detail="Cancel the job before deleting it.")
     async with get_db() as conn:
-        # Remove indexed artifact records, then the job. (Explicit delete rather
-        # than relying on SQLite FK cascade, which is off by default.)
+        # Remove indexed artifact records and hide markers, then the job.
+        # (Explicit delete rather than relying on SQLite FK cascade, which is
+        # off by default.)
         await conn.execute(sa.delete(job_artifacts).where(job_artifacts.c.job_id == job_id))
+        await conn.execute(sa.delete(user_hidden_jobs).where(user_hidden_jobs.c.job_id == job_id))
         await conn.execute(sa.delete(jobs).where(jobs.c.id == job_id))
         await audit(
             conn,
@@ -535,5 +579,45 @@ async def share_job(job: ModifiableJob, user: CurrentUser):
 
 @router.post("/{job_id}/unshare", response_model=JobOut)
 async def unshare_job(job: ModifiableJob, user: CurrentUser):
-    """Return a shared job to private (owner/admin only)."""
+    """Return a shared or example job to private (owner/admin only)."""
     return await _set_job_visibility(job, "private", user)
+
+
+@router.post("/{job_id}/example", response_model=JobOut)
+async def promote_job_to_example(job: ModifiableJob, user: AdminUser):
+    """Feature a completed job as the shared example every user sees."""
+    _require_complete(job)
+    if job["job_type"] == "benchmark" and job["run_id"]:
+        # A benchmark run is a group of sibling jobs (one per model); promote
+        # the completed siblings together so the group renders whole.
+        async with get_db() as conn:
+            promoted = (
+                (
+                    await conn.execute(
+                        sa.update(jobs)
+                        .where(
+                            jobs.c.run_id == job["run_id"],
+                            # run_id is client-supplied, so scope to the promoted
+                            # job's owner: a legitimate run's siblings share one.
+                            jobs.c.user_id == job["user_id"],
+                            jobs.c.job_type == "benchmark",
+                            jobs.c.status == "complete",
+                        )
+                        .values(visibility="example")
+                        .returning(jobs.c.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for sibling_id in promoted:
+                if sibling_id == job["id"]:
+                    continue  # audited below by _set_job_visibility
+                await audit(
+                    conn,
+                    "job.example",
+                    user_id=user.id,
+                    resource_type="job",
+                    resource_id=sibling_id,
+                )
+    return await _set_job_visibility(job, "example", user)

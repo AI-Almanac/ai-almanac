@@ -20,6 +20,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import { pollWhileActive } from '$lib/poll';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
@@ -163,10 +164,12 @@
 	}
 
 	async function deleteForecast(id: string) {
-		if (
-			!confirm('Delete this forecast? This permanently removes its outputs and cannot be undone.')
-		)
-			return;
+		const forecast = forecasts.find((f) => f.id === id);
+		if (!forecast) return;
+		const message = isExample(forecast)
+			? 'Remove this forecast from your list? This example stays available to everyone else.'
+			: 'Delete this forecast? This permanently removes its outputs and cannot be undone.';
+		if (!confirm(message)) return;
 		actionError = null;
 		try {
 			await deleteJob(id);
@@ -185,21 +188,45 @@
 		return 'mixed';
 	}
 
-	const sidebarSections = $derived<RunSection[]>([
-		{
-			title: 'My Forecasts',
-			open: true,
-			emptyLabel: loaded ? 'No forecasts yet.' : 'Loading…',
-			items: latestForecasts.map((f) => ({
-				id: f.id,
-				title: blendName(f.blend_id),
-				meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
-				count: f.forecast_model_ids.length,
-				status: sidebarStatus(f.status),
-				canDelete: !ACTIVE_STATUSES.includes(f.status)
-			}))
+	function isExample(f: (typeof forecasts)[number]): boolean {
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return f.visibility === 'example';
+	}
+
+	function toSidebarItem(f: (typeof forecasts)[number]) {
+		return {
+			id: f.id,
+			title: blendName(f.blend_id),
+			meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
+			count: f.forecast_model_ids.length,
+			status: sidebarStatus(f.status),
+			canDelete: !ACTIVE_STATUSES.includes(f.status),
+			// Deleting a non-owned example only hides it from this account.
+			deleteTitle: isExample(f) ? 'Remove example' : undefined
+		};
+	}
+
+	const sidebarSections = $derived.by<RunSection[]>(() => {
+		const mine = latestForecasts.filter((f) => !isExample(f));
+		const examples = latestForecasts.filter(isExample);
+		const result: RunSection[] = [
+			{
+				title: 'My Forecasts',
+				open: true,
+				emptyLabel: loaded ? 'No forecasts yet.' : 'Loading…',
+				items: mine.map(toSidebarItem)
+			}
+		];
+		if (examples.length > 0) {
+			result.push({
+				title: 'Examples',
+				items: examples.map(toSidebarItem),
+				open: mine.length === 0
+			});
 		}
-	]);
+		return result;
+	});
 
 	// While any forecast is active, re-fetch the list and replace items whose
 	// status changed. Bounded by the server's ~5s reconcile cadence, so a 3s
@@ -378,6 +405,8 @@
 	});
 </script>
 
+<svelte:head><title>Forecasts · AI Almanac</title></svelte:head>
+
 <div class="workspace-page" class:is-setup={creating}>
 	{#if !creating}
 		<RunSidebar
@@ -499,6 +528,12 @@
 						</p>
 					</div>
 					<div class="detail-actions">
+						<ExampleActions
+							promoteId={selected.status === 'complete' ? selected.id : null}
+							demoteIds={[selected.id]}
+							isExample={selected.visibility === 'example'}
+							onChanged={load}
+						/>
 						<span class="status-badge {statusClass(selected.status)}"
 							>{statusLabel(selected.status)}</span
 						>

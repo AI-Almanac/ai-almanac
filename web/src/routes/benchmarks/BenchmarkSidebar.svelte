@@ -41,21 +41,31 @@
 		return 'mixed';
 	}
 
+	function isExampleGroup(group: (typeof store.runGroups)[number]): boolean {
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return group.jobs.every((job) => job.visibility === 'example');
+	}
+
 	function toItem(group: (typeof store.runGroups)[number]): RunListItem {
+		const isExample = isExampleGroup(group);
 		return {
 			id: group.key,
 			title: group.region,
 			meta: `${formatRunDate(group.mostRecentAt)} · ${eventLabel(group.eventType)}`,
 			count: group.jobs.length,
 			status: groupStatus(group),
-			canDelete: group.isOwner
+			canDelete: group.isOwner || isExample,
+			// Deleting a non-owned example only hides it from this account.
+			deleteTitle: isExample ? 'Remove example' : undefined
 		};
 	}
 
 	const sections = $derived.by<RunSection[]>(() => {
 		if (store.runGroups.length === 0) return [];
-		const mine = store.runGroups.filter((g) => g.isOwner);
-		const shared = store.runGroups.filter((g) => !g.isOwner);
+		const mine = store.runGroups.filter((g) => g.isOwner && !isExampleGroup(g));
+		const examples = store.runGroups.filter(isExampleGroup);
+		const shared = store.runGroups.filter((g) => !g.isOwner && !isExampleGroup(g));
 		const result: RunSection[] = [
 			{
 				title: 'My Benchmarks',
@@ -64,6 +74,9 @@
 				emptyLabel: 'No benchmarks yet.'
 			}
 		];
+		if (examples.length > 0) {
+			result.push({ title: 'Examples', items: examples.map(toItem), open: mine.length === 0 });
+		}
 		if (shared.length > 0) {
 			result.push({ title: 'Shared With Me', items: shared.map(toItem), open: false });
 		}
