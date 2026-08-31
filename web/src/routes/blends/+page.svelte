@@ -279,7 +279,9 @@
 	}
 
 	function isExample(b: (typeof blends)[number]): boolean {
-		return b.visibility === 'example' && !b.is_owner;
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return b.visibility === 'example';
 	}
 
 	function toSidebarItem(b: (typeof blends)[number]) {
