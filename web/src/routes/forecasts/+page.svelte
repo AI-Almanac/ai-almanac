@@ -188,7 +188,9 @@
 	}
 
 	function isExample(f: (typeof forecasts)[number]): boolean {
-		return f.visibility === 'example' && !f.is_owner;
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return f.visibility === 'example';
 	}
 
 	function toSidebarItem(f: (typeof forecasts)[number]) {

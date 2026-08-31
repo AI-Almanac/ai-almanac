@@ -42,7 +42,9 @@
 	}
 
 	function isExampleGroup(group: (typeof store.runGroups)[number]): boolean {
-		return !group.isOwner && group.jobs.every((job) => job.visibility === 'example');
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return group.jobs.every((job) => job.visibility === 'example');
 	}
 
 	function toItem(group: (typeof store.runGroups)[number]): RunListItem {
@@ -61,7 +63,7 @@
 
 	const sections = $derived.by<RunSection[]>(() => {
 		if (store.runGroups.length === 0) return [];
-		const mine = store.runGroups.filter((g) => g.isOwner);
+		const mine = store.runGroups.filter((g) => g.isOwner && !isExampleGroup(g));
 		const examples = store.runGroups.filter(isExampleGroup);
 		const shared = store.runGroups.filter((g) => !g.isOwner && !isExampleGroup(g));
 		const result: RunSection[] = [
