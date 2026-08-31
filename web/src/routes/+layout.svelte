@@ -4,12 +4,20 @@
 	import Nav from '$lib/Nav.svelte';
 	import Footer from '$lib/Footer.svelte';
 	import ViewAsUserBanner from '$lib/components/ViewAsUserBanner.svelte';
+	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 	import { addBreadcrumb } from '$lib/breadcrumbs';
+	import { isAuthenticated } from '$lib/auth-store';
+	import { USE_BEARER_AUTH } from '$lib/api/core';
 
 	let { children } = $props();
+
+	// /callback must always render: it runs the Globus token exchange, so no
+	// token exists yet while it is on screen. It always arrives and leaves via
+	// full page loads, so a load-time check is enough.
+	const isCallback = browser && window.location.pathname === '/callback';
 
 	afterNavigate((nav) => {
 		addBreadcrumb('navigation', `→ ${nav.to?.url?.pathname ?? '?'}`, {
@@ -19,10 +27,7 @@
 		});
 	});
 
-	// /callback runs the Globus token exchange itself. Bootstrapping auth here
-	// would force a login redirect before a token exists, aborting the in-flight
-	// exchange (NS_BINDING_ABORTED → "NetworkError") and looping the sign-in.
-	if (browser && window.location.pathname !== '/callback') {
+	if (browser && !isCallback) {
 		account.load();
 	}
 </script>
@@ -30,5 +35,9 @@
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 <ViewAsUserBanner />
 <Nav />
-{@render children()}
+{#if USE_BEARER_AUTH && !isCallback && !$isAuthenticated}
+	<LoginPrompt />
+{:else}
+	{@render children()}
+{/if}
 <Footer />
