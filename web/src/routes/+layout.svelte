@@ -35,7 +35,7 @@
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 <ViewAsUserBanner />
 <Nav />
-{#if USE_BEARER_AUTH && !isCallback && !$isAuthenticated}
+{#if browser && USE_BEARER_AUTH && !isCallback && !$isAuthenticated}
 	<LoginPrompt />
 {:else}
 	{@render children()}
