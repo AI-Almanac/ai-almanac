@@ -53,19 +53,13 @@ export function usesBearerAuth(
 
 export const USE_BEARER_AUTH = usesBearerAuth(runtimeConfig, import.meta.env.VITE_GLOBUS_CLIENT_ID);
 
-export async function request<T>(
-	path: string,
-	init: RequestInit = {},
-	retry = false,
-	requireAuth = true
-): Promise<T> {
-	// No stored token means the user never signed in (or signed out): fail the
-	// call and let the layout show the sign-in prompt. Redirecting to Globus
-	// here bounced first-time visitors off-site before they saw the app (#182).
+export async function request<T>(path: string, init: RequestInit = {}, retry = false): Promise<T> {
+	// No stored token means the user never signed in (or signed out): send the
+	// request anonymously — public endpoints answer with example data, private
+	// ones 401 and throw below. Redirecting to Globus here bounced first-time
+	// visitors off-site before they saw the app (#182).
 	const headers = authHeaders();
-	if (requireAuth && USE_BEARER_AUTH && !('Authorization' in headers)) {
-		throw new Error('Authentication required');
-	}
+	const hadToken = 'Authorization' in headers;
 
 	const method = init.method ?? 'GET';
 	const start = performance.now();
@@ -93,14 +87,16 @@ export async function request<T>(
 		requestId: res.headers.get('x-request-id') ?? undefined
 	});
 
-	if (res.status === 401) {
+	// A 401 only means "session expired" when the request carried a token;
+	// anonymous 401s (a visitor poking a private endpoint) just throw.
+	if (res.status === 401 && hadToken) {
 		if (!retry && (await refreshAuthTokens())) {
 			return request<T>(path, init, true);
 		}
 		// Refresh failed (or already retried once): the session is truly
 		// expired. Send the user to re-authenticate instead of letting every
 		// call site's Promise.allSettled swallow this as an empty result.
-		if (requireAuth && USE_BEARER_AUTH) {
+		if (USE_BEARER_AUTH) {
 			login(window.location.pathname + window.location.search);
 		}
 	}

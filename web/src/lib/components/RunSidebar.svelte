@@ -21,6 +21,10 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { account } from '$lib/account.svelte';
+
+	// Anonymous visitors browse examples read-only; mutations would just 401.
+	const canMutate = $derived(!account.isAnonymous);
 
 	let {
 		newLabel,
@@ -66,12 +70,16 @@
 			aria-label="Show the run list"
 			onclick={() => setCollapsed(false)}>»</button
 		>
-		<button class="rail-btn" title={newLabel} aria-label={newLabel} onclick={onNew}>+</button>
+		{#if canMutate}
+			<button class="rail-btn" title={newLabel} aria-label={newLabel} onclick={onNew}>+</button>
+		{/if}
 	</aside>
 {:else}
 	<aside class="sidebar">
 		<div class="sidebar-head">
-			<button class="new-run-btn" class:active={newActive} onclick={onNew}>{newLabel}</button>
+			{#if canMutate}
+				<button class="new-run-btn" class:active={newActive} onclick={onNew}>{newLabel}</button>
+			{/if}
 			<button
 				class="rail-btn"
 				title="Hide the run list"
@@ -104,7 +112,7 @@
 										<span class="status-dot {item.status}" title={item.status}></span>
 									</div>
 								</button>
-								{#if item.canDelete}
+								{#if canMutate && item.canDelete}
 									<button
 										class="run-delete"
 										title={item.deleteTitle ?? deleteTitle}
