@@ -754,7 +754,10 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
         )
     if not row or row["job_type"] != "blend":
         raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
-    if row["user_id"] != user_id and (row.get("visibility") or "private") != "shared":
+    if row["user_id"] != user_id and (row.get("visibility") or "private") not in (
+        "shared",
+        "example",
+    ):
         raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
     if row["status"] != "complete":
         raise HTTPException(
@@ -1025,7 +1028,9 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
             .mappings()
             .fetchone()
         )
-    if not row or (row["user_id"] != user_id and (row["visibility"] or "private") != "shared"):
+    if not row or (
+        row["user_id"] != user_id and (row["visibility"] or "private") not in ("shared", "example")
+    ):
         raise HTTPException(status_code=404, detail=f"Unknown forecast: {forecast_id!r}")
 
     cfg = json.loads(row["config_json"] or "{}")

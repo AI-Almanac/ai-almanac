@@ -1204,9 +1204,29 @@ export interface paths {
         put?: never;
         /**
          * Unshare Job
-         * @description Return a shared job to private (owner/admin only).
+         * @description Return a shared or example job to private (owner/admin only).
          */
         post: operations["unshare_job_jobs__job_id__unshare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/example": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Job To Example
+         * @description Feature a completed job as the shared example every user sees.
+         */
+        post: operations["promote_job_to_example_jobs__job_id__example_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6852,6 +6872,37 @@ export interface operations {
         };
     };
     unshare_job_jobs__job_id__unshare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_job_to_example_jobs__job_id__example_post: {
         parameters: {
             query?: never;
             header?: never;

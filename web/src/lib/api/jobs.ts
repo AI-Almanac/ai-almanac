@@ -24,7 +24,7 @@ export type Job = {
 	completed_at?: string;
 	error?: string | null;
 	is_owner?: boolean;
-	visibility?: 'private' | 'shared';
+	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
 };
 
