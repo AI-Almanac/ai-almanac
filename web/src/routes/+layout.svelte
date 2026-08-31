@@ -12,9 +12,9 @@
 	let { children } = $props();
 
 	afterNavigate((nav) => {
-		addBreadcrumb('navigation', `→ ${nav.to?.url.pathname ?? '?'}`, {
-			from: nav.from?.url.pathname,
-			to: nav.to?.url.pathname,
+		addBreadcrumb('navigation', `→ ${nav.to?.url?.pathname ?? '?'}`, {
+			from: nav.from?.url?.pathname,
+			to: nav.to?.url?.pathname,
 			type: nav.type
 		});
 	});

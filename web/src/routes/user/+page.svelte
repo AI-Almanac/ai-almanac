@@ -25,6 +25,8 @@
 	});
 </script>
 
+<svelte:head><title>Account · AI Almanac</title></svelte:head>
+
 {#if $isAuthenticated}
 	<section class="account-page">
 		<div class="account-panel">

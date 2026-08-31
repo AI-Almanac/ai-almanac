@@ -32,6 +32,8 @@
 	}
 </script>
 
+<svelte:head><title>Forecast Data · AI Almanac</title></svelte:head>
+
 <AdminGuard>
 	<main class="wrap">
 		<header class="head">
