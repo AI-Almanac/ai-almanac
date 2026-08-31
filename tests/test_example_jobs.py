@@ -274,9 +274,12 @@ async def test_anonymous_reads_example_but_not_private_or_shared(
 @pytest.mark.asyncio
 async def test_anonymous_mutations_rejected(client: httpx.AsyncClient, proxy) -> None:
     example_id, _ = _example_job("benchmark")
-    assert (await client.delete(f"/jobs/{example_id}")).status_code == 401
-    assert (await client.post("/jobs", json={})).status_code == 401
-    assert (await client.post(f"/jobs/{example_id}/example")).status_code == 401
+    delete_resp = await client.delete(f"/jobs/{example_id}")
+    assert delete_resp.status_code == 401
+    create_resp = await client.post("/jobs", json={})
+    assert create_resp.status_code == 401
+    promote_resp = await client.post(f"/jobs/{example_id}/example")
+    assert promote_resp.status_code == 401
 
 
 @pytest.mark.asyncio
