@@ -24,6 +24,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
@@ -729,6 +730,12 @@
 							</p>
 						</div>
 						<div class="detail-actions">
+							<ExampleActions
+								promoteId={selected.status === 'complete' ? selected.id : null}
+								demoteIds={[selected.id]}
+								isExample={selected.visibility === 'example'}
+								onChanged={load}
+							/>
 							<span class="status-badge {statusClass(selected.status)}"
 								>{statusLabel(selected.status)}</span
 							>

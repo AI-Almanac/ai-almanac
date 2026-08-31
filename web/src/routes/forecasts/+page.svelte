@@ -20,6 +20,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import { pollWhileActive } from '$lib/poll';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
@@ -527,6 +528,12 @@
 						</p>
 					</div>
 					<div class="detail-actions">
+						<ExampleActions
+							promoteId={selected.status === 'complete' ? selected.id : null}
+							demoteIds={[selected.id]}
+							isExample={selected.visibility === 'example'}
+							onChanged={load}
+						/>
 						<span class="status-badge {statusClass(selected.status)}"
 							>{statusLabel(selected.status)}</span
 						>

@@ -4,6 +4,7 @@
 	import { account } from '$lib/account.svelte';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
@@ -232,6 +233,12 @@
 							</p>
 						</div>
 						<div class="analysis-actions">
+							<ExampleActions
+								promoteId={completeJobs[0]?.id ?? null}
+								demoteIds={group.jobs.map((j) => j.id)}
+								isExample={group.jobs.some((j) => j.visibility === 'example')}
+								onChanged={() => store.load(group.key)}
+							/>
 							{#if chatAvailable}
 								<button
 									type="button"
