@@ -15,22 +15,28 @@ class JobUser(Protocol):
     is_admin: bool
 
 
-def can_read(job: dict, user: JobUser) -> bool:
-    """Owner, admin, or anyone when the job is shared or an example."""
-    return (
-        user.is_admin
-        or job.get("user_id") == user.id
-        or (job.get("visibility") or "private") in ("shared", "example")
-    )
+def can_read(job: dict, user: JobUser | None) -> bool:
+    """Owner, admin, or anyone when the job is shared or an example.
+
+    Anonymous callers (``user is None``) read examples only — the one
+    admin-curated surface safe to expose without an identity."""
+    visibility = job.get("visibility") or "private"
+    if user is None:
+        return visibility == "example"
+    return user.is_admin or job.get("user_id") == user.id or visibility in ("shared", "example")
 
 
-def can_modify(job: dict, user: JobUser) -> bool:
+def can_modify(job: dict, user: JobUser | None) -> bool:
     """Owner or admin. Sharing is read-only and never grants this."""
-    return user.is_admin or job.get("user_id") == user.id
+    return user is not None and (user.is_admin or job.get("user_id") == user.id)
 
 
-def listing_filter(user_id: str) -> sa.ColumnElement[bool]:
-    """List views show the user's own jobs plus example jobs they haven't hidden."""
+def listing_filter(user_id: str | None) -> sa.ColumnElement[bool]:
+    """List views show the user's own jobs plus example jobs they haven't hidden.
+
+    Anonymous listings (``user_id is None``) are examples only."""
+    if user_id is None:
+        return jobs.c.visibility == "example"
     hidden = (
         sa.select(user_hidden_jobs.c.job_id)
         .where(

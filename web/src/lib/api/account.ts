@@ -2,8 +2,10 @@
 import { request } from './core';
 
 export type Account = {
-	id: string;
-	subject: string;
+	// True for a visitor with no credential; identity fields are null then.
+	anonymous?: boolean;
+	id: string | null;
+	subject: string | null;
 	email: string | null;
 	display_name: string | null;
 	role: 'admin' | 'user';
@@ -18,5 +20,5 @@ export type Account = {
 };
 
 export async function getAccount(): Promise<Account> {
-	return request<Account>('/auth/me', {}, false, false);
+	return request<Account>('/auth/me');
 }

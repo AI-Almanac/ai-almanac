@@ -338,7 +338,8 @@ export interface paths {
         /**
          * Me
          * @description Return the current identity plus capability flags the UI uses to gate
-         *     admin-only navigation and feature affordances.
+         *     admin-only navigation and feature affordances. Anonymous visitors get a
+         *     null identity with read-only capabilities so the public pages render.
          */
         get: operations["me_auth_me_get"];
         put?: never;

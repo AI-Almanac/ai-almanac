@@ -221,3 +221,95 @@ async def test_example_blend_usable_as_parent(client: httpx.AsyncClient, proxy) 
     blend_id, _ = _example_job("blend")
     row = await _resolve_parent_blend(blend_id, "some-other-user-id")
     assert row["id"] == blend_id
+
+
+# ---------------------------------------------------------------------------
+# Anonymous viewing (no credential presented at all)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anonymous_lists_examples_only(client: httpx.AsyncClient, proxy) -> None:
+    bench_id, _ = _example_job("benchmark")
+    blend_id, _ = _example_job("blend")
+    forecast_id, _ = _example_job("forecast")
+    owner_uid = str(uuid.uuid4())
+    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
+    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
+
+    jobs = await client.get("/jobs")
+    assert jobs.status_code == 200
+    listed = {j["id"]: j for j in jobs.json()}
+    assert bench_id in listed
+    assert listed[bench_id]["is_owner"] is False
+    assert private_id not in listed
+    assert shared_id not in listed
+
+    blends = await client.get("/blends")
+    assert blend_id in {b["id"] for b in blends.json()}
+
+    forecasts = await client.get("/forecasts")
+    assert forecast_id in {f["id"] for f in forecasts.json()}
+
+
+@pytest.mark.asyncio
+async def test_anonymous_reads_example_but_not_private_or_shared(
+    client: httpx.AsyncClient, proxy
+) -> None:
+    example_id, _ = _example_job("benchmark")
+    owner_uid = str(uuid.uuid4())
+    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
+    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
+
+    resp = await client.get(f"/jobs/{example_id}")
+    assert resp.status_code == 200
+    assert resp.json()["is_owner"] is False
+    assert (await client.get(f"/jobs/{private_id}")).status_code == 404
+    # 'shared' means shared with authenticated users, not the public.
+    assert (await client.get(f"/jobs/{shared_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_anonymous_mutations_rejected(client: httpx.AsyncClient, proxy) -> None:
+    example_id, _ = _example_job("benchmark")
+    assert (await client.delete(f"/jobs/{example_id}")).status_code == 401
+    assert (await client.post("/jobs", json={})).status_code == 401
+    assert (await client.post(f"/jobs/{example_id}/example")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_anonymous_gets_regions_and_me(client: httpx.AsyncClient, proxy) -> None:
+    assert (await client.get("/regions")).status_code == 200
+
+    me = await client.get("/auth/me")
+    assert me.status_code == 200
+    body = me.json()
+    assert body["anonymous"] is True
+    assert body["id"] is None
+    assert body["role"] == "user"
+    assert body["capabilities"]["can_admin"] is False
+
+    authed = await client.get("/auth/me", headers={"X-Forwarded-User": "somebody"})
+    assert authed.json()["anonymous"] is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_globus_token_still_401s(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A presented-but-bad credential must 401 (feeding the SPA's token
+    refresh), never silently downgrade to the anonymous view."""
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "auth_mode", "globus")
+    monkeypatch.setattr(
+        auth_module, "_introspect_globus_token", lambda token: {"active": False, "sub": None}
+    )
+
+    bad = await client.get("/jobs", headers={"Authorization": "Bearer expired-token"})
+    assert bad.status_code == 401
+
+    anonymous = await client.get("/jobs")
+    assert anonymous.status_code == 200

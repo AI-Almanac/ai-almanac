@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ai_almanac.server.auth import AdminUser, CurrentUser
+from ai_almanac.server.auth import AdminUser, CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import blend_cells, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
@@ -105,13 +105,16 @@ async def create_job(body: JobCreate, user: CurrentUser):
 
 
 @router.get("", response_model=list[JobOut])
-async def list_jobs(user: CurrentUser):
+async def list_jobs(user: OptionalCurrentUser):
     async with get_db() as conn:
         rows = (
             (
                 await conn.execute(
                     sa.select(jobs)
-                    .where(job_access.listing_filter(user.id), jobs.c.run_id.is_not(None))
+                    .where(
+                        job_access.listing_filter(user.id if user else None),
+                        jobs.c.run_id.is_not(None),
+                    )
                     .order_by(jobs.c.created_at.desc())
                 )
             )
@@ -119,15 +122,16 @@ async def list_jobs(user: CurrentUser):
             .fetchall()
         )
     catalog = await load_catalog()
-    return [row_to_job_out(dict(r), user.id, catalog) for r in rows]
+    # Anonymous callers pass "" (never None — the converters treat None as owner).
+    return [row_to_job_out(dict(r), user.id if user else "", catalog) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
-async def get_job(job: ReadableJob, user: CurrentUser):
-    return row_to_job_out(job, user.id, await load_catalog())
+async def get_job(job: ReadableJob, user: OptionalCurrentUser):
+    return row_to_job_out(job, user.id if user else "", await load_catalog())
 
 
-async def readable_job(job_id: str, user: CurrentUser) -> dict:
+async def readable_job(job_id: str, user: OptionalCurrentUser) -> dict:
     job = await job_access.fetch_job(job_id)
     if not job or not job_access.can_read(job, user):
         raise HTTPException(status_code=404, detail="Job not found")

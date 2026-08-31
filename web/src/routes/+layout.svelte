@@ -7,6 +7,8 @@
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { browser } from '$app/environment';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { isAnonRoute } from '$lib/anon-routes';
 	import { account } from '$lib/account.svelte';
 	import { addBreadcrumb } from '$lib/breadcrumbs';
 	import { isAuthenticated } from '$lib/auth-store';
@@ -35,7 +37,7 @@
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 <ViewAsUserBanner />
 <Nav />
-{#if browser && USE_BEARER_AUTH && !isCallback && !$isAuthenticated}
+{#if browser && USE_BEARER_AUTH && !isCallback && !$isAuthenticated && !isAnonRoute($page.url.pathname)}
 	<LoginPrompt />
 {:else}
 	{@render children()}
