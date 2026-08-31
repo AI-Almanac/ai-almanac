@@ -8,6 +8,7 @@
 		count: number;
 		status: RunStatus;
 		canDelete: boolean;
+		deleteTitle?: string;
 	}
 
 	export interface RunSection {
@@ -106,7 +107,7 @@
 								{#if item.canDelete}
 									<button
 										class="run-delete"
-										title={deleteTitle}
+										title={item.deleteTitle ?? deleteTitle}
 										onclick={(e) => {
 											e.stopPropagation();
 											onDelete(item.id);

@@ -12,7 +12,7 @@ export type Blend = {
 	completed_at?: string | null;
 	error?: string | null;
 	is_owner?: boolean;
-	visibility?: 'private' | 'shared';
+	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
 };
 

@@ -249,11 +249,10 @@
 		const blend = blends.find((b) => b.id === id);
 		if (!blend) return;
 		const label = blend.name || 'this blend';
-		if (
-			!confirm(
-				`Delete "${label}"? This permanently removes its trained weights and outputs from storage and cannot be undone.`
-			)
-		) {
+		const message = isExample(blend)
+			? `Remove "${label}" from your list? This example stays available to everyone else.`
+			: `Delete "${label}"? This permanently removes its trained weights and outputs from storage and cannot be undone.`;
+		if (!confirm(message)) {
 			return;
 		}
 		actionError = null;
@@ -279,21 +278,43 @@
 		return 'mixed';
 	}
 
-	const sidebarSections = $derived<RunSection[]>([
-		{
-			title: 'My Blends',
-			open: true,
-			emptyLabel: loaded ? 'No blends yet.' : 'Loading…',
-			items: blends.map((b) => ({
-				id: b.id,
-				title: b.name || 'Untitled blend',
-				meta: `${b.model_names.length} model${b.model_names.length === 1 ? '' : 's'} · ${formatDate(b.created_at)}`,
-				count: b.model_names.length,
-				status: sidebarStatus(b.status),
-				canDelete: !ACTIVE_STATUSES.includes(b.status)
-			}))
+	function isExample(b: (typeof blends)[number]): boolean {
+		return b.visibility === 'example' && !b.is_owner;
+	}
+
+	function toSidebarItem(b: (typeof blends)[number]) {
+		return {
+			id: b.id,
+			title: b.name || 'Untitled blend',
+			meta: `${b.model_names.length} model${b.model_names.length === 1 ? '' : 's'} · ${formatDate(b.created_at)}`,
+			count: b.model_names.length,
+			status: sidebarStatus(b.status),
+			canDelete: !ACTIVE_STATUSES.includes(b.status),
+			// Deleting a non-owned example only hides it from this account.
+			deleteTitle: isExample(b) ? 'Remove example' : undefined
+		};
+	}
+
+	const sidebarSections = $derived.by<RunSection[]>(() => {
+		const mine = blends.filter((b) => !isExample(b));
+		const examples = blends.filter(isExample);
+		const result: RunSection[] = [
+			{
+				title: 'My Blends',
+				open: true,
+				emptyLabel: loaded ? 'No blends yet.' : 'Loading…',
+				items: mine.map(toSidebarItem)
+			}
+		];
+		if (examples.length > 0) {
+			result.push({
+				title: 'Examples',
+				items: examples.map(toSidebarItem),
+				open: mine.length === 0
+			});
 		}
-	]);
+		return result;
+	});
 
 	// Stream status changes per running blend instead of re-fetching the whole
 	// list on a timer. Replacing the array on every poll reassigned every blend

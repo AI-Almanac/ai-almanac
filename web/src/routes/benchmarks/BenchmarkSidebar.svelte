@@ -48,14 +48,16 @@
 			meta: `${formatRunDate(group.mostRecentAt)} · ${eventLabel(group.eventType)}`,
 			count: group.jobs.length,
 			status: groupStatus(group),
-			canDelete: group.isOwner
+			canDelete: true,
+			// Deleting a non-owned example only hides it from this account.
+			deleteTitle: group.isOwner ? undefined : 'Remove example'
 		};
 	}
 
 	const sections = $derived.by<RunSection[]>(() => {
 		if (store.runGroups.length === 0) return [];
 		const mine = store.runGroups.filter((g) => g.isOwner);
-		const shared = store.runGroups.filter((g) => !g.isOwner);
+		const examples = store.runGroups.filter((g) => !g.isOwner);
 		const result: RunSection[] = [
 			{
 				title: 'My Benchmarks',
@@ -64,8 +66,8 @@
 				emptyLabel: 'No benchmarks yet.'
 			}
 		];
-		if (shared.length > 0) {
-			result.push({ title: 'Shared With Me', items: shared.map(toItem), open: false });
+		if (examples.length > 0) {
+			result.push({ title: 'Examples', items: examples.map(toItem), open: mine.length === 0 });
 		}
 		return result;
 	});
