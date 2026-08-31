@@ -196,6 +196,15 @@ async def test_promote_covers_completed_run_group_siblings(
     assert _job_row(failed)[1] == "private"
     assert _job_row(interloper_job)[1] == "private"
 
+    with sqlite3.connect(database_path()) as conn:
+        audited = {
+            row[0]
+            for row in conn.execute(
+                "SELECT resource_id FROM audit_events WHERE event_type = 'job.example'"
+            )
+        }
+    assert {first, sibling} <= audited
+
 
 @pytest.mark.asyncio
 async def test_example_readable_by_non_owner(client: httpx.AsyncClient, proxy) -> None:
