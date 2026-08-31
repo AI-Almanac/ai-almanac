@@ -485,30 +485,28 @@ async def get_cell(
 
 async def _hide_example_job(job_id: str, user: CurrentUser) -> None:
     async with get_db() as conn:
-        already_hidden = (
-            await conn.execute(
-                sa.select(user_hidden_jobs.c.job_id).where(
-                    user_hidden_jobs.c.user_id == user.id,
-                    user_hidden_jobs.c.job_id == job_id,
-                )
-            )
-        ).fetchone()
-        if already_hidden:
-            return
-        await conn.execute(
-            sa.insert(user_hidden_jobs).values(
+        # Upsert so concurrent deletes of the same example stay idempotent
+        # (valid on both SQLite and Postgres, like get_or_create_user).
+        result = await conn.execute(
+            sa.text(
+                "INSERT INTO user_hidden_jobs (user_id, job_id, created_at) "
+                "VALUES (:user_id, :job_id, :now) "
+                "ON CONFLICT (user_id, job_id) DO NOTHING"
+            ),
+            {
+                "user_id": user.id,
+                "job_id": job_id,
+                "now": datetime.now(UTC).isoformat(),
+            },
+        )
+        if result.rowcount:
+            await audit(
+                conn,
+                "job.hidden",
                 user_id=user.id,
-                job_id=job_id,
-                created_at=datetime.now(UTC).isoformat(),
+                resource_type="job",
+                resource_id=job_id,
             )
-        )
-        await audit(
-            conn,
-            "job.hidden",
-            user_id=user.id,
-            resource_type="job",
-            resource_id=job_id,
-        )
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -589,16 +587,33 @@ async def promote_job_to_example(job: ModifiableJob, user: AdminUser):
         # A benchmark run is a group of sibling jobs (one per model); promote
         # the completed siblings together so the group renders whole.
         async with get_db() as conn:
-            await conn.execute(
-                sa.update(jobs)
-                .where(
-                    jobs.c.run_id == job["run_id"],
-                    # run_id is client-supplied, so scope to the promoted job's
-                    # owner: a legitimate run's siblings always share one.
-                    jobs.c.user_id == job["user_id"],
-                    jobs.c.job_type == "benchmark",
-                    jobs.c.status == "complete",
+            promoted = (
+                (
+                    await conn.execute(
+                        sa.update(jobs)
+                        .where(
+                            jobs.c.run_id == job["run_id"],
+                            # run_id is client-supplied, so scope to the promoted
+                            # job's owner: a legitimate run's siblings share one.
+                            jobs.c.user_id == job["user_id"],
+                            jobs.c.job_type == "benchmark",
+                            jobs.c.status == "complete",
+                        )
+                        .values(visibility="example")
+                        .returning(jobs.c.id)
+                    )
                 )
-                .values(visibility="example")
+                .scalars()
+                .all()
             )
+            for sibling_id in promoted:
+                if sibling_id == job["id"]:
+                    continue  # audited below by _set_job_visibility
+                await audit(
+                    conn,
+                    "job.example",
+                    user_id=user.id,
+                    resource_type="job",
+                    resource_id=sibling_id,
+                )
     return await _set_job_visibility(job, "example", user)
