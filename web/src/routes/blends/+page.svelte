@@ -465,6 +465,8 @@
 	}
 </script>
 
+<svelte:head><title>Blends · AI Almanac</title></svelte:head>
+
 {#snippet fieldLabel(text: string, tip: string)}
 	<span class="label-with-help">
 		{text}

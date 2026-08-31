@@ -183,6 +183,8 @@
 	}
 </script>
 
+<svelte:head><title>Benchmarks · AI Almanac</title></svelte:head>
+
 <div class="workspace-page" class:is-setup={inSetupMode}>
 	{#if !inSetupMode}
 		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />

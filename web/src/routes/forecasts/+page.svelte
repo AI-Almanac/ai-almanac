@@ -378,6 +378,8 @@
 	});
 </script>
 
+<svelte:head><title>Forecasts · AI Almanac</title></svelte:head>
+
 <div class="workspace-page" class:is-setup={creating}>
 	{#if !creating}
 		<RunSidebar

@@ -18,6 +18,8 @@
 	});
 </script>
 
+<svelte:head><title>Signing in… · AI Almanac</title></svelte:head>
+
 {#if error}
 	<section class="callback-state">
 		<h1>Authentication Error</h1>
