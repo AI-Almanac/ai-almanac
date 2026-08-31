@@ -51,7 +51,7 @@ export function usesBearerAuth(
 	return Boolean(globusClientId);
 }
 
-const USE_BEARER_AUTH = usesBearerAuth(runtimeConfig, import.meta.env.VITE_GLOBUS_CLIENT_ID);
+export const USE_BEARER_AUTH = usesBearerAuth(runtimeConfig, import.meta.env.VITE_GLOBUS_CLIENT_ID);
 
 export async function request<T>(
 	path: string,
@@ -59,9 +59,11 @@ export async function request<T>(
 	retry = false,
 	requireAuth = true
 ): Promise<T> {
+	// No stored token means the user never signed in (or signed out): fail the
+	// call and let the layout show the sign-in prompt. Redirecting to Globus
+	// here bounced first-time visitors off-site before they saw the app (#182).
 	const headers = authHeaders();
 	if (requireAuth && USE_BEARER_AUTH && !('Authorization' in headers)) {
-		login(window.location.pathname + window.location.search);
 		throw new Error('Authentication required');
 	}
 
