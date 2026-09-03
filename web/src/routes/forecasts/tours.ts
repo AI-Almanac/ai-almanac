@@ -5,9 +5,9 @@ export function forecastResultsSteps(onNewForecast: () => void): DriveStep[] {
 	return [
 		{
 			popover: {
-				title: 'Probabilistic onset forecasts',
+				title: 'Rainy Season Onset Forecasts',
 				description:
-					'A forecast runs a trained blend’s models forward from the latest conditions and combines them with the blend’s weights. The result is the probability that the rainy season has started, or will start, at each location. Let’s look at a finished one.'
+					'A forecast combines raw forecasts with the trained blend’s models forward from the latest conditions. The result is the probability that the rainy season has started, or will start, at each location. Let’s look at a finished one.'
 			}
 		},
 		{
@@ -34,7 +34,7 @@ export function forecastResultsSteps(onNewForecast: () => void): DriveStep[] {
 			popover: {
 				title: 'Look inside a cell',
 				description:
-					'Click any grid cell to open its season inspector: how the onset probability for that location evolves from one forecast date to the next.',
+					'Click any cell to open its season inspector: how the onset probability for that location evolves from one forecast date to the next.',
 				side: 'top',
 				align: 'center'
 			}

@@ -7,7 +7,7 @@ export function blendResultsSteps(onNewBlend: () => void): DriveStep[] {
 			popover: {
 				title: 'Blending models',
 				description:
-					'A blend combines several AI weather models into one forecast, weighting each by how well it predicted onset in past seasons. The result is usually more skilful than any single model, and it is what the Forecasts page runs. Let’s look at a trained blend.'
+					'A blend combines several AI weather models into one forecast, weighting each by how well it predicted onset in past seasons using a multinomial logistic regression. The blended model is usually more skillful than any single model, and it is what the Forecasts page uses. Let’s look at a trained blend.'
 			}
 		},
 		{
@@ -24,8 +24,7 @@ export function blendResultsSteps(onNewBlend: () => void): DriveStep[] {
 			element: '[data-tour="blend-maps"]',
 			popover: {
 				title: 'Skill by grid point',
-				description:
-					'The same skill mapped across the region, so you can see where the blend helps most and where a single model still wins.',
+				description: 'The same skill mapped across the region.',
 				side: 'top',
 				align: 'center'
 			}

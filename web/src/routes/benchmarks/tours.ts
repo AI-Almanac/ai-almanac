@@ -5,9 +5,9 @@ export function benchmarkResultsSteps(onNewBenchmark: () => void): DriveStep[] {
 	return [
 		{
 			popover: {
-				title: 'Benchmarking onset forecasts',
+				title: 'Benchmark Rainy Season Onset Forecasts',
 				description:
-					'A benchmark scores how well each AI weather model predicted the start of the rainy season across a region, compared with observations. Deterministic metrics score a single forecast; probabilistic metrics score an ensemble. Let’s look around a finished run.'
+					'A benchmark scores how well each AI weather model predicted the start of the rainy season across a region, compared with observations. Deterministic metrics score a single forecast; probabilistic metrics score an ensemble. Let’s look around a completed benchmark.'
 			}
 		},
 		{
@@ -15,7 +15,7 @@ export function benchmarkResultsSteps(onNewBenchmark: () => void): DriveStep[] {
 			popover: {
 				title: 'Skill map',
 				description:
-					'Each cell is one grid point, coloured by the selected metric. Hover a cell to read its values.',
+					'Each cell is one grid point, colored by the selected metric. Hover a cell to read its values, or click a cell to see more details.',
 				side: 'top',
 				align: 'center'
 			}
@@ -82,16 +82,16 @@ export function benchmarkSetupSteps(openManualConfig: () => void): DriveStep[] {
 			popover: {
 				title: 'Benchmark plan',
 				description:
-					'This panel tracks your current setup. Once a region, ground truth dataset, and models are chosen it becomes Runnable and you can start the run.',
+					'This panel shows your benchmark setup. Select a region, ground truth dataset, and models to include in the benchmark.',
 				side: 'left'
 			}
 		},
 		{
 			element: '[data-tour="setup-chat"]',
 			popover: {
-				title: 'Let the assistant set it up',
+				title: 'Let the LLM assistant set it up',
 				description:
-					'Describe the benchmark you want in plain language, for example “Compare monsoon onset skill over southern India”. The assistant fills in the plan and can explain any option.',
+					'Describe the benchmark you want in plain language, for example “Compare monsoon onset skill over Ethiopia”. The assistant fills in the plan and can explain any option. Iterate with the assistant to refine the plan.',
 				side: 'right'
 			}
 		},
