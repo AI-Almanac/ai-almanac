@@ -1,5 +1,72 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { installTour, queueTour } from '$lib/tour.svelte';
+
+	const features = [
+		{
+			href: '/benchmarks',
+			tour: 'benchmark-results',
+			title: 'Benchmarks',
+			blurb:
+				'see how individual models score on onset before you blend them. Includes a worked example.'
+		},
+		{
+			href: '/blends',
+			tour: 'blend',
+			title: 'Blends',
+			blurb: 'combine models into a single, more accurate one.'
+		},
+		{
+			href: '/forecasts',
+			tour: 'forecast',
+			title: 'Forecasts',
+			blurb: 'issue a probabilistic onset forecast from a trained blend.'
+		}
+	];
+
+	const featureList = `<div class="tour-cards">${features
+		.map(
+			(f) =>
+				`<a class="tour-card" href="${f.href}" data-tour-next="${f.tour}"><span>${f.title}</span><small>${f.blurb}</small></a>`
+		)
+		.join('')}</div>`;
+
+	// Links are plain anchors so SvelteKit routes them; we only queue the destination's tour.
+	function queueLinkedTour(event: Event) {
+		const next = (event.target as HTMLElement).closest<HTMLElement>('[data-tour-next]');
+		if (next?.dataset.tourNext) queueTour(next.dataset.tourNext);
+	}
+
+	installTour('landing', () => [
+		{
+			element: '[data-tour="nav-links"]',
+			popover: {
+				title: 'Welcome to the AI Almanac',
+				description:
+					'The AI Almanac makes it easy to <strong>assess</strong> AI weather models, create a custom <strong>blend</strong>, and generate <strong>forecasts</strong> focused on human-centric weather phenomena, starting with the onset of the rainy season.',
+				side: 'bottom',
+				align: 'center'
+			}
+		},
+		{
+			element: '[data-tour="ask"]',
+			popover: {
+				title: 'Ask the assistant',
+				description:
+					'Not sure where to start? Describe what you want in plain language and the assistant will set up the workflow for you, or answer questions about the platform. Try one of the example prompts.',
+				side: 'bottom',
+				align: 'center'
+			}
+		},
+		{
+			popover: {
+				title: 'Where would you like to start?',
+				description: featureList,
+				doneBtnText: 'Close',
+				onPopoverRender: (popover) => popover.description.addEventListener('click', queueLinkedTour)
+			}
+		}
+	]);
 
 	const examples = [
 		'Compare monsoon onset skill over southern India',
@@ -42,7 +109,7 @@
 		<h1>Laude AI Almanac</h1>
 		<p class="lede">Human-centric Climate Insights using the latest AI Weather Prediction Models</p>
 
-		<form class="search-box" action="/benchmarks" method="GET">
+		<form class="search-box" action="/benchmarks" method="GET" data-tour="ask">
 			<input
 				name="q"
 				bind:value={prompt}

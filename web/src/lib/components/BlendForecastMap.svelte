@@ -542,7 +542,7 @@
 </script>
 
 <div class="blend-map-wrap" class:fullscreen>
-	<aside class="control-rail" class:collapsed>
+	<aside class="control-rail" class:collapsed data-tour="forecast-controls">
 		<div class="rail-top">
 			<div class="rail-header">
 				<span class="rail-title">Monsoon onset</span>
@@ -674,7 +674,7 @@
 		</div>
 	</aside>
 
-	<div class="map-area">
+	<div class="map-area" data-tour="forecast-map">
 		{#if collapsed}
 			<button class="rail-reopen" aria-label="Show controls" onclick={() => (collapsed = false)}>
 				»

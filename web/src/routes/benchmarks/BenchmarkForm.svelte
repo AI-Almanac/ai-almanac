@@ -5,6 +5,8 @@
 	import type { Dataset, Region, RompDefaults } from '$lib/api';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { benchmarkSetupSteps } from './tours';
 
 	let {
 		store,
@@ -35,6 +37,7 @@
 	);
 
 	let advancedPanelOpen = $state(false);
+	installTour('benchmark-setup', () => benchmarkSetupSteps(() => (advancedPanelOpen = true)));
 	let initialManualOpenHandled = $state(false);
 
 	$effect(() => {
@@ -91,7 +94,7 @@
 </script>
 
 <section class="setup-workspace has-plan" class:is-comparing={chatComparing}>
-	<div class="setup-chat">
+	<div class="setup-chat" data-tour="setup-chat">
 		{#if chatAvailable}
 			<ChatPanel
 				onComparingChange={(value) => (chatComparing = value)}
@@ -130,7 +133,7 @@
 		{/if}
 	</div>
 
-	<aside class="review-panel">
+	<aside class="review-panel" data-tour="benchmark-plan">
 		<div class="review-header">
 			<div class="state-row">
 				<p class="eyebrow">Current setup</p>
@@ -155,7 +158,12 @@
 			{/each}
 		</div>
 
-		<button class="advanced-button" type="button" onclick={() => (advancedPanelOpen = true)}>
+		<button
+			class="advanced-button"
+			type="button"
+			data-tour="manual-config"
+			onclick={() => (advancedPanelOpen = true)}
+		>
 			<span>Manual configuration</span>
 			<small>
 				{#if form.syncingConfig}

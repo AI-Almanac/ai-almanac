@@ -96,7 +96,11 @@
 
 			<div class="panel-body">
 				<div class="settings-form">
-					<section class="form-section plan-section" aria-label="Core benchmark settings">
+					<section
+						class="form-section plan-section"
+						aria-label="Core benchmark settings"
+						data-tour="config-plan"
+					>
 						<div class="section-kicker">1</div>
 						<div class="section-content">
 							<div class="section-heading">
@@ -178,7 +182,7 @@
 						</div>
 					</section>
 
-					<section class="form-section" aria-label="Model selection">
+					<section class="form-section" aria-label="Model selection" data-tour="config-models">
 						<div class="section-kicker">2</div>
 						<div class="section-content">
 							<div class="section-heading">
@@ -237,7 +241,11 @@
 						</div>
 					</section>
 
-					<section class="form-section" aria-label="Per-model benchmark settings">
+					<section
+						class="form-section"
+						aria-label="Per-model benchmark settings"
+						data-tour="config-windows"
+					>
 						<div class="section-kicker">3</div>
 						<div class="section-content">
 							<div class="section-heading">
@@ -267,7 +275,11 @@
 						</div>
 					</section>
 
-					<section class="form-section" aria-label="Shared benchmark settings">
+					<section
+						class="form-section"
+						aria-label="Shared benchmark settings"
+						data-tour="config-shared"
+					>
 						<div class="section-kicker">4</div>
 						<div class="section-content">
 							<div class="section-heading">

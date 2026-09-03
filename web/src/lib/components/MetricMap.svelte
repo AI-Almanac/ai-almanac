@@ -579,7 +579,7 @@
 	});
 </script>
 
-<div class="map-root" class:fullscreen class:compact>
+<div class="map-root" class:fullscreen class:compact data-tour="metric-map">
 	<div class="map-stage" class:grid-cell-hover={gridCellHover}>
 		{#if anyLoading}
 			<div class="status-overlay">Loading…</div>

@@ -36,6 +36,8 @@
 	} from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { blendResultsSteps, blendSetupSteps } from './tours';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
@@ -96,6 +98,12 @@
 	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
+	installTour(
+		'blend',
+		() => blendResultsSteps(startNew),
+		() => !creating && selected?.status === 'complete'
+	);
+	installTour('blend-setup', blendSetupSteps, () => creating);
 	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
 
 	// The chat panel beside a selected blend. A session carried over from the
@@ -200,6 +208,7 @@
 			getForecastModels()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
+		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
@@ -283,6 +292,15 @@
 		// Ownership doesn't matter: the server hides (never deletes) an
 		// example for every caller, owner and admin included.
 		return b.visibility === 'example';
+	}
+
+	/** The user's newest blend, or an example when they have none of their own. */
+	function defaultBlend(all: Blend[]): Blend | undefined {
+		const newestFirst = (a: Blend, b: Blend) => b.created_at.localeCompare(a.created_at);
+		return (
+			all.filter((b) => !isExample(b)).sort(newestFirst)[0] ??
+			all.filter(isExample).sort(newestFirst)[0]
+		);
 	}
 
 	function toSidebarItem(b: (typeof blends)[number]) {
@@ -515,7 +533,7 @@
 		{#if creating}
 			<div class="setup-layout" class:with-chat={chatAvailable} class:is-comparing={chatComparing}>
 				{#if chatAvailable}
-					<div class="setup-chat">
+					<div class="setup-chat" data-tour="setup-chat">
 						<ChatPanel
 							jobs={[]}
 							scopeKind="blend_setup"
@@ -549,7 +567,7 @@
 						<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
 					</label>
 
-					<label class="field">
+					<label class="field" data-tour="blend-obs">
 						{@render fieldLabel(
 							'Observations',
 							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
@@ -564,7 +582,7 @@
 						</select>
 					</label>
 
-					<fieldset class="field">
+					<fieldset class="field" data-tour="blend-models">
 						<legend class="label-with-help">
 							Forecast models
 							<span
@@ -624,7 +642,7 @@
 						</p>
 					{/if}
 
-					<div class="field-row">
+					<div class="field-row" data-tour="blend-years">
 						<label class="field">
 							{@render fieldLabel(
 								'Training years',
@@ -704,6 +722,7 @@
 						<button
 							type="button"
 							class="primary"
+							data-tour="blend-train"
 							disabled={!formValid || submitting}
 							onclick={submit}
 						>
@@ -793,7 +812,7 @@
 							</div>
 						{/if}
 
-						<div class="artifacts">
+						<div class="artifacts" data-tour="blend-outputs">
 							<h2>Weights & outputs</h2>
 							{#if artifacts.length === 0}
 								<p class="muted">No artifacts found.</p>
@@ -819,7 +838,7 @@
 				{#if chatAvailable && detailChat}
 					<SplitResizer container={splitEl} comparing={chatComparing} storageKey="blend-detail" />
 					<aside class="workspace-aside">
-						<div class="result-chat">
+						<div class="result-chat" data-tour="blend-chat">
 							<ChatPanel
 								jobs={detailChatJobs}
 								scopeKind={detailChat.scopeKind}

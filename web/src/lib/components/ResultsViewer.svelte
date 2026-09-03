@@ -136,7 +136,7 @@
 	});
 </script>
 
-<div class="viewer">
+<div class="viewer" data-tour="results">
 	<SegmentedTabs
 		options={TABS}
 		value={activeTab}
@@ -158,7 +158,7 @@
 			<p class="empty">No spatial data available for this run set.</p>
 		{/if}
 
-		<div class="tables">
+		<div class="tables" data-tour="metrics-tables">
 			{#each jobs as job (job.id)}
 				<div class="table-section">
 					<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
