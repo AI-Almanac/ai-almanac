@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import io
 import json
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -138,7 +139,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     )
     combined = workflow._read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
-    train_kwargs = {}
+    train_kwargs = {"cores": os.cpu_count() or 1}
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
     print("==> Training blend weights", flush=True)
