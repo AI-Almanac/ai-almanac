@@ -129,7 +129,7 @@
 </script>
 
 <section class="skill-panel" aria-label="Forecast skill">
-	<div class="overall">
+	<div class="overall" data-tour="blend-metrics">
 		<div class="overall-scroll">
 			<table>
 				<caption class="sr-only">

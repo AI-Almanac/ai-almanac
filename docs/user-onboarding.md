@@ -127,3 +127,12 @@ or from the last step of the landing page walkthough --
 2. Highlight the map controls
 3. Encourage the user to click one of the cells/regions to see a
    detailed breakdown of the forecast probabliites for that cell.
+4. Show the user the forecast probabilites csv below the map interface.
+5. Highlight the New Forecast button
+
+#### Forecast Setup
+
+-- The user found this page on their own (direct navigation) or got
+here from the forecast walkthrough --
+
+1. Walk the user through the setup options

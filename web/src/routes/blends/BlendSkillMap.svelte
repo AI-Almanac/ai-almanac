@@ -259,7 +259,7 @@
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
 </script>
 
-<section class="skill-map" aria-label="Blend skill by grid point">
+<section class="skill-map" aria-label="Blend skill by grid point" data-tour="blend-maps">
 	<div class="map-topline">
 		<h3>By grid point</h3>
 		{#if options.length > 1}
