@@ -30,7 +30,7 @@ Examples:
 The image clones onset_blending-adm3 at a pinned commit by default. Override
 these during Modal build if needed:
     ALMANAC_BLENDING_REPO_URL=https://github.com/hholb/onset_blending-adm3.git
-    ALMANAC_BLENDING_REPO_REF=a99a50344b7f3877e8ecda3922a18e4a57425aad
+    ALMANAC_BLENDING_REPO_REF=2a59cec0680dcfb575104fa03b59ee64dc110f82
 """
 
 from __future__ import annotations
@@ -50,7 +50,14 @@ APP_NAME = "almanac-blending"
 BLENDING_ROOT = Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
 DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
-DEFAULT_REPO_REF = "8ba308eb2e50982294dfdc991d433336550e11e1"
+# Keep in sync with ai_almanac.envs.manager.BLENDING_REPO_REF (local blend env).
+# See docs/onset-blending-haiyang-integration.md for the pin history.
+DEFAULT_REPO_REF = "2a59cec0680dcfb575104fa03b59ee64dc110f82"
+
+# Worker count handed to 1_blend_evaluation.py --cores. train_blending_model_bundle
+# runs via .local() inside run_blend's container, so size to run_blend's cpu request.
+RUN_BLEND_CPU = 4
+RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
 
 # Written by train_blending_model_bundle's final fit; applied by
 # apply_blend_coefs_bundle to score live seasons without retraining.
@@ -336,7 +343,7 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
 
 @app.function(
     image=blending_image,
-    cpu=(4, 8),
+    cpu=(RUN_BLEND_CPU, 8),
     memory=(16384, 32768),
     timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
@@ -415,7 +422,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
-            train_kwargs = {}
+            train_kwargs = {"cores": RUN_BLEND_TRAINING_CORES}
             if params.get("formula_text"):
                 train_kwargs["formula_text"] = params["formula_text"]
             print("==> Training blend weights")
