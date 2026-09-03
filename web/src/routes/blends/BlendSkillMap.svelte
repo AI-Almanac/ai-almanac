@@ -4,7 +4,7 @@
 	 *
 	 * The pooled table above says whether the blend wins on average; this says
 	 * where. It reads the blend's per-grid-point summary, which nothing consumed
-	 * before, and colours each point by its skill against the same Traditional
+	 * before, and colors each point by its skill against the same Traditional
 	 * Climatology baseline the table uses, so a number means the same thing in both.
 	 */
 	import { untrack } from 'svelte';

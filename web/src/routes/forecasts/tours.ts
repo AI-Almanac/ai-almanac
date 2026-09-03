@@ -15,7 +15,7 @@ export function forecastResultsSteps(onNewForecast: () => void): DriveStep[] {
 			popover: {
 				title: 'Forecast map',
 				description:
-					'Each cell is coloured by its onset probability for the selected forecast date. Use the date strip under the map to step through the season or play it as an animation.',
+					'Each cell is colored by its onset probability for the selected forecast date. Use the date strip under the map to step through the season or play it as an animation.',
 				side: 'top',
 				align: 'center'
 			}
@@ -25,7 +25,7 @@ export function forecastResultsSteps(onNewForecast: () => void): DriveStep[] {
 			popover: {
 				title: 'Map controls',
 				description:
-					'Switch the view, choose the onset window to show, toggle administrative boundaries, and read the legend for the current colouring.',
+					'Switch the view, choose the onset window to show, toggle administrative boundaries, and read the legend for the current coloring.',
 				side: 'right'
 			}
 		},
