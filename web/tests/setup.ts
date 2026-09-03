@@ -51,6 +51,9 @@ if (!storageWorks(() => globalThis.localStorage)) {
 	});
 }
 
+// jsdom does not implement scrollIntoView; tours call it on every highlighted element.
+Element.prototype.scrollIntoView ??= () => {};
+
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();

@@ -3,6 +3,7 @@
 	import { account } from '$lib/account.svelte';
 	import { login } from '$lib/auth';
 	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
+	import { activeTour } from '$lib/tour.svelte';
 
 	let logoFailed = $state(false);
 </script>
@@ -33,7 +34,7 @@
 			</a>
 		</div>
 		<div class="nav-row">
-			<div class="links" aria-label="Primary navigation">
+			<div class="links" aria-label="Primary navigation" data-tour="nav-links">
 				<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
 				<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
 				<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
@@ -63,6 +64,16 @@
 				<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
 			</div>
 			<div class="nav-right">
+				{#if activeTour.restart}
+					<button
+						class="help-btn"
+						type="button"
+						data-tour="help"
+						title="Show a tour of this page"
+						aria-label="Show a tour of this page"
+						onclick={() => activeTour.restart?.()}>?</button
+					>
+				{/if}
 				<FeedbackWidget />
 				{#if account.isAnonymous}
 					<button class="signin-btn" onclick={() => login()}>Sign in</button>
@@ -92,6 +103,11 @@
 		-webkit-backdrop-filter: blur(1rem);
 	}
 
+	/* A running tour disables the nav anyway, so let it scroll away instead of occluding highlights. */
+	:global(body.driver-active) .site-nav {
+		position: static;
+	}
+
 	.nav-inner {
 		width: min(100% - 2rem, 76rem);
 		margin: 0 auto;
@@ -109,18 +125,18 @@
 		gap: 1.5rem;
 	}
 
+	/* Links stay centred; the side columns absorb the slack and the right one holds the actions. */
 	.nav-row {
-		position: relative;
-		display: flex;
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
 		align-items: center;
-		justify-content: center;
+		gap: 0.5rem;
 	}
 
-	.nav-right {
-		position: absolute;
-		right: 0;
-		top: 50%;
-		transform: translateY(-50%);
+	.links {
+		grid-column: 2;
+		min-width: 0;
+		overflow-x: auto;
 	}
 
 	.brand,
@@ -159,6 +175,8 @@
 	}
 
 	.nav-right {
+		grid-column: 3;
+		justify-self: end;
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
@@ -189,6 +207,24 @@
 		max-width: 12rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.help-btn {
+		width: 1.75rem;
+		aspect-ratio: 1;
+		border: 1px solid var(--color-border);
+		border-radius: 50%;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 800;
+		cursor: pointer;
+	}
+
+	.help-btn:hover {
+		border-color: var(--color-accent-border);
+		color: var(--color-accent);
 	}
 
 	.signin-btn {
@@ -235,19 +271,12 @@
 
 	@media (max-width: 680px) {
 		.nav-row {
-			flex-wrap: wrap;
-			justify-content: flex-start;
-			gap: 0.5rem;
+			grid-template-columns: 1fr;
 		}
 
+		.links,
 		.nav-right {
-			position: static;
-			transform: none;
-		}
-
-		.links {
-			width: 100%;
-			overflow-x: auto;
+			grid-column: 1;
 		}
 	}
 </style>
