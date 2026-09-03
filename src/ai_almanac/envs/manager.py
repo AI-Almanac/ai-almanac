@@ -19,7 +19,9 @@ from pathlib import Path
 from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
-BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
+# Keep in sync with modal/blending_app.py DEFAULT_REPO_REF; tests/test_blending_pins.py
+# enforces it. See docs/onset-blending-haiyang-integration.md for the pin history.
+BLENDING_REPO_REF = "2a59cec0680dcfb575104fa03b59ee64dc110f82"
 BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 
 # Platforms forecast.pixi.toml declares — earth2studio's GPU extras (e.g.
