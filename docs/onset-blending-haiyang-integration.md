@@ -78,7 +78,7 @@ artifact name all still exist. New CLI surface is additive.
    harnesses (`preprocess_timing_harness.py`, `scale_preprocess_timing.py`)
    cherry-pick cleanly if we want to keep them for the parity benchmark below.
 3. Run the fork's own validation on the Ethiopia configuration: legacy
-   two-model CLI (`aifs` + `aifs_ens`), `clim_mok_date` cutoff, existing
+   two-model CLI (`aifs` + `aifs_ens`), `fixed_cutoff` (né `clim_mok_date`) cutoff, existing
    specs. Compare CV summary metrics and final coefficients against a
    `8ba308eb` run. The correctness fixes (Platt NaN handling, observed-weight
    ordering) mean outputs will *not* be identical — document each expected

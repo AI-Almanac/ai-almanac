@@ -59,6 +59,18 @@ DEFAULT_REPO_REF = "2a59cec0680dcfb575104fa03b59ee64dc110f82"
 RUN_BLEND_CPU = 4
 RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
 
+# onset_blending's name for "onset search starts at a fixed calendar cutoff"
+# (was clim_mok_date before the haiyang generalization).
+BLEND_CUTOFF_MODE = "fixed_cutoff"
+
+
+def _ref_onset_for(mok_month_day: str | None) -> dict | None:
+    """nc_utils ref_onset_dt value: one fixed month-day applied to every year."""
+    if not mok_month_day:
+        return None
+    return {"mode": "constant_month_day", "month_day": mok_month_day}
+
+
 # Written by train_blending_model_bundle's final fit; applied by
 # apply_blend_coefs_bundle to score live seasons without retraining.
 FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
@@ -859,7 +871,6 @@ def probe_lat_lon_onset_bundle(
     import sys
     import traceback
 
-    import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
@@ -913,22 +924,10 @@ def probe_lat_lon_onset_bundle(
             if row_limit > 0:
                 df = df.head(row_limit).copy()
 
-            mok_dt = None
-            if mok_month_day:
-                years = sorted(int(year) for year in df["year"].dropna().unique())
-                mok_dt = pd.DataFrame(
-                    {
-                        "year": years,
-                        "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
-                        ],
-                    }
-                )
-
             processed = process_rainfall_forecast_id(
                 df,
                 spec,
-                mok_dt=mok_dt,
+                ref_onset_dt=_ref_onset_for(mok_month_day),
                 thr_dt=float(threshold_mm),
             )["wide"]
 
@@ -945,7 +944,7 @@ def probe_lat_lon_onset_bundle(
             clim_prob_cols = [
                 col
                 for col in processed.columns
-                if col.startswith("predicted_prob_clim_mok_date_day_")
+                if col.startswith("predicted_prob_fixed_cutoff_day_")
             ]
             sd_cols = [col for col in processed.columns if col.startswith("forecast_rain_sd_day_")]
             sample_cols = [
@@ -976,7 +975,9 @@ def probe_lat_lon_onset_bundle(
                     "nonzero_predicted_prob_cells": int((processed[prob_cols] > 0).sum().sum())
                     if prob_cols
                     else 0,
-                    "nonzero_clim_mok_prob_cells": int((processed[clim_prob_cols] > 0).sum().sum())
+                    "nonzero_fixed_cutoff_prob_cells": int(
+                        (processed[clim_prob_cols] > 0).sum().sum()
+                    )
                     if clim_prob_cols
                     else 0,
                     "non_null_sd_cells": int(processed[sd_cols].notna().sum().sum())
@@ -1016,7 +1017,6 @@ def probe_lat_lon_ground_truth_bundle(
     import sys
     import traceback
 
-    import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
@@ -1070,34 +1070,22 @@ def probe_lat_lon_ground_truth_bundle(
             if row_limit > 0:
                 df = df.head(row_limit).copy()
 
-            mok_dt = None
-            if mok_month_day:
-                years = sorted(int(year) for year in df["year"].dropna().unique())
-                mok_dt = pd.DataFrame(
-                    {
-                        "year": years,
-                        "mok_date": [
-                            pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years
-                        ],
-                    }
-                )
-
             processed = process_ground_truth_rainfall_id(
                 df,
                 spec,
-                mok_dt=mok_dt,
+                ref_onset_dt=_ref_onset_for(mok_month_day),
                 thr_dt=float(threshold_mm),
                 value_col=value_col.lower(),
             )
             wide = processed["wide"]
             long = processed["long"]
-            onset_days = wide["mr_onset_day"].dropna()
+            onset_days = wide["onset_day"].dropna()
             sample_cols = [
                 "id",
                 "year",
-                "mr_onset_idx",
-                "mr_onset_date",
-                "mr_onset_day",
+                "onset_idx",
+                "onset_date",
+                "onset_day",
                 "cutoff_date",
             ]
             sample_cols = [col for col in sample_cols if col in wide.columns]
@@ -1109,8 +1097,8 @@ def probe_lat_lon_ground_truth_bundle(
                     "rows_processed": len(df),
                     "wide_rows": len(wide),
                     "long_rows": len(long),
-                    "onset_count": int(wide["mr_onset_day"].notna().sum())
-                    if "mr_onset_day" in wide.columns
+                    "onset_count": int(wide["onset_day"].notna().sum())
+                    if "onset_day" in wide.columns
                     else 0,
                     "onset_day_min": float(onset_days.min()) if len(onset_days) else None,
                     "onset_day_max": float(onset_days.max()) if len(onset_days) else None,
@@ -1262,16 +1250,7 @@ def build_lat_lon_intermediates_bundle(
         },
     }
 
-    def mok_for(df) -> pd.DataFrame | None:
-        if not mok_month_day:
-            return None
-        years = sorted(int(year) for year in df["year"].dropna().unique())
-        return pd.DataFrame(
-            {
-                "year": years,
-                "mok_date": [pd.Timestamp(f"{year}-{mok_month_day}").date() for year in years],
-            }
-        )
+    ref_onset_dt = _ref_onset_for(mok_month_day)
 
     manifest: dict = {
         "threshold_mm": float(threshold_mm),
@@ -1297,7 +1276,7 @@ def build_lat_lon_intermediates_bundle(
         return process_ground_truth_rainfall_id(
             df,
             obs_spec,
-            mok_dt=mok_for(df),
+            ref_onset_dt=ref_onset_dt,
             thr_dt=float(threshold_mm),
             value_col=obs_value_col.lower(),
         )
@@ -1346,10 +1325,10 @@ def build_lat_lon_intermediates_bundle(
     with obs_wide_path.open("wb") as f:
         pickle.dump(obs_wide, f)
     manifest["outputs"][obs_wide_path.name] = {"bytes": obs_wide_path.stat().st_size}
-    onset_days = obs_wide["mr_onset_day"].dropna()
+    onset_days = obs_wide["onset_day"].dropna()
     manifest["obs"] = {
         "wide_rows": int(len(obs_wide)),
-        "onset_count": int(obs_wide["mr_onset_day"].notna().sum()),
+        "onset_count": int(obs_wide["onset_day"].notna().sum()),
         "onset_day_min": float(onset_days.min()) if len(onset_days) else None,
         "onset_day_max": float(onset_days.max()) if len(onset_days) else None,
         "years": sorted(int(year) for year in obs_wide["year"].dropna().unique()),
@@ -1378,7 +1357,7 @@ def build_lat_lon_intermediates_bundle(
         processed = process_rainfall_forecast_id(
             df,
             forecast_spec,
-            mok_dt=mok_for(df),
+            ref_onset_dt=ref_onset_dt,
             thr_dt=float(threshold_mm),
         )
         return {"wide": processed["wide"], "member_counts": member_counts}
@@ -1478,7 +1457,7 @@ def build_lat_lon_intermediates_bundle(
         )
 
         def compute_climatology() -> dict:
-            gt = read_gt_onset_from_tbl(obs_wide, onset_col="mr_onset_day")
+            gt = read_gt_onset_from_tbl(obs_wide, onset_col="onset_day")
             gt_train = filter_gt_training(gt, train_year_min, train_year_max)
             onset_counts = gt_train.groupby("id")["onset_day"].size()
             eligible_ids = onset_counts[onset_counts >= int(min_onset_years)].index
@@ -1601,13 +1580,13 @@ def build_lat_lon_intermediates_bundle(
                     "add_plus": True,
                 },
                 {
-                    "col": "predicted_prob_clim_mok_date",
-                    "out": "p_onset_clim_mok_date",
+                    "col": f"predicted_prob_{BLEND_CUTOFF_MODE}",
+                    "out": f"p_onset_{BLEND_CUTOFF_MODE}",
                     "add_plus": True,
                 },
                 {
-                    "col": "predicted_prob_mok",
-                    "out": "p_onset_mok",
+                    "col": "predicted_prob_ref",
+                    "out": "p_onset_ref",
                     "add_plus": True,
                 },
                 {"col": "forecast_rain", "out": "rain_mean", "add_plus": False},
@@ -1628,7 +1607,7 @@ def build_lat_lon_intermediates_bundle(
                     "sources": [{"file": str(forecast_path), "years": years_spec}],
                     "constants": [
                         {"col": "onset_thresh", "out": "onset_thresh"},
-                        {"col": "mok_date", "out": "mok_date"},
+                        {"col": "ref_onset_date", "out": "ref_onset_date"},
                     ],
                     "daily": daily,
                 },
@@ -1727,6 +1706,7 @@ def _prepare_blend_workspace(
     import pandas as pd
 
     sys.path.insert(0, str(BLENDING_ROOT))
+    from python.blending_process.blend_evaluation_utils import input_rds_from_cutoff
     from python.blending_process.connect_utils import make_cv_rds_from_daylevel
 
     if not model_names:
@@ -1734,7 +1714,7 @@ def _prepare_blend_workspace(
 
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
     combined_path = work_dir / "combined_wide.pkl"
-    pipeline_input_path = work_dir / "cv_data_clim_mok_date_new_pipeline.pkl"
+    pipeline_input_path = work_dir / input_rds_from_cutoff(cutoff_mode)
     combined_path.write_bytes(combined_wide_pkl)
 
     with combined_path.open("rb") as f:
@@ -1762,12 +1742,15 @@ def _prepare_blend_workspace(
         "climatology": {
             "base_prefix": "clim",
             "unconditional_prefix": "clim_unc",
+            # haiyang renamed the default to prob_clim; keep the old feature
+            # names so stored formula_text and saved coef bundles still apply.
+            "output_prefix": "prob_clim_mr",
             "window_tags": [],
         },
         "forecast_models": [
             {
                 "name": name,
-                "variants": ["clim_mok_date"],
+                "variants": [BLEND_CUTOFF_MODE],
                 "rain_predictors": [{"agg": "diff", "window": int(rain_window)}],
             }
             for name in model_names
@@ -1804,7 +1787,7 @@ def _build_blend_spec(
     forecast_extras = [
         {
             "name": name,
-            "variant": "clim_mok_date",
+            "variant": BLEND_CUTOFF_MODE,
             "raw": bool(include_raw_forecasts),
             "calibrated": bool(include_calibrated_forecasts),
             "fair_brier": False,
@@ -1828,7 +1811,7 @@ def _build_blend_spec(
             "formulas": {"blended_model": {"enabled": True, "text": formula_text}},
             "window_variants": {"enabled": False},
         },
-        "mme": {"enabled": False, "variants": ["clim_mok_date"], "blend_models": []},
+        "mme": {"enabled": False, "variants": [BLEND_CUTOFF_MODE], "blend_models": []},
         "extras": {
             "clim_logits": [
                 {
@@ -1845,7 +1828,7 @@ def _build_blend_spec(
                 },
             ],
             "forecasts": forecast_extras,
-            "forecast_variants": {"base": "", "clim_mok_date": "_clim_mok_date"},
+            "forecast_variants": {"base": "", BLEND_CUTOFF_MODE: f"_{BLEND_CUTOFF_MODE}"},
         },
     }
 
@@ -1857,7 +1840,7 @@ def train_blending_model_bundle(
     training_years: list[int],
     cv_holdout_years: list[int],
     true_holdout_years: list[int] | None = None,
-    cutoff_mode: str = "clim_mok_date",
+    cutoff_mode: str = BLEND_CUTOFF_MODE,
     day_max: int = 28,
     days_per_week: int = 7,
     n_weeks: int = 4,
@@ -2035,7 +2018,7 @@ def apply_blend_coefs_bundle(
     training_years: list[int],
     cv_holdout_years: list[int],
     live_year: int,
-    cutoff_mode: str = "clim_mok_date",
+    cutoff_mode: str = BLEND_CUTOFF_MODE,
     day_max: int = 28,
     days_per_week: int = 7,
     n_weeks: int = 4,
