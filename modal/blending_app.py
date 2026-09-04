@@ -65,21 +65,76 @@ RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
 BLEND_CUTOFF_MODE = "fixed_cutoff"
 
 
-def _ref_onset_for(mok_month_day: str | None) -> dict | None:
+def _ref_onset_for(ref_onset_month_day: str | None) -> dict | None:
     """nc_utils ref_onset_dt value: one fixed month-day applied to every year."""
-    if not mok_month_day:
+    if not ref_onset_month_day:
         return None
-    return {"mode": "constant_month_day", "month_day": mok_month_day}
+    return {"mode": "constant_month_day", "month_day": ref_onset_month_day}
+
+
+# Blend params that shape the intermediates. `mok_month_day` is the pre-rename
+# spelling of `ref_onset_month_day`; job configs written before the rename still
+# carry it, so both are read (the new name wins when both are present).
+_INTERMEDIATE_PREP_KEYS = ("threshold_mm", "cutoff_month_day", "ref_onset_month_day", "focus_area")
+
+
+def _intermediate_prep_kwargs(params: dict) -> dict:
+    kwargs = {k: params[k] for k in _INTERMEDIATE_PREP_KEYS if params.get(k) is not None}
+    if "ref_onset_month_day" not in kwargs and params.get("mok_month_day") is not None:
+        kwargs["ref_onset_month_day"] = params["mok_month_day"]
+    return kwargs
 
 
 # Written by train_blending_model_bundle's final fit; applied by
 # apply_blend_coefs_bundle to score live seasons without retraining.
 FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
 
-# Bump to invalidate cached blend intermediates when the builder's schema or
-# hardcoded onset options change; onset_blending code bumps invalidate via the
-# repo-ref key segment instead.
-BLEND_INTERMEDIATES_CACHE_VERSION = 1
+# Bump to invalidate cached blend intermediates when the builder's schema
+# changes; onset_blending code bumps invalidate via the repo-ref key segment, and
+# onset-rule changes via _intermediates_cache_params.
+BLEND_INTERMEDIATES_CACHE_VERSION = 2
+
+# The parts of the onset rule users cannot change yet. Kept in one place so the
+# rule the intermediates are built with is the rule their cache key records.
+ONSET_RULE = {
+    "window": 3,
+    "onset_definition": {
+        "wet_day_min_mm": 1.0,
+        "follow_days": 21,
+        "dry_spell": {
+            "mode": "consecutive_dry",
+            "min_dry_days": 5,
+            "dry_day_min_mm": 1.0,
+        },
+    },
+}
+
+
+def _intermediates_cache_params(
+    *,
+    id_precision: int,
+    threshold_mm: float,
+    min_day: int,
+    max_day: int,
+    cutoff_month_day: str,
+    ref_onset_month_day: str | None,
+    adm3_domain: bool,
+    focus_area: dict | None,
+) -> dict:
+    """Everything that shapes a processed part besides the input file itself."""
+    return {
+        "id_precision": int(id_precision),
+        "threshold_mm": float(threshold_mm),
+        "min_day": int(min_day),
+        "max_day": int(max_day),
+        "cutoff_month_day": cutoff_month_day,
+        "ref_onset_month_day": ref_onset_month_day,
+        "onset_rule": ONSET_RULE,
+        "adm3_domain": bool(adm3_domain),
+        "focus_area": focus_area,
+    }
+
+
 GCP_SECRET_NAME = "gcp-service-account"
 ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
@@ -414,11 +469,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 _stage_uris(client, uris, model_local, f"forecast {key}")
                 forecast_bundles[key] = _bundle_files(sorted(model_local.glob("*.nc")))
 
-            prep_kwargs = {
-                k: params[k]
-                for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
-                if params.get(k) is not None
-            }
+            prep_kwargs = _intermediate_prep_kwargs(params)
             if config.get("region_id"):
                 prep_kwargs["region_id"] = config["region_id"]
             cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
@@ -946,7 +997,7 @@ def probe_lat_lon_onset_bundle(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     row_limit: int = 5000,
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     sample_row_count: int = 0,
 ) -> dict:
     """Create lat_lon ids and run the forecast onset processing step."""
@@ -975,16 +1026,7 @@ def probe_lat_lon_onset_bundle(
         "options": {
             "min_day": min_day,
             "max_day": max_day,
-            "window": 3,
-            "onset_definition": {
-                "wet_day_min_mm": 1.0,
-                "follow_days": 21,
-                "dry_spell": {
-                    "mode": "consecutive_dry",
-                    "min_dry_days": 5,
-                    "dry_day_min_mm": 1.0,
-                },
-            },
+            **ONSET_RULE,
         },
         "filter": {},
     }
@@ -1008,7 +1050,7 @@ def probe_lat_lon_onset_bundle(
             processed = process_rainfall_forecast_id(
                 df,
                 spec,
-                ref_onset_dt=_ref_onset_for(mok_month_day),
+                ref_onset_dt=_ref_onset_for(ref_onset_month_day),
                 thr_dt=float(threshold_mm),
             )["wide"]
 
@@ -1090,7 +1132,7 @@ def probe_lat_lon_ground_truth_bundle(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     cutoff_month_day: str = "05-01",
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     row_limit: int = 0,
     sample_row_count: int = 0,
 ) -> dict:
@@ -1122,17 +1164,8 @@ def probe_lat_lon_ground_truth_bundle(
         "options": {
             "min_day": 1,
             "max_day": 45,
-            "window": 3,
+            **ONSET_RULE,
             "cutoff_month_day": cutoff_month_day,
-            "onset_definition": {
-                "wet_day_min_mm": 1.0,
-                "follow_days": 21,
-                "dry_spell": {
-                    "mode": "consecutive_dry",
-                    "min_dry_days": 5,
-                    "dry_day_min_mm": 1.0,
-                },
-            },
         },
         "filter": {},
     }
@@ -1153,7 +1186,7 @@ def probe_lat_lon_ground_truth_bundle(
             processed = process_ground_truth_rainfall_id(
                 df,
                 spec,
-                ref_onset_dt=_ref_onset_for(mok_month_day),
+                ref_onset_dt=_ref_onset_for(ref_onset_month_day),
                 thr_dt=float(threshold_mm),
                 value_col=value_col.lower(),
             )
@@ -1213,7 +1246,7 @@ def build_lat_lon_intermediates_bundle(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     cutoff_month_day: str = "05-01",
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     include_long: bool = False,
     build_climatology: bool = True,
     build_combined: bool = True,
@@ -1275,19 +1308,7 @@ def build_lat_lon_intermediates_bundle(
 
     domain_filter = _domain_filter(dissemination_path, focus_area, adm3_domain)
 
-    onset_options = {
-        "window": 3,
-        "cutoff_month_day": cutoff_month_day,
-        "onset_definition": {
-            "wet_day_min_mm": 1.0,
-            "follow_days": 21,
-            "dry_spell": {
-                "mode": "consecutive_dry",
-                "min_dry_days": 5,
-                "dry_day_min_mm": 1.0,
-            },
-        },
-    }
+    onset_options = {**ONSET_RULE, "cutoff_month_day": cutoff_month_day}
     forecast_spec = {
         "input": {
             "value_col": forecast_value_col,
@@ -1330,13 +1351,13 @@ def build_lat_lon_intermediates_bundle(
         "filter": domain_filter,
     }
 
-    ref_onset_dt = _ref_onset_for(mok_month_day)
+    ref_onset_dt = _ref_onset_for(ref_onset_month_day)
 
     manifest: dict = {
         "threshold_mm": float(threshold_mm),
         "id_precision": int(id_precision),
         "cutoff_month_day": cutoff_month_day,
-        "mok_month_day": mok_month_day,
+        "ref_onset_month_day": ref_onset_month_day,
         "region_id": region_id,
         "adm3_domain": bool(adm3_domain),
         "focus_area": focus_area,
@@ -1363,18 +1384,16 @@ def build_lat_lon_intermediates_bundle(
             value_col=obs_value_col.lower(),
         )
 
-    # Everything that shapes a processed part besides the input file itself;
-    # hardcoded onset options are covered by the repo-ref + version segments.
-    static_cache_params = {
-        "id_precision": int(id_precision),
-        "threshold_mm": float(threshold_mm),
-        "min_day": int(min_day),
-        "max_day": int(max_day),
-        "cutoff_month_day": cutoff_month_day,
-        "mok_month_day": mok_month_day,
-        "adm3_domain": bool(adm3_domain),
-        "focus_area": focus_area,
-    }
+    static_cache_params = _intermediates_cache_params(
+        id_precision=id_precision,
+        threshold_mm=threshold_mm,
+        min_day=min_day,
+        max_day=max_day,
+        cutoff_month_day=cutoff_month_day,
+        ref_onset_month_day=ref_onset_month_day,
+        adm3_domain=adm3_domain,
+        focus_area=focus_area,
+    )
     cache_hits = 0
     cache_misses = 0
     obs_file_digests: list[str] = []
@@ -2276,11 +2295,7 @@ def score_live_forecast(
 
     print("==> Building blending intermediates (including live season)")
     t0 = time.perf_counter()
-    prep_kwargs = {
-        k: blend_params[k]
-        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
-        if blend_params.get(k) is not None
-    }
+    prep_kwargs = _intermediate_prep_kwargs(blend_params)
     if blend_params.get("region_id"):
         prep_kwargs["region_id"] = blend_params["region_id"]
     intermediates = build_lat_lon_intermediates_bundle.local(
@@ -2499,7 +2514,7 @@ def probe_lat_lon_onset_processing(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     row_limit: int = 5000,
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     sample_row_count: int = 0,
 ) -> None:
     """Upload local NetCDF files and test lat/lon id onset processing."""
@@ -2515,7 +2530,7 @@ def probe_lat_lon_onset_processing(
         threshold_mm=threshold_mm,
         id_precision=id_precision,
         row_limit=row_limit,
-        mok_month_day=mok_month_day,
+        ref_onset_month_day=ref_onset_month_day,
         sample_row_count=sample_row_count,
     )
     print(result)
@@ -2530,7 +2545,7 @@ def probe_lat_lon_ground_truth_processing(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     cutoff_month_day: str = "05-01",
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     row_limit: int = 0,
     sample_row_count: int = 0,
 ) -> None:
@@ -2545,7 +2560,7 @@ def probe_lat_lon_ground_truth_processing(
         threshold_mm=threshold_mm,
         id_precision=id_precision,
         cutoff_month_day=cutoff_month_day,
-        mok_month_day=mok_month_day,
+        ref_onset_month_day=ref_onset_month_day,
         row_limit=row_limit,
         sample_row_count=sample_row_count,
     )
@@ -2567,7 +2582,7 @@ def build_lat_lon_intermediates(
     threshold_mm: float = 20.0,
     id_precision: int = 2,
     cutoff_month_day: str = "05-01",
-    mok_month_day: str | None = "06-01",
+    ref_onset_month_day: str | None = "06-01",
     include_long: bool = False,
     build_climatology: bool = True,
     build_combined: bool = True,
@@ -2614,7 +2629,7 @@ def build_lat_lon_intermediates(
         threshold_mm=threshold_mm,
         id_precision=id_precision,
         cutoff_month_day=cutoff_month_day,
-        mok_month_day=mok_month_day,
+        ref_onset_month_day=ref_onset_month_day,
         include_long=include_long,
         build_climatology=build_climatology,
         build_combined=build_combined,

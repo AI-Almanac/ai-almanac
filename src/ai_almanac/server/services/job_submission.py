@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -263,8 +263,54 @@ async def _resolve_obs_dir(
     return source["path"]
 
 
+def _month_day_error(label: str, value: str) -> str | None:
+    """Reject anything but a real calendar ``MM-DD``; leap day is allowed."""
+    try:
+        datetime.strptime(f"2000-{value}", "%Y-%m-%d")
+    except ValueError:
+        return f"{label} must be a calendar date in MM-DD form (e.g. 05-01), got {value!r}"
+    return None
+
+
+def onset_param_errors(
+    threshold_mm: float | None,
+    cutoff_month_day: str | None,
+    ref_onset_month_day: str | None,
+) -> list[str]:
+    """Validate the onset-definition trio shared by the blend form, the chat
+    config, and the submission body. Returns messages, empty when valid."""
+    errors: list[str] = []
+    if threshold_mm is not None and not threshold_mm > 0:
+        errors.append(f"Onset rainfall threshold must be positive, got {threshold_mm}")
+    for label, value in (
+        ("Onset search start", cutoff_month_day),
+        ("Reference onset date", ref_onset_month_day),
+    ):
+        if value is not None:
+            err = _month_day_error(label, value)
+            if err:
+                errors.append(err)
+    # MM-DD strings compare lexically in calendar order.
+    if (
+        not errors
+        and cutoff_month_day
+        and ref_onset_month_day
+        and ref_onset_month_day < cutoff_month_day
+    ):
+        errors.append(
+            f"Reference onset date {ref_onset_month_day} is before the onset search "
+            f"start {cutoff_month_day}; onset cannot be detected before the search begins"
+        )
+    return errors
+
+
 class BlendParams(BaseModel):
-    """Blend preparation and training hyperparameters."""
+    """Blend preparation and training hyperparameters.
+
+    The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
+    ``ref_onset_month_day``) is optional; unset values fall back to the
+    workflow defaults (20 mm, 05-01, 06-01).
+    """
 
     forecast_years: str | None = None
     obs_years: str | None = None
@@ -272,10 +318,42 @@ class BlendParams(BaseModel):
     cv_holdout_years: str
     true_holdout_years: str | None = None
     formula_text: str | None = None
-    threshold_mm: float | None = None
-    cutoff_month_day: str | None = None
-    mok_month_day: str | None = None
+    threshold_mm: float | None = Field(
+        default=None,
+        description="Rainfall accumulation (mm) over the onset window that triggers onset.",
+    )
+    cutoff_month_day: str | None = Field(
+        default=None,
+        description="MM-DD from which onset is searched each season; also the first "
+        "forecast issue date.",
+    )
+    ref_onset_month_day: str | None = Field(
+        default=None,
+        description="MM-DD reference onset date (climatological onset) that the "
+        "onset-before-reference probability is scored against.",
+    )
     focus_area: FocusArea | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_mok_month_day(cls, data: object) -> object:
+        # onset_blending renamed "MOK date" to "reference onset"; keep the old
+        # request key working and normalize stored/echoed params to the new one.
+        if isinstance(data, dict) and "mok_month_day" in data:
+            data = dict(data)
+            legacy = data.pop("mok_month_day")
+            if data.get("ref_onset_month_day") is None and legacy is not None:
+                data["ref_onset_month_day"] = legacy
+        return data
+
+    @model_validator(mode="after")
+    def _check_onset_params(self) -> BlendParams:
+        errors = onset_param_errors(
+            self.threshold_mm, self.cutoff_month_day, self.ref_onset_month_day
+        )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
 
 
 class BlendCreate(BaseModel):

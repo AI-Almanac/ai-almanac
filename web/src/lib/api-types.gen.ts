@@ -2216,6 +2216,12 @@ export interface components {
             focus_area?: {
                 [key: string]: unknown;
             } | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /** Cutoff Month Day */
+            cutoff_month_day?: string | null;
+            /** Ref Onset Month Day */
+            ref_onset_month_day?: string | null;
         };
         /** BlendCreate */
         BlendCreate: {
@@ -2268,6 +2274,10 @@ export interface components {
         /**
          * BlendParams
          * @description Blend preparation and training hyperparameters.
+         *
+         *     The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
+         *     ``ref_onset_month_day``) is optional; unset values fall back to the
+         *     workflow defaults (20 mm, 05-01, 06-01).
          */
         BlendParams: {
             /** Forecast Years */
@@ -2282,12 +2292,21 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
-            /** Threshold Mm */
+            /**
+             * Threshold Mm
+             * @description Rainfall accumulation (mm) over the onset window that triggers onset.
+             */
             threshold_mm?: number | null;
-            /** Cutoff Month Day */
+            /**
+             * Cutoff Month Day
+             * @description MM-DD from which onset is searched each season; also the first forecast issue date.
+             */
             cutoff_month_day?: string | null;
-            /** Mok Month Day */
-            mok_month_day?: string | null;
+            /**
+             * Ref Onset Month Day
+             * @description MM-DD reference onset date (climatological onset) that the onset-before-reference probability is scored against.
+             */
+            ref_onset_month_day?: string | null;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };
@@ -2347,6 +2366,18 @@ export interface components {
             formula_text: string;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /**
+             * Cutoff Month Day
+             * @default
+             */
+            cutoff_month_day: string;
+            /**
+             * Ref Onset Month Day
+             * @default
+             */
+            ref_onset_month_day: string;
             /**
              * Status
              * @default collecting
