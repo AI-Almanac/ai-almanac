@@ -871,7 +871,6 @@ def probe_lat_lon_onset_bundle(
     import sys
     import traceback
 
-
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
         nc_read_forecast_wide,
@@ -1016,7 +1015,6 @@ def probe_lat_lon_ground_truth_bundle(
     """Create lat_lon ids and run the ground-truth onset processing step."""
     import sys
     import traceback
-
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
