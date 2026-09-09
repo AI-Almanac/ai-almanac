@@ -56,6 +56,7 @@ def _source_candidate(source: dict) -> dict:
         "region": source.get("region"),
         "start_year": meta.get("start_year"),
         "end_year": meta.get("end_year"),
+        "grid_step_deg": meta.get("grid_step_deg"),
     }
 
 
@@ -162,7 +163,11 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     if bad_models:
         errors.append("Models are not available for this region: " + ", ".join(bad_models))
 
-    warnings.extend(job_submission.historical_only_warning(m["name"] for m in selected_models))
+    warnings.extend(
+        job_submission.historical_only_warning(
+            (m["name"], m.get("grid_step_deg")) for m in selected_models
+        )
+    )
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))

@@ -6,9 +6,6 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
-		getForecastModels,
-		forecastModelFor,
-		type ForecastModel,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -43,12 +40,10 @@
 
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
+	// Each model source carries the server's live-forecast verdict
+	// (source.live_forecast): whether a registry model exists for it and runs
+	// on the archive's grid — the same check create_forecast_for_user enforces.
 	let modelSources = $state<DataSource[]>([]);
-	// Forecast registry (forecast_models.yaml). A blend model is forecastable
-	// only when its name resolves to a registry entry (forecastModelFor) — the
-	// server's live-scoring gate (see create_forecast_for_user). Empty if
-	// forecasting is disabled.
-	let forecastModels = $state<ForecastModel[]>([]);
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -183,10 +178,10 @@
 	// Live scoring needs a rolled-out season for every member, so one historical-only
 	// member makes the whole blend historical-only. Said here, before training is paid
 	// for, rather than only as a rejection at forecast time.
-	const historicalOnlyMembers = $derived(
+	const liveForecastBlockers = $derived(
 		availableModels
-			.filter((s) => modelIds.includes(s.id) && !forecastModelFor(forecastModels, s.name))
-			.map((s) => s.name)
+			.filter((s) => modelIds.includes(s.id) && s.live_forecast?.status !== 'ready')
+			.map((s) => `${s.name}: ${s.live_forecast?.detail ?? 'No live forecast model is available.'}`)
 	);
 
 	const formValid = $derived(
@@ -200,12 +195,11 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps, forecastModelsRes] = await Promise.allSettled([
+		const [b, obs, models, caps] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities(),
-			getForecastModels()
+			getCapabilities()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
@@ -213,9 +207,6 @@
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
-		// Gated by the forecasting feature flag; rejects when it's off — leave the
-		// list empty so no forecast badges show.
-		if (forecastModelsRes.status === 'fulfilled') forecastModels = forecastModelsRes.value;
 		loaded = true;
 	}
 
@@ -607,10 +598,14 @@
 											onchange={() => toggleModel(source.id)}
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
-										{#if forecastModelFor(forecastModels, source.name)}
+										{#if source.live_forecast?.status === 'ready'}
 											<span
 												class="forecast-badge"
 												title="This model can also generate live forecasts.">Live forecast</span
+											>
+										{:else if source.live_forecast?.status === 'grid_mismatch'}
+											<span class="forecast-badge blocked" title={source.live_forecast.detail}
+												>Grid mismatch</span
 											>
 										{/if}
 									</label>
@@ -627,11 +622,10 @@
 						<p class="caution">{modelCountWarning}</p>
 					{/if}
 
-					{#if historicalOnlyMembers.length > 0}
+					{#if liveForecastBlockers.length > 0}
 						<p class="caution">
-							No live forecast is available for {historicalOnlyMembers.join(', ')}. You can train
-							and score this blend on past seasons, but it can't be run as a live forecast for the
-							current season.
+							This blend can't be run as a live forecast for the current season.
+							{liveForecastBlockers.join(' ')} You can still train and score it on past seasons.
 						</p>
 					{/if}
 
@@ -1067,6 +1061,11 @@
 		background: rgba(52, 211, 153, 0.15);
 		color: var(--color-status-complete);
 		white-space: nowrap;
+	}
+
+	.forecast-badge.blocked {
+		background: rgba(251, 191, 36, 0.18);
+		color: var(--color-status-warning, #b45309);
 	}
 
 	.forecast-legend {

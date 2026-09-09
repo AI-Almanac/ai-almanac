@@ -241,7 +241,7 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
             user_id,
         )
     assert exc.value.status_code == 400
-    assert "no live forecast model" in exc.value.detail
+    assert "No live forecast model" in exc.value.detail
     assert "neuralgcm" in exc.value.detail
 
 
@@ -253,10 +253,18 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
         (["aifs", "aifs_single_v2", "graphcast", "fuxi"], []),
     ],
 )
-def test_models_without_live_forecast(names: list[str], expected: list[str]) -> None:
+def test_live_forecast_blockers_by_name(names: list[str], expected: list[str]) -> None:
     """Guards the alias normalization: no blendable-only model may accidentally
     resolve to a live forecast registry entry (and vice versa)."""
-    assert job_submission.models_without_live_forecast(names) == expected
+    blockers = job_submission.live_forecast_blockers((name, None) for name in names)
+    assert [blocker.split(":")[0] for blocker in blockers] == expected
+
+
+def test_live_forecast_blockers_reject_grid_mismatch() -> None:
+    blockers = job_submission.live_forecast_blockers([("graphcast", 0.25), ("fuxi", 0.25)])
+    assert len(blockers) == 1
+    assert blockers[0].startswith("graphcast:")
+    assert "1° grid" in blockers[0]
 
 
 @pytest.mark.asyncio

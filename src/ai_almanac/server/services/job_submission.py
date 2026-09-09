@@ -22,6 +22,10 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.forecast_models import (
+    archive_grid_step,
+    live_forecast_compatibility,
+)
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import romp_safe_model_name
@@ -31,7 +35,6 @@ from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
     blend_model_key,
     get_packaged_forecast_models,
-    resolve_forecast_model,
     settings,
 )
 
@@ -378,30 +381,37 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     return errors
 
 
-def models_without_live_forecast(model_names: Iterable[str]) -> list[str]:
-    """Blend members with no entry in the live forecast model registry.
+def live_forecast_blockers(members: Iterable[tuple[str, float | None]]) -> list[str]:
+    """Why each blocked member keeps the blend from running as a live forecast.
 
     Live scoring needs a rolled-out season for *every* member of the blend, so a
-    single unmatched member makes the whole blend history-only.
+    single blocked member (no live model, or one on a different grid than the
+    archive) makes the whole blend history-only. Members are (name, archive grid
+    step) pairs; an unknown grid step falls back to the registry-only check.
     """
     registry = get_packaged_forecast_models()
-    return sorted(name for name in model_names if resolve_forecast_model(registry, name) is None)
+    blockers = []
+    for name, archive_step in members:
+        verdict = live_forecast_compatibility(name, archive_step, registry)
+        if verdict.status != "ready":
+            blockers.append(f"{name}: {verdict.detail}")
+    return sorted(blockers)
 
 
-def historical_only_warning(model_names: Iterable[str]) -> list[str]:
+def historical_only_warning(members: Iterable[tuple[str, float | None]]) -> list[str]:
     """Warn, at blend submission, that a blend can never run a live forecast.
 
     History-only blends are a legitimate research result, so this does not block
     submission — but the limitation belongs at submission time, before training
     is paid for, rather than surfacing as a rejection at forecast time.
     """
-    unsupported = models_without_live_forecast(model_names)
-    if not unsupported:
+    blockers = live_forecast_blockers(members)
+    if not blockers:
         return []
     return [
-        f"No live forecast model is available for {', '.join(unsupported)}. "
-        "This blend can be trained and scored on past seasons, but it cannot be "
-        "run as a live forecast."
+        "This blend cannot be run as a live forecast. "
+        + " ".join(blockers)
+        + " It can still be trained and scored on past seasons."
     ]
 
 
@@ -555,7 +565,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     model_years: list[YearRange] = []
     # The blend keys everything on the slug; warnings read better with the name
     # the user picked the source by.
-    display_names: list[str] = []
+    model_sources: list[dict] = []
     for model_id in body.model_ids:
         source = await _resolve_model_source(model_id, user_id)
         key = _blend_model_key(source["name"])
@@ -564,7 +574,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                 status_code=400, detail=f"Duplicate model in blend: {source['name']!r}"
             )
         model_names.append(key)
-        display_names.append(source["name"])
+        model_sources.append(source)
         model_files[key] = year_uris(source["path"], forecast_years)
         model_years.append(source_year_range(source))
 
@@ -585,7 +595,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if guardrail_errors:
         raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))
 
-    warnings = historical_only_warning(display_names) + guardrails.warning_messages(findings)
+    warnings = historical_only_warning(
+        (source["name"], archive_grid_step(source)) for source in model_sources
+    ) + guardrails.warning_messages(findings)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
@@ -803,16 +815,31 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             status_code=400,
             detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
         )
+    # The archived sources the blend was trained from. Deliberately not scoped
+    # to the caller: running someone else's shared blend needs its members'
+    # cadence, extent, and grid, or the rollout silently produces a differently
+    # shaped season than the blend was trained on. Sharing a blend therefore
+    # shares these technical parameters. Keep it to those — never copy the
+    # source's `path` or validation error into the job.
+    model_source_ids: list[str] = blend_config.get("model_source_ids") or []
+    sources_by_name: dict[str, dict | None] = {}
+    for name, source_id in zip(model_names, model_source_ids, strict=True):
+        sources_by_name[name] = (
+            await data_source_service.get_source(source_id) if source_id else None
+        )
+
     # Every member, not just the requested subset: live scoring applies the
     # blend's whole formula, so it needs a rolled-out season for each member
     # (score_live_forecast_bundle rejects a bundle set that is missing one).
     # Without this, a request for only the runnable members is accepted and then
     # fails during scoring, after the rollout has already been paid for.
-    unsupported = models_without_live_forecast(model_names)
-    if unsupported:
+    blockers = live_forecast_blockers(
+        (name, archive_grid_step(sources_by_name.get(name) or {})) for name in model_names
+    )
+    if blockers:
         raise HTTPException(
             status_code=400,
-            detail=(f"Blend model(s) have no live forecast model to run: {', '.join(unsupported)}"),
+            detail="This blend cannot run as a live forecast. " + " ".join(blockers),
         )
     forecast_model_ids = sorted(requested)
     if not forecast_model_ids:
@@ -832,18 +859,9 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # archived issue-day cadence, unit conversion, and spatial extent so its
     # output matches the shape/units the blend was trained against — these
     # live on the original archived data source, not the live registry.
-    model_source_ids: list[str] = blend_config.get("model_source_ids") or []
-    source_id_by_name = dict(zip(model_names, model_source_ids, strict=True))
     season_model_params: dict[str, dict] = {}
     for name in forecast_model_ids:
-        source_id = source_id_by_name.get(name)
-        # Deliberately not scoped to the caller: running someone else's shared
-        # blend needs its members' cadence and extent, or the rollout silently
-        # produces a differently shaped season than the blend was trained on.
-        # Sharing a blend therefore shares these technical parameters. Keep it
-        # to those — never copy the source's `path` or validation error here.
-        source = await data_source_service.get_source(source_id) if source_id else None
-        metadata = (source or {}).get("metadata") or {}
+        metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
         season_model_params[name] = {
             "init_days": metadata.get("init_days") or "0,3",
             # The archive's fixed calendar (MM-DD) issue-date schedule, when
