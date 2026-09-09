@@ -685,8 +685,11 @@ def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
     import pandas as pd
 
     rows = pd.read_csv(io.BytesIO(csv_bytes))
-    if {"lat", "lon"}.issubset(rows.columns):
+    coord_cols = [c for c in ("lat", "lon") if c in rows.columns]
+    if len(coord_cols) == 2 and rows[coord_cols].notna().all(axis=None):
         return csv_bytes
+    # ADM3 pipelines emit lat/lon as empty columns; drop them so the merge fills them.
+    rows = rows.drop(columns=coord_cols)
     if "id" not in rows.columns:
         raise ValueError("Cannot attach ADM3 centroids: prediction CSV has no id column")
 
