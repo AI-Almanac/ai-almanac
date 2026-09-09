@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai_almanac.server.services.forecast_models import live_forecast_compatibility
 from ai_almanac.server.services.job_submission import forecast_generation_gpus
 
 
@@ -14,6 +15,29 @@ def test_cold_model_needs_a_gpu_for_anyone():
 
 def test_stale_set_needs_a_gpu():
     assert forecast_generation_gpus({"fuxi": False}) == 1
+
+
+class TestLiveForecastCompatibility:
+    """A blend member can be extended live only by a registry model that runs
+    on the archive's grid; the verdict feeds the blend-setup badges, the
+    submit-time warning, and the forecast gate alike."""
+
+    def test_matching_grid_is_ready(self):
+        verdict = live_forecast_compatibility("fuxi", 0.25)
+        assert verdict.status == "ready"
+        assert verdict.model_id == "fuxi"
+
+    def test_coarser_model_is_a_grid_mismatch(self):
+        verdict = live_forecast_compatibility("graphcast", 0.25)
+        assert verdict.status == "grid_mismatch"
+        assert "1° grid" in verdict.detail
+        assert "0.25° grid" in verdict.detail
+
+    def test_archive_without_recorded_grid_passes(self):
+        assert live_forecast_compatibility("graphcast", None).status == "ready"
+
+    def test_unregistered_model_is_unavailable(self):
+        assert live_forecast_compatibility("neuralgcm", None).status == "unavailable"
 
 
 class TestResolveForecastModel:

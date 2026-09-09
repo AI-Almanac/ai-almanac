@@ -2622,6 +2622,7 @@ export interface components {
              * @enum {string}
              */
             visibility: "private" | "shared";
+            live_forecast: components["schemas"]["LiveForecastOut"] | null;
             /** Is Owner */
             is_owner: boolean;
             /** Created At */
@@ -3469,6 +3470,18 @@ export interface components {
             title?: string | null;
             /** Length */
             length?: number | null;
+        };
+        /** LiveForecastOut */
+        LiveForecastOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "grid_mismatch" | "ready" | "unavailable";
+            /** Detail */
+            detail: string | null;
+            /** Model Id */
+            model_id: string | null;
         };
         /** MessageIn */
         MessageIn: {
