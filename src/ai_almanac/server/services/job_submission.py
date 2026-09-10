@@ -859,6 +859,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # archived issue-day cadence, unit conversion, and spatial extent so its
     # output matches the shape/units the blend was trained against — these
     # live on the original archived data source, not the live registry.
+    from ai_almanac.server.services.forecast_pipeline import (
+        season_covered_dates,
+        shared_issue_schedule,
+    )
+
     season_model_params: dict[str, dict] = {}
     for name in forecast_model_ids:
         metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
@@ -871,6 +876,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             "unit_cvt": metadata.get("unit_cvt", 1.0),
             "spatial_bounds": metadata.get("spatial_bounds"),
         }
+    season_model_params = shared_issue_schedule(season_model_params)
 
     # The season loop must start counting issue dates from the same monsoon
     # cutoff the blend was trained against, not an unrelated hardcoded date.
@@ -881,8 +887,6 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
     # when cold) and every later run scores against the cache for free.
-    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
-
     init_source = body.params.init_source or "gfs"
     season = str(datetime.now(UTC).year)
     season_store_prefix = (
