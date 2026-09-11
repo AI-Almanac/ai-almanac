@@ -80,6 +80,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
         "lon_min": 38.0,
         "lon_max": 39.0,
     }
+    assert obs["metadata"]["grid_step_deg"] == 0.25
 
     regions_response = await client.get("/regions")
     assert regions_response.status_code == 200

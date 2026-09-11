@@ -25,6 +25,8 @@
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { forecastResultsSteps, forecastSetupSteps } from './tours';
 
 	$effect(() => {
 		if (account.loaded && !account.canUseForecasting) goto('/');
@@ -92,6 +94,18 @@
 		return newest.id !== selected.id && ['failed', 'canceled'].includes(newest.status);
 	});
 
+	installTour(
+		'forecast',
+		() => forecastResultsSteps(startNew),
+		() => !creating && selected?.status === 'complete'
+	);
+	installTour('forecast-setup', forecastSetupSteps, () => creating);
+
+	/** The user's newest forecast, or an example when they have none of their own. */
+	function defaultForecast(newestFirst: Forecast[]): Forecast | undefined {
+		return newestFirst.find((f) => !isExample(f)) ?? newestFirst.find(isExample);
+	}
+
 	function blendName(blendId: string): string {
 		return blends.find((b) => b.id === blendId)?.name || blendId;
 	}
@@ -141,6 +155,7 @@
 			getInitSources()
 		]);
 		if (f.status === 'fulfilled') forecasts = f.value;
+		if (!selectedId && !creating) selectedId = defaultForecast(latestForecasts)?.id ?? null;
 		if (b.status === 'fulfilled') blends = b.value;
 		if (m.status === 'fulfilled') forecastModels = m.value;
 		if (s.status === 'fulfilled') initSources = s.value;
@@ -429,7 +444,7 @@
 					against the blend's trained weights.
 				</p>
 
-				<label class="field">
+				<label class="field" data-tour="forecast-blend">
 					<span>Blend</span>
 					<select bind:value={blendId}>
 						<option value="" disabled>Select a completed blend…</option>
@@ -442,7 +457,7 @@
 					{/if}
 				</label>
 
-				<label class="field">
+				<label class="field" data-tour="forecast-init">
 					<span>Initialization data source</span>
 					<select bind:value={initSource}>
 						{#each initSources as source (source.id)}
@@ -453,7 +468,7 @@
 				</label>
 
 				{#if selectedBlend}
-					<fieldset class="field">
+					<fieldset class="field" data-tour="forecast-models">
 						<legend>Forecast models</legend>
 						{#if availableModels.length === 0}
 							<p class="muted">None of this blend's models have a live forecast model available.</p>
@@ -500,6 +515,7 @@
 					<button
 						type="button"
 						class="primary"
+						data-tour="forecast-run"
 						disabled={!formValid || submitting}
 						onclick={submit}
 					>
@@ -597,7 +613,7 @@
 						</div>
 					</div>
 
-					<div class="artifacts">
+					<div class="artifacts" data-tour="forecast-outputs">
 						<h2>Outputs</h2>
 						{#if downloadableArtifacts.length === 0}
 							<p class="muted">No downloadable outputs found.</p>

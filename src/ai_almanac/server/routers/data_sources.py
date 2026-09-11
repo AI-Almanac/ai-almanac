@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
+from ai_almanac.server.services.forecast_models import (
+    LiveForecastStatus,
+    live_forecast_compatibility,
+)
 from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
@@ -49,6 +53,12 @@ class DataSourceUpdate(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class LiveForecastOut(BaseModel):
+    status: LiveForecastStatus
+    detail: str | None
+    model_id: str | None
+
+
 class DataSourceOut(BaseModel):
     id: str
     kind: Literal["obs", "model"]
@@ -60,6 +70,7 @@ class DataSourceOut(BaseModel):
     status: Literal["ready", "invalid"]
     validation_error: str | None
     visibility: Literal["private", "shared"]
+    live_forecast: LiveForecastOut | None
     is_owner: bool
     created_at: str
     updated_at: str | None
@@ -72,6 +83,13 @@ class DataSourceValidationOut(BaseModel):
     metadata: dict
     status: Literal["ready", "invalid"]
     validation_error: str | None
+
+
+def _live_forecast_out(kind: str, name: str, metadata: dict) -> LiveForecastOut | None:
+    if kind != "model":
+        return None
+    verdict = live_forecast_compatibility(name, metadata.get("grid_step_deg"))
+    return LiveForecastOut(status=verdict.status, detail=verdict.detail, model_id=verdict.model_id)
 
 
 def _to_out(row: dict, user) -> DataSourceOut:
@@ -94,6 +112,7 @@ def _to_out(row: dict, user) -> DataSourceOut:
         status=row.get("status") or "invalid",
         validation_error=row.get("validation_error"),
         visibility=row.get("visibility") or "shared",
+        live_forecast=_live_forecast_out(row["kind"], row["name"], raw),
         is_owner=row.get("owner_id") == user.id,
         created_at=row["created_at"],
         updated_at=row.get("updated_at"),

@@ -4,7 +4,7 @@
 	 *
 	 * The pooled table above says whether the blend wins on average; this says
 	 * where. It reads the blend's per-grid-point summary, which nothing consumed
-	 * before, and colours each point by its skill against the same Traditional
+	 * before, and colors each point by its skill against the same Traditional
 	 * Climatology baseline the table uses, so a number means the same thing in both.
 	 */
 	import { untrack } from 'svelte';
@@ -259,7 +259,7 @@
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
 </script>
 
-<section class="skill-map" aria-label="Blend skill by grid point">
+<section class="skill-map" aria-label="Blend skill by grid point" data-tour="blend-maps">
 	<div class="map-topline">
 		<h3>By grid point</h3>
 		{#if options.length > 1}

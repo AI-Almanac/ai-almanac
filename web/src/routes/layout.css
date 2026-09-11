@@ -149,3 +149,58 @@ textarea {
 		min-height: 0;
 	}
 }
+
+.almanac-tour.driver-popover {
+	font-family: inherit;
+	color: var(--color-text);
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	max-width: 22rem;
+}
+
+.almanac-tour .driver-popover-next-btn {
+	background: var(--color-accent);
+	border-color: var(--color-accent);
+	color: white;
+	font-weight: 700;
+}
+
+.almanac-tour .tour-cards {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.almanac-tour .tour-card {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	padding: 0.7rem 0.85rem;
+	border: 1px solid var(--color-border);
+	border-radius: 0.45rem;
+	color: var(--color-text);
+	text-decoration: none;
+}
+
+.almanac-tour .tour-card span {
+	font-weight: 800;
+	color: var(--color-accent);
+}
+
+.almanac-tour .tour-card small {
+	color: var(--color-text-muted);
+	font-size: 0.85em;
+	line-height: 1.4;
+}
+
+.almanac-tour .tour-card:hover {
+	border-color: var(--color-accent-border);
+	background: var(--color-accent-light);
+}
+
+/* The hint popover anchors to its beacon; keep the anchor point, drop the flashing dot. */
+.driver-hint {
+	--driver-hint-size: 0.25rem;
+	opacity: 0;
+	pointer-events: none;
+}

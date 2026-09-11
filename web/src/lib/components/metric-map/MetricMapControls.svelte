@@ -91,7 +91,7 @@
 	);
 </script>
 
-<div class="layer-panel result-lens" class:collapsed={panelCollapsed}>
+<div class="layer-panel result-lens" class:collapsed={panelCollapsed} data-tour="map-controls">
 	<button class="layer-panel-header" onclick={onTogglePanel}>
 		<span class="layer-panel-title">Map controls</span>
 		<span class="panel-toggle">{panelCollapsed ? '▸' : '▾'}</span>

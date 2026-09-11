@@ -434,7 +434,7 @@ keying on `jobsKey` would never notice it finish. Derived values still use the
 ### Cell shading: one diverging scale, one meaning
 
 Every cell resolves to a **skill-relative-to-reference** number via
-`skillAgainstReference`, and that single quantity drives the colour: `0` matches
+`skillAgainstReference`, and that single quantity drives the color: `0` matches
 climatology, `1` is perfect, negative is worse than climatology. Teal above,
 muted rust (`166, 84, 60`) below, unshaded at or without a reference.
 
@@ -447,13 +447,13 @@ muted rust (`166, 84, 60`) below, unshaded at or without a reference.
 
 Two earlier attempts were wrong:
 
-**Rank-within-row fill.** Colour encoded position among models. With a single
+**Rank-within-row fill.** Color encoded position among models. With a single
 model — the common case — `max === min`, so every cell normalized to 1 and
 rendered at full saturation, making "only value present" look identical to "best
 in class". Suppressing shading when fewer than two distinct values existed fixed
 the lie but left the single-model table almost entirely unshaded.
 
-**Rank fill plus a flat below-climatology tint.** Colour then encoded two
+**Rank fill plus a flat below-climatology tint.** Color then encoded two
 different things through one channel. On the real GenCast run eight of ten cells
 came out the same flat pink, so the table could not say *how far* below
 climatology a value sat, and the legend advertised a teal ramp that appeared
@@ -471,7 +471,7 @@ letting it run saturates everything. The legend swatches sample that same curve,
 so they cannot drift from the cells.
 
 `isBest` still requires two distinct values — "best of one" is not a claim worth
-making — but it now only sets bold weight, not colour.
+making — but it now only sets bold weight, not color.
 
 Note the Brier Score row's shading is by construction identical to the Brier
 Skill Score row's, since `1 − BS/BS_ref` *is* the Brier Skill Score. Accepted:

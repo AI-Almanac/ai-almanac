@@ -201,8 +201,8 @@ def test_negative_coordinates_parse() -> None:
 
 
 def test_distinguishes_the_per_cell_summary_from_its_pooled_sibling() -> None:
-    assert blend_cells.is_per_cell_summary("summary_models_clim_mok_date_2023_2024.csv")
-    assert not blend_cells.is_per_cell_summary("summary_models_pooled_clim_mok_date_2023_2024.csv")
+    assert blend_cells.is_per_cell_summary("summary_models_fixed_cutoff_2023_2024.csv")
+    assert not blend_cells.is_per_cell_summary("summary_models_pooled_fixed_cutoff_2023_2024.csv")
 
 
 def test_coverage_counts_the_points_that_beat_climatology() -> None:

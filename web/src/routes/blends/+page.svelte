@@ -6,9 +6,6 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
-		getForecastModels,
-		forecastModelFor,
-		type ForecastModel,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -36,17 +33,17 @@
 	} from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { blendResultsSteps, blendSetupSteps } from './tours';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
+	// Each model source carries the server's live-forecast verdict
+	// (source.live_forecast): whether a registry model exists for it and runs
+	// on the archive's grid — the same check create_forecast_for_user enforces.
 	let modelSources = $state<DataSource[]>([]);
-	// Forecast registry (forecast_models.yaml). A blend model is forecastable
-	// only when its name resolves to a registry entry (forecastModelFor) — the
-	// server's live-scoring gate (see create_forecast_for_user). Empty if
-	// forecasting is disabled.
-	let forecastModels = $state<ForecastModel[]>([]);
 	let selectedId = $state<string | null>(null);
 	let creating = $state(false);
 	let loaded = $state(false);
@@ -96,6 +93,12 @@
 	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
+	installTour(
+		'blend',
+		() => blendResultsSteps(startNew),
+		() => !creating && selected?.status === 'complete'
+	);
+	installTour('blend-setup', blendSetupSteps, () => creating);
 	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
 
 	// The chat panel beside a selected blend. A session carried over from the
@@ -175,10 +178,10 @@
 	// Live scoring needs a rolled-out season for every member, so one historical-only
 	// member makes the whole blend historical-only. Said here, before training is paid
 	// for, rather than only as a rejection at forecast time.
-	const historicalOnlyMembers = $derived(
+	const liveForecastBlockers = $derived(
 		availableModels
-			.filter((s) => modelIds.includes(s.id) && !forecastModelFor(forecastModels, s.name))
-			.map((s) => s.name)
+			.filter((s) => modelIds.includes(s.id) && s.live_forecast?.status !== 'ready')
+			.map((s) => `${s.name}: ${s.live_forecast?.detail ?? 'No live forecast model is available.'}`)
 	);
 
 	const formValid = $derived(
@@ -192,21 +195,18 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps, forecastModelsRes] = await Promise.allSettled([
+		const [b, obs, models, caps] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities(),
-			getForecastModels()
+			getCapabilities()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
+		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
-		// Gated by the forecasting feature flag; rejects when it's off — leave the
-		// list empty so no forecast badges show.
-		if (forecastModelsRes.status === 'fulfilled') forecastModels = forecastModelsRes.value;
 		loaded = true;
 	}
 
@@ -283,6 +283,15 @@
 		// Ownership doesn't matter: the server hides (never deletes) an
 		// example for every caller, owner and admin included.
 		return b.visibility === 'example';
+	}
+
+	/** The user's newest blend, or an example when they have none of their own. */
+	function defaultBlend(all: Blend[]): Blend | undefined {
+		const newestFirst = (a: Blend, b: Blend) => b.created_at.localeCompare(a.created_at);
+		return (
+			all.filter((b) => !isExample(b)).sort(newestFirst)[0] ??
+			all.filter(isExample).sort(newestFirst)[0]
+		);
 	}
 
 	function toSidebarItem(b: (typeof blends)[number]) {
@@ -515,7 +524,7 @@
 		{#if creating}
 			<div class="setup-layout" class:with-chat={chatAvailable} class:is-comparing={chatComparing}>
 				{#if chatAvailable}
-					<div class="setup-chat">
+					<div class="setup-chat" data-tour="setup-chat">
 						<ChatPanel
 							jobs={[]}
 							scopeKind="blend_setup"
@@ -549,7 +558,7 @@
 						<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
 					</label>
 
-					<label class="field">
+					<label class="field" data-tour="blend-obs">
 						{@render fieldLabel(
 							'Observations',
 							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
@@ -564,7 +573,7 @@
 						</select>
 					</label>
 
-					<fieldset class="field">
+					<fieldset class="field" data-tour="blend-models">
 						<legend class="label-with-help">
 							Forecast models
 							<span
@@ -589,10 +598,14 @@
 											onchange={() => toggleModel(source.id)}
 										/>
 										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
-										{#if forecastModelFor(forecastModels, source.name)}
+										{#if source.live_forecast?.status === 'ready'}
 											<span
 												class="forecast-badge"
 												title="This model can also generate live forecasts.">Live forecast</span
+											>
+										{:else if source.live_forecast?.status === 'grid_mismatch'}
+											<span class="forecast-badge blocked" title={source.live_forecast.detail}
+												>Grid mismatch</span
 											>
 										{/if}
 									</label>
@@ -609,11 +622,10 @@
 						<p class="caution">{modelCountWarning}</p>
 					{/if}
 
-					{#if historicalOnlyMembers.length > 0}
+					{#if liveForecastBlockers.length > 0}
 						<p class="caution">
-							No live forecast is available for {historicalOnlyMembers.join(', ')}. You can train
-							and score this blend on past seasons, but it can't be run as a live forecast for the
-							current season.
+							This blend can't be run as a live forecast for the current season.
+							{liveForecastBlockers.join(' ')} You can still train and score it on past seasons.
 						</p>
 					{/if}
 
@@ -624,7 +636,7 @@
 						</p>
 					{/if}
 
-					<div class="field-row">
+					<div class="field-row" data-tour="blend-years">
 						<label class="field">
 							{@render fieldLabel(
 								'Training years',
@@ -704,6 +716,7 @@
 						<button
 							type="button"
 							class="primary"
+							data-tour="blend-train"
 							disabled={!formValid || submitting}
 							onclick={submit}
 						>
@@ -793,7 +806,7 @@
 							</div>
 						{/if}
 
-						<div class="artifacts">
+						<div class="artifacts" data-tour="blend-outputs">
 							<h2>Weights & outputs</h2>
 							{#if artifacts.length === 0}
 								<p class="muted">No artifacts found.</p>
@@ -819,7 +832,7 @@
 				{#if chatAvailable && detailChat}
 					<SplitResizer container={splitEl} comparing={chatComparing} storageKey="blend-detail" />
 					<aside class="workspace-aside">
-						<div class="result-chat">
+						<div class="result-chat" data-tour="blend-chat">
 							<ChatPanel
 								jobs={detailChatJobs}
 								scopeKind={detailChat.scopeKind}
@@ -1048,6 +1061,11 @@
 		background: rgba(52, 211, 153, 0.15);
 		color: var(--color-status-complete);
 		white-space: nowrap;
+	}
+
+	.forecast-badge.blocked {
+		background: rgba(251, 191, 36, 0.18);
+		color: var(--color-status-warning, #b45309);
 	}
 
 	.forecast-legend {

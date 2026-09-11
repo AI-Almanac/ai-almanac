@@ -14,7 +14,7 @@ import { interpolateStops } from '$lib/components/metric-map/gridData';
  * Both maps answer "better or worse than climatology at this point", so they
  * share a palette — blue is better and red is worse on either page. The reversal
  * is what keeps that true: the benchmark map plots deltas of error metrics, where
- * better is negative, while skill is better when positive. Same colour meanings,
+ * better is negative, while skill is better when positive. Same color meanings,
  * opposite axis direction.
  */
 export const SKILL_STOPS = [...DIVERGING_STOPS].reverse();
@@ -28,7 +28,7 @@ export type SkillCellFeature = GeoJSON.Feature<
 		lon: number;
 		skill: number;
 		observations: number | null;
-		/** True when |skill| exceeded the ramp and the colour is saturated. */
+		/** True when |skill| exceeded the ramp and the color is saturated. */
 		clipped: boolean;
 	}
 >;
@@ -42,7 +42,7 @@ export type SkillCellCollection = GeoJSON.FeatureCollection<
  * Position on the diverging ramp, with zero fixed at the midpoint.
  *
  * Fixing the midpoint is the point of the whole scale: it makes "beats
- * climatology" a colour family rather than a value the reader has to look up.
+ * climatology" a color family rather than a value the reader has to look up.
  */
 export function rampPosition(skill: number, extent: number): number {
 	if (!(extent > 0)) return 0.5;

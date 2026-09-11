@@ -97,6 +97,25 @@ def _spatial_bounds(dataset) -> dict[str, float]:
     return bounds
 
 
+def _grid_step_deg(dataset) -> float | None:
+    """Regular latitude spacing in degrees, or None when the grid is irregular.
+
+    Live forecast models are matched against this: a blend's coefficients only
+    transfer to a live season rolled out on the same grid the archive uses.
+    """
+    # ponytail: latitude spacing stands in for the whole grid; every archive so
+    # far is a regular lat/lon grid with equal steps in both axes.
+    latitude = _coordinate_name(dataset, _LATITUDE_NAMES)
+    values = [float(value) for value in dataset[latitude].values]
+    if len(values) < 2:
+        return None
+    steps = [abs(after - before) for before, after in zip(values[:-1], values[1:], strict=True)]
+    step = round(steps[0], 6)
+    if not all(math.isclose(candidate, step, abs_tol=1e-6) for candidate in steps):
+        return None
+    return step
+
+
 def _initialization_days(dataset) -> tuple[str, str, int] | None:
     coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
     if coordinate is None or dataset[coordinate].ndim != 1:
@@ -273,6 +292,7 @@ def _finalize_inspection(
         with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
+            grid_step_deg = _grid_step_deg(dataset)
             has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
             initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
@@ -283,6 +303,7 @@ def _finalize_inspection(
             normalized,
         )
     normalized["spatial_bounds"] = spatial_bounds
+    normalized["grid_step_deg"] = grid_step_deg
     if kind == "model":
         # An ensemble member dim can only be evaluated by ROMP's probabilistic
         # path; the deterministic path crashes on the extra dim. The file's

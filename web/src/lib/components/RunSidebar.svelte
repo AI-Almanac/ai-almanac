@@ -71,14 +71,22 @@
 			onclick={() => setCollapsed(false)}>»</button
 		>
 		{#if canMutate}
-			<button class="rail-btn" title={newLabel} aria-label={newLabel} onclick={onNew}>+</button>
+			<button
+				class="rail-btn"
+				title={newLabel}
+				aria-label={newLabel}
+				data-tour="new-run"
+				onclick={onNew}>+</button
+			>
 		{/if}
 	</aside>
 {:else}
 	<aside class="sidebar">
 		<div class="sidebar-head">
 			{#if canMutate}
-				<button class="new-run-btn" class:active={newActive} onclick={onNew}>{newLabel}</button>
+				<button class="new-run-btn" class:active={newActive} data-tour="new-run" onclick={onNew}
+					>{newLabel}</button
+				>
 			{/if}
 			<button
 				class="rail-btn"

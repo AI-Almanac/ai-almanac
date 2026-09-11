@@ -23,6 +23,8 @@
 	import { modelDisplayName } from '$lib/model-names';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { benchmarkResultsSteps } from './tours';
 
 	const store = new BenchmarkStore();
 
@@ -42,6 +44,14 @@
 	const manualSetupRequested = $derived($page.url.searchParams.get('manual') === '1');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
 	const inSetupMode = $derived(store.showForm || promptSetupActive || manualSetupRequested);
+	const resultsTourActive = $derived(
+		!inSetupMode && (store.selectedGroup?.jobs.some((job) => job.status === 'complete') ?? false)
+	);
+	installTour(
+		'benchmark-results',
+		() => benchmarkResultsSteps(startNew),
+		() => resultsTourActive
+	);
 
 	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
@@ -264,7 +274,7 @@
 						</div>
 					</header>
 
-					<details class="benchmark-summary">
+					<details class="benchmark-summary" data-tour="benchmark-summary">
 						<summary class="summary-trigger">
 							<span class="summary-trigger-title">Benchmark summary</span>
 							<span class="summary-trigger-meta">
