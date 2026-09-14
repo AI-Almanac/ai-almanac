@@ -16,7 +16,7 @@
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
-		"@iconify-json/lucide": "^1.2.121",
+		"@iconify-json/lucide": "^1.2.131",
 		"@iconify/tailwind4": "^1.2.3",
 		"@sveltejs/adapter-auto": "^7.0.0",
 		"@sveltejs/adapter-static": "^3.0.10",
@@ -35,15 +35,15 @@
 		"svelte-check": "^4.7.5",
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.9.3",
-		"vite": "^8.2.1",
+		"vite": "^8.3.0",
 		"vitest": "^4.1.10"
 	},
 	"dependencies": {
 		"@globus/sdk": "^6.3.1",
-		"dompurify": "^3.4.13",
+		"dompurify": "^3.4.15",
 		"driver.js": "^1.8.0",
-		"maplibre-gl": "^6.2.0",
-		"marked": "^18.0.9",
+		"maplibre-gl": "^6.9.0",
+		"marked": "^18.0.12",
 		"svelte-floating-ui": "^1.6.2",
 		"uplot": "^1.6.32"
 	}
