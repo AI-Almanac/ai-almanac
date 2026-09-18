@@ -123,7 +123,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     }
     prep_kwargs = {
         key: params[key]
-        for key in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+        for key in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
         if params.get(key) is not None
     }
     if config.get("region_id"):

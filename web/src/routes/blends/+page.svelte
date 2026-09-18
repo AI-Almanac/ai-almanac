@@ -21,6 +21,8 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
+	import type { BboxExtent } from '$lib/api/jobs';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
@@ -128,6 +130,7 @@
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
+	let focusArea = $state<BboxExtent | null>(null);
 	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
@@ -445,7 +448,8 @@
 				cv_holdout_years: cvHoldoutYears.trim(),
 				...(forecastYears.trim() ? { forecast_years: forecastYears.trim() } : {}),
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
-				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {})
+				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
+				...(focusArea ? { focus_area: focusArea } : {})
 			}
 		};
 		try {
@@ -455,6 +459,7 @@
 			selectedId = blend.id;
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
+			focusArea = null;
 			modelIds = [];
 			yearsDirty = false;
 		} catch (err) {
@@ -705,6 +710,13 @@
 								placeholder="optional — model formula override"
 							/>
 						</label>
+						<div class="field">
+							{@render fieldLabel(
+								'Focus area',
+								'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
+							)}
+							<FocusAreaMap value={focusArea} onchange={(box) => (focusArea = box)} />
+						</div>
 					</details>
 
 					{#if submitError}

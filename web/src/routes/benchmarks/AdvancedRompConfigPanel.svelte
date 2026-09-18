@@ -1,5 +1,7 @@
 <script lang="ts">
 	import PerModelConfig from './PerModelConfig.svelte';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
+	import type { BboxExtent } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
 	import { getForecastModels, forecastModelFor, type ForecastModel } from '$lib/api';
 
@@ -24,11 +26,20 @@
 	const selectedModels = $derived(form.selectedModels);
 	const sharedAdvancedParams = $derived(form.sharedAdvancedParams);
 	const parameterDefaults = $derived(form.parameterDefaults);
+	const focusArea = $derived(
+		(sharedAdvancedParams.focus_area as BboxExtent | null | undefined) ?? null
+	);
+	const regionExtent = $derived.by((): BboxExtent | null => {
+		const r = selectedRegion;
+		if (!r || r.lat_min == null || r.lat_max == null || r.lon_min == null || r.lon_max == null)
+			return null;
+		return { lat_min: r.lat_min, lat_max: r.lat_max, lon_min: r.lon_min, lon_max: r.lon_max };
+	});
 
 	const setRegionId = (id: string) => form.setRegionId(id);
 	const setForecastWindowDays = (days: number | null) => form.setForecastWindowDays(days);
 	const toggleModel = (id: string) => form.toggleModel(id);
-	const setSharedParam = (key: string, value: string | number | null) =>
+	const setSharedParam = (key: string, value: string | number | BboxExtent | null) =>
 		form.setSharedParam(key, value);
 	const getOverride = <T,>(modelId: string, key: string, fallback: T): T =>
 		form.getOverride(modelId, key, fallback);
@@ -388,6 +399,21 @@
 
 								<fieldset>
 									<legend>Masks and baseline</legend>
+									<div class="focus-area-field">
+										<span class="label-with-help">
+											Focus area
+											<span
+												class="tip"
+												title="Draw a box to score only the grid cells inside it. Land and country boundaries still apply."
+												>ⓘ</span
+											>
+										</span>
+										<FocusAreaMap
+											value={focusArea}
+											extent={regionExtent}
+											onchange={(box) => setSharedParam('focus_area', box)}
+										/>
+									</div>
 									<label>
 										<span class="label-with-help">
 											Area mask file

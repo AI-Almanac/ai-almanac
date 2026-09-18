@@ -415,7 +415,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
 
             prep_kwargs = {
                 k: params[k]
-                for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+                for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
                 if params.get(k) is not None
             }
             if config.get("region_id"):
@@ -658,6 +658,19 @@ def _remap_bundle_to_adm3(bundle: bytes, label: str, cache_dir: str | None = Non
     if not output_paths:
         raise ValueError(f"No NetCDF files found while remapping {label} to ADM3")
     return _bundle_files(output_paths)
+
+
+def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: bool) -> dict:
+    filt = {"dissemination_cells_file": str(dissemination_path) if dissemination_path else None}
+    if not focus_area:
+        return filt
+    filt["bbox"] = dict(focus_area)
+    if adm3_domain:
+        # ADM3 rows carry no lat/lon; the bbox filter needs a point per unit.
+        centroids_path = Path(tempfile.mkdtemp(prefix="adm3-centroids-")) / "centroids.csv"
+        _adm3_centroids().to_csv(centroids_path, index=False)
+        filt["centroids_file"] = str(centroids_path)
+    return filt
 
 
 def _adm3_centroids():
@@ -1149,6 +1162,7 @@ def build_lat_lon_intermediates_bundle(
     trim_forecasts_after_true_onset: bool = True,
     region_id: str | None = None,
     use_adm3_domain: bool | None = None,
+    focus_area: dict | None = None,
     return_outputs: bool = True,
     cache_dir: str | None = None,
 ) -> dict:
@@ -1192,6 +1206,8 @@ def build_lat_lon_intermediates_bundle(
         model_name: _extract_bundle(bundle) for model_name, bundle in forecast_bundles.items()
     }
 
+    domain_filter = _domain_filter(dissemination_path, focus_area, adm3_domain)
+
     onset_options = {
         "window": 3,
         "cutoff_month_day": cutoff_month_day,
@@ -1224,9 +1240,7 @@ def build_lat_lon_intermediates_bundle(
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {
-            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
-        },
+        "filter": domain_filter,
     }
     obs_spec = {
         "input": {"value_col": obs_value_col},
@@ -1246,9 +1260,7 @@ def build_lat_lon_intermediates_bundle(
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {
-            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
-        },
+        "filter": domain_filter,
     }
 
     ref_onset_dt = _ref_onset_for(mok_month_day)
@@ -1260,6 +1272,7 @@ def build_lat_lon_intermediates_bundle(
         "mok_month_day": mok_month_day,
         "region_id": region_id,
         "adm3_domain": bool(adm3_domain),
+        "focus_area": focus_area,
         "climatology": {},
         "combined": {},
         "outputs": {},
@@ -1292,6 +1305,7 @@ def build_lat_lon_intermediates_bundle(
         "cutoff_month_day": cutoff_month_day,
         "mok_month_day": mok_month_day,
         "adm3_domain": bool(adm3_domain),
+        "focus_area": focus_area,
     }
     cache_hits = 0
     cache_misses = 0
@@ -2195,7 +2209,7 @@ def score_live_forecast(
     t0 = time.perf_counter()
     prep_kwargs = {
         k: blend_params[k]
-        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
         if blend_params.get(k) is not None
     }
     if blend_params.get("region_id"):

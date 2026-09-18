@@ -22,6 +22,7 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.focus_area import FocusArea
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     live_forecast_compatibility,
@@ -69,6 +70,7 @@ class RompParams(BaseModel):
     land_only: bool | None = None
     shp_only: bool | None = None
     nc_mask: str | None = None
+    focus_area: FocusArea | None = None
     ref_model_dir: str | None = None
     thresh_file: str | None = None
 
@@ -273,6 +275,7 @@ class BlendParams(BaseModel):
     threshold_mm: float | None = None
     cutoff_month_day: str | None = None
     mok_month_day: str | None = None
+    focus_area: FocusArea | None = None
 
 
 class BlendCreate(BaseModel):

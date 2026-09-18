@@ -2240,6 +2240,7 @@ export interface components {
             cutoff_month_day?: string | null;
             /** Mok Month Day */
             mok_month_day?: string | null;
+            focus_area?: components["schemas"]["FocusArea"] | null;
         };
         /**
          * BlendRunSpec
@@ -2864,6 +2865,17 @@ export interface components {
             breadcrumbs?: {
                 [key: string]: unknown;
             }[];
+        };
+        /** FocusArea */
+        FocusArea: {
+            /** Lat Min */
+            lat_min: number;
+            /** Lat Max */
+            lat_max: number;
+            /** Lon Min */
+            lon_min: number;
+            /** Lon Max */
+            lon_max: number;
         };
         /** ForecastCreate */
         ForecastCreate: {
@@ -4005,6 +4017,7 @@ export interface components {
             shp_only?: boolean | null;
             /** Nc Mask */
             nc_mask?: string | null;
+            focus_area?: components["schemas"]["FocusArea"] | null;
             /** Ref Model Dir */
             ref_model_dir?: string | null;
             /** Thresh File */

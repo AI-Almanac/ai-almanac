@@ -8,12 +8,13 @@ import {
 	type Job,
 	type JobParams,
 	type ModelConfig,
+	type BboxExtent,
 	type Region,
 	type RompDefaults
 } from '$lib/api';
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
 
-type SharedParamValue = string | number | null;
+type SharedParamValue = string | number | BboxExtent | null;
 type ModelOverrideValue = string | boolean | number;
 type ModelOverrides = Record<string, Record<string, ModelOverrideValue>>;
 
@@ -25,6 +26,12 @@ function numberParam(value: unknown): number | undefined {
 
 function stringParam(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function bboxParam(value: unknown): BboxExtent | undefined {
+	return value !== null && typeof value === 'object' && 'lat_min' in value
+		? (value as BboxExtent)
+		: undefined;
 }
 
 function booleanParam(value: unknown): boolean | undefined {
@@ -232,6 +239,7 @@ export class BenchmarkSetupForm {
 				dry_extent: numberParam(params.dry_extent)
 			}),
 			...(stringParam(params.nc_mask) && { nc_mask: stringParam(params.nc_mask) }),
+			...(bboxParam(params.focus_area) && { focus_area: bboxParam(params.focus_area) }),
 			...(stringParam(params.thresh_file) && { thresh_file: stringParam(params.thresh_file) }),
 			...(stringParam(params.ref_model) && { ref_model: stringParam(params.ref_model) }),
 			...(stringParam(params.ref_model_dir) && {

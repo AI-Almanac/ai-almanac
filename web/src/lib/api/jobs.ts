@@ -61,6 +61,7 @@ export type JobParams = {
 	ref_model_dir?: string;
 	// Advanced — masks/thresholds
 	nc_mask?: string;
+	focus_area?: BboxExtent;
 	thresh_file?: string;
 };
 
