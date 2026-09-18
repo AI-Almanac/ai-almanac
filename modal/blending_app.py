@@ -673,6 +673,21 @@ def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: boo
     return filt
 
 
+def _apply_focus_area(df, domain_filter: dict, filter_rows):
+    """Keep only rows inside the focus box.
+
+    Only the bbox keys are passed on, so the dissemination-cells filter stays off
+    and runs without a focus area behave exactly as before.
+    """
+    if "bbox" not in domain_filter:
+        return df
+    focus_only = {k: v for k, v in domain_filter.items() if k in ("bbox", "centroids_file")}
+    kept = filter_rows(df, {"filter": focus_only})
+    if kept.empty:
+        raise ValueError(f"No cells fall inside the focus area {domain_filter['bbox']}")
+    return kept
+
+
 def _adm3_centroids():
     import pandas as pd
 
@@ -1180,6 +1195,7 @@ def build_lat_lon_intermediates_bundle(
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
+        filter_by_dissemination_cells,
         nc_read_forecast_wide,
         nc_read_groundtruth_long,
         process_ground_truth_rainfall_id,
@@ -1287,6 +1303,7 @@ def build_lat_lon_intermediates_bundle(
             dim_rename_map=obs_spec["dimensions"]["rename"],
         )
         df = _add_lat_lon_id(df, precision=id_precision)
+        df = _apply_focus_area(df, domain_filter, filter_by_dissemination_cells)
         return process_ground_truth_rainfall_id(
             df,
             obs_spec,
@@ -1368,6 +1385,7 @@ def build_lat_lon_intermediates_bundle(
             prefix="rain",
         )
         df = _add_lat_lon_id(df, precision=id_precision)
+        df = _apply_focus_area(df, domain_filter, filter_by_dissemination_cells)
         member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
         processed = process_rainfall_forecast_id(
             df,
