@@ -21,6 +21,7 @@
 		SKILL_STOPS,
 		buildAreaSkillCells,
 		buildSkillCells,
+		centredAreaCount,
 		featureBounds,
 		isAreaMetric,
 		lowCountPoints as countLowPoints,
@@ -34,6 +35,7 @@
 	const SOURCE = 'blend-skill';
 	const FILL_LAYER = 'blend-skill-fill';
 	const LINE_LAYER = 'blend-skill-outline';
+	const MARKER_LAYER = 'blend-skill-markers';
 
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
@@ -51,6 +53,8 @@
 	let requested = $state<string | null>(null);
 	/** ADM3 outlines for named areas; null draws them as centroid squares instead. */
 	let boundaries = $state<GeoJSON.FeatureCollection | null>(null);
+	/** Areas with no matching outline, drawn as markers at their centroid. */
+	let centredAreas = $state(0);
 	/** The basemap style never arrived; the frame would otherwise be silently blank. */
 	let stalled = $state(false);
 	let styleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -99,6 +103,7 @@
 					minObservations: metrics.min_observations,
 					cellSizeDeg: metrics.cell_size_deg
 				});
+		centredAreas = centredAreaCount(geojson);
 		const existing = map.getSource(SOURCE) as maplibregl.GeoJSONSource | undefined;
 		if (existing) {
 			existing.setData(geojson);
@@ -118,6 +123,20 @@
 					'line-color': outlineColor,
 					// Cell borders would swamp the fills when zoomed out.
 					'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0, 8, 0.6]
+				}
+			});
+			// Fill and line layers ignore points, so unmatched areas need their own layer.
+			map.addLayer({
+				id: MARKER_LAYER,
+				type: 'circle',
+				source: SOURCE,
+				filter: ['==', ['geometry-type'], 'Point'],
+				paint: {
+					'circle-color': ['get', 'color'],
+					'circle-opacity': ['get', 'opacity'],
+					'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 3, 8, 7],
+					'circle-stroke-color': outlineColor,
+					'circle-stroke-width': 1
 				}
 			});
 		}
@@ -223,7 +242,7 @@
 			if (!mapReady && !error) stalled = true;
 		}, 10_000);
 
-		instance.on('mousemove', FILL_LAYER, (event: maplibregl.MapLayerMouseEvent) => {
+		const showHover = (event: maplibregl.MapLayerMouseEvent) => {
 			const feature = event.features?.[0];
 			if (!feature) return;
 			const p = feature.properties as {
@@ -245,8 +264,11 @@
 				x: event.point.x + 14,
 				y: event.point.y - 8
 			};
-		});
+		};
+		instance.on('mousemove', FILL_LAYER, showHover);
 		instance.on('mouseleave', FILL_LAYER, () => (hover = null));
+		instance.on('mousemove', MARKER_LAYER, showHover);
+		instance.on('mouseleave', MARKER_LAYER, () => (hover = null));
 
 		// The panel column changes width as the chat rail collapses.
 		const observer = new ResizeObserver(() => instance.resize());
@@ -376,6 +398,12 @@
 				{byArea ? 'Areas' : 'Points'} scored on fewer than {metrics.min_observations} point-years are
 				faded; {lowCountPoints}
 				{lowCountPoints === 1 ? 'is' : 'are'} below that.
+			{/if}
+			{#if centredAreas > 0}
+				{centredAreas}
+				{centredAreas === 1 ? 'area has' : 'areas have'} no matching outline and {centredAreas === 1
+					? 'is'
+					: 'are'} drawn as a dot at {centredAreas === 1 ? 'its' : 'their'} centre.
 			{/if}
 		</p>
 	{/if}

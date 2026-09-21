@@ -21,7 +21,7 @@ import { interpolateStops } from '$lib/components/metric-map/gridData';
 export const SKILL_STOPS = [...DIVERGING_STOPS].reverse();
 
 export type SkillCellFeature = GeoJSON.Feature<
-	GeoJSON.Polygon | GeoJSON.MultiPolygon,
+	GeoJSON.Polygon | GeoJSON.MultiPolygon | GeoJSON.Point,
 	{
 		color: string;
 		opacity: number;
@@ -37,7 +37,7 @@ export type SkillCellFeature = GeoJSON.Feature<
 >;
 
 export type SkillCellCollection = GeoJSON.FeatureCollection<
-	GeoJSON.Polygon | GeoJSON.MultiPolygon,
+	GeoJSON.Polygon | GeoJSON.MultiPolygon | GeoJSON.Point,
 	SkillCellFeature['properties']
 >;
 
@@ -180,31 +180,10 @@ export function lowCountPoints(layer: SkillLayer, floor: number): number {
 }
 
 /**
- * Half-width of the square drawn for an area whose boundary polygon is unknown.
- * Ethiopian woredas are a few tens of kilometres across, so a 0.1° square reads
- * as a marker at the centroid without pretending to be the unit's outline.
- */
-export const AREA_FALLBACK_HALF_DEG = 0.05;
-
-function square(lat: number, lon: number, half: number): GeoJSON.Polygon {
-	return {
-		type: 'Polygon',
-		coordinates: [
-			[
-				[lon - half, lat - half],
-				[lon + half, lat - half],
-				[lon + half, lat + half],
-				[lon - half, lat + half],
-				[lon - half, lat - half]
-			]
-		]
-	};
-}
-
-/**
  * Paint each named area with its skill. Areas whose name matches a boundary
- * feature take that polygon; the rest get a small square at their centroid, so
- * a unit the boundary file spells differently is still on the map.
+ * feature take that polygon; the rest become a point at their centroid, drawn as
+ * a marker so a unit the boundary file spells differently is still on the map
+ * without masquerading as a grid cell.
  */
 export function buildAreaSkillCells(
 	metric: BlendAreaMetric,
@@ -235,9 +214,10 @@ export function buildAreaSkillCells(
 				clipped: extent > 0 && Math.abs(area.skill) > extent,
 				name: area.id
 			},
-			geometry:
-				outlines.get(normalizeAreaName(area.id)) ??
-				square(area.lat, area.lon, AREA_FALLBACK_HALF_DEG)
+			geometry: outlines.get(normalizeAreaName(area.id)) ?? {
+				type: 'Point',
+				coordinates: [area.lon, area.lat]
+			}
 		});
 	}
 	return { type: 'FeatureCollection', features };
@@ -257,12 +237,11 @@ export function featureBounds(
 		south = Math.min(south, position[1]);
 		north = Math.max(north, position[1]);
 	};
-	for (const feature of collection.features) {
-		const rings: GeoJSON.Position[][] =
-			feature.geometry.type === 'Polygon'
-				? feature.geometry.coordinates
-				: feature.geometry.coordinates.flat();
-		rings.forEach((ring) => ring.forEach(visit));
+	for (const { geometry } of collection.features) {
+		if (geometry.type === 'Point') visit(geometry.coordinates);
+		else if (geometry.type === 'Polygon')
+			geometry.coordinates.forEach((ring) => ring.forEach(visit));
+		else geometry.coordinates.flat().forEach((ring) => ring.forEach(visit));
 	}
 	return Number.isFinite(west)
 		? [
@@ -270,4 +249,9 @@ export function featureBounds(
 				[east, north]
 			]
 		: null;
+}
+
+/** Areas drawn at their centroid because no boundary outline matched their name. */
+export function centredAreaCount(collection: SkillCellCollection): number {
+	return collection.features.filter((feature) => feature.geometry.type === 'Point').length;
 }

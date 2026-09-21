@@ -131,13 +131,8 @@ async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> d
     timeout = aiohttp.ClientTimeout(total=30)
     connector = aiohttp.TCPConnector(ssl=_BOUNDARY_SSL_CONTEXT)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-        metadata = await _fetch_json(session, _metadata_url(iso, boundary_type))
-        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
-        if not geojson_url:
-            raise HTTPException(
-                status_code=502,
-                detail="geoBoundaries metadata did not include a GeoJSON URL",
-            )
+        metadata = await _fetch_metadata(session, iso, boundary_type)
+        geojson_url = _geojson_url(metadata)
         geojson = await _fetch_json(session, geojson_url)
 
     result = {
@@ -155,8 +150,37 @@ async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> d
     return result
 
 
-def _metadata_url(iso: str, boundary_type: str) -> str:
-    return f"https://www.geoboundaries.org/api/current/gbOpen/{iso}/{boundary_type}/"
+# The humanitarian release mirrors OCHA's Common Operational Datasets, which the
+# blend pipeline's administrative units are drawn from (Ethiopia: 1082 woredas,
+# towns included), so its names line up with blend outputs. gbOpen covers the
+# countries the COD set does not.
+_BOUNDARY_RELEASES = ("gbHumanitarian", "gbOpen")
+
+
+def _metadata_url(iso: str, boundary_type: str, release: str) -> str:
+    return f"https://www.geoboundaries.org/api/current/{release}/{iso}/{boundary_type}/"
+
+
+def _geojson_url(metadata: Any) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
+
+
+async def _fetch_metadata(
+    session: aiohttp.ClientSession, iso: str, boundary_type: str
+) -> dict[str, Any]:
+    failures: list[str] = []
+    for release in _BOUNDARY_RELEASES:
+        try:
+            metadata = await _fetch_json(session, _metadata_url(iso, boundary_type, release))
+        except HTTPException as exc:
+            failures.append(str(exc.detail))
+            continue
+        if _geojson_url(metadata):
+            return metadata
+        failures.append(f"{release} has no GeoJSON for {iso} {boundary_type}")
+    raise HTTPException(status_code=502, detail="; ".join(failures))
 
 
 async def _fetch_json(session: aiohttp.ClientSession, url: str) -> dict[str, Any]:

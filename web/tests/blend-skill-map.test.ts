@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { BlendAreaMetric, BlendCellGrid } from '../src/lib/api';
 import {
-	AREA_FALLBACK_HALF_DEG,
 	buildAreaSkillCells,
 	buildSkillCells,
+	centredAreaCount,
 	featureBounds,
 	isAreaMetric,
 	lowCountPoints,
@@ -97,7 +97,7 @@ describe('buildSkillCells', () => {
 	it('emits one square per scored point and skips empty ones', () => {
 		const cells = buildSkillCells(grid(), { minObservations: 10, cellSizeDeg: 0.25 });
 		expect(cells.features).toHaveLength(3);
-		const ring = cells.features[0].geometry.coordinates[0];
+		const ring = (cells.features[0].geometry as GeoJSON.Polygon).coordinates[0];
 		// Closed ring centred on the point.
 		expect(ring).toHaveLength(5);
 		expect(ring[0]).toEqual(ring[4]);
@@ -230,25 +230,24 @@ describe('buildAreaSkillCells', () => {
 		const cells = buildAreaSkillCells(areaMetric(), legamboOutline, { minObservations: 10 });
 		const legambo = cells.features.find((f) => f.properties.name === 'Legambo');
 		expect(legambo?.geometry).toEqual(legamboOutline.features[0].geometry);
+		expect(centredAreaCount(cells)).toBe(1);
 	});
 
-	it('falls back to a centroid square for an unmatched area and skips unscored ones', () => {
+	it('marks an unmatched area as a point at its centroid and skips unscored ones', () => {
 		const cells = buildAreaSkillCells(areaMetric(), legamboOutline, { minObservations: 10 });
 		expect(cells.features.map((f) => f.properties.name)).toEqual(['Dessie town', 'Legambo']);
 		const dessie = cells.features[0];
-		expect(dessie.geometry.type).toBe('Polygon');
-		const ring = (dessie.geometry as GeoJSON.Polygon).coordinates[0];
-		expect(ring[0]).toEqual([39.63 - AREA_FALLBACK_HALF_DEG, 11.13 - AREA_FALLBACK_HALF_DEG]);
+		expect(dessie.geometry).toEqual({ type: 'Point', coordinates: [39.63, 11.13] });
 		expect(dessie.properties.opacity).toBe(0.85);
 		expect(cells.features[1].properties.opacity).toBeLessThan(0.85);
 	});
 
-	it('draws centroid squares for every area when no boundaries are available', () => {
+	it('places every area at its centroid when no boundaries are available', () => {
 		const cells = buildAreaSkillCells(areaMetric(), null, { minObservations: 10 });
-		expect(cells.features).toHaveLength(2);
+		expect(centredAreaCount(cells)).toBe(2);
 		expect(featureBounds(cells)).toEqual([
-			[39.2 - AREA_FALLBACK_HALF_DEG, 11.0 - AREA_FALLBACK_HALF_DEG],
-			[39.63 + AREA_FALLBACK_HALF_DEG, 11.13 + AREA_FALLBACK_HALF_DEG]
+			[39.2, 11.0],
+			[39.63, 11.13]
 		]);
 	});
 });
