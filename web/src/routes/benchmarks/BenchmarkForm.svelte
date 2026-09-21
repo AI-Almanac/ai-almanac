@@ -170,23 +170,25 @@
 			{/each}
 		</div>
 
-		{#if form.selectedRegionId}
-			<div class="focus-area" data-tour="focus-area">
-				<div class="focus-area-head">
-					<span>Focus area</span>
-					<small
-						>{focusArea
-							? 'Scoring limited to the box'
-							: 'Optional: score part of the region'}</small
-					>
-				</div>
+		<div class="focus-area" data-tour="focus-area">
+			<div class="focus-area-head">
+				<span>Focus area</span>
+				<small
+					>{focusArea ? 'Scoring limited to the box' : 'Optional: score part of the region'}</small
+				>
+			</div>
+			{#if form.selectedRegionId}
 				<FocusAreaMap
 					value={focusArea}
 					extent={regionExtent}
 					onchange={(box) => form.setSharedParam('focus_area', box)}
 				/>
-			</div>
-		{/if}
+			{:else}
+				<p class="focus-area-hint">
+					Choose a region, then draw a box here to score only part of it.
+				</p>
+			{/if}
+		</div>
 
 		<button
 			class="advanced-button"
@@ -487,5 +489,11 @@
 
 	.focus-area-head small {
 		opacity: 0.7;
+	}
+
+	.focus-area-hint {
+		margin: 0;
+		opacity: 0.7;
+		font-size: 0.9em;
 	}
 </style>
