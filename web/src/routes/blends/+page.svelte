@@ -683,7 +683,11 @@
 							'Focus area',
 							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
 						)}
-						<FocusAreaMap value={focusArea} onchange={(box) => (focusArea = box)} />
+						<FocusAreaMap
+							value={focusArea}
+							regionId={selectedObs?.region ?? null}
+							onchange={(box) => (focusArea = box)}
+						/>
 					</div>
 					<details class="advanced">
 						<summary>Advanced</summary>

@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _BOUNDARY_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 BOUNDARY_LEVELS = {
+    "adm0": "ADM0",
     "adm1": "ADM1",
     "adm2": "ADM2",
     "adm3": "ADM3",

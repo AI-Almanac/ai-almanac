@@ -181,6 +181,7 @@
 				<FocusAreaMap
 					value={focusArea}
 					extent={regionExtent}
+					regionId={form.selectedRegionId}
 					onchange={(box) => form.setSharedParam('focus_area', box)}
 				/>
 			{:else}

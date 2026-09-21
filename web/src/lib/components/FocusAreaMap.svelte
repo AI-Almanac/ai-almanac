@@ -3,23 +3,31 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
-	import type { FeatureCollection } from 'geojson';
+	import type { FeatureCollection, Position } from 'geojson';
 	import { BASEMAP_STYLES } from '$lib/basemaps';
 	import type { BboxExtent } from '$lib/api/jobs';
+	import { getRegionBoundary } from '$lib/api/regions';
 
 	interface Props {
 		value: BboxExtent | null;
+		/** Bounding box to frame when nothing is drawn yet. */
 		extent?: BboxExtent | null;
+		/** Region whose border is highlighted so the user sees what a box carves out of. */
+		regionId?: string | null;
 		onchange: (value: BboxExtent | null) => void;
 	}
 
-	const { value, extent = null, onchange }: Props = $props();
+	const { value, extent = null, regionId = null, onchange }: Props = $props();
 
 	const SOURCE = 'focus-area';
+	const REGION = 'focus-region';
+	const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
 	let container = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
+	let mapReady = $state(false);
 	let drawing = $state(false);
 	let anchor: maplibregl.LngLat | null = null;
+	let regionShape = $state<FeatureCollection | null>(null);
 
 	function boxFrom(a: maplibregl.LngLat, b: maplibregl.LngLat): BboxExtent {
 		const round = (n: number) => Math.round(n * 100) / 100;
@@ -32,7 +40,7 @@
 	}
 
 	function polygon(box: BboxExtent | null): FeatureCollection {
-		if (!box) return { type: 'FeatureCollection', features: [] };
+		if (!box) return EMPTY;
 		const { lat_min, lat_max, lon_min, lon_max } = box;
 		const ring = [
 			[lon_min, lat_min],
@@ -49,9 +57,27 @@
 		};
 	}
 
-	function render(box: BboxExtent | null) {
-		const source = map?.getSource(SOURCE) as maplibregl.GeoJSONSource | undefined;
-		source?.setData(polygon(box));
+	function shapeExtent(shape: FeatureCollection): BboxExtent | null {
+		let box: BboxExtent | null = null;
+		const visit = (p: Position) => {
+			box = box
+				? {
+						lat_min: Math.min(box.lat_min, p[1]),
+						lat_max: Math.max(box.lat_max, p[1]),
+						lon_min: Math.min(box.lon_min, p[0]),
+						lon_max: Math.max(box.lon_max, p[0])
+					}
+				: { lat_min: p[1], lat_max: p[1], lon_min: p[0], lon_max: p[0] };
+		};
+		for (const { geometry } of shape.features) {
+			if (geometry.type === 'Polygon') geometry.coordinates.flat().forEach(visit);
+			else if (geometry.type === 'MultiPolygon') geometry.coordinates.flat(2).forEach(visit);
+		}
+		return box;
+	}
+
+	function setData(source: string, data: FeatureCollection) {
+		(map?.getSource(source) as maplibregl.GeoJSONSource | undefined)?.setData(data);
 	}
 
 	function fitTo(box: BboxExtent | null) {
@@ -63,6 +89,10 @@
 			],
 			{ padding: 24, duration: 0 }
 		);
+	}
+
+	function frame() {
+		fitTo(value ?? extent ?? (regionShape ? shapeExtent(regionShape) : null));
 	}
 
 	function startDrawing() {
@@ -89,6 +119,20 @@
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.on('load', () => {
+			// Region first so the box always paints above it.
+			map?.addSource(REGION, { type: 'geojson', data: regionShape ?? EMPTY });
+			map?.addLayer({
+				id: `${REGION}-fill`,
+				type: 'fill',
+				source: REGION,
+				paint: { 'fill-color': '#0f766e', 'fill-opacity': 0.12 }
+			});
+			map?.addLayer({
+				id: `${REGION}-line`,
+				type: 'line',
+				source: REGION,
+				paint: { 'line-color': '#0f766e', 'line-width': 1.5, 'line-opacity': 0.8 }
+			});
 			map?.addSource(SOURCE, { type: 'geojson', data: polygon(value) });
 			map?.addLayer({
 				id: `${SOURCE}-fill`,
@@ -102,7 +146,8 @@
 				source: SOURCE,
 				paint: { 'line-color': '#2f6fed', 'line-width': 2 }
 			});
-			fitTo(value ?? extent);
+			mapReady = true;
+			frame();
 		});
 		map.on('mousedown', (e) => {
 			if (!drawing) return;
@@ -110,14 +155,14 @@
 			anchor = e.lngLat;
 		});
 		map.on('mousemove', (e) => {
-			if (anchor) render(boxFrom(anchor, e.lngLat));
+			if (anchor) setData(SOURCE, polygon(boxFrom(anchor, e.lngLat)));
 		});
 		map.on('mouseup', (e) => {
 			if (!anchor) return;
 			const box = boxFrom(anchor, e.lngLat);
 			stopDrawing();
 			if (box.lat_min === box.lat_max || box.lon_min === box.lon_max) {
-				render(value);
+				setData(SOURCE, polygon(value));
 				return;
 			}
 			onchange(box);
@@ -126,9 +171,40 @@
 
 	onDestroy(() => map?.remove());
 
-	$effect(() => render(value));
+	// The region's border, when the boundary service knows it. A miss just leaves
+	// the basemap, so the map stays usable for regions without boundary data.
 	$effect(() => {
-		if (!value) fitTo(extent);
+		const id = regionId;
+		regionShape = null;
+		if (!id) return;
+		let stale = false;
+		getRegionBoundary(id, 'adm0')
+			.then(({ geojson }) => {
+				if (!stale && isFeatureCollection(geojson)) regionShape = geojson;
+			})
+			.catch(() => {});
+		return () => {
+			stale = true;
+		};
+	});
+
+	function isFeatureCollection(value: unknown): value is FeatureCollection {
+		return (
+			typeof value === 'object' &&
+			value != null &&
+			(value as { type?: unknown }).type === 'FeatureCollection' &&
+			Array.isArray((value as { features?: unknown }).features)
+		);
+	}
+
+	$effect(() => {
+		if (mapReady) setData(SOURCE, polygon(value));
+	});
+
+	$effect(() => {
+		if (!mapReady) return;
+		setData(REGION, regionShape ?? EMPTY);
+		if (!value) frame();
 	});
 </script>
 
