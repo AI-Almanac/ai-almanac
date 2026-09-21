@@ -3,6 +3,8 @@
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { goToBlend } from '$lib/blend-nav';
 	import type { Dataset, Region, RompDefaults } from '$lib/api';
+	import type { BboxExtent } from '$lib/api/jobs';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
 	import { installTour } from '$lib/tour.svelte';
@@ -84,6 +86,16 @@
 		}
 	]);
 
+	const focusArea = $derived(
+		(form.sharedAdvancedParams.focus_area as BboxExtent | null | undefined) ?? null
+	);
+	const regionExtent = $derived.by((): BboxExtent | null => {
+		const r = form.selectedRegion;
+		if (!r || r.lat_min == null || r.lat_max == null || r.lon_min == null || r.lon_max == null)
+			return null;
+		return { lat_min: r.lat_min, lat_max: r.lat_max, lon_min: r.lon_min, lon_max: r.lon_max };
+	});
+
 	function closeManualConfig() {
 		advancedPanelOpen = false;
 		void form.syncBenchmarkConfig({ showErrors: true });
@@ -157,6 +169,24 @@
 				</div>
 			{/each}
 		</div>
+
+		{#if form.selectedRegionId}
+			<div class="focus-area" data-tour="focus-area">
+				<div class="focus-area-head">
+					<span>Focus area</span>
+					<small
+						>{focusArea
+							? 'Scoring limited to the box'
+							: 'Optional: score part of the region'}</small
+					>
+				</div>
+				<FocusAreaMap
+					value={focusArea}
+					extent={regionExtent}
+					onchange={(box) => form.setSharedParam('focus_area', box)}
+				/>
+			</div>
+		{/if}
 
 		<button
 			class="advanced-button"
@@ -440,5 +470,22 @@
 		.spec-list strong {
 			text-align: left;
 		}
+	}
+
+	.focus-area {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.focus-area-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 0.75rem;
+	}
+
+	.focus-area-head small {
+		opacity: 0.7;
 	}
 </style>

@@ -127,6 +127,9 @@
 	onDestroy(() => map?.remove());
 
 	$effect(() => render(value));
+	$effect(() => {
+		if (!value) fitTo(extent);
+	});
 </script>
 
 <div class="focus-area">

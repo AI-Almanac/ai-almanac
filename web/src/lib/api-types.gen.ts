@@ -2211,6 +2211,10 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
+            /** Focus Area */
+            focus_area?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** BlendCreate */
         BlendCreate: {
@@ -2339,6 +2343,7 @@ export interface components {
              * @default
              */
             formula_text: string;
+            focus_area?: components["schemas"]["FocusArea"] | null;
             /**
              * Status
              * @default collecting

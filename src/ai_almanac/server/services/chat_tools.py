@@ -8,6 +8,8 @@ from typing import Annotated
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
+from ai_almanac.server.services.focus_area import FocusArea
+
 from . import benchmark_domain, blend_domain
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
@@ -42,6 +44,7 @@ class BenchmarkAdvancedParams(BaseModel):
     thresh_file: str | None = None
     ref_model: str | None = None
     ref_model_dir: str | None = None
+    focus_area: FocusArea | None = None
     per_model_params: dict[str, PerModelRompParams] | None = None
 
 
@@ -76,6 +79,7 @@ class BlendConfigPatch(BaseModel):
     forecast_years: str | None = None
     true_holdout_years: str | None = None
     formula_text: str | None = None
+    focus_area: FocusArea | None = None
 
 
 class SubmitBlendApproval(BaseModel):

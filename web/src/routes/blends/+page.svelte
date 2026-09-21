@@ -224,6 +224,7 @@
 		forecastYears = config.forecast_years ?? '';
 		trueHoldoutYears = config.true_holdout_years ?? '';
 		formulaText = config.formula_text ?? '';
+		focusArea = config.focus_area ?? null;
 		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
 	}
 
@@ -677,6 +678,13 @@
 						<p class="error">{yearError}</p>
 					{/if}
 
+					<div class="field">
+						{@render fieldLabel(
+							'Focus area',
+							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
+						)}
+						<FocusAreaMap value={focusArea} onchange={(box) => (focusArea = box)} />
+					</div>
 					<details class="advanced">
 						<summary>Advanced</summary>
 						<div class="field-row">
@@ -710,13 +718,6 @@
 								placeholder="optional — model formula override"
 							/>
 						</label>
-						<div class="field">
-							{@render fieldLabel(
-								'Focus area',
-								'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
-							)}
-							<FocusAreaMap value={focusArea} onchange={(box) => (focusArea = box)} />
-						</div>
 					</details>
 
 					{#if submitError}

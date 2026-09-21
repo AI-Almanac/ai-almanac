@@ -190,6 +190,7 @@ class BlendConfigPatchIn(BaseModel):
     forecast_years: str | None = None
     true_holdout_years: str | None = None
     formula_text: str | None = None
+    focus_area: dict | None = None
 
 
 class BlendSubmitIn(BaseModel):
