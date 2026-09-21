@@ -685,7 +685,7 @@ def _apply_focus_area(df, domain_filter: dict, filter_rows):
     focus_only = {k: v for k, v in domain_filter.items() if k in ("bbox", "centroids_file")}
     kept = filter_rows(df, {"filter": focus_only})
     if kept.empty:
-        raise ValueError(f"No cells fall inside the focus area {domain_filter['bbox']}")
+        raise ValueError(f"No cells fall inside the area of interest {domain_filter['bbox']}")
     return kept
 
 

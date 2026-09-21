@@ -18,9 +18,9 @@ class FocusArea(BaseModel):
     @model_validator(mode="after")
     def _ordered_within_globe(self) -> FocusArea:
         if not -90 <= self.lat_min < self.lat_max <= 90:
-            raise ValueError("Focus area needs lat_min < lat_max within [-90, 90]")
+            raise ValueError("Area of interest needs lat_min < lat_max within [-90, 90]")
         if not -180 <= self.lon_min < self.lon_max <= 360:
-            raise ValueError("Focus area needs lon_min < lon_max within [-180, 360]")
+            raise ValueError("Area of interest needs lon_min < lon_max within [-180, 360]")
         return self
 
 

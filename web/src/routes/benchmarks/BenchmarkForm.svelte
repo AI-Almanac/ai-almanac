@@ -173,7 +173,7 @@
 		<div class="focus-area" data-tour="focus-area">
 			<div class="focus-area-head">
 				<span class="label-with-help">
-					Focus area
+					Area of interest
 					<span
 						class="tip"
 						title="Limits scoring to the grid cells inside a box you draw. Land and country borders still apply. Leave it empty to score the whole region."

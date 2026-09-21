@@ -680,7 +680,7 @@
 
 					<div class="field">
 						{@render fieldLabel(
-							'Focus area',
+							'Area of interest',
 							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
 						)}
 						<FocusAreaMap
