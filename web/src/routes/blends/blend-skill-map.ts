@@ -4,7 +4,8 @@
  * Kept out of the Svelte component so it can be unit tested — maplibre needs a
  * real WebGL context and doesn't run under jsdom.
  */
-import type { BlendCellGrid } from '$lib/api';
+import type { BlendAreaMetric, BlendCellGrid, SkillLayer } from '$lib/api';
+import { adminFeatureName, normalizeAreaName } from '$lib/components/blend-map/adm3';
 import { DIVERGING_STOPS } from '$lib/components/metric-map/constants';
 import { interpolateStops } from '$lib/components/metric-map/gridData';
 
@@ -20,7 +21,7 @@ import { interpolateStops } from '$lib/components/metric-map/gridData';
 export const SKILL_STOPS = [...DIVERGING_STOPS].reverse();
 
 export type SkillCellFeature = GeoJSON.Feature<
-	GeoJSON.Polygon,
+	GeoJSON.Polygon | GeoJSON.MultiPolygon,
 	{
 		color: string;
 		opacity: number;
@@ -30,11 +31,13 @@ export type SkillCellFeature = GeoJSON.Feature<
 		observations: number | null;
 		/** True when |skill| exceeded the ramp and the color is saturated. */
 		clipped: boolean;
+		/** The administrative unit's name; null for grid cells. */
+		name: string | null;
 	}
 >;
 
 export type SkillCellCollection = GeoJSON.FeatureCollection<
-	GeoJSON.Polygon,
+	GeoJSON.Polygon | GeoJSON.MultiPolygon,
 	SkillCellFeature['properties']
 >;
 
@@ -110,7 +113,8 @@ export function buildSkillCells(
 					lon,
 					skill,
 					observations,
-					clipped: extent > 0 && Math.abs(skill) > extent
+					clipped: extent > 0 && Math.abs(skill) > extent,
+					name: null
 				},
 				geometry: {
 					type: 'Polygon',
@@ -144,15 +148,126 @@ export function skillBounds(
 }
 
 /** Share of points that beat climatology — the map's one-line summary. */
-export function shareBeatingBaseline(grid: BlendCellGrid): { better: number; total: number } {
-	let better = 0;
-	let total = 0;
-	for (const row of grid.values) {
-		for (const value of row) {
-			if (value == null) continue;
-			total += 1;
-			if (value > 0) better += 1;
+export function shareBeatingBaseline(layer: SkillLayer): { better: number; total: number } {
+	const values = scoredValues(layer);
+	return { better: values.filter((value) => value > 0).length, total: values.length };
+}
+
+export function isAreaMetric(layer: SkillLayer): layer is BlendAreaMetric {
+	return 'areas' in layer;
+}
+
+/** Every non-missing skill value, whichever shape the metric came in. */
+export function scoredValues(layer: SkillLayer): number[] {
+	if (isAreaMetric(layer)) {
+		return layer.areas.flatMap((area) => (area.skill == null ? [] : [area.skill]));
+	}
+	return layer.values.flatMap((row) => row.filter((value): value is number => value != null));
+}
+
+/** Scored points whose observation count sits under the floor, so the caption can name them. */
+export function lowCountPoints(layer: SkillLayer, floor: number): number {
+	if (isAreaMetric(layer)) {
+		return layer.areas.filter((a) => a.skill != null && a.count != null && a.count < floor).length;
+	}
+	let count = 0;
+	layer.counts.forEach((row, i) =>
+		row.forEach((n, j) => {
+			if (layer.values[i]?.[j] != null && n != null && n < floor) count += 1;
+		})
+	);
+	return count;
+}
+
+/**
+ * Half-width of the square drawn for an area whose boundary polygon is unknown.
+ * Ethiopian woredas are a few tens of kilometres across, so a 0.1° square reads
+ * as a marker at the centroid without pretending to be the unit's outline.
+ */
+export const AREA_FALLBACK_HALF_DEG = 0.05;
+
+function square(lat: number, lon: number, half: number): GeoJSON.Polygon {
+	return {
+		type: 'Polygon',
+		coordinates: [
+			[
+				[lon - half, lat - half],
+				[lon + half, lat - half],
+				[lon + half, lat + half],
+				[lon - half, lat + half],
+				[lon - half, lat - half]
+			]
+		]
+	};
+}
+
+/**
+ * Paint each named area with its skill. Areas whose name matches a boundary
+ * feature take that polygon; the rest get a small square at their centroid, so
+ * a unit the boundary file spells differently is still on the map.
+ */
+export function buildAreaSkillCells(
+	metric: BlendAreaMetric,
+	boundaries: GeoJSON.FeatureCollection | null,
+	options: { minObservations: number }
+): SkillCellCollection {
+	const extent = metric.scale_max_abs ?? 0;
+	const outlines = new Map<string, GeoJSON.Polygon | GeoJSON.MultiPolygon>();
+	for (const feature of boundaries?.features ?? []) {
+		const name = adminFeatureName(feature);
+		const geometry = feature.geometry;
+		if (name && (geometry?.type === 'Polygon' || geometry?.type === 'MultiPolygon')) {
+			outlines.set(normalizeAreaName(name), geometry);
 		}
 	}
-	return { better, total };
+	const features: SkillCellFeature[] = [];
+	for (const area of metric.areas) {
+		if (area.skill == null) continue;
+		features.push({
+			type: 'Feature',
+			properties: {
+				color: interpolateStops(SKILL_STOPS, rampPosition(area.skill, extent)),
+				opacity: cellOpacity(area.count, options.minObservations),
+				lat: area.lat,
+				lon: area.lon,
+				skill: area.skill,
+				observations: area.count,
+				clipped: extent > 0 && Math.abs(area.skill) > extent,
+				name: area.id
+			},
+			geometry:
+				outlines.get(normalizeAreaName(area.id)) ??
+				square(area.lat, area.lon, AREA_FALLBACK_HALF_DEG)
+		});
+	}
+	return { type: 'FeatureCollection', features };
+}
+
+/** Bounding box of every drawn feature, for framing the camera. */
+export function featureBounds(
+	collection: SkillCellCollection
+): [[number, number], [number, number]] | null {
+	let west = Infinity;
+	let south = Infinity;
+	let east = -Infinity;
+	let north = -Infinity;
+	const visit = (position: GeoJSON.Position) => {
+		west = Math.min(west, position[0]);
+		east = Math.max(east, position[0]);
+		south = Math.min(south, position[1]);
+		north = Math.max(north, position[1]);
+	};
+	for (const feature of collection.features) {
+		const rings: GeoJSON.Position[][] =
+			feature.geometry.type === 'Polygon'
+				? feature.geometry.coordinates
+				: feature.geometry.coordinates.flat();
+		rings.forEach((ring) => ring.forEach(visit));
+	}
+	return Number.isFinite(west)
+		? [
+				[west, south],
+				[east, north]
+			]
+		: null;
 }

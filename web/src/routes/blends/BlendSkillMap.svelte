@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Where the blend beats climatology, per grid point.
+	 * Where the blend beats climatology, per grid point or administrative area.
 	 *
 	 * The pooled table above says whether the blend wins on average; this says
 	 * where. It reads the blend's per-grid-point summary, which nothing consumed
@@ -12,13 +12,18 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
-	import { getBlendCellMetrics, type BlendCellGrid, type BlendCellMetrics } from '$lib/api';
+	import { getBlendCellMetrics, type BlendCellMetrics, type SkillLayer } from '$lib/api';
+	import { getRegionBoundary } from '$lib/api/regions';
 	import SegmentedTabs, { type SegmentedTabOption } from '$lib/components/SegmentedTabs.svelte';
 	import { interpolateStops } from '$lib/components/metric-map/gridData';
 	import { formatSkillValue } from '$lib/skill-series';
 	import {
 		SKILL_STOPS,
+		buildAreaSkillCells,
 		buildSkillCells,
+		featureBounds,
+		isAreaMetric,
+		lowCountPoints as countLowPoints,
 		shareBeatingBaseline,
 		skillBounds
 	} from './blend-skill-map';
@@ -44,6 +49,8 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let requested = $state<string | null>(null);
+	/** ADM3 outlines for named areas; null draws them as centroid squares instead. */
+	let boundaries = $state<GeoJSON.FeatureCollection | null>(null);
 	/** The basemap style never arrived; the frame would otherwise be silently blank. */
 	let stalled = $state(false);
 	let styleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,13 +60,16 @@
 		observations: number | null;
 		lat: number;
 		lon: number;
+		name: string | null;
 		clipped: boolean;
 		x: number;
 		y: number;
 	} | null>(null);
 
-	const grids = $derived(metrics?.grids ?? []);
-	const grid = $derived<BlendCellGrid | null>(
+	const grids = $derived<SkillLayer[]>(
+		metrics ? (metrics.grids.length ? metrics.grids : metrics.areas) : []
+	);
+	const grid = $derived<SkillLayer | null>(
 		grids.find((g) => g.metric === requested) ?? grids[0] ?? null
 	);
 	const options = $derived<SegmentedTabOption[]>(
@@ -67,17 +77,11 @@
 	);
 	const share = $derived(grid ? shareBeatingBaseline(grid) : null);
 	const extent = $derived(grid?.scale_max_abs ?? 0);
-	const lowCountPoints = $derived.by(() => {
-		if (!grid || !metrics) return 0;
-		let count = 0;
-		for (let i = 0; i < grid.counts.length; i++) {
-			for (let j = 0; j < grid.counts[i].length; j++) {
-				const n = grid.counts[i][j];
-				if (grid.values[i]?.[j] != null && n != null && n < metrics.min_observations) count += 1;
-			}
-		}
-		return count;
-	});
+	const lowCountPoints = $derived(
+		grid && metrics ? countLowPoints(grid, metrics.min_observations) : 0
+	);
+	const byArea = $derived(grid != null && isAreaMetric(grid));
+	const unitWord = $derived(byArea ? 'areas' : 'points');
 
 	function basemapUrl(): string {
 		return (BASEMAP_STYLES.find((s) => s.id === basemap) ?? BASEMAP_STYLES[0]).url;
@@ -89,10 +93,12 @@
 
 	function renderCells(fit: boolean) {
 		if (!map || !mapReady || !grid || !metrics) return;
-		const geojson = buildSkillCells(grid, {
-			minObservations: metrics.min_observations,
-			cellSizeDeg: metrics.cell_size_deg
-		});
+		const geojson = isAreaMetric(grid)
+			? buildAreaSkillCells(grid, boundaries, { minObservations: metrics.min_observations })
+			: buildSkillCells(grid, {
+					minObservations: metrics.min_observations,
+					cellSizeDeg: metrics.cell_size_deg
+				});
 		const existing = map.getSource(SOURCE) as maplibregl.GeoJSONSource | undefined;
 		if (existing) {
 			existing.setData(geojson);
@@ -116,7 +122,9 @@
 			});
 		}
 		if (fit) {
-			const bounds = skillBounds(grid, metrics.cell_size_deg);
+			const bounds = isAreaMetric(grid)
+				? featureBounds(geojson)
+				: skillBounds(grid, metrics.cell_size_deg);
 			if (bounds) map.fitBounds(bounds, { padding: 24, duration: 0 });
 		}
 	}
@@ -131,7 +139,10 @@
 		requested = null;
 		getBlendCellMetrics(id)
 			.then((result) => {
-				if (!cancelled) metrics = result;
+				if (cancelled) return;
+				metrics = result;
+				boundaries = null;
+				if (result.areas.length && result.region_id) void loadBoundaries(result.region_id);
 			})
 			.catch((e) => {
 				if (!cancelled) {
@@ -145,6 +156,23 @@
 			cancelled = true;
 		};
 	});
+	/** Outlines for named areas. A failure leaves centroid squares rather than an error. */
+	async function loadBoundaries(regionId: string) {
+		try {
+			const { geojson } = await getRegionBoundary(regionId, 'adm3');
+			if (isFeatureCollection(geojson)) boundaries = geojson;
+		} catch {
+			boundaries = null;
+		}
+	}
+	function isFeatureCollection(value: unknown): value is GeoJSON.FeatureCollection {
+		return (
+			typeof value === 'object' &&
+			value != null &&
+			(value as { type?: unknown }).type === 'FeatureCollection' &&
+			Array.isArray((value as { features?: unknown }).features)
+		);
+	}
 
 	/**
 	 * Build the map when its host element appears, not on mount.
@@ -203,6 +231,7 @@
 				observations: number | null;
 				lat: number;
 				lon: number;
+				name: string | null;
 				clipped: boolean;
 			};
 			hover = {
@@ -210,6 +239,7 @@
 				observations: p.observations == null ? null : Number(p.observations),
 				lat: Number(p.lat),
 				lon: Number(p.lon),
+				name: p.name == null || p.name === 'null' ? null : String(p.name),
 				// maplibre serializes feature properties, so booleans arrive as strings.
 				clipped: String(p.clipped) === 'true',
 				x: event.point.x + 14,
@@ -239,9 +269,11 @@
 	// every metric shares one grid, so switching metric must not move the camera.
 	$effect(() => {
 		if (!grid || !metrics || !mapReady) return;
-		const fit = fittedJob !== metrics.job_id;
+		// Outlines arriving after the first draw reframe once, onto the polygons.
+		const frame = `${metrics.job_id}:${boundaries ? 'outlines' : 'centroids'}`;
+		const fit = fittedJob !== frame;
 		renderCells(fit);
-		if (fit) fittedJob = metrics.job_id;
+		if (fit) fittedJob = frame;
 	});
 
 	// Only restyle on an actual change. The map is built with the current basemap
@@ -259,9 +291,13 @@
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
 </script>
 
-<section class="skill-map" aria-label="Blend skill by grid point" data-tour="blend-maps">
+<section
+	class="skill-map"
+	aria-label={`Blend skill by ${byArea ? 'area' : 'grid point'}`}
+	data-tour="blend-maps"
+>
 	<div class="map-topline">
-		<h3>By grid point</h3>
+		<h3>{byArea ? 'By area' : 'By grid point'}</h3>
 		{#if options.length > 1}
 			<SegmentedTabs
 				{options}
@@ -278,8 +314,7 @@
 		<p class="muted">{error}</p>
 	{:else if grids.length === 0}
 		<p class="muted">
-			This blend has no per-grid-point summary, so its skill can only be read pooled over the
-			region.
+			This blend has no per-point summary, so its skill can only be read pooled over the region.
 		</p>
 	{:else}
 		<div class="map-frame">
@@ -293,7 +328,7 @@
 			{#if hover}
 				<div class="map-tooltip" style={`left: ${hover.x}px; top: ${hover.y}px`} role="tooltip">
 					<strong>{formatSkillValue(hover.skill)}</strong>
-					<span>{hover.lat.toFixed(2)}, {hover.lon.toFixed(2)}</span>
+					<span>{hover.name ?? `${hover.lat.toFixed(2)}, ${hover.lon.toFixed(2)}`}</span>
 					{#if hover.observations != null}
 						<span>{hover.observations} point-years</span>
 					{/if}
@@ -325,9 +360,10 @@
 
 		<p class="caption">
 			{#if share && share.total > 0}
-				{grid?.label} against Traditional Climatology at each grid point. The blend beats it at
+				{grid?.label} against Traditional Climatology at each {byArea ? 'area' : 'grid point'}. The
+				blend beats it at
 				<strong>{share.better} of {share.total}</strong>
-				points ({Math.round((100 * share.better) / share.total)}%).
+				{unitWord} ({Math.round((100 * share.better) / share.total)}%).
 			{/if}
 			{#if grid && grid.clipped > 0 && grid.value_min != null && grid.value_max != null}
 				Skill is a ratio, so points where Traditional Climatology scored near zero run far past the
@@ -337,7 +373,8 @@
 				)}.
 			{/if}
 			{#if lowCountPoints > 0 && metrics}
-				Points scored on fewer than {metrics.min_observations} point-years are faded; {lowCountPoints}
+				{byArea ? 'Areas' : 'Points'} scored on fewer than {metrics.min_observations} point-years are
+				faded; {lowCountPoints}
 				{lowCountPoints === 1 ? 'is' : 'are'} below that.
 			{/if}
 		</p>

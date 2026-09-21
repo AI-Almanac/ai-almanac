@@ -2105,22 +2105,14 @@ export interface components {
             message: string;
         };
         /**
-         * BlendCellGrid
-         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         * BlendAreaMetric
+         * @description One metric's skill per named area, for domains that are not a grid.
          */
-        BlendCellGrid: {
+        BlendAreaMetric: {
             /** Metric */
             metric: string;
             /** Label */
             label: string;
-            /** Lats */
-            lats: number[];
-            /** Lons */
-            lons: number[];
-            /** Values */
-            values: (number | null)[][];
-            /** Counts */
-            counts: (number | null)[][];
             /** Scale Max Abs */
             scale_max_abs: number | null;
             /** Value Min */
@@ -2129,6 +2121,50 @@ export interface components {
             value_max: number | null;
             /** Clipped */
             clipped: number;
+            /** Areas */
+            areas: components["schemas"]["BlendAreaSkill"][];
+        };
+        /**
+         * BlendAreaSkill
+         * @description Skill at one named administrative unit, located by its centroid.
+         */
+        BlendAreaSkill: {
+            /** Id */
+            id: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /** Skill */
+            skill: number | null;
+            /** Count */
+            count: number | null;
+        };
+        /**
+         * BlendCellGrid
+         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         */
+        BlendCellGrid: {
+            /** Metric */
+            metric: string;
+            /** Label */
+            label: string;
+            /** Scale Max Abs */
+            scale_max_abs: number | null;
+            /** Value Min */
+            value_min: number | null;
+            /** Value Max */
+            value_max: number | null;
+            /** Clipped */
+            clipped: number;
+            /** Lats */
+            lats: number[];
+            /** Lons */
+            lons: number[];
+            /** Values */
+            values: (number | null)[][];
+            /** Counts */
+            counts: (number | null)[][];
         };
         /** BlendCellMetrics */
         BlendCellMetrics: {
@@ -2142,6 +2178,13 @@ export interface components {
             min_observations: number;
             /** Grids */
             grids: components["schemas"]["BlendCellGrid"][];
+            /**
+             * Areas
+             * @default []
+             */
+            areas: components["schemas"]["BlendAreaMetric"][];
+            /** Region Id */
+            region_id?: string | null;
         };
         /** BlendConfigOut */
         BlendConfigOut: {

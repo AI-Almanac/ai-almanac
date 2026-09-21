@@ -245,3 +245,46 @@ def test_coverage_median_resists_a_single_wild_point() -> None:
 def test_coverage_is_empty_without_grids() -> None:
     coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job-1", ""))
     assert coverage == []
+
+
+def _area_row(name: str, lat: str, lon: str, brier: str, rps: str, n: str, model: str) -> str:
+    return ",".join([name, brier, rps, "0.70", n, lat, lon, *[""] * 11, model, "global"])
+
+
+# Two woredas located by centroid, as an ADM3-domain blend writes them.
+_TWO_AREAS = _csv(
+    _area_row("Dessie town", "11.13", "39.63", "0.50", "0.40", "24", "blended_model"),
+    _area_row("Legambo", "11.00", "39.20", "0.80", "0.80", "24", "blended_model"),
+    _area_row("Dessie town", "11.13", "39.63", "1.00", "0.80", "24", "unc_clim_raw"),
+    _area_row("Legambo", "11.00", "39.20", "0.40", "0.40", "24", "unc_clim_raw"),
+)
+
+
+def test_named_units_become_areas_rather_than_a_grid() -> None:
+    result = blend_cells.build_cell_metrics("job", _TWO_AREAS, region_id="ethiopia")
+    assert result.grids == []
+    assert result.cell_size_deg is None
+    assert result.region_id == "ethiopia"
+    by_id = {
+        a.id: a for a in next(m for m in result.areas if m.metric == "brier_skill_score").areas
+    }
+    assert by_id["Dessie town"].skill == pytest.approx(0.5)
+    assert by_id["Legambo"].skill == pytest.approx(-1.0)
+    assert (by_id["Dessie town"].lat, by_id["Dessie town"].lon) == (11.13, 39.63)
+
+
+def test_named_units_without_a_centroid_are_skipped() -> None:
+    result = blend_cells.build_cell_metrics(
+        "job",
+        _csv(
+            _area_row("Nowhere", "", "", "0.50", "0.40", "24", "blended_model"),
+            _area_row("Nowhere", "", "", "1.00", "0.80", "24", "unc_clim_raw"),
+        ),
+    )
+    assert result.areas == [] and result.grids == []
+
+
+def test_coverage_summary_reads_areas_too() -> None:
+    coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job", _TWO_AREAS))
+    brier = next(c for c in coverage if c.metric == "brier_skill_score")
+    assert (brier.points, brier.points_better) == (2, 1)

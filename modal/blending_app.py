@@ -38,6 +38,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -709,7 +710,7 @@ def _adm3_centroids():
     return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
 
 
-def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
+def _attach_adm3_centroids_to_csv(csv_bytes: bytes, strict: bool = True) -> bytes:
     import pandas as pd
 
     rows = pd.read_csv(io.BytesIO(csv_bytes))
@@ -724,10 +725,33 @@ def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
     centroids = _adm3_centroids()
     out = rows.merge(centroids, on="id", how="left", validate="many_to_one")
     missing = out[out["lat"].isna() | out["lon"].isna()]["id"].drop_duplicates()
-    if not missing.empty:
+    if strict and not missing.empty:
         sample = ", ".join(missing.astype(str).head(10).tolist())
         raise ValueError(f"ADM3 centroid mapping is missing prediction ids: {sample}")
     return out.to_csv(index=False).encode("utf-8")
+
+
+_GRID_ID = re.compile(r"^-?\d+(?:\.\d+)?_-?\d+(?:\.\d+)?$")
+
+
+def _with_area_centroids(path: Path) -> bytes:
+    """Give named units in the per-point summary a centroid so the map can place them.
+
+    Grid domains already locate points by their "{lat}_{lon}" id and are returned
+    untouched. The pooled ALL row has no centroid and stays blank.
+    """
+    data = path.read_bytes()
+    per_point = path.name.startswith("summary_models_") and not path.name.startswith(
+        "summary_models_pooled"
+    )
+    if not per_point:
+        return data
+    import pandas as pd
+
+    ids = pd.read_csv(io.BytesIO(data), usecols=["id"])["id"].astype(str)
+    if ids.map(lambda value: value == "ALL" or bool(_GRID_ID.match(value))).all():
+        return data
+    return _attach_adm3_centroids_to_csv(data, strict=False)
 
 
 def _add_lat_lon_id(df, precision: int):
@@ -2036,7 +2060,7 @@ def train_blending_model_bundle(
         )
         for path in sorted(results_dir.iterdir()):
             if path.is_file():
-                (output_dir / path.name).write_bytes(path.read_bytes())
+                (output_dir / path.name).write_bytes(_with_area_centroids(path))
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
