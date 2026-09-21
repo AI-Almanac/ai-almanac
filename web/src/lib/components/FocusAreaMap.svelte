@@ -287,10 +287,11 @@
 	}
 
 	.controls button {
-		border-radius: 0.45rem;
-		padding: 0.45rem 0.9rem;
+		border-radius: 0.4rem;
+		padding: 0.3rem 0.7rem;
 		font: inherit;
-		font-weight: 700;
+		font-size: 0.85rem;
+		font-weight: 600;
 		cursor: pointer;
 	}
 
