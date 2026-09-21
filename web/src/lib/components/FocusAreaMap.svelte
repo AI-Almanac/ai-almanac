@@ -201,9 +201,11 @@
 		if (mapReady) setData(SOURCE, polygon(value));
 	});
 
+	// The region highlight means "this is what gets scored", so it yields to the
+	// box once one exists and returns when the box is cleared.
 	$effect(() => {
 		if (!mapReady) return;
-		setData(REGION, regionShape ?? EMPTY);
+		setData(REGION, value ? EMPTY : (regionShape ?? EMPTY));
 		if (!value) frame();
 	});
 </script>
