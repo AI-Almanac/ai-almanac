@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
@@ -144,6 +144,15 @@
 
 	function clearSelection() {
 		onchange(null);
+	}
+
+	/** Fill the viewport; the map keeps its instance and just re-measures. */
+	let expanded = $state(false);
+	async function setExpanded(next: boolean) {
+		expanded = next;
+		await tick();
+		map?.resize();
+		if (!value) frame();
 	}
 
 	onMount(() => {
@@ -313,18 +322,34 @@
 	});
 </script>
 
-<div class="focus-area">
-	<div class="modes" role="group" aria-label="Area of interest">
-		{#each MODES as option (option.id)}
-			<button
-				type="button"
-				class:active={mode === option.id}
-				aria-pressed={mode === option.id}
-				onclick={() => setMode(option.id)}
-			>
-				{option.label}
-			</button>
-		{/each}
+<svelte:window
+	onkeydown={(event) => {
+		if (event.key === 'Escape' && expanded) void setExpanded(false);
+	}}
+/>
+
+<div class="focus-area" class:expanded>
+	<div class="toolbar">
+		<div class="modes" role="group" aria-label="Area of interest">
+			{#each MODES as option (option.id)}
+				<button
+					type="button"
+					class:active={mode === option.id}
+					aria-pressed={mode === option.id}
+					onclick={() => setMode(option.id)}
+				>
+					{option.label}
+				</button>
+			{/each}
+		</div>
+		<button
+			type="button"
+			class="expand"
+			title={expanded ? 'Back to the panel' : 'Open a larger map'}
+			onclick={() => setExpanded(!expanded)}
+		>
+			{expanded ? 'Close' : 'Expand'}
+		</button>
 	</div>
 	<div class="map-frame">
 		<div class="map" bind:this={container}></div>
@@ -375,6 +400,44 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
+	}
+
+	.focus-area.expanded {
+		position: fixed;
+		inset: 0;
+		z-index: 1000;
+		padding: 1rem clamp(1rem, 4vw, 3rem);
+		background: var(--color-surface);
+	}
+
+	.toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.expand {
+		border: 1px solid var(--color-border);
+		border-radius: 0.4rem;
+		padding: 0.3rem 0.7rem;
+		background: var(--color-bg);
+		color: var(--color-text);
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.expanded .map-frame {
+		display: flex;
+		flex: 1;
+		min-block-size: 0;
+	}
+
+	.expanded .map {
+		aspect-ratio: auto;
+		block-size: 100%;
 	}
 
 	.modes {

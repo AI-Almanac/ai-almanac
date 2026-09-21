@@ -311,6 +311,8 @@
 		flex-direction: column;
 		gap: 1rem;
 		min-height: 0;
+		/* The area map can outgrow the viewport; scroll the plan rather than spill it. */
+		overflow-y: auto;
 		padding: clamp(1rem, 2vw, 1.25rem);
 		border: 1px solid var(--color-border);
 		border-radius: 0.5rem;
