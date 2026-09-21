@@ -172,7 +172,14 @@
 
 		<div class="focus-area" data-tour="focus-area">
 			<div class="focus-area-head">
-				<span>Focus area</span>
+				<span class="label-with-help">
+					Focus area
+					<span
+						class="tip"
+						title="Limits scoring to the grid cells inside a box you draw. Land and country borders still apply. Leave it empty to score the whole region."
+						>ⓘ</span
+					>
+				</span>
 				<small
 					>{focusArea ? 'Scoring limited to the box' : 'Optional: score part of the region'}</small
 				>
@@ -496,5 +503,24 @@
 		margin: 0;
 		opacity: 0.7;
 		font-size: 0.9em;
+	}
+
+	.label-with-help {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+
+	.tip {
+		display: inline-grid;
+		place-items: center;
+		inline-size: 1rem;
+		block-size: 1rem;
+		border-radius: 999px;
+		background: var(--color-accent-light);
+		color: var(--color-accent);
+		font-size: 0.7rem;
+		font-weight: 900;
+		cursor: help;
 	}
 </style>

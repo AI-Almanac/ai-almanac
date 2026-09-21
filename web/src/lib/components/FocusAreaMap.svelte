@@ -211,18 +211,36 @@
 </script>
 
 <div class="focus-area">
-	<div class="map" bind:this={container}></div>
+	<div class="map-frame">
+		<div class="map" bind:this={container}></div>
+		{#if drawing}
+			<p class="drawing-hint">Click and drag to draw the box</p>
+		{/if}
+	</div>
 	<div class="controls">
-		<button type="button" onclick={drawing ? stopDrawing : startDrawing}>
+		<button
+			type="button"
+			class="draw"
+			class:cancel={drawing}
+			title={value ? 'Replace the current box with a new one' : 'Limit scoring to a box you draw'}
+			onclick={drawing ? stopDrawing : startDrawing}
+		>
 			{drawing ? 'Cancel' : value ? 'Redraw box' : 'Draw box'}
 		</button>
 		{#if value}
-			<button type="button" onclick={() => onchange(null)}>Clear</button>
+			<button
+				type="button"
+				class="clear"
+				title="Remove the box and score the whole region"
+				onclick={() => onchange(null)}
+			>
+				Clear
+			</button>
 			<small>
 				{value.lat_min}° to {value.lat_max}° lat, {value.lon_min}° to {value.lon_max}° lon
 			</small>
-		{:else}
-			<small>{drawing ? 'Click and drag on the map.' : 'Whole region'}</small>
+		{:else if !drawing}
+			<small>Whole region is scored</small>
 		{/if}
 	</div>
 </div>
@@ -234,6 +252,10 @@
 		gap: 0.5rem;
 	}
 
+	.map-frame {
+		position: relative;
+	}
+
 	.map {
 		inline-size: 100%;
 		aspect-ratio: 16 / 9;
@@ -242,10 +264,54 @@
 		overflow: hidden;
 	}
 
+	.drawing-hint {
+		position: absolute;
+		inset-block-start: 0.5rem;
+		inset-inline: 0;
+		margin: 0 auto;
+		inline-size: fit-content;
+		padding: 0.3rem 0.7rem;
+		border-radius: 999px;
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		font-size: 0.85rem;
+		font-weight: 600;
+		pointer-events: none;
+	}
+
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem;
+	}
+
+	.controls button {
+		border-radius: 0.45rem;
+		padding: 0.45rem 0.9rem;
+		font: inherit;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.draw {
+		border: 0;
+		background: var(--color-accent);
+		color: white;
+	}
+
+	.draw:hover {
+		background: var(--color-accent-hover);
+	}
+
+	.draw.cancel,
+	.clear {
+		border: 1px solid var(--color-border);
+		background: var(--color-bg);
+		color: var(--color-text);
+	}
+
+	.controls small {
+		color: var(--color-text-muted);
 	}
 </style>
