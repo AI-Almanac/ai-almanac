@@ -1,6 +1,6 @@
 // ---- Blends ------------------------------------------------------------------
 import { request } from './core';
-import type { BboxExtent, JobStatus } from './jobs';
+import type { FocusAreaValue, JobStatus } from './jobs';
 
 export type Blend = {
 	id: string;
@@ -26,7 +26,7 @@ export type BlendParams = {
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	mok_month_day?: string;
-	focus_area?: BboxExtent;
+	focus_area?: FocusAreaValue;
 };
 
 export type BlendCreate = {

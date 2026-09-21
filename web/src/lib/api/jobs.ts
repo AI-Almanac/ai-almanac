@@ -61,7 +61,7 @@ export type JobParams = {
 	ref_model_dir?: string;
 	// Advanced — masks/thresholds
 	nc_mask?: string;
-	focus_area?: BboxExtent | null;
+	focus_area?: FocusAreaValue | null;
 	thresh_file?: string;
 };
 
@@ -254,6 +254,18 @@ export type BboxExtent = {
 	lon_min: number;
 	lon_max: number;
 };
+
+/** Named administrative units picked on the map; outlines are attached at submission. */
+export type FocusUnits = {
+	level: 'adm2';
+	units: string[];
+};
+
+export type FocusAreaValue = BboxExtent | FocusUnits;
+
+export function isFocusUnits(value: FocusAreaValue | null | undefined): value is FocusUnits {
+	return value != null && 'units' in value;
+}
 
 export type GridInfo = {
 	lats: number[];

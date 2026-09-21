@@ -1,34 +1,15 @@
-import json
 import logging
-import ssl
 from typing import Any
 
-import aiohttp
-import certifi
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ai_almanac.server.auth import AdminUser, OptionalCurrentUser, require_data_management
-from ai_almanac.server.services import region_catalog
+from ai_almanac.server.services import boundaries, region_catalog
 from ai_almanac.server.services.regions import list_region_options
 
 router = APIRouter(prefix="/regions", tags=["regions"])
 logger = logging.getLogger(__name__)
-
-# Verify the geoBoundaries TLS cert against certifi's CA bundle rather than the
-# ambient system trust store, which some environments (e.g. a bare pixi Python)
-# leave unpopulated — ssl.get_default_verify_paths() returns nothing there and
-# every HTTPS fetch fails with CERTIFICATE_VERIFY_FAILED.
-_BOUNDARY_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
-
-BOUNDARY_LEVELS = {
-    "adm0": "ADM0",
-    "adm1": "ADM1",
-    "adm2": "ADM2",
-    "adm3": "ADM3",
-}
-
-_BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 class RegionWrite(BaseModel):
@@ -118,84 +99,8 @@ async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> d
     region_def = await region_catalog.get_region(region.strip())
     if not region_def or not region_def.get("boundary_iso"):
         raise HTTPException(status_code=404, detail=f"No boundary mapping for region {region!r}")
-    iso = region_def["boundary_iso"]
-
-    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
-    if not boundary_type:
-        raise HTTPException(status_code=404, detail=f"Unsupported boundary level {level!r}")
-
-    cache_key = (iso, boundary_type)
-    cached = _BOUNDARY_CACHE.get(cache_key)
-    if cached:
-        return cached
-
-    timeout = aiohttp.ClientTimeout(total=30)
-    connector = aiohttp.TCPConnector(ssl=_BOUNDARY_SSL_CONTEXT)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-        metadata = await _fetch_metadata(session, iso, boundary_type)
-        geojson_url = _geojson_url(metadata)
-        geojson = await _fetch_json(session, geojson_url)
-
-    result = {
-        "metadata": {
-            "boundaryID": metadata.get("boundaryID"),
-            "boundaryName": metadata.get("boundaryName"),
-            "boundaryType": metadata.get("boundaryType"),
-            "boundarySource": metadata.get("boundarySource"),
-            "boundaryLicense": metadata.get("boundaryLicense"),
-            "licenseSource": metadata.get("licenseSource"),
-        },
-        "geojson": geojson,
-    }
-    _BOUNDARY_CACHE[cache_key] = result
-    return result
-
-
-# The humanitarian release mirrors OCHA's Common Operational Datasets, which the
-# blend pipeline's administrative units are drawn from (Ethiopia: 1082 woredas,
-# towns included), so its names line up with blend outputs. gbOpen covers the
-# countries the COD set does not.
-_BOUNDARY_RELEASES = ("gbHumanitarian", "gbOpen")
-
-
-def _metadata_url(iso: str, boundary_type: str, release: str) -> str:
-    return f"https://www.geoboundaries.org/api/current/{release}/{iso}/{boundary_type}/"
-
-
-def _geojson_url(metadata: Any) -> str | None:
-    if not isinstance(metadata, dict):
-        return None
-    return metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
-
-
-async def _fetch_metadata(
-    session: aiohttp.ClientSession, iso: str, boundary_type: str
-) -> dict[str, Any]:
-    failures: list[str] = []
-    for release in _BOUNDARY_RELEASES:
-        try:
-            metadata = await _fetch_json(session, _metadata_url(iso, boundary_type, release))
-        except HTTPException as exc:
-            failures.append(str(exc.detail))
-            continue
-        if _geojson_url(metadata):
-            return metadata
-        failures.append(f"{release} has no GeoJSON for {iso} {boundary_type}")
-    raise HTTPException(status_code=502, detail="; ".join(failures))
-
-
-async def _fetch_json(session: aiohttp.ClientSession, url: str) -> dict[str, Any]:
-    async with session.get(url) as response:
-        body = await response.text()
-        if response.status >= 400:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Boundary upstream request failed ({response.status}): {body[:300]}",
-            )
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Boundary upstream response was not JSON: {body[:300]}",
-            ) from exc
+    try:
+        return await boundaries.load_boundary(region_def["boundary_iso"], level)
+    except boundaries.BoundaryUnavailable as exc:
+        status = 404 if "Unsupported boundary level" in str(exc) else 502
+        raise HTTPException(status_code=status, detail=str(exc)) from exc

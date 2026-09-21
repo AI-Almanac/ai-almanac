@@ -22,7 +22,7 @@
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
-	import type { BboxExtent } from '$lib/api/jobs';
+	import type { FocusAreaValue } from '$lib/api/jobs';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
@@ -130,7 +130,7 @@
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
-	let focusArea = $state<BboxExtent | null>(null);
+	let focusArea = $state<FocusAreaValue | null>(null);
 	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);

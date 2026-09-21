@@ -18,7 +18,7 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
-from ai_almanac.server.services.focus_area import FocusArea
+from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.tables import jobs as _jobs
 
 # Per-lead columns in the blend's pooled summary CSV, ordered week 1 → later.
@@ -292,7 +292,7 @@ def _focus_area_field(patch: dict, spec: BlendRunSpec) -> FocusArea | None:
     if "focus_area" not in patch:
         return spec.focus_area
     value = patch["focus_area"]
-    return FocusArea.model_validate(value) if value else None
+    return parse_focus_area(value) if value else None
 
 
 async def update_blend_config(

@@ -5,22 +5,32 @@
 	import '$lib/maplibre-worker';
 	import type { FeatureCollection, Position } from 'geojson';
 	import { BASEMAP_STYLES } from '$lib/basemaps';
-	import type { BboxExtent } from '$lib/api/jobs';
+	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
 	import { getRegionBoundary } from '$lib/api/regions';
 
 	interface Props {
-		value: BboxExtent | null;
+		value: FocusAreaValue | null;
 		/** Bounding box to frame when nothing is drawn yet. */
 		extent?: BboxExtent | null;
-		/** Region whose border is highlighted so the user sees what a box carves out of. */
+		/** Region whose border is highlighted and whose areas can be picked. */
 		regionId?: string | null;
-		onchange: (value: BboxExtent | null) => void;
+		onchange: (value: FocusAreaValue | null) => void;
 	}
 
 	const { value, extent = null, regionId = null, onchange }: Props = $props();
 
+	type Mode = 'region' | 'box' | 'units';
+	const MODES: { id: Mode; label: string }[] = [
+		{ id: 'region', label: 'Whole region' },
+		{ id: 'box', label: 'Draw a box' },
+		{ id: 'units', label: 'Pick areas' }
+	];
+	// ponytail: ADM2 only for now; a level picker slots in here once the flow is proven.
+	const UNIT_LEVEL = 'adm2';
+
 	const SOURCE = 'focus-area';
 	const REGION = 'focus-region';
+	const ZONES = 'focus-zones';
 	const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
 	let container = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
@@ -28,6 +38,11 @@
 	let drawing = $state(false);
 	let anchor: maplibregl.LngLat | null = null;
 	let regionShape = $state<FeatureCollection | null>(null);
+	let zones = $state<FeatureCollection | null>(null);
+	let mode = $state<Mode>('region');
+
+	const box = $derived(value && !isFocusUnits(value) ? value : null);
+	const picked = $derived(isFocusUnits(value) ? value.units : []);
 
 	function boxFrom(a: maplibregl.LngLat, b: maplibregl.LngLat): BboxExtent {
 		const round = (n: number) => Math.round(n * 100) / 100;
@@ -39,9 +54,9 @@
 		};
 	}
 
-	function polygon(box: BboxExtent | null): FeatureCollection {
-		if (!box) return EMPTY;
-		const { lat_min, lat_max, lon_min, lon_max } = box;
+	function polygon(area: BboxExtent | null): FeatureCollection {
+		if (!area) return EMPTY;
+		const { lat_min, lat_max, lon_min, lon_max } = area;
 		const ring = [
 			[lon_min, lat_min],
 			[lon_max, lat_min],
@@ -58,14 +73,14 @@
 	}
 
 	function shapeExtent(shape: FeatureCollection): BboxExtent | null {
-		let box: BboxExtent | null = null;
+		let bounds: BboxExtent | null = null;
 		const visit = (p: Position) => {
-			box = box
+			bounds = bounds
 				? {
-						lat_min: Math.min(box.lat_min, p[1]),
-						lat_max: Math.max(box.lat_max, p[1]),
-						lon_min: Math.min(box.lon_min, p[0]),
-						lon_max: Math.max(box.lon_max, p[0])
+						lat_min: Math.min(bounds.lat_min, p[1]),
+						lat_max: Math.max(bounds.lat_max, p[1]),
+						lon_min: Math.min(bounds.lon_min, p[0]),
+						lon_max: Math.max(bounds.lon_max, p[0])
 					}
 				: { lat_min: p[1], lat_max: p[1], lon_min: p[0], lon_max: p[0] };
 		};
@@ -73,26 +88,26 @@
 			if (geometry.type === 'Polygon') geometry.coordinates.flat().forEach(visit);
 			else if (geometry.type === 'MultiPolygon') geometry.coordinates.flat(2).forEach(visit);
 		}
-		return box;
+		return bounds;
 	}
 
 	function setData(source: string, data: FeatureCollection) {
 		(map?.getSource(source) as maplibregl.GeoJSONSource | undefined)?.setData(data);
 	}
 
-	function fitTo(box: BboxExtent | null) {
-		if (!box || !map) return;
+	function fitTo(area: BboxExtent | null) {
+		if (!area || !map) return;
 		map.fitBounds(
 			[
-				[box.lon_min, box.lat_min],
-				[box.lon_max, box.lat_max]
+				[area.lon_min, area.lat_min],
+				[area.lon_max, area.lat_max]
 			],
 			{ padding: 24, duration: 0 }
 		);
 	}
 
 	function frame() {
-		fitTo(value ?? extent ?? (regionShape ? shapeExtent(regionShape) : null));
+		fitTo(box ?? extent ?? (regionShape ? shapeExtent(regionShape) : null));
 	}
 
 	function startDrawing() {
@@ -108,6 +123,29 @@
 		map?.getCanvas().style.removeProperty('cursor');
 	}
 
+	function setMode(next: Mode) {
+		stopDrawing();
+		mode = next;
+		// The three choices are exclusive: leaving a mode discards its selection.
+		if (next === 'region' || (next === 'box') === isFocusUnits(value)) {
+			if (value) onchange(null);
+		}
+	}
+
+	function zoneName(feature: maplibregl.MapGeoJSONFeature): string | null {
+		const name = feature.id ?? feature.properties?.shapeName;
+		return typeof name === 'string' && name ? name : null;
+	}
+
+	function togglePicked(name: string) {
+		const next = picked.includes(name) ? picked.filter((n) => n !== name) : [...picked, name];
+		onchange(next.length ? { level: UNIT_LEVEL, units: next } : null);
+	}
+
+	function clearSelection() {
+		onchange(null);
+	}
+
 	onMount(() => {
 		if (!container) return;
 		map = new maplibregl.Map({
@@ -119,32 +157,61 @@
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.on('load', () => {
-			// Region first so the box always paints above it.
-			map?.addSource(REGION, { type: 'geojson', data: regionShape ?? EMPTY });
-			map?.addLayer({
+			if (!map) return;
+			// Region first, then pickable areas, then the box, so each paints above the last.
+			map.addSource(REGION, { type: 'geojson', data: regionShape ?? EMPTY });
+			map.addLayer({
 				id: `${REGION}-fill`,
 				type: 'fill',
 				source: REGION,
 				paint: { 'fill-color': '#0f766e', 'fill-opacity': 0.12 }
 			});
-			map?.addLayer({
+			map.addLayer({
 				id: `${REGION}-line`,
 				type: 'line',
 				source: REGION,
 				paint: { 'line-color': '#0f766e', 'line-width': 1.5, 'line-opacity': 0.8 }
 			});
-			map?.addSource(SOURCE, { type: 'geojson', data: polygon(value) });
-			map?.addLayer({
+			// Feature state needs an id per area; the name doubles as one.
+			map.addSource(ZONES, { type: 'geojson', data: zones ?? EMPTY, promoteId: 'shapeName' });
+			map.addLayer({
+				id: `${ZONES}-fill`,
+				type: 'fill',
+				source: ZONES,
+				paint: {
+					'fill-color': '#2f6fed',
+					'fill-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 0.45, 0.04]
+				}
+			});
+			map.addLayer({
+				id: `${ZONES}-line`,
+				type: 'line',
+				source: ZONES,
+				paint: { 'line-color': '#2f6fed', 'line-width': 0.8, 'line-opacity': 0.7 }
+			});
+			map.addSource(SOURCE, { type: 'geojson', data: polygon(box) });
+			map.addLayer({
 				id: `${SOURCE}-fill`,
 				type: 'fill',
 				source: SOURCE,
 				paint: { 'fill-color': '#2f6fed', 'fill-opacity': 0.2 }
 			});
-			map?.addLayer({
+			map.addLayer({
 				id: `${SOURCE}-line`,
 				type: 'line',
 				source: SOURCE,
 				paint: { 'line-color': '#2f6fed', 'line-width': 2 }
+			});
+			map.on('click', `${ZONES}-fill`, (e) => {
+				if (mode !== 'units') return;
+				const name = e.features?.[0] ? zoneName(e.features[0]) : null;
+				if (name) togglePicked(name);
+			});
+			map.on('mouseenter', `${ZONES}-fill`, () => {
+				if (mode === 'units') map?.getCanvas().style.setProperty('cursor', 'pointer');
+			});
+			map.on('mouseleave', `${ZONES}-fill`, () => {
+				if (mode === 'units') map?.getCanvas().style.removeProperty('cursor');
 			});
 			mapReady = true;
 			frame();
@@ -163,23 +230,30 @@
 		});
 		map.on('mouseup', (e) => {
 			if (!anchor) return;
-			const box = boxFrom(anchor, e.lngLat);
+			const drawn = boxFrom(anchor, e.lngLat);
 			stopDrawing();
-			if (box.lat_min === box.lat_max || box.lon_min === box.lon_max) {
-				setData(SOURCE, polygon(value));
+			if (drawn.lat_min === drawn.lat_max || drawn.lon_min === drawn.lon_max) {
+				setData(SOURCE, polygon(box));
 				return;
 			}
-			onchange(box);
+			onchange(drawn);
 		});
 	});
 
 	onDestroy(() => map?.remove());
+
+	// A value set from outside (chat, a reloaded config) decides the mode.
+	$effect(() => {
+		if (isFocusUnits(value)) mode = 'units';
+		else if (value) mode = 'box';
+	});
 
 	// The region's border, when the boundary service knows it. A miss just leaves
 	// the basemap, so the map stays usable for regions without boundary data.
 	$effect(() => {
 		const id = regionId;
 		regionShape = null;
+		zones = null;
 		if (!id) return;
 		let stale = false;
 		getRegionBoundary(id, 'adm0')
@@ -192,58 +266,105 @@
 		};
 	});
 
-	function isFeatureCollection(value: unknown): value is FeatureCollection {
+	// Pickable areas load on demand, the first time the mode calls for them.
+	$effect(() => {
+		const id = regionId;
+		if (mode !== 'units' || !id || zones) return;
+		let stale = false;
+		getRegionBoundary(id, UNIT_LEVEL)
+			.then(({ geojson }) => {
+				if (!stale && isFeatureCollection(geojson)) zones = geojson;
+			})
+			.catch(() => {});
+		return () => {
+			stale = true;
+		};
+	});
+
+	function isFeatureCollection(candidate: unknown): candidate is FeatureCollection {
 		return (
-			typeof value === 'object' &&
-			value != null &&
-			(value as { type?: unknown }).type === 'FeatureCollection' &&
-			Array.isArray((value as { features?: unknown }).features)
+			typeof candidate === 'object' &&
+			candidate != null &&
+			(candidate as { type?: unknown }).type === 'FeatureCollection' &&
+			Array.isArray((candidate as { features?: unknown }).features)
 		);
 	}
 
 	$effect(() => {
-		if (mapReady) setData(SOURCE, polygon(value));
+		if (mapReady) setData(SOURCE, polygon(box));
 	});
 
-	// The region highlight means "this is what gets scored", so it yields to the
-	// box once one exists and returns when the box is cleared.
+	// The region highlight means "this is what gets scored", so it yields to any
+	// selection and returns when the selection is cleared.
 	$effect(() => {
 		if (!mapReady) return;
 		setData(REGION, value ? EMPTY : (regionShape ?? EMPTY));
 		if (!value) frame();
 	});
+
+	$effect(() => {
+		if (!mapReady || !map) return;
+		setData(ZONES, zones ?? EMPTY);
+		const visibility = mode === 'units' ? 'visible' : 'none';
+		map.setLayoutProperty(`${ZONES}-fill`, 'visibility', visibility);
+		map.setLayoutProperty(`${ZONES}-line`, 'visibility', visibility);
+		map.removeFeatureState({ source: ZONES });
+		for (const name of picked) map.setFeatureState({ source: ZONES, id: name }, { selected: true });
+	});
 </script>
 
 <div class="focus-area">
+	<div class="modes" role="group" aria-label="Area of interest">
+		{#each MODES as option (option.id)}
+			<button
+				type="button"
+				class:active={mode === option.id}
+				aria-pressed={mode === option.id}
+				onclick={() => setMode(option.id)}
+			>
+				{option.label}
+			</button>
+		{/each}
+	</div>
 	<div class="map-frame">
 		<div class="map" bind:this={container}></div>
 		{#if drawing}
-			<p class="drawing-hint">Click and drag to draw the box</p>
+			<p class="map-hint">Click and drag to draw the box</p>
+		{:else if mode === 'units' && picked.length === 0}
+			<p class="map-hint">{zones ? 'Click areas to add them' : 'Loading areas…'}</p>
 		{/if}
 	</div>
 	<div class="controls">
-		<button
-			type="button"
-			class="draw"
-			class:cancel={drawing}
-			title={value ? 'Replace the current box with a new one' : 'Limit scoring to a box you draw'}
-			onclick={drawing ? stopDrawing : startDrawing}
-		>
-			{drawing ? 'Cancel' : value ? 'Redraw box' : 'Draw box'}
-		</button>
-		{#if value}
+		{#if mode === 'box'}
 			<button
 				type="button"
-				class="clear"
-				title="Remove the box and score the whole region"
-				onclick={() => onchange(null)}
+				class="draw"
+				class:cancel={drawing}
+				title={box ? 'Replace the current box with a new one' : 'Limit scoring to a box you draw'}
+				onclick={drawing ? stopDrawing : startDrawing}
 			>
-				Clear
+				{drawing ? 'Cancel' : box ? 'Redraw box' : 'Draw box'}
 			</button>
-			<small>
-				{value.lat_min}° to {value.lat_max}° lat, {value.lon_min}° to {value.lon_max}° lon
-			</small>
-		{:else if !drawing}
+			{#if box}
+				<button type="button" class="clear" title="Remove the box" onclick={clearSelection}>
+					Clear
+				</button>
+				<small>
+					{box.lat_min}° to {box.lat_max}° lat, {box.lon_min}° to {box.lon_max}° lon
+				</small>
+			{:else if !drawing}
+				<small>No box yet, so the whole region is scored</small>
+			{/if}
+		{:else if mode === 'units'}
+			{#if picked.length}
+				<button type="button" class="clear" title="Deselect every area" onclick={clearSelection}>
+					Clear
+				</button>
+				<small>{picked.length} selected: {picked.join(', ')}</small>
+			{:else}
+				<small>Click an area on the map to add it; click again to remove it</small>
+			{/if}
+		{:else}
 			<small>Whole region is scored</small>
 		{/if}
 	</div>
@@ -254,6 +375,34 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
+	}
+
+	.modes {
+		display: flex;
+		gap: 0.25rem;
+		padding: 0.2rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-bg);
+		inline-size: fit-content;
+	}
+
+	.modes button {
+		border: 0;
+		border-radius: 0.35rem;
+		padding: 0.3rem 0.7rem;
+		background: transparent;
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.modes button.active {
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 	}
 
 	.map-frame {
@@ -268,7 +417,7 @@
 		overflow: hidden;
 	}
 
-	.drawing-hint {
+	.map-hint {
 		position: absolute;
 		inset-block-start: 0.5rem;
 		inset-inline: 0;
@@ -288,6 +437,7 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem;
+		min-block-size: 1.8rem;
 	}
 
 	.controls button {

@@ -665,9 +665,9 @@ def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: boo
     filt = {"dissemination_cells_file": str(dissemination_path) if dissemination_path else None}
     if not focus_area:
         return filt
-    filt["bbox"] = dict(focus_area)
+    filt["focus_area"] = dict(focus_area)
     if adm3_domain:
-        # ADM3 rows carry no lat/lon; the bbox filter needs a point per unit.
+        # ADM3 rows carry no lat/lon; locating them needs a point per unit.
         centroids_path = Path(tempfile.mkdtemp(prefix="adm3-centroids-")) / "centroids.csv"
         _adm3_centroids().to_csv(centroids_path, index=False)
         filt["centroids_file"] = str(centroids_path)
@@ -675,18 +675,39 @@ def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: boo
 
 
 def _apply_focus_area(df, domain_filter: dict, filter_rows):
-    """Keep only rows inside the focus box.
+    """Keep only rows inside the area of interest: a box, or picked unit outlines.
 
-    Only the bbox keys are passed on, so the dissemination-cells filter stays off
-    and runs without a focus area behave exactly as before.
+    Only the area keys are passed on, so the dissemination-cells filter stays off
+    and runs without an area of interest behave exactly as before.
     """
-    if "bbox" not in domain_filter:
+    focus = domain_filter.get("focus_area")
+    if not focus:
         return df
-    focus_only = {k: v for k, v in domain_filter.items() if k in ("bbox", "centroids_file")}
-    kept = filter_rows(df, {"filter": focus_only})
+    centroids = {k: v for k, v in domain_filter.items() if k == "centroids_file"}
+    if focus.get("geometry"):
+        kept = _rows_inside_outlines(df, focus["geometry"], centroids)
+    else:
+        kept = filter_rows(df, {"filter": {"bbox": focus, **centroids}})
     if kept.empty:
-        raise ValueError(f"No cells fall inside the area of interest {domain_filter['bbox']}")
+        raise ValueError("No cells fall inside the area of interest")
     return kept
+
+
+def _rows_inside_outlines(df, geometry: dict, filt: dict):
+    import shapely
+    from python.prepare_data.nc_utils import _resolve_unit_latlon
+    from shapely.geometry import shape
+
+    lat, lon = _resolve_unit_latlon(df, filt)
+    if lat is None:
+        raise ValueError("Area of interest needs a lat/lon per row or a centroids file")
+    outline = shapely.union_all([shape(f["geometry"]) for f in geometry["features"]])
+    inside = shapely.contains_xy(outline, lon, lat)
+    print(
+        f"  area filter {len(geometry['features'])} outlines: {len(df)} -> {int(inside.sum())} rows",
+        flush=True,
+    )
+    return df[inside]
 
 
 def _adm3_centroids():

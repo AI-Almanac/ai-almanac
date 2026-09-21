@@ -2287,7 +2287,8 @@ export interface components {
             cutoff_month_day?: string | null;
             /** Mok Month Day */
             mok_month_day?: string | null;
-            focus_area?: components["schemas"]["FocusArea"] | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };
         /**
          * BlendRunSpec
@@ -2343,7 +2344,8 @@ export interface components {
              * @default
              */
             formula_text: string;
-            focus_area?: components["schemas"]["FocusArea"] | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             /**
              * Status
              * @default collecting
@@ -2914,8 +2916,8 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
-        /** FocusArea */
-        FocusArea: {
+        /** FocusBox */
+        FocusBox: {
             /** Lat Min */
             lat_min: number;
             /** Lat Max */
@@ -2924,6 +2926,20 @@ export interface components {
             lon_min: number;
             /** Lon Max */
             lon_max: number;
+        };
+        /** FocusUnits */
+        FocusUnits: {
+            /**
+             * Level
+             * @constant
+             */
+            level: "adm2";
+            /** Units */
+            units: string[];
+            /** Geometry */
+            geometry?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ForecastCreate */
         ForecastCreate: {
@@ -4065,7 +4081,8 @@ export interface components {
             shp_only?: boolean | null;
             /** Nc Mask */
             nc_mask?: string | null;
-            focus_area?: components["schemas"]["FocusArea"] | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             /** Ref Model Dir */
             ref_model_dir?: string | null;
             /** Thresh File */

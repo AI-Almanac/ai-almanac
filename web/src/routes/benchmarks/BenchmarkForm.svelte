@@ -3,7 +3,7 @@
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { goToBlend } from '$lib/blend-nav';
 	import type { Dataset, Region, RompDefaults } from '$lib/api';
-	import type { BboxExtent } from '$lib/api/jobs';
+	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
 	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
@@ -87,7 +87,7 @@
 	]);
 
 	const focusArea = $derived(
-		(form.sharedAdvancedParams.focus_area as BboxExtent | null | undefined) ?? null
+		(form.sharedAdvancedParams.focus_area as FocusAreaValue | null | undefined) ?? null
 	);
 	const regionExtent = $derived.by((): BboxExtent | null => {
 		const r = form.selectedRegion;
@@ -176,12 +176,16 @@
 					Area of interest
 					<span
 						class="tip"
-						title="Limits scoring to the grid cells inside a box you draw. Land and country borders still apply. Leave it empty to score the whole region."
+						title="Limits scoring to part of the region: draw a box, or pick administrative areas on the map. Land and country borders still apply. Leave it as the whole region to score everything."
 						>ⓘ</span
 					>
 				</span>
 				<small
-					>{focusArea ? 'Scoring limited to the box' : 'Optional: score part of the region'}</small
+					>{focusArea
+						? isFocusUnits(focusArea)
+							? `Scoring limited to ${focusArea.units.length} ${focusArea.units.length === 1 ? 'area' : 'areas'}`
+							: 'Scoring limited to the box'
+						: 'Optional: score part of the region'}</small
 				>
 			</div>
 			{#if form.selectedRegionId}

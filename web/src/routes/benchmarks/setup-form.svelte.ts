@@ -8,13 +8,13 @@ import {
 	type Job,
 	type JobParams,
 	type ModelConfig,
-	type BboxExtent,
+	type FocusAreaValue,
 	type Region,
 	type RompDefaults
 } from '$lib/api';
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
 
-type SharedParamValue = string | number | BboxExtent | null;
+type SharedParamValue = string | number | FocusAreaValue | null;
 type ModelOverrideValue = string | boolean | number;
 type ModelOverrides = Record<string, Record<string, ModelOverrideValue>>;
 
@@ -28,9 +28,9 @@ function stringParam(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function bboxParam(value: unknown): BboxExtent | undefined {
-	return value !== null && typeof value === 'object' && 'lat_min' in value
-		? (value as BboxExtent)
+function focusAreaParam(value: unknown): FocusAreaValue | undefined {
+	return value !== null && typeof value === 'object' && ('lat_min' in value || 'units' in value)
+		? (value as FocusAreaValue)
 		: undefined;
 }
 
@@ -240,7 +240,7 @@ export class BenchmarkSetupForm {
 			}),
 			...(stringParam(params.nc_mask) && { nc_mask: stringParam(params.nc_mask) }),
 			// A cleared box must reach the server as null, or the merge keeps the old one.
-			...('focus_area' in params && { focus_area: bboxParam(params.focus_area) ?? null }),
+			...('focus_area' in params && { focus_area: focusAreaParam(params.focus_area) ?? null }),
 			...(stringParam(params.thresh_file) && { thresh_file: stringParam(params.thresh_file) }),
 			...(stringParam(params.ref_model) && { ref_model: stringParam(params.ref_model) }),
 			...(stringParam(params.ref_model_dir) && {

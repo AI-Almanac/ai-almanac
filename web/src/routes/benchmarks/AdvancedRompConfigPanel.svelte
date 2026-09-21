@@ -1,6 +1,6 @@
 <script lang="ts">
 	import PerModelConfig from './PerModelConfig.svelte';
-	import type { BboxExtent } from '$lib/api/jobs';
+	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
 	import { getForecastModels, forecastModelFor, type ForecastModel } from '$lib/api';
 
@@ -29,7 +29,7 @@
 	const setRegionId = (id: string) => form.setRegionId(id);
 	const setForecastWindowDays = (days: number | null) => form.setForecastWindowDays(days);
 	const toggleModel = (id: string) => form.toggleModel(id);
-	const setSharedParam = (key: string, value: string | number | BboxExtent | null) =>
+	const setSharedParam = (key: string, value: string | number | FocusAreaValue | null) =>
 		form.setSharedParam(key, value);
 	const getOverride = <T,>(modelId: string, key: string, fallback: T): T =>
 		form.getOverride(modelId, key, fallback);
