@@ -148,6 +148,10 @@
 			});
 			mapReady = true;
 			frame();
+			// MapLibre opens the compact attribution on first render; start it folded.
+			const attrib = container?.querySelector<HTMLDetailsElement>('.maplibregl-ctrl-attrib');
+			attrib?.classList.remove('maplibregl-compact-show');
+			attrib?.removeAttribute('open');
 		});
 		map.on('mousedown', (e) => {
 			if (!drawing) return;
