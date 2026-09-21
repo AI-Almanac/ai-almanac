@@ -239,7 +239,8 @@ export class BenchmarkSetupForm {
 				dry_extent: numberParam(params.dry_extent)
 			}),
 			...(stringParam(params.nc_mask) && { nc_mask: stringParam(params.nc_mask) }),
-			...(bboxParam(params.focus_area) && { focus_area: bboxParam(params.focus_area) }),
+			// A cleared box must reach the server as null, or the merge keeps the old one.
+			...('focus_area' in params && { focus_area: bboxParam(params.focus_area) ?? null }),
 			...(stringParam(params.thresh_file) && { thresh_file: stringParam(params.thresh_file) }),
 			...(stringParam(params.ref_model) && { ref_model: stringParam(params.ref_model) }),
 			...(stringParam(params.ref_model_dir) && {
