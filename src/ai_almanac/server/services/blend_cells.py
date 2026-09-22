@@ -374,6 +374,8 @@ def is_per_cell_summary(filename: str) -> bool:
     ``summary_models_`` prefixes both files, so the pooled one must be excluded
     explicitly or it matches first and yields a grid with no points.
     """
-    return filename.startswith("summary_models_") and not filename.startswith(
-        "summary_models_pooled"
+    return (
+        filename.startswith("summary_models_")
+        and not filename.startswith("summary_models_pooled")
+        and filename.endswith(".csv")
     )

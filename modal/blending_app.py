@@ -755,6 +755,15 @@ def _attach_adm3_centroids_to_csv(csv_bytes: bytes, strict: bool = True) -> byte
 _GRID_ID = re.compile(r"^-?\d+(?:\.\d+)?_-?\d+(?:\.\d+)?$")
 
 
+def _is_per_point_summary_csv(filename: str) -> bool:
+    """The blend writes summary_models_<tag> as both .pkl and .csv; only the CSV is parseable."""
+    return (
+        filename.startswith("summary_models_")
+        and not filename.startswith("summary_models_pooled")
+        and filename.endswith(".csv")
+    )
+
+
 def _with_area_centroids(path: Path) -> bytes:
     """Give named units in the per-point summary a centroid so the map can place them.
 
@@ -762,10 +771,7 @@ def _with_area_centroids(path: Path) -> bytes:
     untouched. The pooled ALL row has no centroid and stays blank.
     """
     data = path.read_bytes()
-    per_point = path.name.startswith("summary_models_") and not path.name.startswith(
-        "summary_models_pooled"
-    )
-    if not per_point:
+    if not _is_per_point_summary_csv(path.name):
         return data
     import pandas as pd
 
