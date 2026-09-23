@@ -84,6 +84,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The backend calls these apps by name in its own Modal environment, so
+      # they ship with every backend deploy and never drift behind it.
+      - name: Deploy Modal apps
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          for app in app blending_app forecasts_app; do
+            pipx run --spec modal==1.5.0 modal deploy --env staging "modal/$app.py"
+          done
+
       # Migrate before routing traffic: new code may need new schema. The job's
       # image is pinned in Terraform with ignore_changes, so point it at this
       # build, then run it to completion.
