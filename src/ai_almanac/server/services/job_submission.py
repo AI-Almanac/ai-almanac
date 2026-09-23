@@ -1081,6 +1081,11 @@ async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     """Picked administrative units need their outlines frozen into the job."""
     if not params.get("focus_area"):
         return params
+    if params.get("nc_mask"):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose either an area of interest or a custom mask file, not both.",
+        )
     try:
         area = await boundaries.attach_unit_outlines(
             parse_focus_area(params["focus_area"]), region_def

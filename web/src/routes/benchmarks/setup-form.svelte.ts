@@ -197,6 +197,7 @@ export class BenchmarkSetupForm {
 		this.selectedRegionId = id;
 		this.selectedModelIds = [];
 		this.perModelOverrides = {};
+		this.sharedAdvancedParams = { ...this.sharedAdvancedParams, focus_area: null };
 		this.models = [];
 		void this.loadModels(id);
 		this.markManualConfigDirty();

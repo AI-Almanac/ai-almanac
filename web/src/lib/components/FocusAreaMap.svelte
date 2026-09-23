@@ -39,6 +39,7 @@
 	let anchor: maplibregl.LngLat | null = null;
 	let regionShape = $state<FeatureCollection | null>(null);
 	let zones = $state<FeatureCollection | null>(null);
+	let zonesFailed = $state(false);
 	let mode = $state<Mode>('region');
 
 	const box = $derived(value && !isFocusUnits(value) ? value : null);
@@ -263,6 +264,7 @@
 		const id = regionId;
 		regionShape = null;
 		zones = null;
+		zonesFailed = false;
 		if (!id) return;
 		let stale = false;
 		getRegionBoundary(id, 'adm0')
@@ -278,13 +280,15 @@
 	// Pickable areas load on demand, the first time the mode calls for them.
 	$effect(() => {
 		const id = regionId;
-		if (mode !== 'units' || !id || zones) return;
+		if (mode !== 'units' || !id || zones || zonesFailed) return;
 		let stale = false;
 		getRegionBoundary(id, UNIT_LEVEL)
 			.then(({ geojson }) => {
 				if (!stale && isFeatureCollection(geojson)) zones = geojson;
 			})
-			.catch(() => {});
+			.catch(() => {
+				if (!stale) zonesFailed = true;
+			});
 		return () => {
 			stale = true;
 		};
@@ -356,7 +360,14 @@
 		{#if drawing}
 			<p class="map-hint">Click and drag to draw the box</p>
 		{:else if mode === 'units' && picked.length === 0}
-			<p class="map-hint">{zones ? 'Click areas to add them' : 'Loading areas…'}</p>
+			<p class="map-hint">
+				{#if zonesFailed}
+					Couldn't load areas.
+					<button type="button" class="retry" onclick={() => (zonesFailed = false)}> Retry </button>
+				{:else}
+					{zones ? 'Click areas to add them' : 'Loading areas…'}
+				{/if}
+			</p>
 		{/if}
 	</div>
 	<div class="controls">
@@ -493,6 +504,17 @@
 		font-size: 0.85rem;
 		font-weight: 600;
 		pointer-events: none;
+	}
+
+	.retry {
+		padding: 0;
+		border: none;
+		background: none;
+		color: var(--color-accent);
+		font: inherit;
+		text-decoration: underline;
+		cursor: pointer;
+		pointer-events: auto;
 	}
 
 	.controls {

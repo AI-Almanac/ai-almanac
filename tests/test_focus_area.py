@@ -118,3 +118,14 @@ def test_select_units_matches_names_loosely_and_rejects_unknown_ones() -> None:
 
 def test_materialize_is_a_no_op_without_a_focus_area(tmp_path: Path) -> None:
     assert materialize_focus_mask({"romp_params": {}}, tmp_path) == {"romp_params": {}}
+
+
+@pytest.mark.asyncio
+async def test_an_area_of_interest_and_a_custom_mask_cannot_both_be_set() -> None:
+    from fastapi import HTTPException
+
+    from ai_almanac.server.services.job_submission import _with_unit_outlines
+
+    with pytest.raises(HTTPException) as caught:
+        await _with_unit_outlines({"focus_area": BOX, "nc_mask": "/data/mask.nc"}, None)
+    assert caught.value.status_code == 400

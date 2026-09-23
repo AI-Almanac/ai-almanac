@@ -135,6 +135,13 @@
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
 
+	// An area drawn for one region means nothing in another.
+	function selectObs(id: string) {
+		const region = obsSources.find((s) => s.id === id)?.region;
+		if (region !== selectedObs?.region) focusArea = null;
+		obsDatasetId = id;
+	}
+
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
 	// Models are region-specific: only offer ones matching the chosen observation
@@ -569,7 +576,7 @@
 							'Observations',
 							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
 						)}
-						<select bind:value={obsDatasetId}>
+						<select value={obsDatasetId} onchange={(e) => selectObs(e.currentTarget.value)}>
 							<option value="" disabled>Select an observation source…</option>
 							{#each obsSources as source (source.id)}
 								<option value={source.id}
