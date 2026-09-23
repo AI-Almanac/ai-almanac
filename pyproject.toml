@@ -112,9 +112,9 @@ self-host-local-reset = { cmd = "docker compose -p ai-almanac-local -f compose.l
 self-host-local-logs = { cmd = "docker compose -p ai-almanac-local -f compose.local.yaml -f compose.local-gpu.yaml logs --follow", description = "Follow local shared-mode development logs" }
 package = { cmd = "python -m build", default-environment = "dev", depends-on = ["build-web"], description = "Build the Python wheel and source distribution" }
 serve = { cmd = "ai-almanac serve --no-open", depends-on = ["build-web"], description = "Run a production-style server with the built frontend" }
-deploy-modal = { cmd = "modal deploy modal/app.py", description = "Deploy the Modal benchmark app (run_benchmark + chat tools)" }
-deploy-blending = { cmd = "modal deploy modal/blending_app.py", description = "Deploy the Modal blending app (run_blend)" }
-deploy-forecasts = { cmd = "modal deploy modal/forecasts_app.py", description = "Deploy the Modal forecasts app (run_forecast)" }
+deploy-modal = { cmd = "modal deploy --env staging modal/app.py", description = "Deploy the Modal benchmark app to staging (prod deploys from CI)" }
+deploy-blending = { cmd = "modal deploy --env staging modal/blending_app.py", description = "Deploy the Modal blending app to staging (prod deploys from CI)" }
+deploy-forecasts = { cmd = "modal deploy --env staging modal/forecasts_app.py", description = "Deploy the Modal forecasts app to staging (prod deploys from CI)" }
 test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }
 check = { depends-on = [{ task = "lint-python" }, { task = "format-python-check" }, { task = "check-web" }, { task = "lint-web" }], description = "Run backend lint + format checks and frontend type + format checks" }
 format = { depends-on = [{ task = "format-python" }, { task = "format-web" }], description = "Format backend and frontend sources" }

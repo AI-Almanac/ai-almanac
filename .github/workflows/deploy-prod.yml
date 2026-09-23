@@ -84,6 +84,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The backend calls these apps by name in its own Modal environment, so
+      # they ship with every backend deploy and never drift behind it.
+      # Installs the Modal CLI from pixi.lock (hash-pinned) rather than a fresh
+      # PyPI resolve, since this step holds the Modal tokens.
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+        with:
+          environments: default
+          cache: true
+
+      - name: Deploy Modal apps
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          for app in app blending_app forecasts_app; do
+            pixi run --locked python -m modal deploy --env main "modal/$app.py"
+          done
+
       # Migrate before routing traffic: new code may need new schema. The job's
       # image is pinned in Terraform with ignore_changes, so point it at this
       # build, then run it to completion.
