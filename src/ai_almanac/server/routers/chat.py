@@ -499,7 +499,7 @@ async def update_session_benchmark_config(
     scope = ChatScope.model_validate(json_dict(row["scope"]))
     try:
         payload = await update_benchmark_config(
-            body.model_dump(exclude_none=True), user.id, scope, session_id
+            body.model_dump(exclude_unset=True), user.id, scope, session_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
