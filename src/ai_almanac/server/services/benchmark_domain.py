@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import guardrails, job_submission
+from ai_almanac.server.services.focus_area import parse_focus_area
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
@@ -107,6 +108,7 @@ SHARED_ROMP_PARAM_KEYS = {
     "dry_spell",
     "dry_extent",
     "nc_mask",
+    "focus_area",
     "thresh_file",
     "ref_model",
     "ref_model_dir",
@@ -137,6 +139,8 @@ def _non_empty_params(params: dict[str, Any], allowed: set[str]) -> dict[str, An
 
 def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict[str, Any]:
     cleaned = _non_empty_params(params, SHARED_ROMP_PARAM_KEYS)
+    if "focus_area" in cleaned:
+        cleaned["focus_area"] = parse_focus_area(cleaned["focus_area"]).model_dump(mode="json")
     raw_per_model = params.get("per_model_params")
     if isinstance(raw_per_model, dict):
         selected = set(model_ids)

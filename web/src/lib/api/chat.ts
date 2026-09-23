@@ -1,7 +1,7 @@
 // ---- Chat: sessions, streaming, and chat-driven benchmark/blend runs ----------
 import { authHeaders } from '../auth';
 import { BASE_URL, request } from './core';
-import type { Job } from './jobs';
+import type { FocusAreaValue, Job } from './jobs';
 import type { Blend } from './blends';
 
 export type BenchmarkRunSpec = {
@@ -49,6 +49,7 @@ export type BlendRunSpec = {
 	forecast_years: string;
 	true_holdout_years: string;
 	formula_text: string;
+	focus_area?: FocusAreaValue | null;
 	status: 'collecting' | 'runnable' | 'running';
 	missing_fields: string[];
 	assumptions: string[];

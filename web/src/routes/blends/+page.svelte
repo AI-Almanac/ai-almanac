@@ -21,6 +21,8 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
+	import type { FocusAreaValue } from '$lib/api/jobs';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
@@ -128,9 +130,17 @@
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
+	let focusArea = $state<FocusAreaValue | null>(null);
 	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
+
+	// An area drawn for one region means nothing in another.
+	function selectObs(id: string) {
+		const region = obsSources.find((s) => s.id === id)?.region;
+		if (region !== selectedObs?.region) focusArea = null;
+		obsDatasetId = id;
+	}
 
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
@@ -221,6 +231,7 @@
 		forecastYears = config.forecast_years ?? '';
 		trueHoldoutYears = config.true_holdout_years ?? '';
 		formulaText = config.formula_text ?? '';
+		focusArea = config.focus_area ?? null;
 		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
 	}
 
@@ -445,7 +456,8 @@
 				cv_holdout_years: cvHoldoutYears.trim(),
 				...(forecastYears.trim() ? { forecast_years: forecastYears.trim() } : {}),
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
-				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {})
+				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
+				...(focusArea ? { focus_area: focusArea } : {})
 			}
 		};
 		try {
@@ -455,6 +467,7 @@
 			selectedId = blend.id;
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
+			focusArea = null;
 			modelIds = [];
 			yearsDirty = false;
 		} catch (err) {
@@ -563,7 +576,7 @@
 							'Observations',
 							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
 						)}
-						<select bind:value={obsDatasetId}>
+						<select value={obsDatasetId} onchange={(e) => selectObs(e.currentTarget.value)}>
 							<option value="" disabled>Select an observation source…</option>
 							{#each obsSources as source (source.id)}
 								<option value={source.id}
@@ -672,6 +685,17 @@
 						<p class="error">{yearError}</p>
 					{/if}
 
+					<div class="field">
+						{@render fieldLabel(
+							'Area of interest',
+							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
+						)}
+						<FocusAreaMap
+							value={focusArea}
+							regionId={selectedObs?.region ?? null}
+							onchange={(box) => (focusArea = box)}
+						/>
+					</div>
 					<details class="advanced">
 						<summary>Advanced</summary>
 						<div class="field-row">

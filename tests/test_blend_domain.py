@@ -236,3 +236,15 @@ async def test_validate_blend_config_flags_bad_years(client, user_id: str) -> No
     validation = patched["blend_validation"]
     assert validation["can_run"] is False
     assert any("Climatology needs" in e for e in validation["errors"])
+
+
+def test_blend_patch_sets_clears_or_keeps_the_focus_area() -> None:
+    from ai_almanac.server.services.blend_domain import _focus_area_field
+    from ai_almanac.server.services.blend_state import BlendRunSpec
+    from ai_almanac.server.services.focus_area import FocusBox
+
+    box = {"lat_min": 9.0, "lat_max": 11.0, "lon_min": 38.0, "lon_max": 40.0}
+    spec = BlendRunSpec(focus_area=FocusBox(**box))
+    assert _focus_area_field({}, spec) == spec.focus_area
+    assert _focus_area_field({"focus_area": None}, spec) is None
+    assert _focus_area_field({"focus_area": {**box, "lat_max": 12.0}}, spec).lat_max == 12.0

@@ -38,6 +38,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -415,7 +416,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
 
             prep_kwargs = {
                 k: params[k]
-                for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+                for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
                 if params.get(k) is not None
             }
             if config.get("region_id"):
@@ -660,6 +661,55 @@ def _remap_bundle_to_adm3(bundle: bytes, label: str, cache_dir: str | None = Non
     return _bundle_files(output_paths)
 
 
+def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: bool) -> dict:
+    filt = {"dissemination_cells_file": str(dissemination_path) if dissemination_path else None}
+    if not focus_area:
+        return filt
+    filt["focus_area"] = dict(focus_area)
+    if adm3_domain:
+        # ADM3 rows carry no lat/lon; locating them needs a point per unit.
+        centroids_path = Path(tempfile.mkdtemp(prefix="adm3-centroids-")) / "centroids.csv"
+        _adm3_centroids().to_csv(centroids_path, index=False)
+        filt["centroids_file"] = str(centroids_path)
+    return filt
+
+
+def _apply_focus_area(df, domain_filter: dict, filter_rows):
+    """Keep only rows inside the area of interest: a box, or picked unit outlines.
+
+    Only the area keys are passed on, so the dissemination-cells filter stays off
+    and runs without an area of interest behave exactly as before.
+    """
+    focus = domain_filter.get("focus_area")
+    if not focus:
+        return df
+    centroids = {k: v for k, v in domain_filter.items() if k == "centroids_file"}
+    if focus.get("geometry"):
+        kept = _rows_inside_outlines(df, focus["geometry"], centroids)
+    else:
+        kept = filter_rows(df, {"filter": {"bbox": focus, **centroids}})
+    if kept.empty:
+        raise ValueError("No cells fall inside the area of interest")
+    return kept
+
+
+def _rows_inside_outlines(df, geometry: dict, filt: dict):
+    import shapely
+    from python.prepare_data.nc_utils import _resolve_unit_latlon
+    from shapely.geometry import shape
+
+    lat, lon = _resolve_unit_latlon(df, filt)
+    if lat is None:
+        raise ValueError("Area of interest needs a lat/lon per row or a centroids file")
+    outline = shapely.union_all([shape(f["geometry"]) for f in geometry["features"]])
+    inside = shapely.contains_xy(outline, lon, lat)
+    print(
+        f"  area filter {len(geometry['features'])} outlines: {len(df)} -> {int(inside.sum())} rows",
+        flush=True,
+    )
+    return df[inside]
+
+
 def _adm3_centroids():
     import pandas as pd
 
@@ -681,7 +731,7 @@ def _adm3_centroids():
     return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
 
 
-def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
+def _attach_adm3_centroids_to_csv(csv_bytes: bytes, strict: bool = True) -> bytes:
     import pandas as pd
 
     rows = pd.read_csv(io.BytesIO(csv_bytes))
@@ -696,10 +746,39 @@ def _attach_adm3_centroids_to_csv(csv_bytes: bytes) -> bytes:
     centroids = _adm3_centroids()
     out = rows.merge(centroids, on="id", how="left", validate="many_to_one")
     missing = out[out["lat"].isna() | out["lon"].isna()]["id"].drop_duplicates()
-    if not missing.empty:
+    if strict and not missing.empty:
         sample = ", ".join(missing.astype(str).head(10).tolist())
         raise ValueError(f"ADM3 centroid mapping is missing prediction ids: {sample}")
     return out.to_csv(index=False).encode("utf-8")
+
+
+_GRID_ID = re.compile(r"^-?\d+(?:\.\d+)?_-?\d+(?:\.\d+)?$")
+
+
+def _is_per_point_summary_csv(filename: str) -> bool:
+    """The blend writes summary_models_<tag> as both .pkl and .csv; only the CSV is parseable."""
+    return (
+        filename.startswith("summary_models_")
+        and not filename.startswith("summary_models_pooled")
+        and filename.endswith(".csv")
+    )
+
+
+def _with_area_centroids(path: Path) -> bytes:
+    """Give named units in the per-point summary a centroid so the map can place them.
+
+    Grid domains already locate points by their "{lat}_{lon}" id and are returned
+    untouched. The pooled ALL row has no centroid and stays blank.
+    """
+    data = path.read_bytes()
+    if not _is_per_point_summary_csv(path.name):
+        return data
+    import pandas as pd
+
+    ids = pd.read_csv(io.BytesIO(data), usecols=["id"])["id"].astype(str)
+    if ids.map(lambda value: value == "ALL" or bool(_GRID_ID.match(value))).all():
+        return data
+    return _attach_adm3_centroids_to_csv(data, strict=False)
 
 
 def _add_lat_lon_id(df, precision: int):
@@ -1149,6 +1228,7 @@ def build_lat_lon_intermediates_bundle(
     trim_forecasts_after_true_onset: bool = True,
     region_id: str | None = None,
     use_adm3_domain: bool | None = None,
+    focus_area: dict | None = None,
     return_outputs: bool = True,
     cache_dir: str | None = None,
 ) -> dict:
@@ -1166,6 +1246,7 @@ def build_lat_lon_intermediates_bundle(
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from python.prepare_data.nc_utils import (
+        filter_by_dissemination_cells,
         nc_read_forecast_wide,
         nc_read_groundtruth_long,
         process_ground_truth_rainfall_id,
@@ -1191,6 +1272,8 @@ def build_lat_lon_intermediates_bundle(
     forecast_dirs = {
         model_name: _extract_bundle(bundle) for model_name, bundle in forecast_bundles.items()
     }
+
+    domain_filter = _domain_filter(dissemination_path, focus_area, adm3_domain)
 
     onset_options = {
         "window": 3,
@@ -1224,9 +1307,7 @@ def build_lat_lon_intermediates_bundle(
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {
-            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
-        },
+        "filter": domain_filter,
     }
     obs_spec = {
         "input": {"value_col": obs_value_col},
@@ -1246,9 +1327,7 @@ def build_lat_lon_intermediates_bundle(
             }
         },
         "options": {**onset_options, "min_day": min_day, "max_day": max_day},
-        "filter": {
-            "dissemination_cells_file": str(dissemination_path) if dissemination_path else None
-        },
+        "filter": domain_filter,
     }
 
     ref_onset_dt = _ref_onset_for(mok_month_day)
@@ -1260,6 +1339,7 @@ def build_lat_lon_intermediates_bundle(
         "mok_month_day": mok_month_day,
         "region_id": region_id,
         "adm3_domain": bool(adm3_domain),
+        "focus_area": focus_area,
         "climatology": {},
         "combined": {},
         "outputs": {},
@@ -1274,6 +1354,7 @@ def build_lat_lon_intermediates_bundle(
             dim_rename_map=obs_spec["dimensions"]["rename"],
         )
         df = _add_lat_lon_id(df, precision=id_precision)
+        df = _apply_focus_area(df, domain_filter, filter_by_dissemination_cells)
         return process_ground_truth_rainfall_id(
             df,
             obs_spec,
@@ -1292,6 +1373,7 @@ def build_lat_lon_intermediates_bundle(
         "cutoff_month_day": cutoff_month_day,
         "mok_month_day": mok_month_day,
         "adm3_domain": bool(adm3_domain),
+        "focus_area": focus_area,
     }
     cache_hits = 0
     cache_misses = 0
@@ -1354,6 +1436,7 @@ def build_lat_lon_intermediates_bundle(
             prefix="rain",
         )
         df = _add_lat_lon_id(df, precision=id_precision)
+        df = _apply_focus_area(df, domain_filter, filter_by_dissemination_cells)
         member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
         processed = process_rainfall_forecast_id(
             df,
@@ -2004,7 +2087,7 @@ def train_blending_model_bundle(
         )
         for path in sorted(results_dir.iterdir()):
             if path.is_file():
-                (output_dir / path.name).write_bytes(path.read_bytes())
+                (output_dir / path.name).write_bytes(_with_area_centroids(path))
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
@@ -2195,7 +2278,7 @@ def score_live_forecast(
     t0 = time.perf_counter()
     prep_kwargs = {
         k: blend_params[k]
-        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day")
+        for k in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
         if blend_params.get(k) is not None
     }
     if blend_params.get("region_id"):

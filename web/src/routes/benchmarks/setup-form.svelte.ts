@@ -8,12 +8,13 @@ import {
 	type Job,
 	type JobParams,
 	type ModelConfig,
+	type FocusAreaValue,
 	type Region,
 	type RompDefaults
 } from '$lib/api';
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
 
-type SharedParamValue = string | number | null;
+type SharedParamValue = string | number | FocusAreaValue | null;
 type ModelOverrideValue = string | boolean | number;
 type ModelOverrides = Record<string, Record<string, ModelOverrideValue>>;
 
@@ -25,6 +26,12 @@ function numberParam(value: unknown): number | undefined {
 
 function stringParam(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function focusAreaParam(value: unknown): FocusAreaValue | undefined {
+	return value !== null && typeof value === 'object' && ('lat_min' in value || 'units' in value)
+		? (value as FocusAreaValue)
+		: undefined;
 }
 
 function booleanParam(value: unknown): boolean | undefined {
@@ -190,6 +197,7 @@ export class BenchmarkSetupForm {
 		this.selectedRegionId = id;
 		this.selectedModelIds = [];
 		this.perModelOverrides = {};
+		this.sharedAdvancedParams = { ...this.sharedAdvancedParams, focus_area: null };
 		this.models = [];
 		void this.loadModels(id);
 		this.markManualConfigDirty();
@@ -232,6 +240,8 @@ export class BenchmarkSetupForm {
 				dry_extent: numberParam(params.dry_extent)
 			}),
 			...(stringParam(params.nc_mask) && { nc_mask: stringParam(params.nc_mask) }),
+			// A cleared box must reach the server as null, or the merge keeps the old one.
+			...('focus_area' in params && { focus_area: focusAreaParam(params.focus_area) ?? null }),
 			...(stringParam(params.thresh_file) && { thresh_file: stringParam(params.thresh_file) }),
 			...(stringParam(params.ref_model) && { ref_model: stringParam(params.ref_model) }),
 			...(stringParam(params.ref_model_dir) && {

@@ -15,6 +15,7 @@ from ai_almanac.envs.manager import run_forecast as forecast_pixi_run
 from ai_almanac.paths import blending_env_dir, cache_dir
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
+from ai_almanac.server.services.focus_area import materialize_focus_mask
 from ai_almanac.server.services.romp import write_romp_config
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import sync_engine
@@ -43,6 +44,7 @@ def _run_pixi(job_id: str, config: dict) -> None:
     output_dir_raw, figure_dir_raw = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     figure_dir = Path(figure_dir_raw)
+    config = materialize_focus_mask(config, output_dir.parent)
     config_path = write_romp_config(job_id, config, output_dir, figure_dir)
     env = build_job_env(config, output_dir_raw, figure_dir_raw)
     process_env = os.environ.copy()

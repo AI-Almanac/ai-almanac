@@ -61,6 +61,7 @@ export type JobParams = {
 	ref_model_dir?: string;
 	// Advanced — masks/thresholds
 	nc_mask?: string;
+	focus_area?: FocusAreaValue | null;
 	thresh_file?: string;
 };
 
@@ -254,6 +255,18 @@ export type BboxExtent = {
 	lon_max: number;
 };
 
+/** Named administrative units picked on the map; outlines are attached at submission. */
+export type FocusUnits = {
+	level: 'adm2';
+	units: string[];
+};
+
+export type FocusAreaValue = BboxExtent | FocusUnits;
+
+export function isFocusUnits(value: FocusAreaValue | null | undefined): value is FocusUnits {
+	return value != null && 'units' in value;
+}
+
 export type GridInfo = {
 	lats: number[];
 	lons: number[];
@@ -403,7 +416,33 @@ export type BlendCellMetrics = {
 	cell_size_deg: number | null;
 	min_observations: number;
 	grids: BlendCellGrid[];
+	/** Named administrative units, when the domain is not a grid. Exactly one of grids/areas is populated. */
+	areas: BlendAreaMetric[];
+	/** Region whose boundaries the areas belong to. */
+	region_id: string | null;
 };
+
+/** Skill at one named administrative unit, located by its centroid. */
+export type BlendAreaSkill = {
+	id: string;
+	lat: number;
+	lon: number;
+	skill: number | null;
+	count: number | null;
+};
+
+/** One metric's skill per named area, sharing the grid's scale fields. */
+export type BlendAreaMetric = {
+	metric: string;
+	label: string;
+	areas: BlendAreaSkill[];
+	scale_max_abs: number | null;
+	value_min: number | null;
+	value_max: number | null;
+	clipped: number;
+};
+
+export type SkillLayer = BlendCellGrid | BlendAreaMetric;
 
 /**
  * Per-grid-point blend skill. A run whose per-cell summary is missing, or which

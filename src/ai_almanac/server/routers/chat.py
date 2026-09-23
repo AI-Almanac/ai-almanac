@@ -190,6 +190,7 @@ class BlendConfigPatchIn(BaseModel):
     forecast_years: str | None = None
     true_holdout_years: str | None = None
     formula_text: str | None = None
+    focus_area: dict | None = None
 
 
 class BlendSubmitIn(BaseModel):
@@ -496,12 +497,12 @@ async def update_session_benchmark_config(
         raise HTTPException(status_code=404, detail="Session not found")
 
     scope = ChatScope.model_validate(json_dict(row["scope"]))
-    payload = await update_benchmark_config(
-        body.model_dump(exclude_none=True),
-        user.id,
-        scope,
-        session_id,
-    )
+    try:
+        payload = await update_benchmark_config(
+            body.model_dump(exclude_unset=True), user.id, scope, session_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("benchmark_config"), dict):
         raise HTTPException(
             status_code=500, detail="Benchmark config update returned invalid payload"
@@ -571,12 +572,12 @@ async def update_session_blend_config(session_id: str, body: BlendConfigPatchIn,
         raise HTTPException(status_code=404, detail="Session not found")
 
     scope = ChatScope.model_validate(json_dict(row["scope"]))
-    payload = await update_blend_config(
-        body.model_dump(exclude_none=True),
-        user.id,
-        scope,
-        session_id,
-    )
+    try:
+        payload = await update_blend_config(
+            body.model_dump(exclude_unset=True), user.id, scope, session_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("blend_config"), dict):
         raise HTTPException(status_code=500, detail="Blend config update returned invalid payload")
     return BlendConfigOut(

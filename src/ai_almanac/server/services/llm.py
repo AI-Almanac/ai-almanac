@@ -223,9 +223,12 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
     async def update_benchmark_config(
         ctx: RunContext[ChatDeps], patch: chat_tools.BenchmarkConfigPatch
     ) -> dict:
-        """Patch and validate the canonical benchmark configuration for this chat session."""
+        """Patch and validate the canonical benchmark configuration for this chat session.
+
+        Omit a field to leave it unchanged; set it to null to clear it.
+        """
         return await chat_tools.update_benchmark_config(
-            patch.model_dump(exclude_none=True),
+            patch.model_dump(exclude_unset=True),
             ctx.deps.user_id,
             ctx.deps.scope,
             ctx.deps.session_id,
@@ -289,9 +292,12 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
     async def update_blend_config(
         ctx: RunContext[ChatDeps], patch: chat_tools.BlendConfigPatch
     ) -> dict:
-        """Patch and validate the canonical blend configuration for this chat session."""
+        """Patch and validate the canonical blend configuration for this chat session.
+
+        Omit a field to leave it unchanged; set it to null to clear it.
+        """
         return await chat_tools.update_blend_config(
-            patch.model_dump(exclude_none=True),
+            patch.model_dump(exclude_unset=True),
             ctx.deps.user_id,
             ctx.deps.scope,
             ctx.deps.session_id,

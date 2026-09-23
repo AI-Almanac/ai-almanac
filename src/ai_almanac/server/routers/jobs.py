@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Annotated
@@ -154,6 +155,10 @@ def _require_complete(job: dict) -> None:
         raise HTTPException(
             status_code=409, detail=f"Job is not complete (status: {job['status']})"
         )
+
+
+def _job_region_id(job: dict) -> str | None:
+    return json.loads(job.get("config_json") or "{}").get("region_id")
 
 
 @router.post("/{job_id}/cancel", response_model=JobOut)
@@ -343,11 +348,13 @@ async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetr
         None,
     )
     if summary is None:
-        return blend_cells.build_cell_metrics(job_id, "")
+        return blend_cells.build_cell_metrics(job_id, "", region_id=_job_region_id(job))
     text = await asyncio.to_thread(
         get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
     )
-    return await asyncio.to_thread(blend_cells.build_cell_metrics, job_id, text or "")
+    return await asyncio.to_thread(
+        blend_cells.build_cell_metrics, job_id, text or "", region_id=_job_region_id(job)
+    )
 
 
 @router.get("/{job_id}/results/{kind}/{filename:path}")

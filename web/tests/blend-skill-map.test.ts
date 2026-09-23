@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BlendCellGrid } from '../src/lib/api';
+import type { BlendAreaMetric, BlendCellGrid } from '../src/lib/api';
 import {
+	buildAreaSkillCells,
 	buildSkillCells,
+	centredAreaCount,
+	featureBounds,
+	isAreaMetric,
+	lowCountPoints,
 	cellOpacity,
 	halfCell,
 	rampPosition,
@@ -92,7 +97,7 @@ describe('buildSkillCells', () => {
 	it('emits one square per scored point and skips empty ones', () => {
 		const cells = buildSkillCells(grid(), { minObservations: 10, cellSizeDeg: 0.25 });
 		expect(cells.features).toHaveLength(3);
-		const ring = cells.features[0].geometry.coordinates[0];
+		const ring = (cells.features[0].geometry as GeoJSON.Polygon).coordinates[0];
 		// Closed ring centred on the point.
 		expect(ring).toHaveLength(5);
 		expect(ring[0]).toEqual(ring[4]);
@@ -178,5 +183,84 @@ describe('shareBeatingBaseline', () => {
 	it('treats exactly matching climatology as not beating it', () => {
 		const tied = grid({ values: [[0]], counts: [[24]], lats: [10], lons: [33] });
 		expect(shareBeatingBaseline(tied)).toEqual({ better: 0, total: 1 });
+	});
+});
+
+function areaMetric(overrides: Partial<BlendAreaMetric> = {}): BlendAreaMetric {
+	return {
+		metric: 'brier_skill_score',
+		label: 'Brier Skill Score',
+		areas: [
+			{ id: 'Dessie town', lat: 11.13, lon: 39.63, skill: 0.5, count: 24 },
+			{ id: 'Legambo', lat: 11.0, lon: 39.2, skill: -1.0, count: 4 },
+			{ id: 'Unscored', lat: 10.9, lon: 39.1, skill: null, count: null }
+		],
+		scale_max_abs: 1,
+		value_min: -1,
+		value_max: 0.5,
+		clipped: 0,
+		...overrides
+	};
+}
+
+const legamboOutline: GeoJSON.FeatureCollection = {
+	type: 'FeatureCollection',
+	features: [
+		{
+			type: 'Feature',
+			properties: { shapeName: 'LEGAMBO' },
+			geometry: {
+				type: 'Polygon',
+				coordinates: [
+					[
+						[39.0, 10.8],
+						[39.4, 10.8],
+						[39.4, 11.2],
+						[39.0, 11.2],
+						[39.0, 10.8]
+					]
+				]
+			}
+		}
+	]
+};
+
+describe('buildAreaSkillCells', () => {
+	it('uses the boundary polygon when a name matches, ignoring case and spelling noise', () => {
+		const cells = buildAreaSkillCells(areaMetric(), legamboOutline, { minObservations: 10 });
+		const legambo = cells.features.find((f) => f.properties.name === 'Legambo');
+		expect(legambo?.geometry).toEqual(legamboOutline.features[0].geometry);
+		expect(centredAreaCount(cells)).toBe(1);
+	});
+
+	it('marks an unmatched area as a point at its centroid and skips unscored ones', () => {
+		const cells = buildAreaSkillCells(areaMetric(), legamboOutline, { minObservations: 10 });
+		expect(cells.features.map((f) => f.properties.name)).toEqual(['Dessie town', 'Legambo']);
+		const dessie = cells.features[0];
+		expect(dessie.geometry).toEqual({ type: 'Point', coordinates: [39.63, 11.13] });
+		expect(dessie.properties.opacity).toBe(0.85);
+		expect(cells.features[1].properties.opacity).toBeLessThan(0.85);
+	});
+
+	it('places every area at its centroid when no boundaries are available', () => {
+		const cells = buildAreaSkillCells(areaMetric(), null, { minObservations: 10 });
+		expect(centredAreaCount(cells)).toBe(2);
+		expect(featureBounds(cells)).toEqual([
+			[39.2, 11.0],
+			[39.63, 11.13]
+		]);
+	});
+});
+
+describe('area metrics share the grid helpers', () => {
+	it('distinguishes the two shapes', () => {
+		expect(isAreaMetric(areaMetric())).toBe(true);
+		expect(isAreaMetric(grid())).toBe(false);
+	});
+
+	it('counts scored areas beating the baseline and those on thin evidence', () => {
+		expect(shareBeatingBaseline(areaMetric())).toEqual({ better: 1, total: 2 });
+		expect(lowCountPoints(areaMetric(), 10)).toBe(1);
+		expect(lowCountPoints(grid(), 10)).toBe(1);
 	});
 });

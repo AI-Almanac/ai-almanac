@@ -18,10 +18,11 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from ai_almanac.server.db import get_db, lock_for_update
+from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services import guardrails, trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     live_forecast_compatibility,
@@ -69,6 +70,7 @@ class RompParams(BaseModel):
     land_only: bool | None = None
     shp_only: bool | None = None
     nc_mask: str | None = None
+    focus_area: FocusArea | None = None
     ref_model_dir: str | None = None
     thresh_file: str | None = None
 
@@ -273,6 +275,7 @@ class BlendParams(BaseModel):
     threshold_mm: float | None = None
     cutoff_month_day: str | None = None
     mok_month_day: str | None = None
+    focus_area: FocusArea | None = None
 
 
 class BlendCreate(BaseModel):
@@ -602,6 +605,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     region_id = obs_source.get("region") if obs_source else None
+    blend_params = await _with_unit_outlines(
+        body.params.model_dump(exclude_none=True), (await load_catalog()).region(region_id or "")
+    )
     config = {
         "job_type": "blend",
         "modal_app": settings.modal_blending_app_name,
@@ -614,7 +620,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "forecast_years": forecast_years,
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
-        "blend_params": body.params.model_dump(exclude_none=True),
+        "blend_params": blend_params,
         "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }
@@ -1071,6 +1077,26 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     return await create_forecast_for_user(body, user_id)
 
 
+async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
+    """Picked administrative units need their outlines frozen into the job."""
+    if not params.get("focus_area"):
+        return params
+    if params.get("nc_mask"):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose either an area of interest or a custom mask file, not both.",
+        )
+    try:
+        area = await boundaries.attach_unit_outlines(
+            parse_focus_area(params["focus_area"]), region_def
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except boundaries.BoundaryUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {**params, "focus_area": area.model_dump(mode="json")}
+
+
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if not observation_source:
@@ -1140,6 +1166,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     region_id = romp_params.get("region") or model_cfg.get("region", "")
     region_def = catalog.region(region_id)
     romp_params = apply_region_params({"region": region_id, **romp_params}, catalog)
+    romp_params = await _with_unit_outlines(romp_params, region_def)
 
     source_metadata = observation_source["metadata"] if observation_source else {}
     if region_id == "custom":
