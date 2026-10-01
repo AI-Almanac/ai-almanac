@@ -484,6 +484,7 @@
 			zoom: 1.8,
 			attributionControl: false
 		});
+		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 		map.on('load', () => {
 			mapReady = true;
@@ -666,9 +667,7 @@
 			</p>
 			{#if boundaries.visibleLayers.length > 0}
 				<p class="legend-note">
-					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
-						.map((l) => l.label)
-						.join('; ')})
+					Boundaries: geoBoundaries ({boundaries.visibleLayers.map((l) => l.label).join('; ')})
 				</p>
 			{/if}
 		</div>

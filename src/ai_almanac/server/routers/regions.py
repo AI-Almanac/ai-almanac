@@ -91,7 +91,7 @@ async def delete_region(region_id: str, _admin: AdminUser) -> None:
 @router.get("/{region}/boundaries/{level}")
 async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> dict[str, Any]:
     """
-    Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
+    Return simplified geoBoundaries GeoJSON (gbHumanitarian, else gbOpen) for a region.
 
     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
     of browser CORS restrictions, so the API fetches and caches it server-side.
