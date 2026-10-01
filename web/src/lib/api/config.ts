@@ -8,6 +8,7 @@ export type MetricDefinition = {
 	unit: string | null;
 	range?: [number, number];
 	lower_is_better?: boolean;
+	tolerance_dependent?: boolean;
 	description: string;
 };
 
