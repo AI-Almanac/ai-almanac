@@ -160,10 +160,13 @@ export async function getJobArtifacts(id: string): Promise<JobArtifact[]> {
 	return request<JobArtifact[]>(`/jobs/${id}/artifacts`);
 }
 
-// The blend's pooled summary CSV, read server-side so the browser never fetches
+// One of the blend's small CV summary CSVs, read server-side so the browser never fetches
 // the outputs bucket directly. Empty string until publication indexes it.
-export async function getBlendSummary(id: string): Promise<string> {
-	const { csv } = await request<{ csv: string }>(`/jobs/${id}/blend-summary`);
+export async function getBlendSummary(
+	id: string,
+	table: 'pooled' | 'yearly' = 'pooled'
+): Promise<string> {
+	const { csv } = await request<{ csv: string }>(`/jobs/${id}/blend-summary?table=${table}`);
 	return csv;
 }
 

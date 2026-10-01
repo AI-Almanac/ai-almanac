@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { type BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { goToBlend } from '$lib/blend-nav';
@@ -174,11 +175,9 @@
 			<div class="focus-area-head">
 				<span class="label-with-help">
 					Area of interest
-					<span
-						class="tip"
-						title="Limits scoring to part of the region: draw a box, or pick administrative areas on the map. Land and country borders still apply. Leave it as the whole region to score everything."
-						>ⓘ</span
-					>
+					<InfoTip
+						text="Limits scoring to part of the region: draw a box, or pick administrative areas on the map. Land and country borders still apply. Leave it as the whole region to score everything."
+					/>
 				</span>
 				<small
 					>{focusArea
@@ -515,18 +514,5 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-	}
-
-	.tip {
-		display: inline-grid;
-		place-items: center;
-		inline-size: 1rem;
-		block-size: 1rem;
-		border-radius: 999px;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font-size: 0.7rem;
-		font-weight: 900;
-		cursor: help;
 	}
 </style>

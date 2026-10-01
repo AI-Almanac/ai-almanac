@@ -100,6 +100,6 @@ export function yearSpecError(
 	if (min < cov.start || max > cov.end)
 		return `Chosen sources only share data for ${cov.start}–${cov.end}.`;
 	if (min < cov.earliestForecast)
-		return `Climatology needs ${MIN_ONSET_YEARS} years of observations before the first forecast year — start at ${cov.earliestForecast} or later.`;
+		return `The climatology baseline needs at least ${MIN_ONSET_YEARS} observed years before the first forecast year — start at ${cov.earliestForecast} or later.`;
 	return null;
 }

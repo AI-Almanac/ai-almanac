@@ -1040,10 +1040,11 @@ export interface paths {
         };
         /**
          * Get Blend Summary
-         * @description Return the blend's pooled summary CSV, read server-side.
+         * @description Return one of the blend's small CV summary CSVs, read server-side.
          *
-         *     The browser parses this for the skill chart; serving it here keeps the
-         *     outputs bucket off the client (mirroring how metrics read outputs).
+         *     `pooled` is the per-model summary behind the skill chart; `yearly` is the
+         *     per-holdout-year CV scores. Serving them here keeps the outputs bucket off
+         *     the client (mirroring how metrics read outputs).
          */
         get: operations["get_blend_summary_jobs__job_id__blend_summary_get"];
         put?: never;
@@ -6699,7 +6700,9 @@ export interface operations {
     };
     get_blend_summary_jobs__job_id__blend_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                table?: "pooled" | "yearly";
+            };
             header?: never;
             path: {
                 job_id: string;

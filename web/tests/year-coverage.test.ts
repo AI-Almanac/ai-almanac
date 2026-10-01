@@ -72,7 +72,9 @@ describe('yearSpecError', () => {
 	const cov = { start: 2000, end: 2012, earliestForecast: 2008 };
 	it('rejects a forecast start without enough climatology runway', () => {
 		// This is the config that failed the real run.
-		expect(yearSpecError(cov, '2000:2010', '2011,2012', '', '')).toMatch(/Climatology needs/);
+		expect(yearSpecError(cov, '2000:2010', '2011,2012', '', '')).toMatch(
+			/climatology baseline needs/
+		);
 	});
 	it('rejects years outside shared coverage', () => {
 		expect(yearSpecError(cov, '2008:2013', '', '', '')).toMatch(/only share data/);

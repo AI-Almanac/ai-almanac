@@ -56,8 +56,9 @@ def live_forecast_compatibility(
     if grids_known and not math.isclose(live_step, archive_step, abs_tol=1e-6):
         return LiveForecastCompatibility(
             "grid_mismatch",
-            f"{entry['display_name']} forecasts on a {live_step:g}° grid, "
-            f"but this archive is on a {archive_step:g}° grid.",
+            f"{entry['display_name']} runs live forecasts on a {live_step:g}° grid, "
+            f"but this archive is on a {archive_step:g}° grid, so weights trained "
+            "on it don't apply to live forecasts.",
             entry["id"],
         )
     return LiveForecastCompatibility("ready", None, entry["id"])
