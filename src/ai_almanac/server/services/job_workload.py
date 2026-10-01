@@ -50,21 +50,21 @@ def _run_pixi(job_id: str, config: dict) -> None:
     process_env = os.environ.copy()
     process_env.update(env)
 
-    print(f"==> ROMP config: {config_path}", flush=True)
-    print("==> Starting ROMP...", flush=True)
+    print(f"==> Benchmark config: {config_path}", flush=True)
+    print("==> Starting onset scoring...", flush=True)
     process = pixi_run(["momp-run", "-p", str(config_path)], env=process_env)
     _stream_process(process)
 
     if config.get("compute_e2s_metrics"):
-        print("==> Starting Earth2Studio metrics...", flush=True)
+        print("==> Starting rainfall verification metrics...", flush=True)
         e2s_script = Path(__file__).with_name("e2s.py")
         e2s_process = pixi_run(["python", str(e2s_script)], env=process_env)
         try:
             _stream_process(e2s_process)
         except subprocess.CalledProcessError as exc:
             print(
-                f"WARNING: Earth2Studio metrics exited with code {exc.returncode}; "
-                "ROMP outputs are still available.",
+                f"WARNING: Rainfall verification metrics exited with code {exc.returncode}; "
+                "Onset scores are still available.",
                 flush=True,
             )
 
