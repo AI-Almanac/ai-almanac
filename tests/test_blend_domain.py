@@ -249,3 +249,86 @@ def test_blend_patch_sets_clears_or_keeps_the_focus_area() -> None:
     assert _focus_area_field({}, spec) == spec.focus_area
     assert _focus_area_field({"focus_area": None}, spec) is None
     assert _focus_area_field({"focus_area": {**box, "lat_max": 12.0}}, spec).lat_max == 12.0
+
+
+# --- Onset definition (threshold / cutoff / reference onset) -----------------
+
+
+@pytest.mark.asyncio
+async def test_onset_params_flow_from_patch_to_submission_body(client, user_id: str) -> None:
+    obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
+    gencast_id = await _seed_source("model", "GenCast", "india", 2000, 2024)
+    session_id = await _seed_session(user_id)
+    scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
+
+    patched = await blend_domain.update_blend_config(
+        {
+            "name": "India blend",
+            "obs_dataset_id": obs_id,
+            "model_ids": [gencast_id],
+            "training_years": "2015:2020",
+            "cv_holdout_years": "2021,2022",
+            "threshold_mm": 25,
+            "cutoff_month_day": "05-15",
+            "ref_onset_month_day": "06-10",
+        },
+        user_id,
+        scope,
+        session_id,
+    )
+    cfg = patched["blend_config"]
+    assert cfg["threshold_mm"] == 25.0
+    assert cfg["cutoff_month_day"] == "05-15"
+    assert cfg["ref_onset_month_day"] == "06-10"
+    assert patched["blend_validation"]["can_run"] is True
+
+    body = blend_domain._blend_create_body(BlendRunSpec.model_validate(cfg), "run-1")
+    assert body.params.threshold_mm == 25.0
+    assert body.params.cutoff_month_day == "05-15"
+    assert body.params.ref_onset_month_day == "06-10"
+
+    # A later patch that omits the onset keys leaves them alone; an explicit
+    # null clears the threshold back to the workflow default.
+    patched = await blend_domain.update_blend_config(
+        {"name": "Renamed", "threshold_mm": None}, user_id, scope, session_id
+    )
+    cfg = patched["blend_config"]
+    assert cfg["threshold_mm"] is None
+    assert cfg["cutoff_month_day"] == "05-15"
+
+
+@pytest.mark.asyncio
+async def test_validate_blend_config_flags_bad_onset_params(client, user_id: str) -> None:
+    obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
+    gencast_id = await _seed_source("model", "GenCast", "india", 2000, 2024)
+    session_id = await _seed_session(user_id)
+    scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
+
+    base = {
+        "name": "India blend",
+        "obs_dataset_id": obs_id,
+        "model_ids": [gencast_id],
+        "training_years": "2015:2020",
+        "cv_holdout_years": "2021,2022",
+    }
+
+    patched = await blend_domain.update_blend_config(
+        {**base, "cutoff_month_day": "5/1"}, user_id, scope, session_id
+    )
+    assert patched["blend_validation"]["can_run"] is False
+    assert any("MM-DD" in e for e in patched["blend_validation"]["errors"])
+
+    patched = await blend_domain.update_blend_config(
+        {"cutoff_month_day": "06-15", "ref_onset_month_day": "06-01"}, user_id, scope, session_id
+    )
+    assert patched["blend_validation"]["can_run"] is False
+    assert any("before the onset search start" in e for e in patched["blend_validation"]["errors"])
+
+    patched = await blend_domain.update_blend_config(
+        {"cutoff_month_day": "", "ref_onset_month_day": "", "threshold_mm": 0},
+        user_id,
+        scope,
+        session_id,
+    )
+    assert patched["blend_validation"]["can_run"] is False
+    assert any("must be positive" in e for e in patched["blend_validation"]["errors"])

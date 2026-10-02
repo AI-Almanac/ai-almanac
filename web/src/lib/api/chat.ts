@@ -50,6 +50,9 @@ export type BlendRunSpec = {
 	true_holdout_years: string;
 	formula_text: string;
 	focus_area?: FocusAreaValue | null;
+	threshold_mm?: number | null;
+	cutoff_month_day: string;
+	ref_onset_month_day: string;
 	status: 'collecting' | 'runnable' | 'running';
 	missing_fields: string[];
 	assumptions: string[];

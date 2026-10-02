@@ -191,6 +191,9 @@ class BlendConfigPatchIn(BaseModel):
     true_holdout_years: str | None = None
     formula_text: str | None = None
     focus_area: dict | None = None
+    threshold_mm: float | None = None
+    cutoff_month_day: str | None = None
+    ref_onset_month_day: str | None = None
 
 
 class BlendSubmitIn(BaseModel):

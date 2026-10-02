@@ -395,3 +395,61 @@ def test_blend_coverage_rejects_forecast_years_a_source_is_missing():
 
     assert any("no data for 2005, 2007" in error for error in errors)
     assert job_submission.blend_coverage_errors([2004, 2006], coverage) == []
+
+
+# --- BlendParams onset definition -------------------------------------------
+
+
+def test_blend_params_accepts_legacy_mok_month_day_alias() -> None:
+    # onset_blending renamed "MOK date" to "reference onset"; pre-rename clients
+    # and stored payloads still say mok_month_day.
+    params = job_submission.BlendParams(
+        training_years="2019:2024", cv_holdout_years="2024", mok_month_day="06-05"
+    )
+    assert params.ref_onset_month_day == "06-05"
+    dumped = params.model_dump(exclude_none=True)
+    assert "mok_month_day" not in dumped
+    assert dumped["ref_onset_month_day"] == "06-05"
+
+    # The new name wins when both are present.
+    params = job_submission.BlendParams(
+        training_years="2019:2024",
+        cv_holdout_years="2024",
+        mok_month_day="06-05",
+        ref_onset_month_day="06-10",
+    )
+    assert params.ref_onset_month_day == "06-10"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "fragment"),
+    [
+        ({"threshold_mm": 0}, "must be positive"),
+        ({"threshold_mm": -3.5}, "must be positive"),
+        ({"cutoff_month_day": "2024-05-01"}, "MM-DD"),
+        ({"cutoff_month_day": "13-01"}, "MM-DD"),
+        ({"ref_onset_month_day": "02-30"}, "MM-DD"),
+        ({"cutoff_month_day": "5-1"}, "MM-DD"),
+        ({"cutoff_month_day": "02-29"}, "not Feb 29"),
+        ({"threshold_mm": float("inf")}, "must be positive"),
+        ({"cutoff_month_day": "06-15", "ref_onset_month_day": "06-01"}, "before the onset search"),
+        # One override is checked against the other field's default (05-01 / 06-01).
+        ({"ref_onset_month_day": "04-15"}, "before the onset search start 05-01"),
+        ({"cutoff_month_day": "06-15"}, "Reference onset date 06-01 is before"),
+    ],
+)
+def test_blend_params_rejects_bad_onset_definition(overrides: dict, fragment: str) -> None:
+    with pytest.raises(ValueError, match=fragment):
+        job_submission.BlendParams(training_years="2019:2024", cv_holdout_years="2024", **overrides)
+
+
+def test_blend_params_accepts_valid_onset_definition() -> None:
+    params = job_submission.BlendParams(
+        training_years="2019:2024",
+        cv_holdout_years="2024",
+        threshold_mm=25.5,
+        cutoff_month_day="04-15",
+        ref_onset_month_day="05-01",
+    )
+    assert params.threshold_mm == 25.5
+    assert job_submission.onset_param_errors(None, None, None) == []
