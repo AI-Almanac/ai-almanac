@@ -7,7 +7,8 @@ const blank = { thresholdMm: '', cutoffMonthDay: '', refOnsetMonthDay: '' };
 describe('blend onset params', () => {
 	it('accepts real MM-DD dates only', () => {
 		expect(isMonthDay('05-01')).toBe(true);
-		expect(isMonthDay('02-29')).toBe(true);
+		expect(isMonthDay('02-29')).toBe(false);
+		expect(isMonthDay('02-28')).toBe(true);
 		expect(isMonthDay('02-30')).toBe(false);
 		expect(isMonthDay('13-01')).toBe(false);
 		expect(isMonthDay('5-1')).toBe(false);
@@ -35,6 +36,14 @@ describe('blend onset params', () => {
 		expect(
 			onsetParamsError({ ...blank, cutoffMonthDay: '05-01', refOnsetMonthDay: '06-01' })
 		).toBeNull();
+	});
+
+	it('checks a single date override against the other field default', () => {
+		expect(onsetParamsError({ ...blank, refOnsetMonthDay: '04-15' })).toMatch(
+			/before the onset search start 05-01/
+		);
+		expect(onsetParamsError({ ...blank, cutoffMonthDay: '06-15' })).toMatch(/06-01 is before/);
+		expect(onsetParamsError({ ...blank, cutoffMonthDay: '04-15' })).toBeNull();
 	});
 
 	it('only sends fields the user filled in, trimmed and typed', () => {

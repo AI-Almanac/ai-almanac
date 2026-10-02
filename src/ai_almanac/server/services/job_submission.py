@@ -9,6 +9,8 @@ surface the errors to an HTTP client.
 from __future__ import annotations
 
 import json
+import math
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -263,12 +265,28 @@ async def _resolve_obs_dir(
     return source["path"]
 
 
+# Workflow defaults the blend uses when a field is unset. Mirror
+# build_intermediates' defaults in modal/blending_app.py.
+DEFAULT_CUTOFF_MONTH_DAY = "05-01"
+DEFAULT_REF_ONSET_MONTH_DAY = "06-01"
+
+
 def _month_day_error(label: str, value: str) -> str | None:
-    """Reject anything but a real calendar ``MM-DD``; leap day is allowed."""
+    """Reject anything but a zero-padded ``MM-DD`` that exists in every year.
+
+    Feb 29 is refused: the workflow builds a date from it for each season, which
+    fails in non-leap years.
+    """
     try:
-        datetime.strptime(f"2000-{value}", "%Y-%m-%d")
+        valid = re.fullmatch(r"\d{2}-\d{2}", value) and datetime.strptime(
+            f"2001-{value}", "%Y-%m-%d"
+        )
     except ValueError:
-        return f"{label} must be a calendar date in MM-DD form (e.g. 05-01), got {value!r}"
+        valid = False
+    if not valid:
+        return (
+            f"{label} must be a calendar date in MM-DD form (e.g. 05-01, not Feb 29), got {value!r}"
+        )
     return None
 
 
@@ -280,7 +298,7 @@ def onset_param_errors(
     """Validate the onset-definition trio shared by the blend form, the chat
     config, and the submission body. Returns messages, empty when valid."""
     errors: list[str] = []
-    if threshold_mm is not None and not threshold_mm > 0:
+    if threshold_mm is not None and not (math.isfinite(threshold_mm) and threshold_mm > 0):
         errors.append(f"Onset rainfall threshold must be positive, got {threshold_mm}")
     for label, value in (
         ("Onset search start", cutoff_month_day),
@@ -290,16 +308,14 @@ def onset_param_errors(
             err = _month_day_error(label, value)
             if err:
                 errors.append(err)
-    # MM-DD strings compare lexically in calendar order.
-    if (
-        not errors
-        and cutoff_month_day
-        and ref_onset_month_day
-        and ref_onset_month_day < cutoff_month_day
-    ):
+    # Compare effective values, so overriding one date is checked against the
+    # other's default. Zero-padded MM-DD strings compare lexically in calendar order.
+    cutoff = cutoff_month_day or DEFAULT_CUTOFF_MONTH_DAY
+    ref_onset = ref_onset_month_day or DEFAULT_REF_ONSET_MONTH_DAY
+    if not errors and ref_onset < cutoff:
         errors.append(
-            f"Reference onset date {ref_onset_month_day} is before the onset search "
-            f"start {cutoff_month_day}; onset cannot be detected before the search begins"
+            f"Reference onset date {ref_onset} is before the onset search "
+            f"start {cutoff}; onset cannot be detected before the search begins"
         )
     return errors
 

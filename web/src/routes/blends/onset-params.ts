@@ -22,11 +22,12 @@ export type OnsetParams = {
 	ref_onset_month_day?: string;
 };
 
-// A real calendar MM-DD; leap day allowed (validated against a leap year).
+// A calendar MM-DD that exists every year. Feb 29 is refused because each
+// season builds a date from it, which fails in non-leap years.
 export function isMonthDay(value: string): boolean {
 	const m = value.match(/^(\d{2})-(\d{2})$/);
 	if (!m) return false;
-	const d = new Date(Date.UTC(2000, +m[1] - 1, +m[2]));
+	const d = new Date(Date.UTC(2001, +m[1] - 1, +m[2]));
 	return d.getUTCMonth() === +m[1] - 1 && d.getUTCDate() === +m[2];
 }
 
@@ -45,9 +46,12 @@ export function onsetParamsError(input: OnsetParamsInput): string | null {
 		return 'Onset search start must be a date in MM-DD form, e.g. 05-01.';
 	if (refOnset && !isMonthDay(refOnset))
 		return 'Reference onset date must be a date in MM-DD form, e.g. 06-01.';
-	// MM-DD strings compare lexically in calendar order.
-	if (cutoff && refOnset && refOnset < cutoff)
-		return 'Reference onset date is before the onset search start; onset cannot be detected before the search begins.';
+	// Compare effective values so one override is checked against the other's
+	// default. Zero-padded MM-DD strings compare lexically in calendar order.
+	const effectiveCutoff = cutoff || ONSET_DEFAULTS.cutoff_month_day;
+	const effectiveRefOnset = refOnset || ONSET_DEFAULTS.ref_onset_month_day;
+	if (effectiveRefOnset < effectiveCutoff)
+		return `Reference onset date ${effectiveRefOnset} is before the onset search start ${effectiveCutoff}; onset cannot be detected before the search begins.`;
 	return null;
 }
 
