@@ -17,6 +17,7 @@
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
+	import { describeSourceCoverage, missingYears } from '$lib/source-coverage';
 	import { account } from '$lib/account.svelte';
 
 	$effect(() => {
@@ -450,6 +451,15 @@
 									</strong>
 								</div>
 							{/if}
+							{#if missingYears(validationDraft).length}
+								<div class="wide">
+									<span>Missing years</span>
+									<strong class="gap-warning">
+										No files for {missingYears(validationDraft).join(', ')}. The source can still be
+										saved; those years will be unavailable.
+									</strong>
+								</div>
+							{/if}
 							{#if spatialBoundsMetadata(validationDraft.metadata)}
 								<div class="wide">
 									<span>Detected coverage</span>
@@ -580,6 +590,9 @@
 				<span class="tag">{src.visibility === 'shared' ? 'shared' : 'private'}</span>
 			</div>
 			<code class="path">{src.path}</code>
+			{#if describeSourceCoverage(src)}
+				<p class="coverage">{describeSourceCoverage(src)}</p>
+			{/if}
 			{#if spatialBounds(src)}
 				<p class="coverage">{spatialBounds(src)}</p>
 			{/if}
@@ -888,6 +901,10 @@
 		color: var(--color-text-muted);
 		font-size: 0.85rem;
 	}
+	.gap-warning {
+		color: var(--color-status-running);
+	}
+
 	.coverage {
 		margin: 0;
 		color: var(--color-text-muted);

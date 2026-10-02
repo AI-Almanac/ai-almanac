@@ -59,15 +59,15 @@ def _file_glob(pattern: str) -> str:
     return pattern.replace("{}", "*")
 
 
-def _coverage_years(files: list[Path]) -> tuple[int | None, int | None]:
-    years = []
-    for file in files:
-        match = re.search(r"(?:19|20)\d{2}", file.name)
-        if match:
-            years.append(int(match.group(0)))
+def _coverage_years(files: list[Path]) -> list[int]:
+    matches = (re.search(r"(?:19|20)\d{2}", file.name) for file in files)
+    return sorted({int(match.group(0)) for match in matches if match})
+
+
+def _missing_years(years: list[int]) -> list[int]:
     if not years:
-        return None, None
-    return min(years), max(years)
+        return []
+    return sorted(set(range(years[0], years[-1] + 1)) - set(years))
 
 
 def _coordinate_name(dataset, candidates: tuple[str, ...]) -> str | None:
@@ -197,10 +197,15 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     normalized[variable_key] = str(normalized.get(variable_key) or default_variable).strip()
     normalized[pattern_key] = str(normalized.get(pattern_key) or "{}.nc").strip()
 
-    start_year, end_year = _coverage_years(files)
-    if start_year is not None:
+    years = _coverage_years(files)
+    start_year, end_year = (years[0], years[-1]) if years else (None, None)
+    if years:
         normalized["start_year"] = start_year
         normalized["end_year"] = end_year
+        # A gap is reported, not rejected: sources with a missing season are
+        # still usable for the years they do cover.
+        normalized["years"] = years
+        normalized["missing_years"] = _missing_years(years)
 
     if kind == "model":
         normalized.setdefault("model_type", "AIWP")

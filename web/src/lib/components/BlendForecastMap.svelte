@@ -24,6 +24,7 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
+	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
 		buildAdm3ForecastGeoJson,
 		usesNamedAreas,
@@ -389,6 +390,7 @@
 		return `calc(${frac} * (100% - 2.8rem))`;
 	}
 
+	const dataThrough = $derived(data ? latestIssueDate(data.issue_dates) : null);
 	const dateIndex = $derived(data ? data.issue_dates.indexOf(selectedDate) : -1);
 	const dateCount = $derived(data?.issue_dates.length ?? 0);
 
@@ -556,6 +558,9 @@
 					{#if data.region_name}<span class="rail-def-region">{data.region_name}</span>{/if}
 					{data.onset_definition}
 				</p>
+			{/if}
+			{#if dataThrough}
+				<p class="rail-def">Data through {formatIssueDate(dataThrough)}</p>
 			{/if}
 		</div>
 

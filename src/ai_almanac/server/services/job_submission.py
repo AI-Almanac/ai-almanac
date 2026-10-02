@@ -431,9 +431,23 @@ def source_year_range(source: dict | None) -> YearRange:
     return _registered_year(metadata.get("start_year")), _registered_year(metadata.get("end_year"))
 
 
-def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> dict | None:
+def source_missing_years(metadata: dict | None) -> set[int]:
+    """Years missing inside a source's registered range. Sources registered
+    before gaps were detected have none recorded: unknown, treated as gap-free."""
+    value = (metadata or {}).get("missing_years")
+    if not isinstance(value, list):
+        return set()
+    return {year for item in value if (year := _registered_year(item)) is not None}
+
+
+def blend_year_coverage(
+    obs_years: YearRange,
+    model_years: list[YearRange],
+    missing_years: Iterable[int] = (),
+) -> dict | None:
     """Years the observations and every forecast model share, plus the earliest
-    forecast year whose onset climatology has enough observations behind it.
+    forecast year whose onset climatology has enough observations behind it,
+    and the years inside that range some source has no data for.
 
     None when any source's range is unregistered: the rule is then unenforceable
     rather than violated. Mirrored by web/src/routes/blends/year-coverage.ts.
@@ -449,6 +463,7 @@ def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> d
         "start": max(obs_start, *model_starts),
         "end": min(obs_end, *model_ends),
         "earliest_forecast": max(obs_start + MIN_ONSET_YEARS, *model_starts),
+        "missing": sorted(set(missing_years)),
     }
 
 
@@ -474,6 +489,12 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
         errors.append(
             f"Climatology needs {MIN_ONSET_YEARS} years of observations before the "
             f"first forecast year — start at {coverage['earliest_forecast']} or later."
+        )
+    gaps = sorted(set(forecast_years) & set(coverage.get("missing", ())))
+    if gaps:
+        errors.append(
+            f"Some chosen sources have no data for {', '.join(map(str, gaps))} — "
+            "leave those years out."
         )
     return errors
 
@@ -675,7 +696,10 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         model_files[key] = year_uris(source["path"], forecast_years)
         model_years.append(source_year_range(source))
 
-    coverage = blend_year_coverage(source_year_range(obs_source), model_years)
+    missing = set().union(
+        *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
+    )
+    coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
     coverage_errors = blend_coverage_errors(forecast_years, coverage)
     if coverage_errors:
         raise HTTPException(status_code=400, detail=" ".join(coverage_errors))

@@ -57,6 +57,7 @@ def _source_candidate(source: dict) -> dict:
         "region": source.get("region"),
         "start_year": meta.get("start_year"),
         "end_year": meta.get("end_year"),
+        "missing_years": meta.get("missing_years"),
         "grid_step_deg": meta.get("grid_step_deg"),
     }
 
@@ -94,6 +95,7 @@ def _coverage(obs: dict | None, models: list[dict]) -> dict | None:
     return job_submission.blend_year_coverage(
         (obs.get("start_year"), obs.get("end_year")),
         [(m.get("start_year"), m.get("end_year")) for m in models],
+        set().union(*(job_submission.source_missing_years(s) for s in [obs, *models])),
     )
 
 
