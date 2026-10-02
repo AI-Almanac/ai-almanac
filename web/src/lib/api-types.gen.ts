@@ -1431,7 +1431,7 @@ export interface paths {
         };
         /**
          * Get Boundary
-         * @description Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
+         * @description Return simplified geoBoundaries GeoJSON (gbHumanitarian, else gbOpen) for a region.
          *
          *     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
          *     of browser CORS restrictions, so the API fetches and caches it server-side.

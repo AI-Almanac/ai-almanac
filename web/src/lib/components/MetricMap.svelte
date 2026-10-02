@@ -49,6 +49,8 @@
 		forecastWindows?: WindowDef[];
 		metricWindowAvailability?: MetricWindowAvailability;
 		metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob;
+		/** Jobs that wrote climatology output; the baseline comes from the first of these. */
+		climatologyJobIds?: string[];
 		compact?: boolean;
 	};
 	let {
@@ -58,6 +60,7 @@
 		forecastWindows,
 		metricWindowAvailability,
 		metricWindowAvailabilityByJob,
+		climatologyJobIds,
 		compact = false
 	}: Props = $props();
 
@@ -69,6 +72,7 @@
 	let layers = $state<Record<string, LayerState>>({});
 	let loading = $state<Set<string>>(new Set());
 	let errors = $state<Record<string, string>>({});
+	let selectionError = $state<string | null>(null);
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
@@ -221,12 +225,16 @@
 		return getSwipeRuns(normalizeLensSelection(), activeRuns);
 	}
 
+	function hasLayer(key: string) {
+		return key in layers;
+	}
+
 	function currentLensKey() {
-		return getCurrentLensKey(normalizeLensSelection(), activeRuns);
+		return getCurrentLensKey(normalizeLensSelection(), activeRuns, hasLayer);
 	}
 
 	function currentLensKeys() {
-		return getCurrentLensKeys(normalizeLensSelection(), activeRuns);
+		return getCurrentLensKeys(normalizeLensSelection(), activeRuns, hasLayer);
 	}
 
 	function swipeLongitude() {
@@ -281,6 +289,7 @@
 
 	function applyLensSelection(fit = false) {
 		const keys = currentLensKeys();
+		selectionError = keys.map((key) => errors[key]).find(Boolean) ?? null;
 		const nextVisibleKeys = new Set(keys.filter((key) => layers[key]));
 		for (const [layerKey, state] of Object.entries(layers)) {
 			if (!map?.getLayer(state.layerId)) continue;
@@ -360,6 +369,7 @@
 		boundaries.clearFromMap();
 		layers = {};
 		errors = {};
+		selectionError = null;
 		loading = new Set();
 
 		if (jobs.length === 0 || metrics.length === 0) {
@@ -370,11 +380,14 @@
 		}
 
 		const modelRuns = buildModelRuns(jobs);
-		const climRun = buildClimatologyRun(jobs);
-		if (!climRun) return;
+		const climRun = buildClimatologyRun(
+			jobs,
+			(jobId) => !climatologyJobIds || climatologyJobIds.includes(jobId)
+		);
+		const fetchRuns = climRun ? [...modelRuns, climRun] : modelRuns;
 		setLensSelection(
 			getNormalizedLensSelection(lensSelection(), {
-				activeRuns: [...modelRuns, climRun],
+				activeRuns: fetchRuns,
 				activeWindows,
 				forecastWindow,
 				metrics,
@@ -383,7 +396,6 @@
 			})
 		);
 
-		const fetchRuns = [...modelRuns, climRun];
 		const allKeys = allRawLayerKeys(
 			fetchRuns,
 			activeWindows,
@@ -406,7 +418,7 @@
 		if (requestId !== loadRequestId) return;
 
 		const { dataByRunMetric, hasClimatology } = indexGridResults(results);
-		activeRuns = hasClimatology ? [...modelRuns, climRun] : modelRuns;
+		activeRuns = hasClimatology ? fetchRuns : modelRuns;
 
 		const sharedRangeByMetric = computeSharedRanges(
 			activeRuns,
@@ -583,6 +595,8 @@
 	<div class="map-stage" class:grid-cell-hover={gridCellHover}>
 		{#if anyLoading}
 			<div class="status-overlay">Loading…</div>
+		{:else if selectionError}
+			<div class="status-overlay" role="alert">Couldn't load this map: {selectionError}</div>
 		{/if}
 
 		<button
@@ -620,7 +634,7 @@
 
 		{#if boundaries.visibleLayers.length > 0}
 			<div class="boundary-attribution">
-				Boundaries: geoBoundaries gbOpen
+				Boundaries: geoBoundaries
 				{#each boundaries.visibleLayers as boundaryLayer, i}
 					{#if i === 0}({:else};
 					{/if}{boundaryLayer.label}{#if i === boundaries.visibleLayers.length - 1}){/if}

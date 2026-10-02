@@ -2,6 +2,8 @@
 #
 # metrics: definitions for all metrics ROMP can compute, used for display
 #          labels, units, and documentation in the frontend and API.
+#          tolerance_dependent marks scores that change with the onset
+#          tolerance (±N days); the others do not depend on it.
 #
 # defaults: default values for optional ROMP run parameters. These match
 #           the defaults in ROMP's generate_config.py and are used when a
@@ -16,6 +18,7 @@ metrics:
       unit: fraction
       range: [0, 1]
       lower_is_better: true
+      tolerance_dependent: true
       description: >
         Fraction of forecast events that did not occur (false alarms).
         FAR = FP / (TP + FP).
@@ -109,8 +112,8 @@ e2s_metrics:
       evaluation days. Lower is better.
 
   - id: mae
-    label: "Mean Absolute Error"
-    abbreviation: MAE
+    label: "Rainfall Mean Absolute Error"
+    abbreviation: Rainfall MAE
     unit: mm
     lower_is_better: true
     description: >

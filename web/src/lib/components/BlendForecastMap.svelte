@@ -484,6 +484,7 @@
 			zoom: 1.8,
 			attributionControl: false
 		});
+		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 		map.on('load', () => {
 			mapReady = true;
@@ -666,9 +667,7 @@
 			</p>
 			{#if boundaries.visibleLayers.length > 0}
 				<p class="legend-note">
-					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
-						.map((l) => l.label)
-						.join('; ')})
+					Boundaries: geoBoundaries ({boundaries.visibleLayers.map((l) => l.label).join('; ')})
 				</p>
 			{/if}
 		</div>
@@ -831,6 +830,11 @@
 	.fullscreen-btn:hover {
 		background: #fff;
 		color: #111;
+	}
+
+	/* Keep the map credit above the date scrubber, which spans the bottom edge. */
+	.map-area:has(.scrubber) :global(.maplibregl-ctrl-bottom-right) {
+		bottom: 3.4rem;
 	}
 
 	.scrubber {

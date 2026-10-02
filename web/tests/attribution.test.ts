@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
 	attributionSections,
 	forecastModelSources,
-	groundTruthSources
+	groundTruthSources,
+	mapDataSources
 } from '$lib/legal/attribution';
 
-const ALL_ENTRIES = [...groundTruthSources, ...forecastModelSources];
+const ALL_ENTRIES = [...groundTruthSources, ...forecastModelSources, ...mapDataSources];
 
 describe('attribution catalog', () => {
 	it('credits every ground-truth source and forecast model the platform ships by default', () => {
@@ -50,8 +51,12 @@ describe('attribution catalog', () => {
 		}
 	});
 
-	it('renders both sections in the order the page walks them', () => {
-		expect(attributionSections.map((section) => section.slug)).toEqual(['ground-truth', 'models']);
+	it('renders every section in the order the page walks them', () => {
+		expect(attributionSections.map((section) => section.slug)).toEqual([
+			'ground-truth',
+			'models',
+			'map-data'
+		]);
 		expect(attributionSections.flatMap((section) => section.entries)).toEqual(ALL_ENTRIES);
 	});
 });

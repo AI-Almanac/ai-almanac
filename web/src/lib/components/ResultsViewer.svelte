@@ -10,6 +10,7 @@
 	} from '$lib/metric-metadata';
 	import { modelDisplayName } from '$lib/model-names';
 	import MetricsTable from './MetricsTable.svelte';
+	import SkillScoresTable from './SkillScoresTable.svelte';
 	import MetricMap from './MetricMap.svelte';
 	import SegmentedTabs, { type SegmentedTabOption } from './SegmentedTabs.svelte';
 	import AllMetricsPanel from './AllMetricsPanel.svelte';
@@ -55,6 +56,24 @@
 			return metrics ? [metrics] : [];
 		});
 	});
+
+	// Probabilistic runs write region-pooled scores only, so they have nothing to map.
+	const spatialJobIds = $derived(
+		new Set(
+			currentMetrics
+				.filter((metrics) => metrics.windows.some((window) => window.model !== 'climatology'))
+				.map((metrics) => metrics.job_id)
+		)
+	);
+	const spatialJobs = $derived(jobs.filter((job) => spatialJobIds.has(job.id)));
+	const pooledOnlyJobs = $derived(
+		jobs.filter((job) => job.params?.probabilistic && !spatialJobIds.has(job.id))
+	);
+	const climatologyJobIds = $derived(
+		currentMetrics
+			.filter((metrics) => metrics.windows.some((window) => window.model === 'climatology'))
+			.map((metrics) => metrics.job_id)
+	);
 
 	function windowSortValue(window: string): number {
 		if (window === '1-15') return 0;
@@ -145,24 +164,38 @@
 	/>
 
 	{#if activeTab === 'map'}
-		{#if jobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
+		{#if spatialJobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
 			<MetricMap
-				{jobs}
+				jobs={spatialJobs}
 				forecastWindow={windowOptions[0].value}
 				forecastWindows={windowOptions}
 				metrics={mapMetrics}
 				{metricWindowAvailability}
 				{metricWindowAvailabilityByJob}
+				{climatologyJobIds}
 			/>
-		{:else}
+		{:else if pooledOnlyJobs.length === 0}
 			<p class="empty">No spatial data available for this run set.</p>
+		{/if}
+		{#if pooledOnlyJobs.length > 0}
+			<p class="empty">
+				No per-grid-point output for probabilistic runs ({pooledOnlyJobs
+					.map((job) => job.model_display_name || modelDisplayName(job.model_name))
+					.join(', ')}) — see
+				<button class="link" onclick={() => (activeTab = 'metrics')}>All Metrics</button>.
+			</p>
 		{/if}
 
 		<div class="tables" data-tour="metrics-tables">
 			{#each jobs as job (job.id)}
 				<div class="table-section">
 					<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
-					<MetricsTable jobId={job.id} />
+					{#if job.params?.probabilistic}
+						<SkillScoresTable jobId={job.id} />
+					{/if}
+					{#if !pooledOnlyJobs.includes(job)}
+						<MetricsTable jobId={job.id} />
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -183,6 +216,16 @@
 		font-size: 0.85rem;
 		margin: 0;
 		padding: 1rem 0;
+	}
+
+	.link {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		color: var(--color-accent);
+		text-decoration: underline;
+		cursor: pointer;
 	}
 
 	.tables {
