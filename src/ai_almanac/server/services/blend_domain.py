@@ -172,6 +172,13 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
+    errors.extend(
+        job_submission.onset_param_errors(
+            spec.threshold_mm,
+            spec.cutoff_month_day.strip() or None,
+            spec.ref_onset_month_day.strip() or None,
+        )
+    )
 
     # The same predicates the submission chokepoint enforces
     # (``job_submission.create_blend_for_user``), surfaced here so the assistant
@@ -316,6 +323,18 @@ async def update_blend_config(
         value = patch.get(key)
         return value if isinstance(value, str) else getattr(spec, key)
 
+    # Numeric override: an explicit null clears it back to the workflow default;
+    # an absent key leaves it alone. Non-numeric junk is ignored, not coerced.
+    if "threshold_mm" in patch:
+        raw_threshold = patch["threshold_mm"]
+        threshold_mm = (
+            float(raw_threshold)
+            if isinstance(raw_threshold, (int, float)) and not isinstance(raw_threshold, bool)
+            else None
+        )
+    else:
+        threshold_mm = spec.threshold_mm
+
     next_spec = spec.model_copy(
         update={
             "intent": text_field("intent"),
@@ -331,6 +350,9 @@ async def update_blend_config(
             "true_holdout_years": text_field("true_holdout_years"),
             "formula_text": text_field("formula_text"),
             "focus_area": _focus_area_field(patch, spec),
+            "threshold_mm": threshold_mm,
+            "cutoff_month_day": text_field("cutoff_month_day"),
+            "ref_onset_month_day": text_field("ref_onset_month_day"),
         }
     )
     next_spec = _finalize_blend_config(next_spec)
@@ -373,6 +395,9 @@ def _blend_create_body(spec: BlendRunSpec, run_id: str) -> job_submission.BlendC
             true_holdout_years=opt(spec.true_holdout_years),
             formula_text=opt(spec.formula_text),
             focus_area=spec.focus_area,
+            threshold_mm=spec.threshold_mm,
+            cutoff_month_day=opt(spec.cutoff_month_day),
+            ref_onset_month_day=opt(spec.ref_onset_month_day),
         ),
         run_id=run_id,
     )

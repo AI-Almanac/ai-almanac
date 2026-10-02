@@ -124,12 +124,19 @@ Single PR against `develop`:
 Small PRs, each independently shippable:
 
 1. **Expose params the stack already accepts.** `threshold_mm`,
-   `cutoff_month_day`, `mok_month_day` flow end-to-end
-   (`BlendParams` → `run_blend` → intermediates) but no form field sets them.
-   Add them to the Advanced block in `web/src/routes/blends/+page.svelte`
-   and to `BlendRunSpec` / `_blend_create_body` so the assistant path can
-   set them too. Backend change: none. Regenerate api types only if the
-   pydantic schema descriptions change.
+   `cutoff_month_day`, `mok_month_day` flowed end-to-end
+   (`BlendParams` → `run_blend` → intermediates) but no form field set them.
+   *Done:* an "Onset definition" group in the form's Advanced block
+   (`web/src/routes/blends/onset-params.ts` holds the client checks),
+   `BlendRunSpec` / chat patch models / `_blend_create_body` carry them so
+   the assistant path reaches them, and `onset_param_errors` in
+   `job_submission.py` validates them for both paths. Decision taken: the
+   API field follows the package rename to `ref_onset_month_day`;
+   `mok_month_day` is accepted as a deprecated alias and normalized, and
+   the Modal / local entrypoints read either spelling from stored job
+   configs (`_intermediate_prep_kwargs`). Renaming the intermediates cache-key
+   field invalidates the staging cache once more; prod is unaffected until
+   it takes the new ref.
 2. **Show the effective formula.** `haiyang` records the resolved formula in
    CV and final coefficient artifacts (predictors the user typed can be
    dropped by rainfall-horizon resolution). Surface it on the blend summary

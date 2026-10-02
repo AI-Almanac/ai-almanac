@@ -12,6 +12,19 @@ import tarfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+# Blend params that shape the intermediates. Mirrors modal/blending_app.py
+# `_intermediate_prep_kwargs` (the Modal module is standalone and cannot import this
+# package). `mok_month_day` is the pre-rename spelling of `ref_onset_month_day`;
+# job configs written before the rename still carry it.
+INTERMEDIATE_PREP_KEYS = ("threshold_mm", "cutoff_month_day", "ref_onset_month_day", "focus_area")
+
+
+def intermediate_prep_kwargs(params: dict) -> dict:
+    kwargs = {k: params[k] for k in INTERMEDIATE_PREP_KEYS if params.get(k) is not None}
+    if "ref_onset_month_day" not in kwargs and params.get("mok_month_day") is not None:
+        kwargs["ref_onset_month_day"] = params["mok_month_day"]
+    return kwargs
+
 
 class _LocalFunction:
     def __init__(self, function):
@@ -121,11 +134,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     forecast_bundles = {
         name: workflow._bundle_files(_forecast_files(config, name)) for name in model_names
     }
-    prep_kwargs = {
-        key: params[key]
-        for key in ("threshold_mm", "cutoff_month_day", "mok_month_day", "focus_area")
-        if params.get(key) is not None
-    }
+    prep_kwargs = intermediate_prep_kwargs(params)
     if config.get("region_id"):
         prep_kwargs["region_id"] = config["region_id"]
 

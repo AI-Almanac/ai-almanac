@@ -23,9 +23,10 @@ export type BlendParams = {
 	obs_years?: string;
 	true_holdout_years?: string;
 	formula_text?: string;
+	// Onset definition; omitted fields use the workflow defaults (20 mm, 05-01, 06-01).
 	threshold_mm?: number;
 	cutoff_month_day?: string;
-	mok_month_day?: string;
+	ref_onset_month_day?: string;
 	focus_area?: FocusAreaValue;
 };
 

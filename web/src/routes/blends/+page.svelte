@@ -34,6 +34,7 @@
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
+	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
@@ -133,6 +134,10 @@
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
 	let focusArea = $state<FocusAreaValue | null>(null);
+	// Onset definition overrides; blank means the workflow default.
+	let thresholdMm = $state('');
+	let cutoffMonthDay = $state('');
+	let refOnsetMonthDay = $state('');
 	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
@@ -184,6 +189,9 @@
 		cvHoldoutYears = split.cv;
 	});
 
+	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
+	const onsetError = $derived(onsetParamsError(onsetInput));
+
 	// Advisory only — never feeds formValid.
 	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
 
@@ -203,6 +211,7 @@
 			trainingYears.trim() !== '' &&
 			cvHoldoutYears.trim() !== '' &&
 			!yearError &&
+			!onsetError &&
 			!insufficientData
 	);
 
@@ -234,6 +243,9 @@
 		trueHoldoutYears = config.true_holdout_years ?? '';
 		formulaText = config.formula_text ?? '';
 		focusArea = config.focus_area ?? null;
+		thresholdMm = config.threshold_mm != null ? String(config.threshold_mm) : '';
+		cutoffMonthDay = config.cutoff_month_day ?? '';
+		refOnsetMonthDay = config.ref_onset_month_day ?? '';
 		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
 	}
 
@@ -459,7 +471,8 @@
 				...(forecastYears.trim() ? { forecast_years: forecastYears.trim() } : {}),
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
 				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
-				...(focusArea ? { focus_area: focusArea } : {})
+				...(focusArea ? { focus_area: focusArea } : {}),
+				...onsetParamsBody(onsetInput)
 			}
 		};
 		try {
@@ -733,6 +746,51 @@
 								placeholder="optional — model formula override"
 							/>
 						</label>
+
+						<p class="muted advanced-group">
+							Onset definition — leave blank to use the defaults ({ONSET_DEFAULTS.threshold_mm} mm,
+							{ONSET_DEFAULTS.cutoff_month_day}, {ONSET_DEFAULTS.ref_onset_month_day}). Changing
+							these redefines what counts as onset for both the observations and every model.
+						</p>
+						<div class="field-row" data-tour="blend-onset">
+							<label class="field">
+								{@render fieldLabel(
+									'Onset rainfall threshold (mm)',
+									`Total rainfall over 3 consecutive days that marks the start of the season. Default ${ONSET_DEFAULTS.threshold_mm} mm.`
+								)}
+								<input
+									type="text"
+									inputmode="decimal"
+									bind:value={thresholdMm}
+									placeholder={String(ONSET_DEFAULTS.threshold_mm)}
+								/>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'Onset search start (MM-DD)',
+									`Calendar date from which onset is searched each season; also the first forecast issue date. Default ${ONSET_DEFAULTS.cutoff_month_day}.`
+								)}
+								<input
+									type="text"
+									bind:value={cutoffMonthDay}
+									placeholder={ONSET_DEFAULTS.cutoff_month_day}
+								/>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'Reference onset date (MM-DD)',
+									`Climatological onset date the "onset before reference" probability is scored against. Default ${ONSET_DEFAULTS.ref_onset_month_day}.`
+								)}
+								<input
+									type="text"
+									bind:value={refOnsetMonthDay}
+									placeholder={ONSET_DEFAULTS.ref_onset_month_day}
+								/>
+							</label>
+						</div>
+						{#if onsetError}
+							<p class="error">{onsetError}</p>
+						{/if}
 					</details>
 
 					{#if submitError}
@@ -1100,6 +1158,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
+	}
+
+	.advanced-group {
+		margin: 0.5rem 0 -0.5rem;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--color-border-subtle);
 	}
 
 	.form-actions {

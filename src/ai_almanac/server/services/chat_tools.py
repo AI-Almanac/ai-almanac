@@ -82,6 +82,21 @@ class BlendConfigPatch(BaseModel):
     true_holdout_years: str | None = None
     formula_text: str | None = None
     focus_area: FocusArea | None = None
+    threshold_mm: float | None = PydanticField(
+        default=None,
+        description="Onset rainfall threshold in mm over the onset window. Optional; "
+        "workflow default is 20 mm.",
+    )
+    cutoff_month_day: str | None = PydanticField(
+        default=None,
+        description="MM-DD from which onset is searched each season (also the first "
+        "forecast issue date). Optional; workflow default is 05-01.",
+    )
+    ref_onset_month_day: str | None = PydanticField(
+        default=None,
+        description="MM-DD reference (climatological) onset date the onset-before-"
+        "reference probability is scored against. Optional; workflow default is 06-01.",
+    )
 
 
 class SubmitBlendApproval(BaseModel):
