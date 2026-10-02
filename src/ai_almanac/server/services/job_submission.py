@@ -533,6 +533,32 @@ def historical_only_warning(members: Iterable[tuple[str, float | None]]) -> list
     ]
 
 
+def grid_mismatch_errors(
+    obs_step: float | None, members: Iterable[tuple[str, float | None]]
+) -> list[str]:
+    """Reject models whose registered grid differs from the observations'.
+
+    Scoring pairs observation and forecast cells by array position, not by
+    coordinate, so mismatched grids score the wrong cells (or none) instead of
+    failing loudly. Members are (name, grid step) pairs; a source registered
+    before grid steps were recorded has no step and is not checked.
+    """
+    if obs_step is None:
+        return []
+    mismatched = [
+        f"{name} is on a {step:g}° grid"
+        for name, step in members
+        if step is not None and not math.isclose(step, obs_step)
+    ]
+    if not mismatched:
+        return []
+    return [
+        f"The observations are on a {obs_step:g}° grid, but "
+        + "; ".join(sorted(mismatched))
+        + ". Choose observations and models on the same grid."
+    ]
+
+
 def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
     """Per-year ``{year}.nc`` file URIs under a dataset dir (path or ``gs://``).
 
@@ -700,9 +726,12 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
     )
     coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
-    coverage_errors = blend_coverage_errors(forecast_years, coverage)
-    if coverage_errors:
-        raise HTTPException(status_code=400, detail=" ".join(coverage_errors))
+    source_errors = blend_coverage_errors(forecast_years, coverage) + grid_mismatch_errors(
+        archive_grid_step(obs_source),
+        ((source["name"], archive_grid_step(source)) for source in model_sources),
+    )
+    if source_errors:
+        raise HTTPException(status_code=400, detail=" ".join(source_errors))
 
     # The guardrail chokepoint. Every entry point — the assistant's submit_blend
     # tool, POST /blends, and the manual UI form — passes through here, so a rule
@@ -1259,6 +1288,12 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             status_code=400,
             detail=f"Model is not configured for region {region!r}",
         )
+    grid_errors = grid_mismatch_errors(
+        archive_grid_step(observation_source),
+        [(model_source["name"], archive_grid_step(model_source))],
+    )
+    if grid_errors:
+        raise HTTPException(status_code=400, detail=" ".join(grid_errors))
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
 
     job_id = str(uuid.uuid4())

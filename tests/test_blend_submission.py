@@ -39,12 +39,15 @@ async def _seed_source(
     name: str,
     path: str,
     years: tuple[int, int] | None = None,
+    grid_step: float | None = None,
 ) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    metadata = json.dumps({"start_year": years[0], "end_year": years[1]}) if years else "{}"
+    metadata = {"start_year": years[0], "end_year": years[1]} if years else {}
+    if grid_step is not None:
+        metadata["grid_step_deg"] = grid_step
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -59,7 +62,7 @@ async def _seed_source(
                 "kind": kind,
                 "name": name,
                 "path": path,
-                "metadata": metadata,
+                "metadata": json.dumps(metadata),
                 "now": now,
             },
         )
@@ -146,6 +149,64 @@ async def test_post_blends_rejects_thin_climatology_coverage(
 
     assert response.status_code == 400
     assert "Climatology needs 10 years of observations" in response.json()["detail"]
+
+
+def test_grid_mismatch_names_each_model_off_the_observation_grid() -> None:
+    errors = job_submission.grid_mismatch_errors(
+        0.25, [("GraphCast", 2.0), ("AIFS", 0.25), ("FuXi", 1.0), ("Legacy", None)]
+    )
+    assert errors == [
+        "The observations are on a 0.25° grid, but FuXi is on a 1° grid; "
+        "GraphCast is on a 2° grid. Choose observations and models on the same grid."
+    ]
+
+
+def test_grid_mismatch_skips_sources_without_a_recorded_grid() -> None:
+    assert job_submission.grid_mismatch_errors(None, [("GraphCast", 2.0)]) == []
+    assert job_submission.grid_mismatch_errors(0.25, [("AIFS", 0.25)]) == []
+
+
+@pytest.mark.asyncio
+async def test_post_blends_rejects_models_on_another_grid(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source(
+        "obs", "IMD 0.25", "gs://data/obs/imd", years=(1990, 2024), grid_step=0.25
+    )
+    model_id = await _seed_source(
+        "model", "GraphCast", "gs://data/models/gc", years=(1990, 2024), grid_step=2.0
+    )
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "mismatched",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2010:2020", "cv_holdout_years": "2020"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "GraphCast is on a 2° grid" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_post_jobs_rejects_a_model_on_another_grid(
+    client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    obs_id = await _seed_source("obs", "IMD 0.25", "gs://data/obs/imd", grid_step=0.25)
+    model_id = await _seed_source("model", "GraphCast", "gs://data/models/gc", grid_step=2.0)
+
+    response = await client.post(
+        "/jobs",
+        headers=auth_headers,
+        json={"dataset_id": obs_id, "model_name": model_id, "params": {"region": "india"}},
+    )
+
+    assert response.status_code == 400
+    assert "GraphCast is on a 2° grid" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

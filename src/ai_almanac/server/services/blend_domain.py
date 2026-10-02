@@ -175,6 +175,12 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
     errors.extend(
+        job_submission.grid_mismatch_errors(
+            obs.get("grid_step_deg") if obs else None,
+            ((m["name"], m.get("grid_step_deg")) for m in selected_models),
+        )
+    )
+    errors.extend(
         job_submission.onset_param_errors(
             spec.threshold_mm,
             spec.cutoff_month_day.strip() or None,
