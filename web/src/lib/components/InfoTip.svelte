@@ -43,7 +43,9 @@
 		left: 50%;
 		transform: translateX(-50%);
 		width: max-content;
-		max-width: min(18rem, 70vw);
+		/* Centred on the icon, so keep it narrow enough not to spill past the
+		   left edge of the scrolling settings panels the icons sit in. */
+		max-width: min(14rem, 70vw);
 		padding: 0.45rem 0.6rem;
 		background: var(--color-surface-raised);
 		border: 1px solid var(--color-border-subtle);

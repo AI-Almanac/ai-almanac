@@ -648,7 +648,7 @@
 						<p class="muted coverage-hint">
 							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}:
 							the climatology baseline is fitted only on observed years before the first forecast
-							year, and each grid cell needs at least {MIN_ONSET_YEARS} of them.
+							year. Grid cells with fewer than {MIN_ONSET_YEARS} onsets in those years are left out.
 						</p>
 					{/if}
 
@@ -656,7 +656,7 @@
 						<label class="field">
 							{@render fieldLabel(
 								'Training years',
-								`Years used to fit the blending weights, e.g. "2008:2010". The climatology baseline is fitted only on observed years before the first forecast year, so it never sees these years; each grid cell needs at least ${MIN_ONSET_YEARS} of them.`
+								`Years used to fit the blending weights, e.g. "2008:2010". The climatology baseline is fitted only on observed years before the first forecast year, so it never sees these years. Grid cells with fewer than ${MIN_ONSET_YEARS} onsets in those years are left out.`
 							)}
 							<input
 								type="text"
