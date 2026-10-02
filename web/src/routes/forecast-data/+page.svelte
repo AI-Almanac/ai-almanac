@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import { getTrajectorySets, type TrajectorySet } from '$lib/api';
-	import { forecastFreshness, formatIssueDate } from '$lib/forecast-freshness';
+	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 
 	let rows = $state<TrajectorySet[]>([]);
 	let loading = $state(true);
@@ -26,8 +26,8 @@
 		return set.covered_init_dates?.length ?? 0;
 	}
 
-	function freshnessOf(set: TrajectorySet) {
-		return forecastFreshness(set.covered_init_dates ?? [], new Date());
+	function dataThrough(set: TrajectorySet): string | null {
+		return latestIssueDate(set.covered_init_dates ?? []);
 	}
 
 	function timestamp(value: string | null | undefined): string {
@@ -90,10 +90,8 @@
 								<td><span class="status status-{set.status}">{set.status}</span></td>
 								<td>{coverageCount(set)}</td>
 								<td>
-									{#if freshnessOf(set)}
-										{@const fresh = freshnessOf(set)!}
-										{formatIssueDate(fresh.latest)}
-										{#if fresh.behind}<span class="behind">not updated recently</span>{/if}
+									{#if dataThrough(set)}
+										{formatIssueDate(dataThrough(set)!)}
 									{:else}
 										—
 									{/if}
@@ -121,12 +119,6 @@
 		padding: clamp(1.5rem, 5vw, 4rem);
 		max-width: 64rem;
 		margin: 0 auto;
-	}
-
-	.behind {
-		display: block;
-		font-size: 0.8em;
-		color: var(--color-status-running);
 	}
 
 	.head {

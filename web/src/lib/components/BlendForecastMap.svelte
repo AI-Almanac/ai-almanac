@@ -24,7 +24,7 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
-	import { forecastFreshness, formatIssueDate } from '$lib/forecast-freshness';
+	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
 		buildAdm3ForecastGeoJson,
 		usesNamedAreas,
@@ -390,7 +390,7 @@
 		return `calc(${frac} * (100% - 2.8rem))`;
 	}
 
-	const freshness = $derived(data ? forecastFreshness(data.issue_dates, new Date()) : null);
+	const dataThrough = $derived(data ? latestIssueDate(data.issue_dates) : null);
 	const dateIndex = $derived(data ? data.issue_dates.indexOf(selectedDate) : -1);
 	const dateCount = $derived(data?.issue_dates.length ?? 0);
 
@@ -559,13 +559,8 @@
 					{data.onset_definition}
 				</p>
 			{/if}
-			{#if freshness}
-				<p class="rail-def" class:rail-behind={freshness.behind}>
-					{freshness.behind ? 'Not updated since' : 'Data through'}
-					{formatIssueDate(freshness.latest)}{freshness.behind
-						? ' — run this forecast again to add newer issue dates.'
-						: ''}
-				</p>
+			{#if dataThrough}
+				<p class="rail-def">Data through {formatIssueDate(dataThrough)}</p>
 			{/if}
 		</div>
 
@@ -1164,10 +1159,6 @@
 		font-size: 0.64rem;
 		line-height: 1.4;
 		color: var(--color-text-muted);
-	}
-
-	.rail-behind {
-		color: var(--color-status-running);
 	}
 
 	.rail-def-region {
