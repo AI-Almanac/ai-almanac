@@ -283,7 +283,7 @@
 	}
 
 	function usesAdm3Polygons(d: BlendForecastData): boolean {
-		return d.region_id === 'ethiopia' && usesNamedAreas(d.points);
+		return d.region_id != null && usesNamedAreas(d.points);
 	}
 
 	function isFeatureCollection(value: unknown): value is GeoJSON.FeatureCollection {

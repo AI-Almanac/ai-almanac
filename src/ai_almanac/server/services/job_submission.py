@@ -30,6 +30,7 @@ from ai_almanac.server.services.forecast_models import (
     live_forecast_compatibility,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
+from ai_almanac.server.services.region_catalog import packaged_subdistricts
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import romp_safe_model_name
 from ai_almanac.server.services.runner_registry import get_job_runner
@@ -737,6 +738,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "model_source_ids": list(body.model_ids),
         "forecast_years": forecast_years,
         "region_id": region_id,
+        "subdistricts": packaged_subdistricts(region_id),
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
         "gcs_cache_bucket": settings.gcs_data_bucket,
@@ -1053,7 +1055,13 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         "blend_id": body.blend_id,
         # Frozen at submission time so a later edit to the blend doesn't
         # retroactively change a forecast job already queued.
-        "blend_config_snapshot": blend_config,
+        "blend_config_snapshot": {
+            # ponytail: blends from before jobs recorded subdistricts fall back to
+            # the region's current ones; wrong for such a blend once its region
+            # gains subdistricts, so retrain old grid blends then.
+            "subdistricts": packaged_subdistricts(blend_config.get("region_id")),
+            **blend_config,
+        },
         "forecast_model_ids": forecast_model_ids,
         "season_model_params": season_model_params,
         "season_start_month_day": season_start_month_day,

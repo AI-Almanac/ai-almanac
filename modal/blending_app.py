@@ -123,11 +123,11 @@ def _intermediates_cache_params(
     max_day: int,
     cutoff_month_day: str,
     ref_onset_month_day: str | None,
-    adm3_domain: bool,
+    subdistrict_mapping_sha256: str | None,
     focus_area: dict | None,
 ) -> dict:
     """Everything that shapes a processed part besides the input file itself."""
-    return {
+    params = {
         "id_precision": int(id_precision),
         "threshold_mm": float(threshold_mm),
         "min_day": int(min_day),
@@ -135,13 +135,16 @@ def _intermediates_cache_params(
         "cutoff_month_day": cutoff_month_day,
         "ref_onset_month_day": ref_onset_month_day,
         "onset_rule": ONSET_RULE,
-        "adm3_domain": bool(adm3_domain),
+        "adm3_domain": subdistrict_mapping_sha256 is not None,
         "focus_area": focus_area,
     }
+    # Added only when set, so keys for grid blends match the ones already cached.
+    if subdistrict_mapping_sha256:
+        params["subdistrict_mapping_sha256"] = subdistrict_mapping_sha256
+    return params
 
 
 GCP_SECRET_NAME = "gcp-service-account"
-ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
 
 app = modal.App(APP_NAME)
@@ -559,6 +562,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             prep_kwargs = _intermediate_prep_kwargs(params)
             if config.get("region_id"):
                 prep_kwargs["region_id"] = config["region_id"]
+            prep_kwargs["subdistricts"] = config.get("subdistricts")
             cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
             cache_dir = f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None
             print("==> Building blending intermediates")
@@ -575,7 +579,10 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
-            train_kwargs = {"cores": RUN_BLEND_TRAINING_CORES}
+            train_kwargs = {
+                "cores": RUN_BLEND_TRAINING_CORES,
+                "subdistricts": config.get("subdistricts"),
+            }
             if params.get("formula_text"):
                 train_kwargs["formula_text"] = params["formula_text"]
             print("==> Training blend weights")
@@ -690,22 +697,25 @@ def _shape(value) -> list[int]:
     return [int(dim) for dim in value.shape]
 
 
-def _adm3_support_paths() -> tuple[Path, Path]:
-    mapping = BLENDING_ROOT / "Monsoon_Data" / "grid_to_district_mapping.csv"
-    dissemination = BLENDING_ROOT / "Monsoon_Data" / "dissemination_cells.csv"
-    missing = [str(path) for path in (mapping, dissemination) if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "ADM3 domain support files are missing from the blending checkout: "
-            + ", ".join(missing)
-        )
-    return mapping, dissemination
+def _subdistrict_file(ref: str) -> Path:
+    """A region's subdistrict file: a gs:// URI, or a path inside the onset_blending checkout."""
+    if ref.startswith("gs://"):
+        local = Path(tempfile.mkdtemp(prefix="subdistricts-")) / Path(ref).name
+        _cache_gcs_blob(ref).download_to_filename(str(local))
+        return local
+    path = BLENDING_ROOT / ref
+    if not path.is_file():
+        raise FileNotFoundError(f"Subdistrict file is missing from the blending checkout: {path}")
+    return path
 
 
-def _should_use_adm3_domain(region_id: str | None, use_adm3_domain: bool | None) -> bool:
-    if use_adm3_domain is not None:
-        return bool(use_adm3_domain)
-    return (region_id or "").strip().lower() in ADM3_DOMAIN_REGIONS
+def _subdistrict_files(subdistricts: dict) -> tuple[Path, Path]:
+    """(grid-to-subdistrict mapping, dissemination cells) from a region's `subdistricts` entry."""
+    return _subdistrict_file(subdistricts["grid_mapping"]), _subdistrict_file(subdistricts["cells"])
+
+
+def _subdistrict_mapping(subdistricts: dict | None) -> Path | None:
+    return _subdistrict_file(subdistricts["grid_mapping"]) if subdistricts else None
 
 
 def _normalize_grid_dims(src: Path, dst: Path) -> Path:
@@ -738,14 +748,15 @@ def _has_adm3_dimension(path: Path) -> bool:
     return bool(names & {"adm3", "adm3_name"})
 
 
-def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None) -> Path:
+def _remap_dir_to_adm3(
+    input_dir: Path, label: str, mapping_path: Path, cache_dir: str | None = None
+) -> Path:
     """Write ADM3-aggregated copies of input_dir's NetCDFs to a new directory."""
     import sys
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from utils.remap_nc import batch_aggregate_to_adm3_matrix
 
-    mapping_path, _ = _adm3_support_paths()
     remap_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-input-"))
     out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
     output_paths: list[Path] = []
@@ -755,6 +766,7 @@ def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None
         cache_prefix = (
             f"{str(cache_dir).rstrip('/')}"
             f"/v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/adm3_nc"
+            f"/{_file_sha256(mapping_path)[:16]}"
         )
 
     for src in sorted(input_dir.glob("*.nc")):
@@ -801,15 +813,15 @@ def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None
     return out_dir
 
 
-def _domain_filter(dissemination_path, focus_area: dict | None, adm3_domain: bool) -> dict:
+def _domain_filter(dissemination_path, focus_area: dict | None, mapping_path: Path | None) -> dict:
     filt = {"dissemination_cells_file": str(dissemination_path) if dissemination_path else None}
     if not focus_area:
         return filt
     filt["focus_area"] = dict(focus_area)
-    if adm3_domain:
+    if mapping_path:
         # ADM3 rows carry no lat/lon; locating them needs a point per unit.
         centroids_path = Path(tempfile.mkdtemp(prefix="adm3-centroids-")) / "centroids.csv"
-        _adm3_centroids().to_csv(centroids_path, index=False)
+        _adm3_centroids(mapping_path).to_csv(centroids_path, index=False)
         filt["centroids_file"] = str(centroids_path)
     return filt
 
@@ -850,10 +862,9 @@ def _rows_inside_outlines(df, geometry: dict, filt: dict):
     return df[inside]
 
 
-def _adm3_centroids():
+def _adm3_centroids(mapping_path: Path):
     import pandas as pd
 
-    mapping_path, _ = _adm3_support_paths()
     mapping = pd.read_csv(mapping_path).rename(columns={"latitude": "lat", "longitude": "lon"})
     required = {"adm3_name", "lat", "lon", "weight"}
     missing = required - set(mapping.columns)
@@ -871,7 +882,9 @@ def _adm3_centroids():
     return grouped.rename(columns={"adm3_name": "id"})[["id", "lat", "lon"]]
 
 
-def _attach_adm3_centroids_to_csv(csv_bytes: bytes, strict: bool = True) -> bytes:
+def _attach_adm3_centroids_to_csv(
+    csv_bytes: bytes, mapping_path: Path, strict: bool = True
+) -> bytes:
     import pandas as pd
 
     rows = pd.read_csv(io.BytesIO(csv_bytes))
@@ -883,7 +896,7 @@ def _attach_adm3_centroids_to_csv(csv_bytes: bytes, strict: bool = True) -> byte
     if "id" not in rows.columns:
         raise ValueError("Cannot attach ADM3 centroids: prediction CSV has no id column")
 
-    centroids = _adm3_centroids()
+    centroids = _adm3_centroids(mapping_path)
     out = rows.merge(centroids, on="id", how="left", validate="many_to_one")
     missing = out[out["lat"].isna() | out["lon"].isna()]["id"].drop_duplicates()
     if strict and not missing.empty:
@@ -904,21 +917,21 @@ def _is_per_point_summary_csv(filename: str) -> bool:
     )
 
 
-def _with_area_centroids(path: Path) -> bytes:
+def _with_area_centroids(path: Path, mapping_path: Path | None) -> bytes:
     """Give named units in the per-point summary a centroid so the map can place them.
 
     Grid domains already locate points by their "{lat}_{lon}" id and are returned
     untouched. The pooled ALL row has no centroid and stays blank.
     """
     data = path.read_bytes()
-    if not _is_per_point_summary_csv(path.name):
+    if mapping_path is None or not _is_per_point_summary_csv(path.name):
         return data
     import pandas as pd
 
     ids = pd.read_csv(io.BytesIO(data), usecols=["id"])["id"].astype(str)
     if ids.map(lambda value: value == "ALL" or bool(_GRID_ID.match(value))).all():
         return data
-    return _attach_adm3_centroids_to_csv(data, strict=False)
+    return _attach_adm3_centroids_to_csv(data, mapping_path, strict=False)
 
 
 def _add_lat_lon_id(df, precision: int):
@@ -1427,7 +1440,7 @@ def build_intermediates_from_dirs(
     combine_join: str = "inner",
     trim_forecasts_after_true_onset: bool = True,
     region_id: str | None = None,
-    use_adm3_domain: bool | None = None,
+    subdistricts: dict | None = None,
     focus_area: dict | None = None,
     return_outputs: bool = True,
     cache_dir: str | None = None,
@@ -1450,23 +1463,24 @@ def build_intermediates_from_dirs(
 
     sys.path.insert(0, str(BLENDING_ROOT))
 
-    adm3_domain = _should_use_adm3_domain(region_id, use_adm3_domain)
-    dissemination_path = None
-    if adm3_domain:
-        _, dissemination_path = _adm3_support_paths()
+    mapping_path = dissemination_path = None
+    if subdistricts:
+        mapping_path, dissemination_path = _subdistrict_files(subdistricts)
         print(
-            f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
+            f"==> Remapping {region_id or 'configured'} blend inputs to subdistricts",
             flush=True,
         )
-        obs_dir = _remap_dir_to_adm3(obs_dir, "obs", cache_dir=cache_dir)
+        obs_dir = _remap_dir_to_adm3(obs_dir, "obs", mapping_path, cache_dir=cache_dir)
         forecast_dirs = {
-            model_name: _remap_dir_to_adm3(input_dir, f"forecast-{model_name}", cache_dir=cache_dir)
+            model_name: _remap_dir_to_adm3(
+                input_dir, f"forecast-{model_name}", mapping_path, cache_dir=cache_dir
+            )
             for model_name, input_dir in forecast_dirs.items()
         }
 
     output_dir = Path(tempfile.mkdtemp(prefix="blend-intermediates-"))
 
-    domain_filter = _domain_filter(dissemination_path, focus_area, adm3_domain)
+    domain_filter = _domain_filter(dissemination_path, focus_area, mapping_path)
 
     onset_options = {**ONSET_RULE, "cutoff_month_day": cutoff_month_day}
     forecast_spec = {
@@ -1519,7 +1533,7 @@ def build_intermediates_from_dirs(
         "cutoff_month_day": cutoff_month_day,
         "ref_onset_month_day": ref_onset_month_day,
         "region_id": region_id,
-        "adm3_domain": bool(adm3_domain),
+        "adm3_domain": mapping_path is not None,
         "focus_area": focus_area,
         "climatology": {},
         "combined": {},
@@ -1546,7 +1560,7 @@ def build_intermediates_from_dirs(
         max_day=max_day,
         cutoff_month_day=cutoff_month_day,
         ref_onset_month_day=ref_onset_month_day,
-        adm3_domain=adm3_domain,
+        subdistrict_mapping_sha256=_file_sha256(mapping_path) if mapping_path else None,
         focus_area=focus_area,
     )
     cache_hits = 0
@@ -2088,6 +2102,7 @@ def train_blending_model_bundle(
     include_calibrated_forecasts: bool = True,
     cores: int | None = None,
     return_outputs: bool = True,
+    subdistricts: dict | None = None,
 ) -> dict:
     """Train/evaluate weekly-bin blending models from a combined wide pickle."""
     import pickle
@@ -2239,9 +2254,10 @@ def train_blending_model_bundle(
         (output_dir / "training_spec.yml").write_text(
             yaml.dump(blend_spec, default_flow_style=False)
         )
+        mapping_path = _subdistrict_mapping(subdistricts)
         for path in sorted(results_dir.iterdir()):
             if path.is_file():
-                (output_dir / path.name).write_bytes(_with_area_centroids(path))
+                (output_dir / path.name).write_bytes(_with_area_centroids(path, mapping_path))
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
@@ -2433,6 +2449,7 @@ def score_live_forecast(
     prep_kwargs = _intermediate_prep_kwargs(blend_params)
     if blend_params.get("region_id"):
         prep_kwargs["region_id"] = blend_params["region_id"]
+    prep_kwargs["subdistricts"] = blend_params.get("subdistricts")
     intermediates = build_lat_lon_intermediates_bundle.local(
         obs_bundle, forecast_bundles, return_outputs=True, cache_dir=cache_dir, **prep_kwargs
     )
@@ -2451,8 +2468,8 @@ def score_live_forecast(
             live_year=live_year,
             formula_text=blend_params.get("formula_text") or None,
         )
-        if _should_use_adm3_domain(blend_params.get("region_id"), None):
-            csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
+        if mapping_path := _subdistrict_mapping(blend_params.get("subdistricts")):
+            csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes, mapping_path)
         print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
         return csv_bytes
 
@@ -2486,8 +2503,8 @@ def score_live_forecast(
     if live_rows.empty:
         raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
     csv_bytes = live_rows.to_csv(index=False).encode("utf-8")
-    if _should_use_adm3_domain(blend_params.get("region_id"), None):
-        csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
+    if mapping_path := _subdistrict_mapping(blend_params.get("subdistricts")):
+        csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes, mapping_path)
     return csv_bytes
 
 
@@ -2526,7 +2543,11 @@ def score_live_forecast_bundle(
             client = gcs.Client()
 
             params = blend_config.get("blend_params") or {}
-            params = {**params, "region_id": blend_config.get("region_id")}
+            params = {
+                **params,
+                "region_id": blend_config.get("region_id"),
+                "subdistricts": blend_config.get("subdistricts"),
+            }
             model_names = blend_config["model_names"]
             model_files = blend_config["model_files"]
             missing = [name for name in model_names if name not in live_forecast_bundles]
