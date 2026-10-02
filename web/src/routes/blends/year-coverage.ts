@@ -1,4 +1,5 @@
 import type { DataSource } from '$lib/api';
+import { sourceYears, type YearSpan } from '$lib/source-coverage';
 
 // Climatology needs this many observation years before the first forecast year.
 // Mirrors `min_onset_years` in modal/blending_app.py.
@@ -9,11 +10,6 @@ export type Coverage = {
 	end: number;
 	earliestForecast: number;
 };
-
-function metaYear(source: DataSource | undefined, key: 'start_year' | 'end_year'): number | null {
-	const value = source?.metadata?.[key];
-	return typeof value === 'number' ? value : null;
-}
 
 // Parse a year spec ('2005:2010', '2011,2012') into sorted years. Mirrors the
 // server's _parse_year_spec. Returns null on a malformed token so callers can
@@ -42,16 +38,44 @@ export function computeCoverage(
 	obs: DataSource | undefined,
 	models: DataSource[]
 ): Coverage | null {
-	const obsStart = metaYear(obs, 'start_year');
-	const obsEnd = metaYear(obs, 'end_year');
-	if (obsStart == null || obsEnd == null || models.length === 0) return null;
-	const modelStarts = models.map((m) => metaYear(m, 'start_year'));
-	const modelEnds = models.map((m) => metaYear(m, 'end_year'));
-	if (modelStarts.some((y) => y == null) || modelEnds.some((y) => y == null)) return null;
+	const obsSpan = sourceYears(obs);
+	if (obsSpan == null || models.length === 0) return null;
+	const modelSpans = models.map(sourceYears);
+	if (modelSpans.some((span) => span == null)) return null;
+	const modelStarts = (modelSpans as YearSpan[]).map((span) => span.start);
+	const modelEnds = (modelSpans as YearSpan[]).map((span) => span.end);
 	return {
-		start: Math.max(obsStart, ...(modelStarts as number[])),
-		end: Math.min(obsEnd, ...(modelEnds as number[])),
-		earliestForecast: Math.max(obsStart + MIN_ONSET_YEARS, ...(modelStarts as number[]))
+		start: Math.max(obsSpan.start, ...modelStarts),
+		end: Math.min(obsSpan.end, ...modelEnds),
+		earliestForecast: Math.max(obsSpan.start + MIN_ONSET_YEARS, ...modelStarts)
+	};
+}
+
+export type CoverageLimits = {
+	// Sources whose own first/last year sets the shared range while another
+	// chosen source reaches further — the ones to swap for a wider range.
+	start: DataSource[];
+	end: DataSource[];
+};
+
+export function coverageLimits(
+	obs: DataSource | undefined,
+	models: DataSource[],
+	cov: Coverage
+): CoverageLimits {
+	const spans = [obs, ...models].flatMap((source) => {
+		const span = sourceYears(source);
+		return source && span ? [{ source, span }] : [];
+	});
+	const reachesEarlier = spans.some(({ span }) => span.start < cov.start);
+	const reachesLater = spans.some(({ span }) => span.end > cov.end);
+	return {
+		start: reachesEarlier
+			? spans.filter(({ span }) => span.start === cov.start).map(({ source }) => source)
+			: [],
+		end: reachesLater
+			? spans.filter(({ span }) => span.end === cov.end).map(({ source }) => source)
+			: []
 	};
 }
 

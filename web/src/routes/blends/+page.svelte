@@ -30,10 +30,12 @@
 	import {
 		MIN_ONSET_YEARS,
 		computeCoverage,
+		coverageLimits,
 		defaultSplit,
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
+	import { describeSourceCoverage } from '$lib/source-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
@@ -167,6 +169,24 @@
 		)
 	);
 	const insufficientData = $derived(coverage != null && coverage.earliestForecast > coverage.end);
+	const limits = $derived(
+		coverage
+			? coverageLimits(
+					selectedObs ?? undefined,
+					modelSources.filter((s) => modelIds.includes(s.id)),
+					coverage
+				)
+			: { start: [], end: [] }
+	);
+	const limitingIds = $derived(new Set([...limits.start, ...limits.end].map((s) => s.id)));
+	const limitsSummary = $derived(
+		[
+			limits.start.length ? `starts with ${limits.start.map((s) => s.name).join(', ')}` : '',
+			limits.end.length ? `ends with ${limits.end.map((s) => s.name).join(', ')}` : ''
+		]
+			.filter(Boolean)
+			.join('; ')
+	);
 
 	const yearError = $derived(
 		coverage
@@ -610,7 +630,14 @@
 											checked={modelIds.includes(source.id)}
 											onchange={() => toggleModel(source.id)}
 										/>
-										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+										<span class="model-label">
+											<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+											{#if describeSourceCoverage(source)}
+												<small class="model-coverage" class:limits={limitingIds.has(source.id)}
+													>{describeSourceCoverage(source)}</small
+												>
+											{/if}
+										</span>
 										{#if source.live_forecast?.status === 'ready'}
 											<span
 												class="forecast-badge"
@@ -646,9 +673,11 @@
 
 					{#if coverage}
 						<p class="muted coverage-hint">
-							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}:
-							the climatology baseline is fitted only on observed years before the first forecast
-							year. Grid cells with fewer than {MIN_ONSET_YEARS} onsets in those years are left out.
+							Shared data: {coverage.start}–{coverage.end}{limitsSummary
+								? ` (${limitsSummary})`
+								: ''}. Forecast years start at {coverage.earliestForecast}: the climatology baseline
+							is fitted only on observed years before the first forecast year. Grid cells with fewer
+							than {MIN_ONSET_YEARS} onsets in those years are left out.
 						</p>
 					{/if}
 
@@ -1051,6 +1080,21 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		color: var(--color-text);
+	}
+
+	.model-label {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.model-coverage {
+		font-size: 0.8em;
+		color: var(--color-text-muted);
+	}
+
+	.model-coverage.limits {
+		color: var(--color-status-running);
+		font-weight: 600;
 	}
 
 	.forecast-badge {

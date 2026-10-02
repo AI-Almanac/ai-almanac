@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import type { DataSource } from '../src/lib/api';
 import {
 	computeCoverage,
+	coverageLimits,
 	defaultSplit,
 	memberCountWarning,
 	parseYearSpec,
@@ -84,5 +85,28 @@ describe('yearSpecError', () => {
 	});
 	it('accepts identical training and CV holdout specs', () => {
 		expect(yearSpecError(cov, '2008:2012', '2008:2012', '', '')).toBeNull();
+	});
+});
+
+describe('coverageLimits', () => {
+	function named(name: string, start: number, end: number): DataSource {
+		return { name, metadata: { start_year: start, end_year: end } } as unknown as DataSource;
+	}
+
+	it('names the sources that narrow the shared range', () => {
+		const obs = named('Observations', 1990, 2022);
+		const models = [named('Model A', 2000, 2022), named('Model B', 1995, 2018)];
+		const limits = coverageLimits(obs, models, computeCoverage(obs, models)!);
+		expect(limits.start.map((s) => s.name)).toEqual(['Model A']);
+		expect(limits.end.map((s) => s.name)).toEqual(['Model B']);
+	});
+
+	it('names nothing when every source shares the same range', () => {
+		const obs = named('Observations', 2000, 2020);
+		const models = [named('Model A', 2000, 2020)];
+		expect(coverageLimits(obs, models, computeCoverage(obs, models)!)).toEqual({
+			start: [],
+			end: []
+		});
 	});
 });
