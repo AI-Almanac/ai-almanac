@@ -1343,7 +1343,10 @@ def _process_obs_part(path: Path, context: dict) -> dict:
 
 
 def _process_obs_wide(path: Path, context: dict):
-    return _process_obs_part(path, context)["wide"]
+    """The wide frame alone; skips the per-row daily table the package builds by default."""
+    obs_spec = context["obs_spec"]
+    wide_only = {**obs_spec, "output": {**obs_spec.get("output", {}), "write_long": False}}
+    return _process_obs_part(path, {**context, "obs_spec": wide_only})["wide"]
 
 
 def _process_forecast_part(path: Path, context: dict) -> dict:
@@ -1553,10 +1556,12 @@ def build_intermediates_from_dirs(
         obs_wide_parts = [wide for wide, _ in obs_results]
         cache_hits += sum(was_cached for _, was_cached in obs_results)
         cache_misses += sum(not was_cached for _, was_cached in obs_results)
-    else:
+    elif include_long:
         processed = _map_parts(_process_obs_part, obs_paths, part_context, file_workers)
         obs_wide_parts = [part["wide"] for part in processed]
         obs_long_parts = [part["long"] for part in processed]
+    else:
+        obs_wide_parts = _map_parts(_process_obs_wide, obs_paths, part_context, file_workers)
 
     obs_wide = pd.concat(obs_wide_parts, ignore_index=True)
     obs_wide_path = output_dir / "ground_truth_wide.pkl"
