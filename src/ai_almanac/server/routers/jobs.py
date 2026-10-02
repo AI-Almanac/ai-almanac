@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import sqlalchemy as sa
 from fastapi import (
@@ -305,19 +305,26 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
     }
 
 
-@router.get("/{job_id}/blend-summary")
-async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
-    """Return the blend's pooled summary CSV, read server-side.
+_BLEND_SUMMARY_PREFIXES = {"pooled": "summary_models_pooled", "yearly": "yearly_metrics_global"}
 
-    The browser parses this for the skill chart; serving it here keeps the
-    outputs bucket off the client (mirroring how metrics read outputs).
+
+@router.get("/{job_id}/blend-summary")
+async def get_blend_summary(
+    job_id: str, job: ReadableJob, table: Literal["pooled", "yearly"] = "pooled"
+) -> dict:
+    """Return one of the blend's small CV summary CSVs, read server-side.
+
+    `pooled` is the per-model summary behind the skill chart; `yearly` is the
+    per-holdout-year CV scores. Serving them here keeps the outputs bucket off
+    the client (mirroring how metrics read outputs).
     """
     _require_complete(job)
+    prefix = _BLEND_SUMMARY_PREFIXES[table]
     summary = next(
         (
             a
             for a in await list_job_artifacts(job_id)
-            if a["filename"].startswith("summary_models_pooled")
+            if a["filename"].startswith(prefix) and a["filename"].endswith(".csv")
         ),
         None,
     )

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
 	import {
@@ -35,6 +36,7 @@
 	} from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
+	import BlendOutputs from './BlendOutputs.svelte';
 	import { installTour } from '$lib/tour.svelte';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
 
@@ -516,7 +518,7 @@
 {#snippet fieldLabel(text: string, tip: string)}
 	<span class="label-with-help">
 		{text}
-		<span class="tip" title={tip}>ⓘ</span>
+		<InfoTip text={tip} />
 	</span>
 {/snippet}
 
@@ -589,11 +591,9 @@
 					<fieldset class="field" data-tour="blend-models">
 						<legend class="label-with-help">
 							Forecast models
-							<span
-								class="tip"
-								title="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
-								>ⓘ</span
-							>
+							<InfoTip
+								text="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
+							/>
 						</legend>
 						{#if !selectedObs}
 							<p class="muted">Select an observation source first to see matching models.</p>
@@ -618,7 +618,7 @@
 											>
 										{:else if source.live_forecast?.status === 'grid_mismatch'}
 											<span class="forecast-badge blocked" title={source.live_forecast.detail}
-												>Grid mismatch</span
+												>Past seasons only</span
 											>
 										{/if}
 									</label>
@@ -626,7 +626,8 @@
 							</div>
 							<p class="muted forecast-legend">
 								<span class="forecast-badge">Live forecast</span> models can be extended into the current
-								season. Any model can be blended and benchmarked — those without the badge are historical-only.
+								season. Any model can be blended and benchmarked — those without the badge cover past
+								seasons only.
 							</p>
 						{/if}
 					</fieldset>
@@ -637,15 +638,17 @@
 
 					{#if liveForecastBlockers.length > 0}
 						<p class="caution">
-							This blend can't be run as a live forecast for the current season.
-							{liveForecastBlockers.join(' ')} You can still train and score it on past seasons.
+							Past seasons only: this blend can be trained and scored on past seasons, but not run
+							as a live forecast for the current season.
+							{liveForecastBlockers.join(' ')}
 						</p>
 					{/if}
 
 					{#if coverage}
 						<p class="muted coverage-hint">
-							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
-							(leaves {MIN_ONSET_YEARS} years for climatology).
+							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}:
+							the climatology baseline is fitted only on observed years before the first forecast
+							year. Grid cells with fewer than {MIN_ONSET_YEARS} onsets in those years are left out.
 						</p>
 					{/if}
 
@@ -653,7 +656,7 @@
 						<label class="field">
 							{@render fieldLabel(
 								'Training years',
-								`Years used to fit the blending weights, e.g. "2008:2010". Requires at least ${MIN_ONSET_YEARS} years of observations before the first forecast year for the climatology baseline.`
+								`Years used to fit the blending weights, e.g. "2008:2010". The climatology baseline is fitted only on observed years before the first forecast year, so it never sees these years. Grid cells with fewer than ${MIN_ONSET_YEARS} onsets in those years are left out.`
 							)}
 							<input
 								type="text"
@@ -678,8 +681,9 @@
 
 					{#if insufficientData}
 						<p class="error">
-							These sources don't have {MIN_ONSET_YEARS} years of observations before any shared forecast
-							year. Pick an observation source with earlier coverage.
+							The climatology baseline needs at least {MIN_ONSET_YEARS} observed years before the first
+							forecast year, and these sources don't leave that many before any year they share. Pick
+							an observation source with earlier coverage.
 						</p>
 					{:else if yearError}
 						<p class="error">{yearError}</p>
@@ -831,24 +835,11 @@
 						{/if}
 
 						<div class="artifacts" data-tour="blend-outputs">
-							<h2>Weights & outputs</h2>
+							<h2>Results files</h2>
 							{#if artifacts.length === 0}
-								<p class="muted">No artifacts found.</p>
+								<p class="muted">No files found.</p>
 							{:else}
-								<ul>
-									{#each artifacts as artifact (artifact.id)}
-										<li>
-											<button
-												type="button"
-												class="artifact"
-												onclick={() => downloadArtifact(artifact)}
-											>
-												<span class="artifact-name">{artifact.filename}</span>
-												<span class="muted">{(artifact.size_bytes / 1024).toFixed(0)} KB</span>
-											</button>
-										</li>
-									{/each}
-								</ul>
+								<BlendOutputs jobId={selected.id} {artifacts} ondownload={downloadArtifact} />
 							{/if}
 						</div>
 					{/if}
@@ -1030,19 +1021,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-	}
-
-	.tip {
-		display: inline-grid;
-		place-items: center;
-		width: 1rem;
-		height: 1rem;
-		border-radius: 999px;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font-size: 0.7rem;
-		font-weight: 900;
-		cursor: help;
 	}
 
 	.field input,
@@ -1238,40 +1216,6 @@
 		border-radius: 50%;
 		animation: spin 0.8s linear infinite;
 		flex-shrink: 0;
-	}
-
-	.artifacts ul {
-		list-style: none;
-		margin: 0.5rem 0 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-
-	.artifact {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 1rem;
-		width: 100%;
-		padding: 0.6rem 0.75rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
-		cursor: pointer;
-		text-align: left;
-	}
-
-	.artifact:hover {
-		border-color: var(--color-accent-border);
-	}
-
-	.artifact-name {
-		font-weight: 650;
-		color: var(--color-text);
-		font-family: var(--font-mono);
-		font-size: 0.85rem;
 	}
 
 	.error,

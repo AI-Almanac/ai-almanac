@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import PerModelConfig from './PerModelConfig.svelte';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
@@ -236,7 +237,8 @@
 								</div>
 								<p class="forecast-legend">
 									<span class="forecast-badge">Live forecast</span> models can be extended into the current
-									season. Any model can be blended and benchmarked — those without the badge are historical-only.
+									season. Any model can be blended and benchmarked — those without the badge cover past
+									seasons only.
 								</p>
 							{/if}
 						</div>
@@ -296,11 +298,9 @@
 									<label>
 										<span class="label-with-help">
 											Wet-day threshold
-											<span
-												class="tip"
-												title="Rainfall amount used to classify a day as wet when detecting onset behavior."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Rainfall amount used to classify a day as wet when detecting onset behavior."
+											/>
 										</span>
 										<input
 											type="number"
@@ -315,11 +315,9 @@
 									<label>
 										<span class="label-with-help">
 											Minimum wet-day rainfall
-											<span
-												class="tip"
-												title="Minimum daily rainfall counted toward a wet spell during onset detection."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Minimum daily rainfall counted toward a wet spell during onset detection."
+											/>
 										</span>
 										<input
 											type="number"
@@ -334,11 +332,9 @@
 									<label>
 										<span class="label-with-help">
 											Wet spell length
-											<span
-												class="tip"
-												title="Number of consecutive wet days required before a wet spell can support onset."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Number of consecutive wet days required before a wet spell can support onset."
+											/>
 										</span>
 										<input
 											type="number"
@@ -352,11 +348,9 @@
 									<label>
 										<span class="label-with-help">
 											Dry spell limit
-											<span
-												class="tip"
-												title="Consecutive dry days used to reject false onsets after an initial wet period."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Consecutive dry days used to reject false onsets after an initial wet period."
+											/>
 										</span>
 										<input
 											type="number"
@@ -370,11 +364,9 @@
 									<label>
 										<span class="label-with-help">
 											Dry spell search extension
-											<span
-												class="tip"
-												title="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
+											/>
 										</span>
 										<input
 											type="number"
@@ -392,11 +384,9 @@
 									<label>
 										<span class="label-with-help">
 											Area mask file
-											<span
-												class="tip"
-												title="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
+											/>
 										</span>
 										<input
 											placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
@@ -409,11 +399,9 @@
 									<label>
 										<span class="label-with-help">
 											Onset threshold file
-											<span
-												class="tip"
-												title="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
+											/>
 										</span>
 										<input
 											placeholder={defaultValue(parameterDefaults?.thresh_file, 'Dataset default')}
@@ -431,11 +419,9 @@
 									<label>
 										<span class="label-with-help">
 											Baseline forecast
-											<span
-												class="tip"
-												title="Reference forecast used for skill comparisons; climatology is the standard baseline."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Reference forecast used for skill comparisons; climatology is the standard baseline."
+											/>
 										</span>
 										<input
 											value={sharedAdvancedParams.ref_model ?? ''}
@@ -450,11 +436,9 @@
 									<label>
 										<span class="label-with-help">
 											Baseline data path
-											<span
-												class="tip"
-												title="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
-												>ⓘ</span
-											>
+											<InfoTip
+												text="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
+											/>
 										</span>
 										<input
 											placeholder={defaultValue(
@@ -747,19 +731,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-	}
-
-	.tip {
-		display: inline-grid;
-		place-items: center;
-		width: 1rem;
-		height: 1rem;
-		border-radius: 999px;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font-size: 0.7rem;
-		font-weight: 900;
-		cursor: help;
 	}
 
 	input:not([type]),
