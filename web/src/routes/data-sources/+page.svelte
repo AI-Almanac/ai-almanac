@@ -374,7 +374,7 @@
 								? selectedRegion.id === 'custom'
 									? 'Geographic bounds will be inferred from the NetCDF coordinates during validation.'
 									: 'Benchmarks use this region’s configured geographic bounds.'
-								: `Benchmarks use the built-in  region definition.`}
+								: `Benchmarks use the built-in ${selectedRegion.romp_region} region definition.`}
 						</small>
 					{/if}
 				</label>
