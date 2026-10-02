@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
 
 from ai_almanac.server.services.focus_area import FocusArea
@@ -18,6 +18,8 @@ from .chat_state import ChatScope
 
 
 class PerModelRompParams(BaseModel):
+    model_config = ConfigDict(title="PerModelRunParams")
+
     start_date: str | None = None
     end_date: str | None = None
     start_year_clim: int | None = None

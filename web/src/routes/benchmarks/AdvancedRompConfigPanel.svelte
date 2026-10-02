@@ -138,8 +138,8 @@
 											{/if}
 										</select>
 										<small>
-											Observation data may cover a broader area; ROMP clips it to the benchmark
-											coverage.
+											Observation data may cover a broader area; the benchmark clips it to the
+											selected coverage.
 										</small>
 									</label>
 
