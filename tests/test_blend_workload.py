@@ -93,6 +93,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
         "return_outputs": True,
         "threshold_mm": 25.0,
         "cache_dir": str(tmp_path / "blend-intermediates"),
+        "subdistricts": None,
     }
     _, train_kwargs = train.calls[0]
     assert train_kwargs["model_names"] == ["aifs"]
