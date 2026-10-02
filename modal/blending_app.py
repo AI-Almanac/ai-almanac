@@ -407,10 +407,20 @@ def _map_parts(fn, paths: list[Path], context: dict, workers: int) -> list:
         importable = importlib.util.find_spec(__name__) is not None
     except ValueError:
         importable = False
+    if workers > 1 and not importable:
+        print(
+            f"==> {fn.__name__}: module {__name__!r} is not importable by worker "
+            f"processes; running {len(paths)} files serially",
+            flush=True,
+        )
     if workers <= 1 or not importable:
         return [fn(path, context) for path in paths]
-    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"))
+    try:
         return list(pool.map(fn, paths, repeat(context)))
+    finally:
+        # On a worker failure, drop the queued files instead of finishing them first.
+        pool.shutdown(cancel_futures=True)
 
 
 def _cached_parts(

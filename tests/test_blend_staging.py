@@ -84,3 +84,28 @@ def test_cached_parts_only_compute_cache_misses_and_keep_file_order(tmp_path: Pa
     rerun = app._cached_parts(cache_dir, "obs", keys, paths, process, {"label": "fresh"}, 1)
     assert all(was_cached for _, was_cached in rerun)
     assert computed == ["2001.nc", "2003.nc"]
+
+
+def test_parts_run_serially_with_a_log_line_when_workers_cannot_import_the_module(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = _load_blending_app()  # synthetic module name, as the local runner loads it
+    paths = [tmp_path / "b.nc", tmp_path / "a.nc"]
+
+    result = app._map_parts(lambda path, ctx: (path.name, ctx), paths, "ctx", workers=4)
+
+    assert result == [("b.nc", "ctx"), ("a.nc", "ctx")]
+    assert "running 2 files serially" in capsys.readouterr().out
+
+
+def test_a_failing_worker_fails_the_whole_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Imported by its real name, as in the Modal container, so spawned workers
+    # can re-import it and the process pool is actually used.
+    monkeypatch.syspath_prepend(str(_APP_PATH.parent))
+    import blending_app
+
+    missing = [tmp_path / "missing-1.nc", tmp_path / "missing-2.nc"]
+    with pytest.raises(Exception):  # noqa: B017 - any worker error must surface
+        blending_app._map_parts(blending_app._process_obs_part, missing, {}, workers=2)
