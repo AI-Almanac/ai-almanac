@@ -75,6 +75,13 @@ async def test_source_validation_reports_years_missing_inside_the_range(
     assert draft["metadata"]["missing_years"] == [1999]
 
 
+def test_year_detection_keeps_the_first_year_in_each_filename() -> None:
+    from ai_almanac.server.services.data_sources import _coverage_years
+
+    files = [Path("aifs_2p0_2001_v2025.nc"), Path("aifs_2p0_2002_v2025.nc")]
+    assert _coverage_years(files) == [2001, 2002]
+
+
 @pytest.mark.asyncio
 async def test_local_sources_drive_benchmark_selection_and_submission(
     client: httpx.AsyncClient,

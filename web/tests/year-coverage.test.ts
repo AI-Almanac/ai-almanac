@@ -101,6 +101,14 @@ describe('coverageLimits', () => {
 		expect(limits.end.map((s) => s.name)).toEqual(['Model B']);
 	});
 
+	it('names every source that ties for the limiting year', () => {
+		const obs = named('Observations', 1990, 2022);
+		const models = [named('Model A', 2000, 2022), named('Model B', 2000, 2022)];
+		const limits = coverageLimits(obs, models, computeCoverage(obs, models)!);
+		expect(limits.start.map((s) => s.name)).toEqual(['Model A', 'Model B']);
+		expect(limits.end).toEqual([]);
+	});
+
 	it('names nothing when every source shares the same range', () => {
 		const obs = named('Observations', 2000, 2020);
 		const models = [named('Model A', 2000, 2020)];

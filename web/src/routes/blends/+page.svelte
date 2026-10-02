@@ -181,8 +181,8 @@
 	const limitingIds = $derived(new Set([...limits.start, ...limits.end].map((s) => s.id)));
 	const limitsSummary = $derived(
 		[
-			limits.start.length ? `starts with ${limits.start.map((s) => s.name).join(', ')}` : '',
-			limits.end.length ? `ends with ${limits.end.map((s) => s.name).join(', ')}` : ''
+			limits.start.length ? `start set by ${limits.start.map((s) => s.name).join(', ')}` : '',
+			limits.end.length ? `end set by ${limits.end.map((s) => s.name).join(', ')}` : ''
 		]
 			.filter(Boolean)
 			.join('; ')
