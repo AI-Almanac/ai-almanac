@@ -832,6 +832,11 @@
 		color: #111;
 	}
 
+	/* Keep the map credit above the date scrubber, which spans the bottom edge. */
+	.map-area:has(.scrubber) :global(.maplibregl-ctrl-bottom-right) {
+		bottom: 3.4rem;
+	}
+
 	.scrubber {
 		position: absolute;
 		bottom: 0;

@@ -190,9 +190,10 @@
 			{#each jobs as job (job.id)}
 				<div class="table-section">
 					<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
-					{#if pooledOnlyJobs.includes(job)}
+					{#if job.params?.probabilistic}
 						<SkillScoresTable jobId={job.id} />
-					{:else}
+					{/if}
+					{#if !pooledOnlyJobs.includes(job)}
 						<MetricsTable jobId={job.id} />
 					{/if}
 				</div>
