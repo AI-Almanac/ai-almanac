@@ -28,7 +28,15 @@ describe('computeCoverage', () => {
 	it('intersects sources and reserves a climatology runway', () => {
 		// obs 1998-2012, models 2000-2012 -> earliest forecast 2008 (1998+10)
 		const cov = computeCoverage(source(1998, 2012), [source(2000, 2012), source(2000, 2012)]);
-		expect(cov).toEqual({ start: 2000, end: 2012, earliestForecast: 2008 });
+		expect(cov).toEqual({ start: 2000, end: 2012, earliestForecast: 2008, missing: [] });
+	});
+	it('collects years any chosen source is missing', () => {
+		const gappy = {
+			metadata: { start_year: 2000, end_year: 2012, missing_years: [2005] }
+		} as unknown as DataSource;
+		expect(computeCoverage(source(1990, 2012), [gappy, source(2000, 2012)])?.missing).toEqual([
+			2005
+		]);
 	});
 	it('is null when year metadata is missing', () => {
 		expect(computeCoverage(undefined, [source(2000, 2012)])).toBeNull();
@@ -37,22 +45,24 @@ describe('computeCoverage', () => {
 
 describe('defaultSplit', () => {
 	it('cross-validates within the full training span', () => {
-		expect(defaultSplit({ start: 2000, end: 2012, earliestForecast: 2008 })).toEqual({
+		expect(defaultSplit({ start: 2000, end: 2012, earliestForecast: 2008, missing: [] })).toEqual({
 			training: '2008:2012',
 			cv: '2008:2012'
 		});
 	});
 	it('handles a single valid forecast year', () => {
-		expect(defaultSplit({ start: 2000, end: 2008, earliestForecast: 2008 })).toEqual({
+		expect(defaultSplit({ start: 2000, end: 2008, earliestForecast: 2008, missing: [] })).toEqual({
 			training: '2008',
 			cv: '2008'
 		});
 	});
 	it('is null when no forecast year has enough runway', () => {
-		expect(defaultSplit({ start: 2000, end: 2007, earliestForecast: 2008 })).toBeNull();
+		expect(
+			defaultSplit({ start: 2000, end: 2007, earliestForecast: 2008, missing: [] })
+		).toBeNull();
 	});
 	it('produces a split that passes validation', () => {
-		const cov = { start: 2000, end: 2012, earliestForecast: 2008 };
+		const cov = { start: 2000, end: 2012, earliestForecast: 2008, missing: [] };
 		const split = defaultSplit(cov)!;
 		expect(yearSpecError(cov, split.training, split.cv, '', '')).toBeNull();
 	});
@@ -70,7 +80,7 @@ describe('memberCountWarning', () => {
 });
 
 describe('yearSpecError', () => {
-	const cov = { start: 2000, end: 2012, earliestForecast: 2008 };
+	const cov = { start: 2000, end: 2012, earliestForecast: 2008, missing: [] };
 	it('rejects a forecast start without enough climatology runway', () => {
 		// This is the config that failed the real run.
 		expect(yearSpecError(cov, '2000:2010', '2011,2012', '', '')).toMatch(
@@ -85,6 +95,11 @@ describe('yearSpecError', () => {
 	});
 	it('accepts identical training and CV holdout specs', () => {
 		expect(yearSpecError(cov, '2008:2012', '2008:2012', '', '')).toBeNull();
+	});
+	it('rejects forecast years a chosen source is missing', () => {
+		const gappy = { ...cov, missing: [2010] };
+		expect(yearSpecError(gappy, '2008:2012', '', '', '')).toMatch(/no data for 2010/);
+		expect(yearSpecError(gappy, '2008,2009,2011', '', '', '')).toBeNull();
 	});
 });
 

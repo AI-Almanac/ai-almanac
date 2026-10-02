@@ -382,3 +382,16 @@ async def test_not_ready_shared_source_does_not_disclose_its_path(
     assert exc.value.status_code == 409
     assert "private-bucket" not in str(exc.value.detail)
     assert exc.value.detail == "Observation source is not ready"
+
+
+def test_blend_coverage_rejects_forecast_years_a_source_is_missing():
+    coverage = job_submission.blend_year_coverage(
+        (1990, 2012),
+        [(2000, 2012)],
+        job_submission.source_missing_years({"missing_years": [2005, "2007", "x"]}),
+    )
+
+    errors = job_submission.blend_coverage_errors([2004, 2005, 2006, 2007], coverage)
+
+    assert any("no data for 2005, 2007" in error for error in errors)
+    assert job_submission.blend_coverage_errors([2004, 2006], coverage) == []

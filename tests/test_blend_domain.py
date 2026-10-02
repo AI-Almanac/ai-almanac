@@ -32,6 +32,7 @@ def test_coverage_intersects_sources_and_reserves_climatology_runway() -> None:
         "end": 2022,  # earliest end
         # max(obs_start + 10, latest model start) = max(2000, 2005)
         "earliest_forecast": 2005,
+        "missing": [],
     }
 
 

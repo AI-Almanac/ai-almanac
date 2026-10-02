@@ -1,5 +1,5 @@
 import type { DataSource } from '$lib/api';
-import { sourceYears, type YearSpan } from '$lib/source-coverage';
+import { missingYears, sourceYears, type YearSpan } from '$lib/source-coverage';
 
 // Climatology needs this many observation years before the first forecast year.
 // Mirrors `min_onset_years` in modal/blending_app.py.
@@ -9,6 +9,8 @@ export type Coverage = {
 	start: number;
 	end: number;
 	earliestForecast: number;
+	// Years inside the range some chosen source has no data for.
+	missing: number[];
 };
 
 // Parse a year spec ('2005:2010', '2011,2012') into sorted years. Mirrors the
@@ -47,7 +49,8 @@ export function computeCoverage(
 	return {
 		start: Math.max(obsSpan.start, ...modelStarts),
 		end: Math.min(obsSpan.end, ...modelEnds),
-		earliestForecast: Math.max(obsSpan.start + MIN_ONSET_YEARS, ...modelStarts)
+		earliestForecast: Math.max(obsSpan.start + MIN_ONSET_YEARS, ...modelStarts),
+		missing: [...new Set([obs, ...models].flatMap(missingYears))].sort((a, b) => a - b)
 	};
 }
 
@@ -125,5 +128,8 @@ export function yearSpecError(
 		return `Chosen sources only share data for ${cov.start}–${cov.end}.`;
 	if (min < cov.earliestForecast)
 		return `The climatology baseline needs at least ${MIN_ONSET_YEARS} observed years before the first forecast year — start at ${cov.earliestForecast} or later.`;
+	const gaps = forecastYears.filter((y) => cov.missing.includes(y));
+	if (gaps.length)
+		return `Some chosen sources have no data for ${[...new Set(gaps)].join(', ')} — leave those years out.`;
 	return null;
 }
