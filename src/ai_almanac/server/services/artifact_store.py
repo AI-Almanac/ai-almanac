@@ -52,6 +52,10 @@ class ArtifactStore(Protocol):
 
     def open(self, artifact: JobArtifact) -> BinaryIO: ...
 
+    def retain(self, job_id: str, keep: bool) -> None:
+        """Exempt (or stop exempting) a job's outputs from storage retention."""
+        ...
+
     def delete_job(self, job_id: str) -> None: ...
 
 
@@ -114,6 +118,9 @@ class FilesystemArtifactStore:
             raise FileNotFoundError(artifact.storage_key)
         return path.open("rb")
 
+    def retain(self, job_id: str, keep: bool) -> None:
+        pass  # ponytail: local outputs have no retention rule to exempt from
+
     def delete_job(self, job_id: str) -> None:
         job_dir = self._storage.job_dir(job_id)
         if job_dir.exists():
@@ -157,6 +164,9 @@ class GcsArtifactStore:
 
     def open(self, artifact: JobArtifact) -> BinaryIO:
         raise NotImplementedError("GCS artifacts are served via signed URL, not opened locally")
+
+    def retain(self, job_id: str, keep: bool) -> None:
+        self._storage.hold_job(job_id, held=keep)
 
     def delete_job(self, job_id: str) -> None:
         self._storage.delete_job(job_id)

@@ -395,7 +395,19 @@ class GCSStorage:
         blob.reload()
         return int(blob.size or 0), (blob.md5_hash or "")
 
+    def hold_job(self, job_id: str, held: bool) -> None:
+        """Set or release a temporary hold on every output object of a job.
+
+        The bucket's lifecycle Delete rule skips held objects, which is how
+        example jobs outlive staging output retention.
+        """
+        for blob in self._client.list_blobs(self._outputs_bucket, prefix=f"{job_id}/"):
+            if bool(blob.temporary_hold) != held:
+                blob.temporary_hold = held
+                blob.patch()
+
     def delete_job(self, job_id: str) -> None:
+        self.hold_job(job_id, held=False)  # GCS refuses to delete held objects
         for blob in self._client.list_blobs(self._outputs_bucket, prefix=f"{job_id}/"):
             blob.delete()
 

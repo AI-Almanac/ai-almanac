@@ -506,6 +506,10 @@ async def delete_job(job_id: str, user: CurrentUser):
     await asyncio.to_thread(get_artifact_store().delete_job, job_id)
 
 
+async def _retain_outputs(job_id: str, keep: bool) -> None:
+    await asyncio.to_thread(get_artifact_store().retain, job_id, keep)
+
+
 async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
     async with get_db() as conn:
         row = (
@@ -520,6 +524,9 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
             .mappings()
             .fetchone()
         )
+        # Inside the transaction: if storage can't apply the hold, the
+        # visibility change rolls back instead of leaving an unprotected example.
+        await _retain_outputs(job["id"], visibility == "example")
         await audit(
             conn,
             f"job.{visibility}",
@@ -571,7 +578,8 @@ async def promote_job_to_example(job: ModifiableJob, user: AdminUser):
             )
             for sibling_id in promoted:
                 if sibling_id == job["id"]:
-                    continue  # audited below by _set_job_visibility
+                    continue  # retained and audited below by _set_job_visibility
+                await _retain_outputs(sibling_id, keep=True)
                 await audit(
                     conn,
                     "job.example",

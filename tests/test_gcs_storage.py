@@ -21,6 +21,13 @@ class _FakeBlob:
     def __init__(self, bucket: _FakeBucket, name: str) -> None:
         self._bucket = bucket
         self.name = name
+        self.temporary_hold = name in bucket.held
+
+    def patch(self) -> None:
+        if self.temporary_hold:
+            self._bucket.held.add(self.name)
+        else:
+            self._bucket.held.discard(self.name)
 
     @property
     def content_type(self):
@@ -65,6 +72,8 @@ class _FakeBlob:
     def delete(self) -> None:
         if self.name not in self._bucket.store:
             raise FileNotFoundError(self.name)
+        if self.name in self._bucket.held:
+            raise PermissionError(f"{self.name} is under a temporary hold")
         del self._bucket.store[self.name]
 
     def generate_signed_url(self, **kwargs) -> str:
@@ -75,6 +84,7 @@ class _FakeBucket:
     def __init__(self, name: str) -> None:
         self.name = name
         self.store: dict[str, tuple[bytes, str | None]] = {}
+        self.held: set[str] = set()
 
     def blob(self, name: str) -> _FakeBlob:
         return _FakeBlob(self, name)
@@ -238,6 +248,28 @@ def test_gcs_artifact_store_delete_removes_only_that_job(store: GCSStorage) -> N
     assert "job1/output/a.nc" not in out.store
     assert "job1/run.log" not in out.store
     assert "job2/output/b.nc" in out.store
+
+
+def test_gcs_artifact_store_retain_holds_only_that_job_and_delete_still_works(
+    store: GCSStorage,
+) -> None:
+    from ai_almanac.server.services.artifact_store import GcsArtifactStore
+
+    out = store._bucket("out")
+    out.blob("job1/output/a.nc").upload_from_string(b"1")
+    out.blob("job1/figure/a.png").upload_from_string(b"p")
+    out.blob("job2/output/b.nc").upload_from_string(b"2")
+    artifact_store = GcsArtifactStore(store)
+
+    artifact_store.retain("job1", keep=True)
+    assert out.held == {"job1/output/a.nc", "job1/figure/a.png"}
+
+    artifact_store.retain("job1", keep=False)
+    assert out.held == set()
+
+    artifact_store.retain("job1", keep=True)
+    artifact_store.delete_job("job1")
+    assert set(out.store) == {"job2/output/b.nc"}
 
 
 def test_gcs_artifact_store_has_no_local_open_or_workspace(store: GCSStorage) -> None:
