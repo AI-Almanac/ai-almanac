@@ -1019,8 +1019,8 @@ export interface paths {
          * Get Blend Forecast
          * @description Return blended onset probabilities for all issue dates and grid points.
          *
-         *     Parses blended_forecast_probabilities.csv server-side and returns a
-         *     compact structure suitable for client-side choropleth rendering.
+         *     The probabilities CSV is reshaped into per-point series once, stored beside
+         *     the job's outputs, and served from there on later reads.
          */
         get: operations["get_blend_forecast_jobs__job_id__blend_forecast_get"];
         put?: never;
@@ -1141,15 +1141,18 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{job_id}/grid": {
+    "/jobs/{job_id}/grids": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Grid */
-        get: operations["get_grid_jobs__job_id__grid_get"];
+        /**
+         * Get Grids
+         * @description Every map grid for the job in one response, built once and then served as stored bytes.
+         */
+        get: operations["get_grids_jobs__job_id__grids_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3411,6 +3414,16 @@ export interface components {
             min: number;
             /** Max */
             max: number;
+        };
+        /**
+         * JobGrids
+         * @description Every map-ready grid for one job, built once from its metrics NetCDFs and stored.
+         */
+        JobGrids: {
+            /** Job Id */
+            job_id: string;
+            /** Grids */
+            grids: components["schemas"]["JobGridResponse"][];
         };
         /** JobMetrics */
         JobMetrics: {
@@ -6895,13 +6908,9 @@ export interface operations {
             };
         };
     };
-    get_grid_jobs__job_id__grid_get: {
+    get_grids_jobs__job_id__grids_get: {
         parameters: {
-            query: {
-                model: string;
-                window: string;
-                metric: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -6916,7 +6925,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobGridResponse"];
+                    "application/json": components["schemas"]["JobGrids"];
                 };
             };
             /** @description Validation Error */
