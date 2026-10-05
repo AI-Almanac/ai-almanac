@@ -79,9 +79,6 @@ pythonpath = "."
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 
-[tool.pixi.pypi-dependencies]
-ai-almanac = { path = ".", editable = true }
-
 [tool.pixi.environments]
 default = { features = ["devtools"], solve-group = "default" }
 dev = { features = ["devtools", "dev"], solve-group = "default" }
@@ -131,6 +128,11 @@ frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_
 [tool.pixi.feature.devtools.dependencies]
 nodejs = ">=26.3.0,<26.4"
 process-compose = ">=1.103.0,<2"
+
+# Editable only where devtools is used: a workspace-wide declaration would
+# override prod's wheel install and leave the image pointing at a missing src/.
+[tool.pixi.feature.devtools.pypi-dependencies]
+ai-almanac = { path = ".", editable = true }
 
 [tool.pixi.dependencies]
 rasterio = ">=1.5.0,<2"
