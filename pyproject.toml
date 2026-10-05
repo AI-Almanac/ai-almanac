@@ -96,7 +96,13 @@ ai-almanac = { path = ".", editable = true, extras = ["cloud"] }
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.environments.dev]
+features = ["dev"]
+solve-group = "default"
+
+[tool.pixi.environments.dev.dependencies]
+ipython = ">=9.17.1,<10"
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
