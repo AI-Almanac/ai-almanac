@@ -36,14 +36,16 @@ from ai_almanac.server.services.job_submission import (
 from ai_almanac.server.services.registry import load_catalog, load_model_registry
 from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
 
-from ..services.metrics import (
+from ..services.blend_forecast import SOURCE_FILENAME as BLEND_FORECAST_FILENAME
+from ..services.blend_forecast import load_blend_forecast
+from ..services.map_data import (
     JobCellResponse,
-    JobGridResponse,
-    JobMetrics,
-    compute_job_cell,
-    compute_job_grid,
-    compute_job_metrics,
+    JobGridsResponse,
+    job_cell,
+    job_grids,
+    load_job_map_data,
 )
+from ..services.metrics import JobMetrics, compute_job_metrics
 from ..services.skill_scores import JobSkillScores, compute_job_skill_scores
 from ..services.storage import GCSStorage, get_storage
 
@@ -203,106 +205,36 @@ async def list_artifacts(job_id: str, job: ReadableJob):
 
 @router.get("/{job_id}/blend-forecast")
 async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
-    """Return blended onset probabilities for all issue dates and grid points.
-
-    Parses blended_forecast_probabilities.csv server-side and returns a
-    compact structure suitable for client-side choropleth rendering.
-    """
-    import csv
-    import io
-    import json as _json
-
+    """Return blended onset probabilities for all issue dates and grid points,
+    in a compact structure suitable for client-side choropleth rendering."""
     from ai_almanac.server.services.region_catalog import get_region
 
     _require_complete(job)
 
     # The region defines what "onset" means (e.g. India → Modified Moron–Robertson,
     # Ethiopia → Kiremt); surface its name + definition so the UI can keep it visible.
-    config = _json.loads(job.get("config_json") or "{}")
-    region = await get_region(config["region_id"]) if config.get("region_id") else None
-    region_name = (region or {}).get("display_name")
-    onset_definition = (region or {}).get("description")
-
-    def _empty() -> dict:
-        return {
-            "issue_dates": [],
-            "points": [],
-            "onset_threshold": None,
-            "region_id": config.get("region_id"),
-            "region_name": region_name,
-            "onset_definition": onset_definition,
-        }
+    region_id = _job_region_id(job)
+    region = await get_region(region_id) if region_id else None
+    region_fields = {
+        "region_id": region_id,
+        "region_name": (region or {}).get("display_name"),
+        "onset_definition": (region or {}).get("description"),
+    }
+    empty = {"issue_dates": [], "points": [], "onset_threshold": None}
 
     artifact = next(
-        (
-            a
-            for a in await list_job_artifacts(job_id)
-            if a["filename"] == "blended_forecast_probabilities.csv"
-        ),
+        (a for a in await list_job_artifacts(job_id) if a["filename"] == BLEND_FORECAST_FILENAME),
         None,
     )
     if artifact is None:
-        return _empty()
-
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, artifact["kind"], artifact["filename"]
-    )
-    if not text:
-        return _empty()
-
-    reader = csv.DictReader(io.StringIO(text))
-    # point_id → {date → [w1, w2, w3, w4, later]}
-    by_point: dict[str, dict[str, list[float]]] = {}
-    coords_by_point: dict[str, tuple[float, float]] = {}
-    # preserve insertion order for issue_dates
-    date_order: dict[str, None] = {}
-    onset_threshold: float | None = None
-    for row in reader:
-        point_id = row["id"]
-        date = row["time"]
-        date_order[date] = None
-        if onset_threshold is None:
-            try:
-                onset_threshold = float(row.get("onset_threshold") or "")
-            except ValueError:
-                onset_threshold = None
-        if point_id not in by_point:
-            by_point[point_id] = {}
-        by_point[point_id][date] = [
-            float(row.get("cv_week1") or 0),
-            float(row.get("cv_week2") or 0),
-            float(row.get("cv_week3") or 0),
-            float(row.get("cv_week4") or 0),
-            float(row.get("cv_later") or 0),
-        ]
-        if point_id not in coords_by_point and row.get("lat") and row.get("lon"):
-            coords_by_point[point_id] = (float(row["lat"]), float(row["lon"]))
-
-    issue_dates = list(date_order)
-    points = []
-    for point_id, date_map in by_point.items():
-        if point_id in coords_by_point:
-            lat, lon = coords_by_point[point_id]
-        else:
-            lat_str, lon_str = point_id.split("_", 1)
-            lat, lon = float(lat_str), float(lon_str)
-        points.append(
-            {
-                "id": point_id,
-                "lat": lat,
-                "lon": lon,
-                "probs": [date_map.get(d, [0, 0, 0, 0, 0]) for d in issue_dates],
-            }
+        return {**empty, **region_fields}
+    try:
+        forecast = await asyncio.to_thread(
+            load_blend_forecast, job_id, get_storage(), artifact["kind"]
         )
-
-    return {
-        "issue_dates": issue_dates,
-        "points": points,
-        "onset_threshold": onset_threshold,
-        "region_id": config.get("region_id"),
-        "region_name": region_name,
-        "onset_definition": onset_definition,
-    }
+    except FileNotFoundError:
+        return {**empty, **region_fields}
+    return {**forecast.model_dump(), **region_fields}
 
 
 _BLEND_SUMMARY_PREFIXES = {"pooled": "summary_models_pooled", "yearly": "yearly_metrics_global"}
@@ -449,26 +381,18 @@ async def get_skill_scores(job_id: str, job: ReadableJob):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(job_id: str, job: ReadableJob, model: str, window: str, metric: str):
+@router.get("/{job_id}/grids", response_model=JobGridsResponse)
+async def get_grids(job_id: str, job: ReadableJob):
+    """Every per-grid-point metric map of the job, for all models and windows."""
     _require_complete(job)
     try:
-        return await asyncio.to_thread(
-            compute_job_grid, job_id, get_storage(), model, window, metric
-        )
+        data = await asyncio.to_thread(load_job_map_data, job_id, get_storage())
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        logger.exception(
-            "Error computing grid for job %s model=%s window=%s metric=%s",
-            job_id,
-            model,
-            window,
-            metric,
-        )
+        logger.exception("Error loading map grids for job %s", job_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    return job_grids(job_id, data)
 
 
 @router.get("/{job_id}/cell", response_model=JobCellResponse)
@@ -482,12 +406,9 @@ async def get_cell(
 ):
     _require_complete(job)
     try:
-        return await asyncio.to_thread(
-            compute_job_cell, job_id, get_storage(), model, window, lat, lon
-        )
+        data = await asyncio.to_thread(load_job_map_data, job_id, get_storage())
+        return job_cell(job_id, data, model, window, lat, lon)
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.exception(

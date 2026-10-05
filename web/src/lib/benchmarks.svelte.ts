@@ -3,7 +3,7 @@ import {
 	getJobs,
 	getJob,
 	getJobMetrics,
-	getJobGrid,
+	getJobGrids,
 	getJobCell,
 	getJobSkillScores,
 	deleteJob,
@@ -26,10 +26,8 @@ const _metricsCache = new Map<string, JobMetrics>();
 export function invalidateJobCaches(jobId: string): void {
 	_metricsCache.delete(jobId);
 	_skillCache.delete(jobId);
+	_gridsCache.delete(jobId);
 	const prefix = `${jobId}||`;
-	for (const key of _gridCache.keys()) {
-		if (key.startsWith(prefix)) _gridCache.delete(key);
-	}
 	for (const key of _cellCache.keys()) {
 		if (key.startsWith(prefix)) _cellCache.delete(key);
 	}
@@ -46,7 +44,18 @@ export async function getCachedJobMetrics(jobId: string, bbox?: BboxFilter): Pro
 	return getJobMetrics(jobId, bbox);
 }
 
-const _gridCache = new Map<string, JobGridResponse>();
+// One request per job serves every model/window/metric layer, so concurrent
+// layer lookups share the in-flight promise instead of each fetching.
+const _gridsCache = new Map<string, Promise<JobGridResponse[]>>();
+
+function jobGrids(jobId: string): Promise<JobGridResponse[]> {
+	const hit = _gridsCache.get(jobId);
+	if (hit) return hit;
+	const grids = getJobGrids(jobId).then((data) => data.grids);
+	_gridsCache.set(jobId, grids);
+	grids.catch(() => _gridsCache.delete(jobId));
+	return grids;
+}
 
 export async function getCachedJobGrid(
 	jobId: string,
@@ -54,12 +63,12 @@ export async function getCachedJobGrid(
 	window: string,
 	metric: string
 ): Promise<JobGridResponse> {
-	const key = `${jobId}||${model}||${window}||${metric}`;
-	const hit = _gridCache.get(key);
-	if (hit) return hit;
-	const data = await getJobGrid(jobId, model, window, metric);
-	_gridCache.set(key, data);
-	return data;
+	const normalizedWindow = window.replaceAll(',', '-');
+	const grid = (await jobGrids(jobId)).find(
+		(g) => g.model === model && g.window === normalizedWindow && g.metric === metric
+	);
+	if (!grid) throw new Error(`No ${metric} map for ${model} ${window}`);
+	return grid;
 }
 
 // Probabilistic skill scores. The endpoint returns an empty `windows` array for

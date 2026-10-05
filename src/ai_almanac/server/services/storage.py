@@ -13,6 +13,7 @@ Both backends expose the same method surface so routers stay backend-agnostic.
 from __future__ import annotations
 
 import threading
+import uuid
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -21,6 +22,11 @@ from ai_almanac.paths import uploads_dir
 
 # Probed in priority order when a chat figure's extension is unknown.
 _CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+
+# Derived data rebuilt from a job's outputs (e.g. map grids), stored beside
+# them so deleting the job removes it, but outside output/ and figure/ so it
+# is never listed or published as a result.
+_JOB_CACHE_DIR = "cache"
 
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
@@ -164,6 +170,21 @@ class LocalStorage:
 
         with _nc_lock:
             return xr.load_dataset(path)
+
+    def read_job_cache(self, job_id: str, name: str) -> bytes | None:
+        path = self._job_cache_path(job_id, name)
+        return path.read_bytes() if path.is_file() else None
+
+    def write_job_cache(self, job_id: str, name: str, data: bytes) -> None:
+        path = self._job_cache_path(job_id, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Replace atomically so a concurrent reader never sees a partial file.
+        partial = path.with_name(f"{path.name}.{uuid.uuid4().hex}.partial")
+        partial.write_bytes(data)
+        partial.replace(path)
+
+    def _job_cache_path(self, job_id: str, name: str) -> Path:
+        return self._contained(self._outputs_dir, f"{job_id}/{_JOB_CACHE_DIR}/{name}")
 
     def save_chat_figure(self, figure_id: str, data: bytes) -> None:
         ext, _ = detect_chat_figure_format(data)
@@ -405,6 +426,20 @@ class GCSStorage:
         data = self._fs().cat_file(str(path).removeprefix("gs://"))
         with _nc_lock:
             return xr.load_dataset(io.BytesIO(data), engine="h5netcdf")
+
+    def read_job_cache(self, job_id: str, name: str) -> bytes | None:
+        from google.api_core.exceptions import NotFound
+
+        try:
+            return self._job_cache_blob(job_id, name).download_as_bytes()
+        except NotFound:
+            return None
+
+    def write_job_cache(self, job_id: str, name: str, data: bytes) -> None:
+        self._job_cache_blob(job_id, name).upload_from_string(data, content_type="application/json")
+
+    def _job_cache_blob(self, job_id: str, name: str):
+        return self._bucket(self._outputs_bucket).blob(f"{job_id}/{_JOB_CACHE_DIR}/{name}")
 
     def save_chat_figure(self, figure_id: str, data: bytes) -> None:
         ext, content_type = detect_chat_figure_format(data)

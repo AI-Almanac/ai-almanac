@@ -333,14 +333,14 @@ export type JobCellResponse = {
 	mae_series: CellMaePoint[];
 };
 
-export async function getJobGrid(
-	id: string,
-	model: string,
-	window: string,
-	metric: string
-): Promise<JobGridResponse> {
-	const params = new URLSearchParams({ model, window, metric });
-	return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
+export type JobGridsResponse = {
+	job_id: string;
+	grids: JobGridResponse[];
+};
+
+/** Every metric map of a job, for all its models and windows, in one request. */
+export async function getJobGrids(id: string): Promise<JobGridsResponse> {
+	return request<JobGridsResponse>(`/jobs/${id}/grids`);
 }
 
 export async function getJobCell(
