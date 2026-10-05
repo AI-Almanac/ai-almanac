@@ -11,6 +11,7 @@ validation; the LLM operates through typed tool calls.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -46,7 +47,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
 
-from . import chat_tools, rulesets
+from . import chat_tools, local_llm, rulesets
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_state import (
@@ -578,6 +579,12 @@ async def stream_response(
     comparison_id: str | None = None,
     turn_id: str | None = None,
 ) -> AsyncIterator[str]:
+    if local_llm.is_managed():
+        # Raises AssistantUnavailable while a forecast holds the GPU. A wake
+        # reloads the weights (tens of seconds), so say so before blocking on it.
+        if await asyncio.to_thread(local_llm.needs_wake):
+            yield json.dumps({"type": "assistant_status", "status": "waking"})
+        await asyncio.to_thread(local_llm.ensure_awake)
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None

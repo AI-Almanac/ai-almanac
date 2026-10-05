@@ -74,6 +74,10 @@ def forecast_env_dir() -> Path:
     return env_root() / "forecast-env"
 
 
+def llm_env_dir() -> Path:
+    return env_root() / "llm-env"
+
+
 def cache_dir() -> Path:
     return data_root() / "cache"
 

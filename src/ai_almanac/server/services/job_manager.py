@@ -355,6 +355,11 @@ def execute_job(job_id: str) -> None:
 
         log_path = get_storage().log_path(job_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("")
+        # The job is already `starting`, so chat turns are refused from here
+        # on; the model wakes lazily on the first turn after the job ends.
+        if _is_forecast_job(engine, job_id):
+            _park_local_llm(engine, job_id, worker_id, log_path)
         workload = _start_workload(job_id, log_path)
         pgid = workload.pid
         with engine.begin() as conn:
@@ -418,8 +423,43 @@ def execute_job(job_id: str) -> None:
         raise
 
 
+def _is_forecast_job(engine, job_id: str) -> bool:
+    with engine.connect() as conn:
+        row = conn.execute(sa.select(jobs.c.config_json).where(jobs.c.id == job_id)).fetchone()
+    try:
+        return json.loads((row and row[0]) or "{}").get("job_type") == "forecast"
+    except json.JSONDecodeError:
+        return False
+
+
+def _park_local_llm(engine, job_id: str, worker_id: str, log_path: Path) -> None:
+    """Release the managed chat model's memory before a forecast claims the GPU.
+
+    Parking can wait minutes (draining a reply, or a chat-triggered wake that
+    holds the model lock), so it runs in a thread while this loop keeps the
+    heartbeat fresh — a stale one would get the job reconciled as crashed.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ai_almanac.server.services import local_llm
+
+    if not local_llm.is_managed():
+        return
+    with log_path.open("a") as log, ThreadPoolExecutor(max_workers=1) as pool:
+        log.write("==> Parking the local assistant model to free GPU memory...\n")
+        log.flush()
+        future = pool.submit(local_llm.park_for_gpu_job)
+        while True:
+            try:
+                result = future.result(timeout=1)
+                break
+            except TimeoutError:
+                _heartbeat(engine, job_id, worker_id)
+        log.write(f"==> {result.detail}\n")
+
+
 def _start_workload(job_id: str, log_path: Path) -> subprocess.Popen:
-    log_file = log_path.open("w")
+    log_file = log_path.open("a")
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "stdout": log_file,

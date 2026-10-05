@@ -197,6 +197,7 @@ export type ChatEvent =
 			config: BlendRunSpec;
 			validation?: BlendValidation | null;
 	  }
+	| { type: 'assistant_status'; status: 'waking' }
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 

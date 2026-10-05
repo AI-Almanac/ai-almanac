@@ -41,6 +41,7 @@ from ai_almanac.server.services.llm import (
     serialize_model_messages,
     stream_response,
 )
+from ai_almanac.server.services.local_llm import AssistantUnavailable
 from ai_almanac.server.services.rulesets import Ruleset, selectable_ruleset
 
 logger = logging.getLogger(__name__)
@@ -561,11 +562,12 @@ async def stream_chat_turn(
             pass
         return
     except Exception as exc:
-        logger.exception(
-            "Chat response stream failed for session %s and user %s",
-            session_id,
-            user_id,
-        )
+        if not isinstance(exc, AssistantUnavailable):
+            logger.exception(
+                "Chat response stream failed for session %s and user %s",
+                session_id,
+                user_id,
+            )
         try:
             async with get_db() as conn:
                 await _persist_failed_turn(
@@ -577,10 +579,14 @@ async def stream_chat_turn(
                     exc,
                     scope,
                 )
-            terminal_event = _stream_event(
-                "error",
-                error_type=_classify_stream_error(exc, assistant_turn),
-                message="Chat response failed",
+            terminal_event = (
+                _stream_event("error", error_type="assistant_unavailable", message=str(exc))
+                if isinstance(exc, AssistantUnavailable)
+                else _stream_event(
+                    "error",
+                    error_type=_classify_stream_error(exc, assistant_turn),
+                    message="Chat response failed",
+                )
             )
         except Exception:
             terminal_event = _stream_event(

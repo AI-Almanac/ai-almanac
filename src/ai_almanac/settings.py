@@ -35,6 +35,11 @@ _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
 _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
 
 
+# Model the managed local LLM serves unless one is chosen at setup. NVFP4 keeps
+# the weights at ~20 GB, leaving room for a forecast once the model sleeps.
+DEFAULT_LOCAL_LLM_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+
+
 # ---------------------------------------------------------------------------
 # Settings.
 # ---------------------------------------------------------------------------
@@ -179,6 +184,31 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_history_max_messages: int = 80
     llm_tool_result_max_chars: int = 12000
+    # "managed" runs a bundled vLLM (server/services/local_llm.py) on this
+    # machine and derives llm_base_url from llm_port; llm_model is then the
+    # Hugging Face model id it serves. Personal installs only.
+    llm_engine: Literal["external", "managed"] = "external"
+    llm_port: int = 8766
+    # Fraction of GPU memory vLLM claims (weights + KV cache). On unified-memory
+    # hosts (DGX Spark) that is system RAM, so vLLM's 0.9 default would starve
+    # the rest of the machine.
+    llm_gpu_memory_utilization: float = 0.45
+    # Put the managed model to sleep after this long without a chat turn; 0
+    # keeps it loaded.
+    llm_idle_sleep_minutes: float = 10
+    # Extra `vllm serve` flags. The defaults match DEFAULT_LOCAL_LLM_MODEL
+    # (Nemotron's XML tool calls and reasoning). Capturing CUDA graphs only up
+    # to batch 32 (vLLM's default is 512) cuts startup; a personal install
+    # never batches more than a few requests. Eager safetensors loading reads
+    # each shard up front instead of page-faulting it through mmap, which on
+    # the Spark cuts weight loading (and so every wake) from ~110 s to ~13 s.
+    # --host/--port are rejected: the server's dev endpoints are
+    # unauthenticated and must stay on loopback.
+    llm_serve_args: str = (
+        "--max-model-len 65536 --enable-auto-tool-choice "
+        "--tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 "
+        "--max-cudagraph-capture-size 32 --safetensors-load-strategy eager"
+    )
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
@@ -317,6 +347,11 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "identity_issuer_header",
         "identity_groups_header",
         "credential_encryption_key",
+        # Baked into the managed vLLM's command line at `serve` startup.
+        "llm_engine",
+        "llm_port",
+        "llm_gpu_memory_utilization",
+        "llm_serve_args",
     }
 )
 
@@ -347,6 +382,11 @@ LOCAL_ONLY_FIELDS: frozenset[str] = frozenset(
         "max_local_jobs",
         "output_dir",
         "database_url",
+        "llm_engine",
+        "llm_port",
+        "llm_gpu_memory_utilization",
+        "llm_idle_sleep_minutes",
+        "llm_serve_args",
     }
 )
 
@@ -490,6 +530,26 @@ def _warn_removed_settings(overlay: dict, source: str) -> None:
         logging.getLogger(__name__).warning(msg)
 
 
+def _resolve_llm_engine(target: Settings) -> None:
+    """Point the chat client at the managed local LLM when it is enabled.
+
+    A shared deployment never runs one: its users' turns go through their own
+    profiles, and a vLLM beside the web server would be a second, unmanaged
+    GPU workload.
+    """
+    if target.llm_engine != "managed":
+        return
+    if target.deployment_mode != "personal":
+        target.llm_engine = "external"
+        return
+    target.llm_provider = "openai-compatible"
+    target.llm_base_url = f"http://127.0.0.1:{target.llm_port}/v1"
+    # Switching engines from the Settings page leaves the hosted-provider
+    # default in place, which vLLM would try (and fail) to fetch from the Hub.
+    if target.llm_model == type(target).model_fields["llm_model"].default:
+        target.llm_model = DEFAULT_LOCAL_LLM_MODEL
+
+
 def reload_settings() -> Settings:
     """Re-resolve defaults + env + config.yaml + DB overlay; mutate the
     singleton in place.
@@ -518,6 +578,7 @@ def reload_settings() -> Settings:
     )
     if not fresh.enable_assistant_comparisons and not audience_set:
         fresh.assistant_comparisons_audience = "off"
+    _resolve_llm_engine(fresh)
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
     return settings

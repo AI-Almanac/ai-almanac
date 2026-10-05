@@ -1,0 +1,36 @@
+# Pixi spec for the bundled local LLM server (vLLM) behind the chat assistant.
+#
+# Only installed when the assistant is configured to run on this machine
+# (`llm_engine = "managed"`, chosen in `ai-almanac init` or the setup wizard).
+# The server is launched by server/services/local_llm.py with sleep mode on, so
+# it can release its memory while a forecast runs (see docs/local-llm-design.md).
+#
+# Installed into `$AI_ALMANAC_ENV_ROOT/llm-env/`.
+
+[workspace]
+name = "ai-almanac-llm"
+description = "Local LLM server (vLLM) for the ai-almanac chat assistant."
+channels = ["conda-forge"]
+# vLLM ships CUDA wheels for both Linux arches; there is no macOS/CPU build we
+# would want to run a chat model on.
+platforms = ["linux-64", "linux-aarch64"]
+
+# vLLM's tilelang and z3-solver deps ship their only aarch64 wheels as
+# manylinux_2_34; with a lower floor pixi falls back to building their sdists
+# (a long CMake build that fails without an LLVM toolchain). Requires hosts
+# with glibc >= 2.34 (Ubuntu 22.04+), same as the forecast env.
+[system-requirements]
+libc = { family = "glibc", version = "2.34" }
+# vLLM's wheels and their pinned PyPI torch are built against CUDA 13; needs a
+# CUDA 13 driver, like the forecast env.
+cuda = "13"
+
+# Python only from conda: vLLM pins an exact torch (from PyPI), so torch and
+# the CUDA runtime libraries come from the PyPI solve, not conda-forge.
+[dependencies]
+python = "3.12.*"
+
+[pypi-dependencies]
+vllm = "==0.30.0"
+# `hf download` for fetching model weights ahead of the first serve.
+huggingface_hub = { version = "*", extras = ["hf_xet"] }

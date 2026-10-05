@@ -24,7 +24,13 @@ from ai_almanac.envs.pixi_bootstrap import (
     ensure_pixi,
 )
 from ai_almanac.locking import file_lock
-from ai_almanac.paths import benchmark_env_dir, blending_env_dir, env_root, forecast_env_dir
+from ai_almanac.paths import (
+    benchmark_env_dir,
+    blending_env_dir,
+    env_root,
+    forecast_env_dir,
+    llm_env_dir,
+)
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 BLENDING_REPO_REF = "a99a50344b7f3877e8ecda3922a18e4a57425aad"
@@ -109,6 +115,11 @@ def _blending_pixi_spec() -> Path:
 
 def _forecast_pixi_spec() -> Path:
     spec = files("ai_almanac.envs").joinpath("forecast.pixi.toml")
+    return Path(str(spec))
+
+
+def _llm_pixi_spec() -> Path:
+    spec = files("ai_almanac.envs").joinpath("llm.pixi.toml")
     return Path(str(spec))
 
 
@@ -260,14 +271,77 @@ def _ensure_forecast_env(progress: ProgressCallback) -> Path | None:
     return env_dir
 
 
+def ensure_llm_env(progress: ProgressCallback | None = None) -> Path | None:
+    """Install the bundled vLLM server env. Skipped where vLLM has no build."""
+    progress = progress or _default_progress
+    with file_lock(
+        env_root() / ".prepare.lock",
+        message="another instance is preparing environments in this env root; waiting…",
+    ):
+        return _ensure_llm_env(progress)
+
+
+def _ensure_llm_env(progress: ProgressCallback) -> Path | None:
+    # Same gate as the forecast env: vLLM ships Linux CUDA wheels only.
+    current = _current_pixi_platform()
+    if current not in _FORECAST_PLATFORMS:
+        progress(
+            EnvProgressEvent(
+                kind="phase_skipped",
+                phase="llm",
+                detail=(
+                    f"unsupported on {current}. The bundled model server needs a Linux "
+                    "GPU host; connect to an existing OpenAI-compatible server instead."
+                ),
+            )
+        )
+        return None
+    env_dir = llm_env_dir()
+    _install(_llm_pixi_spec(), env_dir, "llm", progress)
+    return env_dir
+
+
+def llm_env_ready() -> bool:
+    env_dir = llm_env_dir()
+    return (env_dir / "pixi.toml").exists() and (env_dir / ".pixi" / "envs" / "default").exists()
+
+
+def download_llm_model(model_id: str, progress: ProgressCallback | None = None) -> None:
+    """Fetch a model's weights into the Hugging Face cache ahead of serving.
+
+    Idempotent: `hf download` skips files already in the cache.
+    """
+    progress = progress or _default_progress
+    pixi = _ensure_pixi(progress)
+    env_dir = llm_env_dir()
+    _run_streaming(
+        [
+            pixi,
+            "run",
+            "--manifest-path",
+            str(env_dir / "pixi.toml"),
+            "--",
+            "hf",
+            "download",
+            model_id,
+        ],
+        phase="llm-model",
+        progress=progress,
+        cwd=env_dir,
+    )
+
+
 def ensure_env(
     progress: ProgressCallback | None = None,
     include_forecast: bool = True,
+    include_llm: bool = False,
 ) -> tuple[Path, Path, Path | None]:
     """Idempotently prepare all local workload environments.
 
     Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
     None when skipped on an unsupported platform or when include_forecast=False.
+    include_llm also installs the bundled vLLM env (see llm_env_dir()); model
+    weights are fetched separately by download_llm_model.
     """
     progress = progress or _default_progress
     with file_lock(
@@ -279,6 +353,8 @@ def ensure_env(
         _install(_pixi_spec(), env_dir, "benchmark", progress)
         blending_dir = _ensure_blending_env(progress)
         forecast_dir = _ensure_forecast_env(progress) if include_forecast else None
+        if include_llm:
+            _ensure_llm_env(progress)
     return env_dir, blending_dir, forecast_dir
 
 
@@ -343,6 +419,34 @@ def run_forecast(
         text=True,
         bufsize=1,
     )
+
+
+def run_llm_server(
+    args: list[str], env: dict[str, str] | None = None, log_path: Path | None = None
+) -> subprocess.Popen:
+    """Spawn the vLLM server inside the LLM env, detached in its own session.
+
+    Unlike the workload runners this is long-lived, so output goes to a log
+    file (a pipe nobody drains would eventually block the server). The new
+    session makes the process group killable as one unit, EngineCore included.
+    """
+    pixi = _ensure_pixi()
+    env_dir = llm_env_dir()
+    full_cmd = [pixi, "run", "--manifest-path", str(env_dir / "pixi.toml"), "--", *args]
+    log_file = log_path.open("a") if log_path else subprocess.DEVNULL
+    try:
+        return subprocess.Popen(
+            full_cmd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        if log_path:
+            log_file.close()
 
 
 def env_versions() -> dict[str, str]:

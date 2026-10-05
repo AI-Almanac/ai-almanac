@@ -8,15 +8,35 @@
 	}
 	const { wizard }: Props = $props();
 
+	type LlmState = {
+		configured?: boolean;
+		engine?: 'external' | 'managed';
+		base_url?: string;
+		model?: string;
+		default_local_model?: string;
+	};
+	type GpuInfo = { name?: string } | null | undefined;
+	type PlatformInfo = { platform?: string } | undefined;
+
+	// "managed": ai-almanac runs the model itself with a bundled vLLM.
+	let engine = $state<'external' | 'managed'>('external');
 	let baseUrl = $state('http://localhost:11434/v1');
 	let model = $state('');
+	let localModel = $state('');
 	let initialized = false;
 	$effect(() => {
 		if (!initialized) {
-			const llm = wizard.state?.llm as
-				{ configured?: boolean; base_url?: string; model?: string } | undefined;
-			if (llm?.base_url) baseUrl = llm.base_url;
-			if (llm?.model) model = llm.model;
+			const llm = wizard.state?.llm as LlmState | undefined;
+			const gpu = wizard.state?.gpu as GpuInfo;
+			const platform = wizard.state?.platform as PlatformInfo;
+			const canRunLocal = Boolean(gpu) && (platform?.platform ?? '').startsWith('linux');
+			engine = llm?.configured ? (llm.engine ?? 'external') : canRunLocal ? 'managed' : 'external';
+			localModel = llm?.default_local_model ?? '';
+			if (llm?.engine === 'managed' && llm.model) localModel = llm.model;
+			else {
+				if (llm?.base_url) baseUrl = llm.base_url;
+				if (llm?.model) model = llm.model;
+			}
 			initialized = true;
 		}
 	});
@@ -34,7 +54,8 @@
 				base_url: baseUrl,
 				model,
 				api_key: apiKey || null,
-				test_only: true
+				test_only: true,
+				engine: 'external'
 			});
 		} catch (e) {
 			wizard.llmError = e instanceof Error ? e.message : String(e);
@@ -47,17 +68,19 @@
 		saving = true;
 		wizard.llmError = null;
 		try {
-			const result = await saveLlm({
-				base_url: baseUrl,
-				model,
-				api_key: apiKey || null,
-				test_only: false
-			});
+			const result = await saveLlm(
+				engine === 'managed'
+					? { engine, base_url: '', model: localModel, test_only: false }
+					: { engine, base_url: baseUrl, model, api_key: apiKey || null, test_only: false }
+			);
 			if (!result.ok) {
 				wizard.llmError = result.error ?? 'LLM connection failed — check the URL and model name';
 				return;
 			}
-			wizard.goNext();
+			// The envs step reads the saved engine to decide whether to install
+			// the local model server.
+			await wizard.load();
+			wizard.goTo('envs');
 		} catch (e) {
 			wizard.llmError = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -67,37 +90,67 @@
 </script>
 
 <div class="card">
-	<h2>LLM endpoint</h2>
+	<h2>Assistant model</h2>
 	<p class="lede">
-		Connect AI Almanac to a local or remote OpenAI-compatible model server (Ollama, vLLM, etc.).
+		Run a model on this machine, or connect AI Almanac to an OpenAI-compatible model server you
+		already have (Ollama, vLLM, etc.).
 	</p>
 
-	<div class="fields">
-		<div class="field">
-			<label for="base-url">Base URL</label>
-			<input
-				id="base-url"
-				type="text"
-				bind:value={baseUrl}
-				placeholder="http://localhost:11434/v1"
-			/>
-		</div>
-		<div class="field">
-			<label for="model">Model name</label>
-			<input id="model" type="text" bind:value={model} placeholder="llama3" />
-		</div>
-		<div class="field">
-			<label for="api-key">API key <span class="optional">(optional)</span></label>
-			<input
-				id="api-key"
-				type="password"
-				bind:value={apiKey}
-				placeholder="Leave blank if not required"
-			/>
-		</div>
+	<div class="choices" role="radiogroup" aria-label="Assistant model">
+		<label class="choice">
+			<input type="radio" bind:group={engine} value="managed" />
+			<span>
+				<strong>Run a model on this machine</strong>
+				<span class="desc">
+					Installs vLLM and downloads the model's weights in the next step. Needs an NVIDIA GPU on
+					Linux. The assistant pauses while a forecast runs so both fit in memory.
+				</span>
+			</span>
+		</label>
+		<label class="choice">
+			<input type="radio" bind:group={engine} value="external" />
+			<span>
+				<strong>Connect to an existing server</strong>
+				<span class="desc">Any OpenAI-compatible endpoint, local or remote.</span>
+			</span>
+		</label>
 	</div>
 
-	{#if testResult}
+	{#if engine === 'managed'}
+		<div class="fields">
+			<div class="field">
+				<label for="local-model">Hugging Face model id</label>
+				<input id="local-model" type="text" bind:value={localModel} />
+			</div>
+		</div>
+	{:else}
+		<div class="fields">
+			<div class="field">
+				<label for="base-url">Base URL</label>
+				<input
+					id="base-url"
+					type="text"
+					bind:value={baseUrl}
+					placeholder="http://localhost:11434/v1"
+				/>
+			</div>
+			<div class="field">
+				<label for="model">Model name</label>
+				<input id="model" type="text" bind:value={model} placeholder="llama3" />
+			</div>
+			<div class="field">
+				<label for="api-key">API key <span class="optional">(optional)</span></label>
+				<input
+					id="api-key"
+					type="password"
+					bind:value={apiKey}
+					placeholder="Leave blank if not required"
+				/>
+			</div>
+		</div>
+	{/if}
+
+	{#if testResult && engine === 'external'}
 		<div class="test-result" class:ok={testResult.ok} class:fail={!testResult.ok}>
 			{#if testResult.ok}
 				<strong>✓ Connected</strong>
@@ -117,10 +170,15 @@
 
 	<div class="actions">
 		<button class="secondary" onclick={() => wizard.goPrev()}>← Back</button>
-		<button class="secondary" onclick={runTest} disabled={testing || !baseUrl || !model}>
-			{testing ? 'Testing…' : 'Test connection'}
-		</button>
-		<button onclick={save} disabled={saving || !baseUrl || !model}>
+		{#if engine === 'external'}
+			<button class="secondary" onclick={runTest} disabled={testing || !baseUrl || !model}>
+				{testing ? 'Testing…' : 'Test connection'}
+			</button>
+		{/if}
+		<button
+			onclick={save}
+			disabled={saving || (engine === 'managed' ? !localModel : !baseUrl || !model)}
+		>
 			{saving ? 'Saving…' : 'Save & continue →'}
 		</button>
 	</div>
@@ -144,6 +202,30 @@
 		margin: 0;
 		color: var(--color-text-muted);
 		font-size: 0.85rem;
+	}
+	.choices {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.choice {
+		display: flex;
+		gap: 0.6rem;
+		align-items: flex-start;
+		padding: 0.6rem 0.75rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.45rem;
+		cursor: pointer;
+		font-weight: 400;
+	}
+	.choice input {
+		width: auto;
+		margin-top: 0.2rem;
+	}
+	.choice .desc {
+		display: block;
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
 	}
 	.fields {
 		display: flex;

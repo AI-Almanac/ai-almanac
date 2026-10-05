@@ -128,6 +128,7 @@ async def lifespan(app: FastAPI):
     await _seed_regions()
     await _seed_assistant_rulesets()
     await _reconcile_jobs()
+    await _start_local_llm()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
         yield
@@ -135,6 +136,32 @@ async def lifespan(app: FastAPI):
         reconciler.cancel()
         with suppress(asyncio.CancelledError):
             await reconciler
+        await _suspend_local_llm()
+
+
+async def _start_local_llm() -> None:
+    """Launch the managed chat model. Non-fatal: the app serves without chat."""
+    from ai_almanac.server.services import local_llm
+
+    if not local_llm.is_managed():
+        return
+    try:
+        await asyncio.to_thread(local_llm.start)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("local model server failed to start: %s", e)
+
+
+async def _suspend_local_llm() -> None:
+    from ai_almanac.server.services import local_llm
+
+    if not local_llm.is_managed():
+        return
+    try:
+        # Sleep rather than stop, so the next `serve` (or dev reload) wakes
+        # it instead of paying a cold start. `ai-almanac llm stop` ends it.
+        await asyncio.to_thread(local_llm.suspend)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("local model server failed to suspend cleanly: %s", e)
 
 
 def _reload_user_config() -> None:
@@ -225,10 +252,17 @@ async def _reconcile_jobs() -> None:
     await _run_background_step("artifact_publication", publish_pending)
 
 
+async def _local_llm_idle_sleep() -> None:
+    from ai_almanac.server.services import local_llm
+
+    await asyncio.to_thread(local_llm.idle_sleep)
+
+
 async def _job_reconciler_loop() -> None:
     while True:
         await asyncio.sleep(5)
         await _reconcile_jobs()
+        await _run_background_step("llm_idle_sleep", _local_llm_idle_sleep)
 
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)
@@ -493,6 +527,7 @@ async def ready():
     from sqlalchemy import text
 
     from ai_almanac.server.db import get_db
+    from ai_almanac.server.services import local_llm
     from ai_almanac.server.services.runner_registry import get_job_runner
     from ai_almanac.server.services.setup import env_status, setup_required
 
@@ -512,6 +547,9 @@ async def ready():
             "checks": checks,
             "setup_complete": not setup_required(),
             "envs": env_status(),
+            # Informational, not a readiness check: the app serves while the
+            # assistant loads, sleeps, or pauses for a forecast.
+            "assistant": await asyncio.to_thread(local_llm.status),
         },
         status_code=200 if all(checks.values()) else 503,
     )

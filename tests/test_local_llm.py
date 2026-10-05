@@ -1,0 +1,378 @@
+"""The managed local vLLM: parking for forecasts, waking for chat, idle sleep.
+
+A fake vLLM (httpx MockTransport) stands in for the real server; process
+liveness and termination are stubbed so no subprocess is ever launched.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from ai_almanac.paths import database_path
+from ai_almanac.server.services import local_llm
+from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, reload_settings, settings
+
+_FAKE_PID = 424242
+
+
+class FakeVllm:
+    """Just enough of vLLM's dev/metrics API to drive local_llm."""
+
+    def __init__(self, *, running: list[float] | None = None, sleep_status: int = 200) -> None:
+        # Successive num_requests_running readings; the last one repeats.
+        self.running = list(running or [0.0])
+        self.sleep_status = sleep_status
+        self.sleeping = False
+        self.calls: list[str] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        query = request.url.query.decode()
+        self.calls.append(f"{request.method} {path}" + (f"?{query}" if query else ""))
+        if path == "/health":
+            return httpx.Response(200)
+        if path == "/metrics":
+            value = self.running.pop(0) if len(self.running) > 1 else self.running[0]
+            return httpx.Response(
+                200,
+                text=(
+                    "# HELP vllm:num_requests_running Number of requests running.\n"
+                    f'vllm:num_requests_running{{engine="0",model_name="local"}} {value}\n'
+                    'vllm:num_requests_waiting{engine="0",model_name="local"} 0.0\n'
+                ),
+            )
+        if path == "/is_sleeping":
+            return httpx.Response(200, json={"is_sleeping": self.sleeping})
+        if path == "/sleep":
+            if self.sleep_status == 200:
+                self.sleeping = True
+            return httpx.Response(self.sleep_status)
+        if path == "/wake_up":
+            if request.url.params.get("tags") == "kv_cache":
+                self.sleeping = False
+            return httpx.Response(200)
+        if path == "/collective_rpc":
+            assert json.loads(request.content) == {"method": "reload_weights"}
+            return httpx.Response(200, json={"results": [None]})
+        return httpx.Response(404)
+
+    def paths(self) -> list[str]:
+        return [call for call in self.calls if not call.endswith(("/health", "/metrics"))]
+
+
+@pytest.fixture
+def managed(monkeypatch: pytest.MonkeyPatch):
+    """Managed engine with a live fake server; records terminations."""
+    monkeypatch.setattr(settings, "llm_engine", "managed")
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    monkeypatch.setattr(local_llm.time, "sleep", lambda _s: None)
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID}))
+    alive = {"value": True}
+    terminated: list[int] = []
+
+    def fake_terminate(pid: int, grace: float = 0) -> None:
+        terminated.append(pid)
+        alive["value"] = False
+
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: alive["value"])
+    monkeypatch.setattr(local_llm, "_terminate", fake_terminate)
+
+    def use(fake: FakeVllm) -> FakeVllm:
+        transport = httpx.MockTransport(fake.handler)
+        monkeypatch.setattr(
+            local_llm,
+            "_client",
+            lambda timeout=5.0: httpx.Client(
+                base_url="http://127.0.0.1:8766", transport=transport, timeout=timeout
+            ),
+        )
+        return fake
+
+    yield use, terminated
+    local_llm.pid_path().unlink(missing_ok=True)
+
+
+def _insert_job(status: str, job_type: str = "forecast", runner: str = "local") -> str:
+    job_id = f"llm-{uuid.uuid4().hex[:8]}"
+    with sqlite3.connect(database_path()) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, external_id, created_at) "
+            "VALUES ('llm-u', 'llm-u', '2026-01-01T00:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, runner, "
+            "created_at, heartbeat_at) VALUES (?, 'llm-u', 'ds', ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                status,
+                json.dumps({"job_type": job_type}),
+                runner,
+                "2026-01-01T00:00:00",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        conn.commit()
+    return job_id
+
+
+@pytest.fixture
+def clean_jobs():
+    yield
+    with sqlite3.connect(database_path()) as conn:
+        conn.execute("DELETE FROM jobs WHERE user_id = 'llm-u'")
+        conn.commit()
+
+
+def test_park_drains_then_sleeps(managed) -> None:
+    use, terminated = managed
+    fake = use(FakeVllm(running=[1.0, 1.0, 0.0]))
+
+    result = local_llm.park_for_gpu_job()
+
+    assert result.ok, result.detail
+    assert fake.running == [0.0], "drain polled until no request was running"
+    metrics_before_sleep = fake.calls.index("POST /sleep?level=2&mode=wait")
+    assert fake.calls[:metrics_before_sleep].count("GET /metrics") == 3
+    assert fake.paths()[-1] == "GET /is_sleeping"
+    assert fake.sleeping
+    assert terminated == []
+
+
+def test_park_kills_server_when_sleep_fails(managed) -> None:
+    use, terminated = managed
+    use(FakeVllm(sleep_status=500))
+
+    result = local_llm.park_for_gpu_job()
+
+    assert not result.ok
+    assert terminated == [_FAKE_PID]
+    assert not local_llm.pid_path().exists()
+
+
+def test_park_is_noop_without_a_running_server(managed, monkeypatch) -> None:
+    use, terminated = managed
+    fake = use(FakeVllm())
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: False)
+
+    assert local_llm.park_for_gpu_job().ok
+    assert fake.calls == []
+    assert terminated == []
+
+
+def test_ensure_awake_pauses_while_forecast_runs(managed, clean_jobs) -> None:
+    use, _ = managed
+    fake = use(FakeVllm())
+    fake.sleeping = True
+    _insert_job("running")
+
+    with pytest.raises(local_llm.AssistantPaused):
+        local_llm.ensure_awake()
+    assert "POST /wake_up?tags=weights" not in fake.calls
+
+
+def test_ensure_awake_ignores_non_forecast_and_modal_jobs(managed, clean_jobs) -> None:
+    use, _ = managed
+    use(FakeVllm())
+    _insert_job("running", job_type="blend")
+    _insert_job("running", runner="modal")
+
+    local_llm.ensure_awake()
+
+
+def test_ensure_awake_wakes_sleeping_model(managed, clean_jobs) -> None:
+    use, _ = managed
+    fake = use(FakeVllm())
+    fake.sleeping = True
+
+    local_llm.ensure_awake()
+
+    assert fake.paths() == [
+        "GET /is_sleeping",
+        "POST /wake_up?tags=weights",
+        "POST /collective_rpc",
+        "POST /wake_up?tags=kv_cache",
+    ]
+    assert not fake.sleeping
+
+
+def test_ensure_awake_restarts_a_stopped_server(managed, monkeypatch, clean_jobs) -> None:
+    use, _ = managed
+    use(FakeVllm())
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: False)
+    started: list[bool] = []
+    monkeypatch.setattr(local_llm, "_start_locked", lambda: started.append(True))
+
+    with pytest.raises(local_llm.AssistantLoading):
+        local_llm.ensure_awake()
+    assert started == [True]
+
+
+def test_idle_sleep_waits_for_timeout(managed, monkeypatch) -> None:
+    use, _ = managed
+    fake = use(FakeVllm())
+    monkeypatch.setattr(settings, "llm_idle_sleep_minutes", 10)
+
+    monkeypatch.setattr(local_llm, "_last_used", local_llm.time.monotonic())
+    local_llm.idle_sleep()
+    assert not fake.sleeping
+
+    monkeypatch.setattr(local_llm, "_last_used", local_llm.time.monotonic() - 11 * 60)
+    local_llm.idle_sleep()
+    assert fake.sleeping
+
+
+def test_serve_args_bind_loopback_and_reject_host_overrides(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "--max-model-len 4096")
+    args = local_llm.serve_args()
+    assert args[args.index("--host") + 1] == "127.0.0.1"
+    assert "--enable-sleep-mode" in args
+
+    monkeypatch.setattr(settings, "llm_serve_args", "--host=0.0.0.0")
+    with pytest.raises(ValueError, match="--host"):
+        local_llm.serve_args()
+
+
+def test_managed_engine_derives_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_ENGINE", "managed")
+    monkeypatch.setenv("LLM_PORT", "9123")
+    try:
+        reload_settings()
+        assert settings.llm_base_url == "http://127.0.0.1:9123/v1"
+        # The hosted-provider default model is not something vLLM can serve.
+        assert settings.llm_model == DEFAULT_LOCAL_LLM_MODEL
+
+        monkeypatch.setenv("DEPLOYMENT_MODE", "shared")
+        reload_settings()
+        assert settings.llm_engine == "external"
+    finally:
+        monkeypatch.undo()
+        reload_settings()
+
+
+def test_supervisor_heartbeats_while_parking(managed, monkeypatch, tmp_path) -> None:
+    """A park that waits on a draining reply must not let the job's heartbeat
+    go stale, or the reconciler would fail the forecast as crashed."""
+    import threading
+
+    from ai_almanac.server.services import job_manager
+
+    beats: list[str] = []
+    released = threading.Event()
+
+    def fake_heartbeat(engine, job_id, worker_id) -> None:
+        beats.append(job_id)
+        if len(beats) >= 2:
+            released.set()
+
+    def slow_park() -> local_llm.ParkResult:
+        assert released.wait(timeout=10)
+        return local_llm.ParkResult(True, "local model asleep; memory released")
+
+    monkeypatch.setattr(job_manager, "_heartbeat", fake_heartbeat)
+    monkeypatch.setattr(local_llm, "park_for_gpu_job", slow_park)
+    log_path = tmp_path / "job.log"
+    log_path.write_text("")
+
+    job_manager._park_local_llm(object(), "job-1", "worker-1", log_path)
+
+    assert beats[:2] == ["job-1", "job-1"]
+    assert "memory released" in log_path.read_text()
+
+
+def test_idle_sleep_skips_while_lock_is_held(managed, monkeypatch) -> None:
+    """The idle step runs in the reconciler loop; it must not block behind a
+    minutes-long wake or park."""
+    use, _ = managed
+    fake = use(FakeVllm())
+    monkeypatch.setattr(settings, "llm_idle_sleep_minutes", 10)
+    monkeypatch.setattr(local_llm, "_last_used", local_llm.time.monotonic() - 11 * 60)
+
+    with local_llm._lock():
+        local_llm.idle_sleep()
+    assert not fake.sleeping
+
+
+@pytest.fixture
+def launchable(managed, monkeypatch):
+    """start() prerequisites stubbed; records launches instead of spawning."""
+    use, terminated = managed
+    launched: list[list[str]] = []
+
+    class FakeProc:
+        pid = _FAKE_PID + 1
+
+    def fake_run(args, env=None, log_path=None):
+        launched.append(args)
+        return FakeProc()
+
+    monkeypatch.setattr("ai_almanac.envs.manager.llm_env_ready", lambda: True)
+    monkeypatch.setattr("ai_almanac.envs.manager.run_llm_server", fake_run)
+    return use, terminated, launched
+
+
+def test_start_reuses_a_server_launched_with_the_same_flags(launchable) -> None:
+    use, terminated, launched = launchable
+    use(FakeVllm())
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID, **local_llm._launch_identity()}))
+
+    local_llm.start()
+
+    assert launched == []
+    assert terminated == []
+
+
+def test_start_replaces_a_server_with_changed_flags(launchable, monkeypatch) -> None:
+    use, terminated, launched = launchable
+    use(FakeVllm())
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID, **local_llm._launch_identity()}))
+    monkeypatch.setattr(settings, "llm_serve_args", "--max-model-len 4096")
+
+    local_llm.start()
+
+    assert terminated == [_FAKE_PID]
+    assert launched and "4096" in launched[0]
+    record = json.loads(local_llm.pid_path().read_text())
+    assert record["pid"] == _FAKE_PID + 1
+    assert record["args"] == launched[0]
+
+
+def test_start_replaces_a_server_from_before_identities_were_recorded(launchable) -> None:
+    use, terminated, launched = launchable
+    use(FakeVllm())  # the fixture's pid file carries only the pid
+
+    local_llm.start()
+
+    assert terminated == [_FAKE_PID]
+    assert len(launched) == 1
+
+
+def test_suspend_sleeps_rather_than_stopping(managed) -> None:
+    use, terminated = managed
+    fake = use(FakeVllm())
+
+    local_llm.suspend()
+
+    assert fake.sleeping
+    assert terminated == []
+    assert local_llm.pid_path().exists()
+
+
+def test_suspend_stops_a_server_that_is_still_loading(managed) -> None:
+    use, terminated = managed
+    fake = FakeVllm()
+    handler = fake.handler
+    fake.handler = lambda request: (
+        httpx.Response(503) if request.url.path == "/health" else handler(request)
+    )
+    use(fake)
+
+    local_llm.suspend()
+
+    assert terminated == [_FAKE_PID]
+    assert not local_llm.pid_path().exists()

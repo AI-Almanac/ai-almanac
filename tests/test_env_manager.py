@@ -305,7 +305,7 @@ def test_cli_env_prepare_no_longer_requires_path_pixi(
     monkeypatch.setattr("shutil.which", lambda name: None)
 
     fake_result = (data_dir / "benchmark-env", data_dir / "blending-env", None)
-    monkeypatch.setattr("ai_almanac.envs.manager.ensure_env", lambda progress=None: fake_result)
+    monkeypatch.setattr("ai_almanac.envs.manager.ensure_env", lambda **kwargs: fake_result)
 
     runner = CliRunner()
     result = runner.invoke(app, ["env", "prepare"])

@@ -3558,7 +3558,16 @@ export interface components {
         };
         /** LlmInput */
         LlmInput: {
-            /** Base Url */
+            /**
+             * Engine
+             * @default external
+             * @enum {string}
+             */
+            engine: "external" | "managed";
+            /**
+             * Base Url
+             * @default
+             */
             base_url: string;
             /** Model */
             model: string;
@@ -3764,6 +3773,8 @@ export interface components {
              * @default true
              */
             include_forecast: boolean;
+            /** Include Llm */
+            include_llm?: boolean | null;
         };
         /** PrepareStatus */
         PrepareStatus: {

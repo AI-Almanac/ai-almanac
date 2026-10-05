@@ -7,8 +7,9 @@ not the normal CurrentUser/AdminUser dependency.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -57,7 +58,10 @@ class StorageInput(BaseModel):
 
 
 class LlmInput(BaseModel):
-    base_url: str
+    # "managed" runs the bundled vLLM on this machine serving `model` (a
+    # Hugging Face id); base_url and api_key are then ignored.
+    engine: Literal["external", "managed"] = "external"
+    base_url: str = ""
     model: str
     api_key: str | None = None
     test_only: bool = False
@@ -73,6 +77,8 @@ class LlmTestOut(BaseModel):
 
 class PrepareInput(BaseModel):
     include_forecast: bool = True
+    # None: install the local model server iff the assistant runs locally.
+    include_llm: bool | None = None
 
 
 class PrepareStatus(BaseModel):
@@ -92,7 +98,8 @@ class FinishOut(BaseModel):
 @router.get("/state", response_model=SetupState)
 async def get_state(_: _SetupAuth):
     from ai_almanac.paths import config_yaml_path, data_root
-    from ai_almanac.settings import settings
+    from ai_almanac.server.services import local_llm
+    from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, settings
 
     return SetupState(
         platform=setup_svc.detect_platform(),
@@ -104,8 +111,11 @@ async def get_state(_: _SetupAuth):
         ],
         llm={
             "configured": bool(settings.llm_base_url),
+            "engine": settings.llm_engine,
             "base_url": settings.llm_base_url,
             "model": settings.llm_model,
+            "default_local_model": DEFAULT_LOCAL_LLM_MODEL,
+            "status": await asyncio.to_thread(local_llm.status),
         },
         envs=setup_svc.env_status(),
         prepare={
@@ -122,6 +132,14 @@ async def post_storage(body: StorageInput, _: _SetupAuth):
 
 @router.post("/llm", response_model=LlmTestOut)
 async def post_llm(body: LlmInput, _: _SetupAuth):
+    if body.engine == "managed":
+        # Nothing to probe yet: the server is installed by the envs step and
+        # started by `serve`, which reports its readiness.
+        if not body.test_only:
+            setup_svc.save_llm("", body.model, None, engine="managed")
+        return LlmTestOut(ok=True, models_ok=False, completion_ok=False, models=[], error=None)
+    if not body.base_url:
+        raise HTTPException(status_code=422, detail="base_url is required for an external server")
     result = await setup_svc.test_llm_connection(body.base_url, body.model, body.api_key)
     if not body.test_only and result.ok:
         setup_svc.save_llm(body.base_url, body.model, body.api_key)
@@ -136,7 +154,9 @@ async def post_llm(body: LlmInput, _: _SetupAuth):
 
 @router.post("/envs/prepare", response_model=PrepareStatus)
 async def post_prepare(body: PrepareInput, _: _SetupAuth):
-    started = setup_svc.prepare_task.start(include_forecast=body.include_forecast)
+    started = setup_svc.prepare_task.start(
+        include_forecast=body.include_forecast, include_llm=body.include_llm
+    )
     return PrepareStatus(status=setup_svc.prepare_task.status, started=started)
 
 

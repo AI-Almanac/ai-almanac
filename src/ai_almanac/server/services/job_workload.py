@@ -127,6 +127,10 @@ def _run_forecast(job_id: str, config: dict) -> None:
         if process_env.get("PYTHONPATH")
         else package_root
     )
+    # Let the caching allocator return freed blocks instead of fragmenting;
+    # on unified-memory hosts the chat model wakes into what is left over.
+    # Matches the Modal inference images (modal/forecasts_app.py).
+    process_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     print(f"==> Forecast config: {config_path}", flush=True)
 

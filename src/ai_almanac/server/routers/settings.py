@@ -85,6 +85,27 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "API key",
                 "API key (use 'placeholder' for local servers that don't check)",
             ),
+            (
+                "llm_engine",
+                "Model server",
+                "'managed' runs the bundled vLLM on this machine; 'external' uses the URL above",
+            ),
+            ("llm_port", "Local model port", "Loopback port for the managed vLLM server"),
+            (
+                "llm_gpu_memory_utilization",
+                "Local model memory share",
+                "Fraction of GPU memory the managed vLLM claims (unified memory: system RAM)",
+            ),
+            (
+                "llm_idle_sleep_minutes",
+                "Local model idle sleep (minutes)",
+                "Release the managed model's memory after this long without chat; 0 = never",
+            ),
+            (
+                "llm_serve_args",
+                "Local model server flags",
+                "Extra `vllm serve` flags (tool-call parser, context length)",
+            ),
             ("llm_timeout_seconds", "Request timeout (seconds)", "Per-request timeout"),
             (
                 "llm_history_max_messages",

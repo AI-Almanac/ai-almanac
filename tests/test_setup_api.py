@@ -236,6 +236,36 @@ def test_llm_failure_not_saved(
     assert settings.llm_base_url != "http://localhost:11434/v1"
 
 
+def test_llm_managed_saves_without_probing(
+    client: TestClient, authed: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.settings import write_settings_overlay
+
+    with patch("openai.AsyncOpenAI") as openai_client:
+        resp = client.post(
+            "/api/setup/llm",
+            headers=authed,
+            json={"engine": "managed", "model": "org/some-model", "test_only": False},
+        )
+    try:
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        openai_client.assert_not_called()  # nothing to probe until `serve` starts it
+        reload_settings()
+        assert settings.llm_engine == "managed"
+        assert settings.llm_model == "org/some-model"
+        assert settings.llm_base_url == f"http://127.0.0.1:{settings.llm_port}/v1"
+        assert "llm" in client.get("/api/setup/state", headers=authed).json()["envs"]
+    finally:
+        write_settings_overlay({"llm_engine": None, "llm_model": None})
+        reload_settings()
+
+
+def test_llm_external_requires_base_url(client: TestClient, authed: dict) -> None:
+    resp = client.post("/api/setup/llm", headers=authed, json={"model": "llama3"})
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # POST /api/setup/envs/prepare
 # ---------------------------------------------------------------------------

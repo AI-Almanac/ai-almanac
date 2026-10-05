@@ -40,3 +40,27 @@ def file_lock(path: Path, message: str | None = None):
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@contextmanager
+def try_file_lock(path: Path):
+    """Non-blocking variant of `file_lock`: yields True if acquired, False if
+    another holder has it (nothing is held in that case). Without `fcntl`,
+    always yields True, matching file_lock's no-op degradation."""
+    try:
+        import fcntl
+    except ImportError:
+        yield True
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)

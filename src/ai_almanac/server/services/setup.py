@@ -149,6 +149,7 @@ def env_status() -> dict:
         _FORECAST_PLATFORMS,
         BLENDING_SOURCE_MARKER,
         FORECAST_ENVIRONMENTS,
+        llm_env_ready,
     )
     from ai_almanac.envs.pixi_bootstrap import _current_pixi_platform
     from ai_almanac.paths import benchmark_env_dir, blending_env_dir, forecast_env_dir
@@ -192,6 +193,13 @@ def env_status() -> dict:
                 result["forecast"] = "partial"
             else:
                 result["forecast"] = "missing"
+
+    # Local model server env — only meaningful when the assistant runs here.
+    if settings.llm_engine == "managed":
+        if current not in _FORECAST_PLATFORMS:
+            result["llm"] = "unsupported"
+        else:
+            result["llm"] = "ready" if llm_env_ready() else "missing"
 
     return result
 
@@ -278,15 +286,24 @@ def save_storage(output_dir: str | None, dataset_mount_roots: list[str] | None) 
         reload_settings()
 
 
-def save_llm(base_url: str, model: str, api_key: str | None) -> None:
+def save_llm(
+    base_url: str,
+    model: str,
+    api_key: str | None,
+    engine: Literal["external", "managed"] = "external",
+) -> None:
+    """Persist the assistant's model server. `managed` runs vLLM on this
+    machine serving `model` (a Hugging Face id); its URL is derived from
+    llm_port, so any stored base URL is cleared."""
     from ai_almanac.settings import reload_settings, write_settings_overlay
 
     updates: dict = {
-        "llm_base_url": base_url,
+        "llm_engine": engine,
+        "llm_base_url": base_url if engine == "external" else None,
         "llm_model": model,
         "llm_provider": "openai-compatible",
     }
-    if api_key:
+    if api_key and engine == "external":
         updates["llm_api_key"] = api_key
     write_settings_overlay(updates)
     reload_settings()
@@ -327,14 +344,21 @@ class PrepareTask:
         if self._loop is not None and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._push, evt)
 
-    def start(self, include_forecast: bool = True) -> bool:
-        """Start preparation. Returns True if started, False if already running."""
+    def start(self, include_forecast: bool = True, include_llm: bool | None = None) -> bool:
+        """Start preparation. Returns True if started, False if already running.
+
+        include_llm defaults to whether the assistant is set to run locally; it
+        installs the vLLM env and downloads the configured model's weights.
+        """
         if self.status == "running":
             return False
         if self.status in ("done", "failed"):
             self._events.clear()
             self._seq = 0
 
+        if include_llm is None:
+            include_llm = settings.llm_engine == "managed"
+        model_id = settings.llm_model
         self.status = "running"
         try:
             self._loop = asyncio.get_event_loop()
@@ -343,9 +367,18 @@ class PrepareTask:
 
         async def _run() -> None:
             try:
-                from ai_almanac.envs.manager import ensure_env
+                from ai_almanac.envs.manager import (
+                    download_llm_model,
+                    ensure_env,
+                    llm_env_ready,
+                )
 
-                await asyncio.to_thread(ensure_env, self._on_progress, include_forecast)
+                await asyncio.to_thread(
+                    ensure_env, self._on_progress, include_forecast, include_llm
+                )
+                # Not ready here means the platform skipped it (no vLLM build).
+                if include_llm and llm_env_ready():
+                    await asyncio.to_thread(download_llm_model, model_id, self._on_progress)
                 evt = {
                     "seq": self._seq,
                     "type": "done",

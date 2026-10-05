@@ -207,6 +207,8 @@
 			<div class="thinking">
 				{#if runningTool}
 					<span class="thinking-label">{formatToolName(runningTool.name)}…</span>
+				{:else if chat.assistantWaking}
+					<span class="thinking-label">Waking the assistant — this can take up to a minute…</span>
 				{/if}
 				<span class="dot"></span><span class="dot"></span><span class="dot"></span>
 			</div>
