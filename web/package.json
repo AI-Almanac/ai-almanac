@@ -36,7 +36,7 @@
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.9.3",
 		"vite": "^8.2.1",
-		"vitest": "^4.1.10"
+		"vitest": "^5.0.0"
 	},
 	"dependencies": {
 		"@globus/sdk": "^6.3.1",
