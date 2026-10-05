@@ -24,7 +24,7 @@ export type Job = {
 	completed_at?: string;
 	error?: string | null;
 	is_owner?: boolean;
-	visibility?: 'private' | 'shared';
+	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
 };
 
@@ -61,6 +61,7 @@ export type JobParams = {
 	ref_model_dir?: string;
 	// Advanced — masks/thresholds
 	nc_mask?: string;
+	focus_area?: FocusAreaValue | null;
 	thresh_file?: string;
 };
 
@@ -151,14 +152,21 @@ export async function unshareJob(id: string): Promise<Job> {
 	return request<Job>(`/jobs/${id}/unshare`, { method: 'POST' });
 }
 
+export async function promoteJobToExample(id: string): Promise<Job> {
+	return request<Job>(`/jobs/${id}/example`, { method: 'POST' });
+}
+
 export async function getJobArtifacts(id: string): Promise<JobArtifact[]> {
 	return request<JobArtifact[]>(`/jobs/${id}/artifacts`);
 }
 
-// The blend's pooled summary CSV, read server-side so the browser never fetches
+// One of the blend's small CV summary CSVs, read server-side so the browser never fetches
 // the outputs bucket directly. Empty string until publication indexes it.
-export async function getBlendSummary(id: string): Promise<string> {
-	const { csv } = await request<{ csv: string }>(`/jobs/${id}/blend-summary`);
+export async function getBlendSummary(
+	id: string,
+	table: 'pooled' | 'yearly' = 'pooled'
+): Promise<string> {
+	const { csv } = await request<{ csv: string }>(`/jobs/${id}/blend-summary?table=${table}`);
 	return csv;
 }
 
@@ -249,6 +257,18 @@ export type BboxExtent = {
 	lon_min: number;
 	lon_max: number;
 };
+
+/** Named administrative units picked on the map; outlines are attached at submission. */
+export type FocusUnits = {
+	level: 'adm2';
+	units: string[];
+};
+
+export type FocusAreaValue = BboxExtent | FocusUnits;
+
+export function isFocusUnits(value: FocusAreaValue | null | undefined): value is FocusUnits {
+	return value != null && 'units' in value;
+}
 
 export type GridInfo = {
 	lats: number[];
@@ -399,7 +419,33 @@ export type BlendCellMetrics = {
 	cell_size_deg: number | null;
 	min_observations: number;
 	grids: BlendCellGrid[];
+	/** Named administrative units, when the domain is not a grid. Exactly one of grids/areas is populated. */
+	areas: BlendAreaMetric[];
+	/** Region whose boundaries the areas belong to. */
+	region_id: string | null;
 };
+
+/** Skill at one named administrative unit, located by its centroid. */
+export type BlendAreaSkill = {
+	id: string;
+	lat: number;
+	lon: number;
+	skill: number | null;
+	count: number | null;
+};
+
+/** One metric's skill per named area, sharing the grid's scale fields. */
+export type BlendAreaMetric = {
+	metric: string;
+	label: string;
+	areas: BlendAreaSkill[];
+	scale_max_abs: number | null;
+	value_min: number | null;
+	value_max: number | null;
+	clipped: number;
+};
+
+export type SkillLayer = BlendCellGrid | BlendAreaMetric;
 
 /**
  * Per-grid-point blend skill. A run whose per-cell summary is missing, or which

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import { getTrajectorySets, type TrajectorySet } from '$lib/api';
+	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 
 	let rows = $state<TrajectorySet[]>([]);
 	let loading = $state(true);
@@ -25,12 +26,18 @@
 		return set.covered_init_dates?.length ?? 0;
 	}
 
+	function dataThrough(set: TrajectorySet): string | null {
+		return latestIssueDate(set.covered_init_dates ?? []);
+	}
+
 	function timestamp(value: string | null | undefined): string {
 		if (!value) return '—';
 		const d = new Date(value);
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
 </script>
+
+<svelte:head><title>Forecast Data · AI Almanac</title></svelte:head>
 
 <AdminGuard>
 	<main class="wrap">
@@ -70,6 +77,7 @@
 							<th>Season</th>
 							<th>Status</th>
 							<th>Issue dates cached</th>
+							<th>Data through</th>
 							<th>Updated</th>
 						</tr>
 					</thead>
@@ -81,11 +89,18 @@
 								<td>{set.season ?? '—'}</td>
 								<td><span class="status status-{set.status}">{set.status}</span></td>
 								<td>{coverageCount(set)}</td>
+								<td>
+									{#if dataThrough(set)}
+										{formatIssueDate(dataThrough(set)!)}
+									{:else}
+										—
+									{/if}
+								</td>
 								<td>{timestamp(set.completed_at ?? set.started_at ?? set.created_at)}</td>
 							</tr>
 							{#if set.error}
 								<tr class="error-row">
-									<td colspan="6"><span class="error">{set.error}</span></td>
+									<td colspan="7"><span class="error">{set.error}</span></td>
 								</tr>
 							{/if}
 						{/each}

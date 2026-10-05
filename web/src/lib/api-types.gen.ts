@@ -440,7 +440,8 @@ export interface paths {
         /**
          * Me
          * @description Return the current identity plus capability flags the UI uses to gate
-         *     admin-only navigation and feature affordances.
+         *     admin-only navigation and feature affordances. Anonymous visitors get a
+         *     null identity with read-only capabilities so the public pages render.
          */
         get: operations["me_auth_me_get"];
         put?: never;
@@ -1141,10 +1142,11 @@ export interface paths {
         };
         /**
          * Get Blend Summary
-         * @description Return the blend's pooled summary CSV, read server-side.
+         * @description Return one of the blend's small CV summary CSVs, read server-side.
          *
-         *     The browser parses this for the skill chart; serving it here keeps the
-         *     outputs bucket off the client (mirroring how metrics read outputs).
+         *     `pooled` is the per-model summary behind the skill chart; `yearly` is the
+         *     per-holdout-year CV scores. Serving them here keeps the outputs bucket off
+         *     the client (mirroring how metrics read outputs).
          */
         get: operations["get_blend_summary_jobs__job_id__blend_summary_get"];
         put?: never;
@@ -1306,9 +1308,29 @@ export interface paths {
         put?: never;
         /**
          * Unshare Job
-         * @description Return a shared job to private (owner/admin only).
+         * @description Return a shared or example job to private (owner/admin only).
          */
         post: operations["unshare_job_jobs__job_id__unshare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/example": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Job To Example
+         * @description Feature a completed job as the shared example every user sees.
+         */
+        post: operations["promote_job_to_example_jobs__job_id__example_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1512,7 +1534,7 @@ export interface paths {
         };
         /**
          * Get Boundary
-         * @description Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
+         * @description Return simplified geoBoundaries GeoJSON (gbHumanitarian, else gbOpen) for a region.
          *
          *     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
          *     of browser CORS restrictions, so the API fetches and caches it server-side.
@@ -2186,22 +2208,14 @@ export interface components {
             message: string;
         };
         /**
-         * BlendCellGrid
-         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         * BlendAreaMetric
+         * @description One metric's skill per named area, for domains that are not a grid.
          */
-        BlendCellGrid: {
+        BlendAreaMetric: {
             /** Metric */
             metric: string;
             /** Label */
             label: string;
-            /** Lats */
-            lats: number[];
-            /** Lons */
-            lons: number[];
-            /** Values */
-            values: (number | null)[][];
-            /** Counts */
-            counts: (number | null)[][];
             /** Scale Max Abs */
             scale_max_abs: number | null;
             /** Value Min */
@@ -2210,6 +2224,50 @@ export interface components {
             value_max: number | null;
             /** Clipped */
             clipped: number;
+            /** Areas */
+            areas: components["schemas"]["BlendAreaSkill"][];
+        };
+        /**
+         * BlendAreaSkill
+         * @description Skill at one named administrative unit, located by its centroid.
+         */
+        BlendAreaSkill: {
+            /** Id */
+            id: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /** Skill */
+            skill: number | null;
+            /** Count */
+            count: number | null;
+        };
+        /**
+         * BlendCellGrid
+         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         */
+        BlendCellGrid: {
+            /** Metric */
+            metric: string;
+            /** Label */
+            label: string;
+            /** Scale Max Abs */
+            scale_max_abs: number | null;
+            /** Value Min */
+            value_min: number | null;
+            /** Value Max */
+            value_max: number | null;
+            /** Clipped */
+            clipped: number;
+            /** Lats */
+            lats: number[];
+            /** Lons */
+            lons: number[];
+            /** Values */
+            values: (number | null)[][];
+            /** Counts */
+            counts: (number | null)[][];
         };
         /** BlendCellMetrics */
         BlendCellMetrics: {
@@ -2223,6 +2281,13 @@ export interface components {
             min_observations: number;
             /** Grids */
             grids: components["schemas"]["BlendCellGrid"][];
+            /**
+             * Areas
+             * @default []
+             */
+            areas: components["schemas"]["BlendAreaMetric"][];
+            /** Region Id */
+            region_id?: string | null;
         };
         /** BlendConfigOut */
         BlendConfigOut: {
@@ -2249,6 +2314,16 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
+            /** Focus Area */
+            focus_area?: {
+                [key: string]: unknown;
+            } | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /** Cutoff Month Day */
+            cutoff_month_day?: string | null;
+            /** Ref Onset Month Day */
+            ref_onset_month_day?: string | null;
         };
         /** BlendCreate */
         BlendCreate: {
@@ -2301,6 +2376,10 @@ export interface components {
         /**
          * BlendParams
          * @description Blend preparation and training hyperparameters.
+         *
+         *     The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
+         *     ``ref_onset_month_day``) is optional; unset values fall back to the
+         *     workflow defaults (20 mm, 05-01, 06-01).
          */
         BlendParams: {
             /** Forecast Years */
@@ -2315,12 +2394,23 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
-            /** Threshold Mm */
+            /**
+             * Threshold Mm
+             * @description Rainfall accumulation (mm) over the onset window that triggers onset.
+             */
             threshold_mm?: number | null;
-            /** Cutoff Month Day */
+            /**
+             * Cutoff Month Day
+             * @description MM-DD from which onset is searched each season; also the first forecast issue date.
+             */
             cutoff_month_day?: string | null;
-            /** Mok Month Day */
-            mok_month_day?: string | null;
+            /**
+             * Ref Onset Month Day
+             * @description MM-DD reference onset date (climatological onset) that the onset-before-reference probability is scored against.
+             */
+            ref_onset_month_day?: string | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };
         /**
          * BlendRunSpec
@@ -2376,6 +2466,20 @@ export interface components {
              * @default
              */
             formula_text: string;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /**
+             * Cutoff Month Day
+             * @default
+             */
+            cutoff_month_day: string;
+            /**
+             * Ref Onset Month Day
+             * @default
+             */
+            ref_onset_month_day: string;
             /**
              * Status
              * @default collecting
@@ -2703,6 +2807,7 @@ export interface components {
              * @enum {string}
              */
             visibility: "private" | "shared";
+            live_forecast: components["schemas"]["LiveForecastOut"] | null;
             /** Is Owner */
             is_owner: boolean;
             /** Created At */
@@ -2949,6 +3054,31 @@ export interface components {
         FinishOut: {
             /** Ok */
             ok: boolean;
+        };
+        /** FocusBox */
+        FocusBox: {
+            /** Lat Min */
+            lat_min: number;
+            /** Lat Max */
+            lat_max: number;
+            /** Lon Min */
+            lon_min: number;
+            /** Lon Max */
+            lon_max: number;
+        };
+        /** FocusUnits */
+        FocusUnits: {
+            /**
+             * Level
+             * @constant
+             */
+            level: "adm2";
+            /** Units */
+            units: string[];
+            /** Geometry */
+            geometry?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ForecastCreate */
         ForecastCreate: {
@@ -3556,6 +3686,18 @@ export interface components {
             /** Length */
             length?: number | null;
         };
+        /** LiveForecastOut */
+        LiveForecastOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "grid_mismatch" | "ready" | "unavailable";
+            /** Detail */
+            detail: string | null;
+            /** Model Id */
+            model_id: string | null;
+        };
         /** LlmInput */
         LlmInput: {
             /**
@@ -4131,6 +4273,8 @@ export interface components {
             shp_only?: boolean | null;
             /** Nc Mask */
             nc_mask?: string | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             /** Ref Model Dir */
             ref_model_dir?: string | null;
             /** Thresh File */
@@ -6951,7 +7095,9 @@ export interface operations {
     };
     get_blend_summary_jobs__job_id__blend_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                table?: "pooled" | "yearly";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -7216,6 +7362,37 @@ export interface operations {
         };
     };
     unshare_job_jobs__job_id__unshare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_job_to_example_jobs__job_id__example_post: {
         parameters: {
             query?: never;
             header?: never;

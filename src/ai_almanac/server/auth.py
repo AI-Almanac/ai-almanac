@@ -10,9 +10,14 @@ Two deployment modes (see `settings.deployment_mode` / `settings.auth_mode`):
   implicit `local` user. The operator owns the box, so the role is always
   `admin`.
 - `proxy` (shared deployments): identity is taken from trusted reverse-proxy
-  headers set by oauth2-proxy. A missing subject header is rejected — this
-  blocks direct-to-app access that bypasses the proxy. The role is `admin` iff
-  the subject or email is in the configured admin allow-lists.
+  headers set by oauth2-proxy. A missing subject header is rejected on
+  authenticated routes — this blocks direct-to-app access that bypasses the
+  proxy. The role is `admin` iff the subject or email is in the configured
+  admin allow-lists.
+
+Routes using `OptionalCurrentUser` additionally serve anonymous callers (no
+credential at all) a read-only view limited to admin-promoted example data —
+effectively public if the app is directly reachable.
 """
 
 from __future__ import annotations
@@ -296,6 +301,23 @@ async def require_user(request: Request) -> AuthenticatedUser:
         ) from None
 
 
+async def optional_user(request: Request) -> AuthenticatedUser | None:
+    """Anonymous-capable identity: None only when no credential was presented.
+
+    A present-but-invalid credential still 401s (via require_user) so the
+    SPA's token refresh flow fires instead of silently downgrading a signed-in
+    user to the anonymous view. `auth_mode='none'` always resolves to the
+    local operator.
+    """
+    if settings.auth_mode == "globus" and _bearer_token(request.headers) is None:
+        return None
+    if settings.auth_mode == "proxy" and not (
+        (request.headers.get(settings.submitted_by_header) or "").strip()
+    ):
+        return None
+    return await require_user(request)
+
+
 async def require_admin(
     user: Annotated[AuthenticatedUser, Depends(require_user)],
 ) -> AuthenticatedUser:
@@ -337,6 +359,7 @@ async def require_assistant_comparisons(
 
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
+OptionalCurrentUser = Annotated[AuthenticatedUser | None, Depends(optional_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
 
 

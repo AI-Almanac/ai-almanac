@@ -134,8 +134,9 @@ export const OVERALL_METRICS: OverallMetric[] = [
 //   blended_model                 -> "Blend"
 //   clim_raw                      -> "Conditional Climatology"
 //   unc_clim_raw                  -> "Traditional Climatology"
-//   aifs_clim_mok_date_raw        -> "AIFS (raw)"
-//   aifs_calibrated_clim_mok_date -> "AIFS (calibrated)"
+//   aifs_fixed_cutoff_raw         -> "AIFS (raw)"
+//   aifs_calibrated_fixed_cutoff  -> "AIFS (calibrated)"
+// (blends trained before the haiyang pin say _clim_mok_date instead)
 //
 // "calibrated" rather than "bias corrected": the step is Platt scaling of the
 // probabilities so they match observed frequencies. It leaves the underlying
@@ -149,7 +150,7 @@ function prettyModel(model: string): string {
 	const calibrated = /calibrated/.test(model);
 	const name = model
 		.replace(/_calibrated/g, '')
-		.replace(/_clim_mok_date/g, '')
+		.replace(/_(fixed_cutoff|clim_mok_date)/g, '')
 		.replace(/_raw$/, '')
 		.replace(/_/g, ' ')
 		.trim()

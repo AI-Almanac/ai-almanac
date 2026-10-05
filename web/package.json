@@ -41,6 +41,7 @@
 	"dependencies": {
 		"@globus/sdk": "^6.3.1",
 		"dompurify": "^3.4.13",
+		"driver.js": "^1.8.0",
 		"maplibre-gl": "^6.2.0",
 		"marked": "^18.0.9",
 		"svelte-floating-ui": "^1.6.2",

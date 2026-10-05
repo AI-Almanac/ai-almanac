@@ -67,6 +67,16 @@ jobs = sa.Table(
     sa.Column("failure_category", sa.Text()),
 )
 
+# Per-user hiding of example jobs: "deleting" a visibility='example' job
+# records a row here instead of removing the shared job (migration 0024).
+user_hidden_jobs = sa.Table(
+    "user_hidden_jobs",
+    metadata,
+    sa.Column("user_id", sa.Text(), primary_key=True),
+    sa.Column("job_id", sa.Text(), primary_key=True),
+    sa.Column("created_at", sa.Text(), nullable=False),
+)
+
 job_artifacts = sa.Table(
     "job_artifacts",
     metadata,

@@ -138,7 +138,7 @@ const IS_SKILL_SCORE = new Set(['brier_skill_score', 'ranked_probability_skill_s
  * Why this rather than rank-within-row: climatology is a meaningful zero, so
  * distance from it is an absolute statement that holds for a single model. Rank
  * is relative and says nothing when only one model ran — which is the common
- * case — and using colour for both made the two indistinguishable.
+ * case — and using color for both made the two indistinguishable.
  *
  * Returns null when the row has no reference, so the cell stays unshaded rather
  * than being assigned a severity it cannot support.
@@ -303,7 +303,7 @@ function buildRow(
 	const cellsByWindow: Record<string, PortraitCell[]> = {};
 	for (const window of input.windows) {
 		const values = valuesByWindow[window] ?? input.models.map(() => null);
-		// Ranked within this window only. Rank no longer drives colour — it only
+		// Ranked within this window only. Rank no longer drives color — it only
 		// marks the leader in bold — but it is still what disagreement detection
 		// compares across rows.
 		const ranks = rankValues(values, lower);

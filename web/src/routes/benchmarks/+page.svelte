@@ -4,6 +4,7 @@
 	import { account } from '$lib/account.svelte';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
@@ -22,6 +23,8 @@
 	import { modelDisplayName } from '$lib/model-names';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { benchmarkResultsSteps } from './tours';
 
 	const store = new BenchmarkStore();
 
@@ -41,6 +44,14 @@
 	const manualSetupRequested = $derived($page.url.searchParams.get('manual') === '1');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
 	const inSetupMode = $derived(store.showForm || promptSetupActive || manualSetupRequested);
+	const resultsTourActive = $derived(
+		!inSetupMode && (store.selectedGroup?.jobs.some((job) => job.status === 'complete') ?? false)
+	);
+	installTour(
+		'benchmark-results',
+		() => benchmarkResultsSteps(startNew),
+		() => resultsTourActive
+	);
 
 	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
@@ -183,6 +194,8 @@
 	}
 </script>
 
+<svelte:head><title>Benchmarks · AI Almanac</title></svelte:head>
+
 <div class="workspace-page" class:is-setup={inSetupMode}>
 	{#if !inSetupMode}
 		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
@@ -230,6 +243,12 @@
 							</p>
 						</div>
 						<div class="analysis-actions">
+							<ExampleActions
+								promoteId={completeJobs[0]?.id ?? null}
+								demoteIds={group.jobs.map((j) => j.id)}
+								isExample={group.jobs.some((j) => j.visibility === 'example')}
+								onChanged={() => store.load(group.key)}
+							/>
 							{#if chatAvailable}
 								<button
 									type="button"
@@ -255,7 +274,7 @@
 						</div>
 					</header>
 
-					<details class="benchmark-summary">
+					<details class="benchmark-summary" data-tour="benchmark-summary">
 						<summary class="summary-trigger">
 							<span class="summary-trigger-title">Benchmark summary</span>
 							<span class="summary-trigger-meta">

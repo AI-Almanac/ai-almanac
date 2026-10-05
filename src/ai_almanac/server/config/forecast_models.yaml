@@ -30,7 +30,7 @@ models:
     earth2studio_class: "AIFS"
     env: base
     gpu: "A100-80GB"
-    resolution: "native"
+    resolution_deg: 0.25
     description: "ECMWF Artificial Intelligence Forecasting System (AIFS-Single v1)."
 
   - id: aifsens
@@ -40,7 +40,7 @@ models:
     ensemble: true
     nensemble: 8
     gpu: "A100-80GB"
-    resolution: "native"
+    resolution_deg: 0.25
     description: "ECMWF AIFS Ensemble v1 (reported as the ensemble mean)."
 
   - id: aifs2
@@ -48,7 +48,7 @@ models:
     earth2studio_class: "AIFS2"
     env: aifs2
     gpu: "A100-80GB"
-    resolution: "0.25 degree"
+    resolution_deg: 0.25
     description: "ECMWF AIFS-Single v2."
     aliases: ["aifs_single_v2"]
 
@@ -59,7 +59,7 @@ models:
     ensemble: true
     nensemble: 8
     gpu: "A100-80GB"
-    resolution: "0.25 degree"
+    resolution_deg: 0.25
     description: "ECMWF AIFS Ensemble v2 (reported as the ensemble mean)."
     aliases: ["aifs_ensemble_v2"]
 
@@ -68,7 +68,7 @@ models:
     earth2studio_class: "GraphCastSmall"
     env: base
     gpu: "A100-80GB"
-    resolution: "1 degree"
+    resolution_deg: 1.0
     description: "Lower-resolution GraphCast variant."
 
   - id: graphcast_operational
@@ -76,7 +76,7 @@ models:
     earth2studio_class: "GraphCastOperational"
     env: base
     gpu: "A100-80GB"
-    resolution: "0.25 degree"
+    resolution_deg: 0.25
     description: "Operational-resolution GraphCast global forecast model."
 
   - id: gencast
@@ -84,7 +84,7 @@ models:
     earth2studio_class: "GenCastMini"
     env: base
     gpu: "A100-80GB"
-    resolution: "1 degree"
+    resolution_deg: 1.0
     description: "Mini stochastic GenCast variant."
 
   - id: fuxi
@@ -92,5 +92,5 @@ models:
     earth2studio_class: "FuXi"
     env: base
     gpu: "A100-80GB"
-    resolution: "0.25 degree"
+    resolution_deg: 0.25
     description: "FuXi medium-range global forecast model."

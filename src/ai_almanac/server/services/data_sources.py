@@ -59,15 +59,15 @@ def _file_glob(pattern: str) -> str:
     return pattern.replace("{}", "*")
 
 
-def _coverage_years(files: list[Path]) -> tuple[int | None, int | None]:
-    years = []
-    for file in files:
-        match = re.search(r"(?:19|20)\d{2}", file.name)
-        if match:
-            years.append(int(match.group(0)))
+def _coverage_years(files: list[Path]) -> list[int]:
+    matches = (re.search(r"(?:19|20)\d{2}", file.name) for file in files)
+    return sorted({int(match.group(0)) for match in matches if match})
+
+
+def _missing_years(years: list[int]) -> list[int]:
     if not years:
-        return None, None
-    return min(years), max(years)
+        return []
+    return sorted(set(range(years[0], years[-1] + 1)) - set(years))
 
 
 def _coordinate_name(dataset, candidates: tuple[str, ...]) -> str | None:
@@ -95,6 +95,25 @@ def _spatial_bounds(dataset) -> dict[str, float]:
     if not all(math.isfinite(value) for value in bounds.values()):
         raise ValueError("Latitude and longitude coordinates contain no finite extent.")
     return bounds
+
+
+def _grid_step_deg(dataset) -> float | None:
+    """Regular latitude spacing in degrees, or None when the grid is irregular.
+
+    Live forecast models are matched against this: a blend's coefficients only
+    transfer to a live season rolled out on the same grid the archive uses.
+    """
+    # ponytail: latitude spacing stands in for the whole grid; every archive so
+    # far is a regular lat/lon grid with equal steps in both axes.
+    latitude = _coordinate_name(dataset, _LATITUDE_NAMES)
+    values = [float(value) for value in dataset[latitude].values]
+    if len(values) < 2:
+        return None
+    steps = [abs(after - before) for before, after in zip(values[:-1], values[1:], strict=True)]
+    step = round(steps[0], 6)
+    if not all(math.isclose(candidate, step, abs_tol=1e-6) for candidate in steps):
+        return None
+    return step
 
 
 def _initialization_days(dataset) -> tuple[str, str, int] | None:
@@ -178,10 +197,15 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     normalized[variable_key] = str(normalized.get(variable_key) or default_variable).strip()
     normalized[pattern_key] = str(normalized.get(pattern_key) or "{}.nc").strip()
 
-    start_year, end_year = _coverage_years(files)
-    if start_year is not None:
+    years = _coverage_years(files)
+    start_year, end_year = (years[0], years[-1]) if years else (None, None)
+    if years:
         normalized["start_year"] = start_year
         normalized["end_year"] = end_year
+        # A gap is reported, not rejected: sources with a missing season are
+        # still usable for the years they do cover.
+        normalized["years"] = years
+        normalized["missing_years"] = _missing_years(years)
 
     if kind == "model":
         normalized.setdefault("model_type", "AIWP")
@@ -250,6 +274,7 @@ def _finalize_inspection(
         with open_first() as dataset:
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
+            grid_step_deg = _grid_step_deg(dataset)
             has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
             initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
@@ -260,6 +285,7 @@ def _finalize_inspection(
             normalized,
         )
     normalized["spatial_bounds"] = spatial_bounds
+    normalized["grid_step_deg"] = grid_step_deg
     if kind == "model":
         # An ensemble member dim can only be evaluated by ROMP's probabilistic
         # path; the deterministic path crashes on the extra dim. The file's

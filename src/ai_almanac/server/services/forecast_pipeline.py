@@ -229,6 +229,25 @@ def season_issue_dates(
     return dates
 
 
+def shared_issue_schedule(season_model_params: dict[str, dict]) -> dict[str, dict]:
+    """Give every model the union of the selected archives' issue-date schedules.
+
+    The blend inner-joins models on issue date, so two archives built on
+    different calendars (e.g. FuXi's twice-weekly grid vs AIFS-single-v2's
+    1st/7th/9th/... grid) would leave only their handful of shared dates in
+    the live forecast. Rolling each model out on every date any selected
+    archive uses keeps the full season; the climatology grid is daily, so any
+    date within the season scores. Models without a schedule are left on their
+    weekday fallback.
+    """
+    union = sorted(
+        {md for p in season_model_params.values() for md in p.get("init_month_days") or []}
+    )
+    if not union:
+        return season_model_params
+    return {name: {**p, "init_month_days": union} for name, p in season_model_params.items()}
+
+
 def season_covered_dates(config: dict) -> dict[str, list[str]]:
     """Init dates each model's season rollout covers, from a forecast job config.
 

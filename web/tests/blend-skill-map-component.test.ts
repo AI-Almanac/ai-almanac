@@ -90,6 +90,8 @@ function metrics(overrides: Partial<BlendCellMetrics> = {}): BlendCellMetrics {
 		baseline_model: 'unc_clim_raw',
 		cell_size_deg: 0.25,
 		min_observations: 10,
+		areas: [],
+		region_id: null,
 		grids: [
 			{
 				metric: 'ranked_probability_skill_score',
@@ -135,7 +137,7 @@ describe('BlendSkillMap', () => {
 		instance.emit('style.load');
 		await waitFor(() => expect(instance.addSource).toHaveBeenCalledTimes(1));
 		// A fill and an outline, added exactly once between them.
-		expect(instance.addLayer).toHaveBeenCalledTimes(2);
+		expect(instance.addLayer).toHaveBeenCalledTimes(3);
 		// And the camera is framed on the data rather than left at the world view.
 		expect(instance.fitBounds).toHaveBeenCalledTimes(1);
 	});
@@ -157,7 +159,7 @@ describe('BlendSkillMap', () => {
 	it('never builds a map when the blend has no per-point grids', async () => {
 		api.getBlendCellMetrics.mockResolvedValue(metrics({ grids: [] }));
 		const { findByText } = render(BlendSkillMap, { jobId: 'job-1' });
-		await findByText(/no per-grid-point summary/i);
+		await findByText(/no per-point summary/i);
 		expect(maplibre.instances).toHaveLength(0);
 	});
 

@@ -35,7 +35,11 @@ def test_read_through_computes_once_then_hits(workflow, tmp_path: Path) -> None:
     entry = _cache_files(cache_root)
     assert len(entry) == 1
     ref = workflow._blending_repo_ref()[:12]
-    assert entry[0].relative_to(cache_root).parts[:3] == ("v1", ref, "obs")
+    assert entry[0].relative_to(cache_root).parts[:3] == (
+        f"v{workflow.BLEND_INTERMEDIATES_CACHE_VERSION}",
+        ref,
+        "obs",
+    )
 
 
 def test_key_separation_by_scope_and_params(workflow, tmp_path: Path) -> None:
@@ -83,3 +87,39 @@ def test_file_sha256_matches_content(workflow, tmp_path: Path) -> None:
 def test_repo_ref_falls_back_without_git_checkout(workflow) -> None:
     ref = workflow._blending_repo_ref()
     assert ref == workflow.DEFAULT_REPO_REF
+
+
+_ONSET_BASE = {
+    "id_precision": 2,
+    "threshold_mm": 20.0,
+    "min_day": 1,
+    "max_day": 45,
+    "cutoff_month_day": "05-01",
+    "ref_onset_month_day": "06-01",
+    "adm3_domain": False,
+    "focus_area": None,
+}
+
+
+def test_parts_are_not_reused_across_onset_definitions(workflow, tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    computed = []
+
+    def build(**overrides) -> bool:
+        key = workflow._intermediates_cache_params(**{**_ONSET_BASE, **overrides})
+        _, was_cached = workflow._cached_pickle(
+            str(cache_root), "obs", key, lambda: computed.append(overrides) or "part"
+        )
+        return was_cached
+
+    assert build() is False
+    assert build() is True
+    assert build(threshold_mm=25.0) is False
+    assert build(cutoff_month_day="05-15") is False
+    assert build(ref_onset_month_day="06-10") is False
+    assert len(computed) == 4
+
+
+def test_cache_key_records_the_fixed_onset_rule(workflow) -> None:
+    key = workflow._intermediates_cache_params(**_ONSET_BASE)
+    assert key["onset_rule"] == workflow.ONSET_RULE

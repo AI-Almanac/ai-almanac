@@ -7,13 +7,14 @@ rows ordered blend-first along with the artifact listing.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
 
-from ai_almanac.server.services import blend_domain
+from ai_almanac.server.services import benchmark_domain, blend_domain
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 
 _SUMMARY_CSV = (
@@ -119,7 +120,9 @@ def test_parse_pooled_summary_treats_blanks_as_missing() -> None:
     assert rows[0]["observations"] is None
 
 
-async def _insert_blend_job(user_id: str, job_id: str, status: str = "complete") -> None:
+async def _insert_blend_job(
+    user_id: str, job_id: str, status: str = "complete", config: dict | None = None
+) -> None:
     from ai_almanac.server.db import get_db
 
     now = datetime.now(UTC).isoformat()
@@ -128,9 +131,15 @@ async def _insert_blend_job(user_id: str, job_id: str, status: str = "complete")
             text(
                 "INSERT INTO jobs (id, user_id, dataset_id, job_type, status, "
                 "config_json, created_at) VALUES (:id, :uid, 'obs-1', 'blend', "
-                ":status, '{}', :now)"
+                ":status, :config, :now)"
             ),
-            {"id": job_id, "uid": user_id, "status": status, "now": now},
+            {
+                "id": job_id,
+                "uid": user_id,
+                "status": status,
+                "config": json.dumps(config or {}),
+                "now": now,
+            },
         )
 
 
@@ -179,6 +188,47 @@ async def test_get_blend_results_reads_summary(client, user_id: str) -> None:
     assert any(a["filename"] == "summary_models_pooled.csv" for a in result["artifacts"])
 
 
+def _write_artifact(job_id: str, filename: str, body: str) -> None:
+    from ai_almanac.server.services.storage import get_storage
+
+    path = get_storage().result_file_path(job_id, "output", filename)
+    assert path is not None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+
+
+@pytest.mark.asyncio
+async def test_blend_summary_serves_the_requested_csv(
+    client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    job_id = str(uuid.uuid4())
+    await _insert_blend_job(user_id, job_id)
+    yearly_csv = "year,model,cv_method,brier,rps,auc\n2019,blended_model,global,0.5,0.4,0.8\n"
+    # The per-cell summary shares the pooled prefix's stem, and the yearly
+    # table has a pickle twin; neither may be served in place of the CSV asked for.
+    files = {
+        "summary_models.csv": "id,model\nALL,blended_model\n",
+        "summary_models_pooled.csv": _SUMMARY_CSV,
+        "yearly_metrics_global.pkl": "not a csv",
+        "yearly_metrics_global.csv": yearly_csv,
+    }
+    for filename, body in files.items():
+        _write_artifact(job_id, filename, body)
+        await _index_artifact(job_id, "output", filename, len(body))
+
+    pooled = await client.get(f"/jobs/{job_id}/blend-summary", headers=auth_headers)
+    yearly = await client.get(
+        f"/jobs/{job_id}/blend-summary", params={"table": "yearly"}, headers=auth_headers
+    )
+    unknown = await client.get(
+        f"/jobs/{job_id}/blend-summary", params={"table": "../secrets"}, headers=auth_headers
+    )
+
+    assert pooled.json()["csv"] == _SUMMARY_CSV
+    assert yearly.json()["csv"] == yearly_csv
+    assert unknown.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_get_blend_results_rejects_incomplete(client, user_id: str) -> None:
     job_id = str(uuid.uuid4())
@@ -186,3 +236,40 @@ async def test_get_blend_results_rejects_incomplete(client, user_id: str) -> Non
     scope = BenchmarkScope(kind="blend_setup", key="setup")
     result = await blend_domain.get_blend_results(job_id, user_id, scope)
     assert "not complete" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_job_tools_describe_blend_configuration(client, user_id: str) -> None:
+    job_id = str(uuid.uuid4())
+    await _insert_blend_job(
+        user_id,
+        job_id,
+        config={
+            "job_type": "blend",
+            "blend_name": "Ethiopia AIFS + FuXi",
+            "model_names": ["aifs", "fuxi"],
+            "model_source_ids": ["src-aifs", "src-fuxi"],
+            "region_id": "ethiopia",
+            "forecast_years": [2015, 2016],
+            "blend_params": {
+                "training_years": "2015-2016",
+                "cv_holdout_years": "2016",
+                "focus_area": {"level": "adm2", "units": ["Tigray"], "geometry": {}},
+            },
+            "warnings": ["Past seasons only"],
+        },
+    )
+    scope = BenchmarkScope(kind="blend_setup", key="setup")
+
+    info = json.loads(await benchmark_domain._exec_get_job_info({"job_id": job_id}, user_id, scope))
+    listing = json.loads(await benchmark_domain._exec_list_jobs({}, user_id, scope))
+
+    assert info["blend_name"] == "Ethiopia AIFS + FuXi"
+    assert info["model_names"] == ["aifs", "fuxi"]
+    assert info["region_id"] == "ethiopia"
+    assert info["blend_params"]["cv_holdout_years"] == "2016"
+    assert "geometry" not in info["blend_params"]["focus_area"]
+    assert info["warnings"] == ["Past seasons only"]
+    listed = next(job for job in listing if job["job_id"] == job_id)
+    assert listed["blend_name"] == "Ethiopia AIFS + FuXi"
+    assert listed["region"] == "ethiopia"

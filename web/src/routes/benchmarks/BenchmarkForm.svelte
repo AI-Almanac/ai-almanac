@@ -1,10 +1,15 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { type BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { goToBlend } from '$lib/blend-nav';
 	import type { Dataset, Region, RompDefaults } from '$lib/api';
+	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { benchmarkSetupSteps } from './tours';
 
 	let {
 		store,
@@ -35,6 +40,7 @@
 	);
 
 	let advancedPanelOpen = $state(false);
+	installTour('benchmark-setup', () => benchmarkSetupSteps(() => (advancedPanelOpen = true)));
 	let initialManualOpenHandled = $state(false);
 
 	$effect(() => {
@@ -105,6 +111,16 @@
 		return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 	}
 
+	const focusArea = $derived(
+		(form.sharedAdvancedParams.focus_area as FocusAreaValue | null | undefined) ?? null
+	);
+	const regionExtent = $derived.by((): BboxExtent | null => {
+		const r = form.selectedRegion;
+		if (!r || r.lat_min == null || r.lat_max == null || r.lon_min == null || r.lon_max == null)
+			return null;
+		return { lat_min: r.lat_min, lat_max: r.lat_max, lon_min: r.lon_min, lon_max: r.lon_max };
+	});
+
 	function closeManualConfig() {
 		advancedPanelOpen = false;
 		panelFocusSection = null;
@@ -116,7 +132,7 @@
 </script>
 
 <section class="setup-workspace has-plan" class:is-comparing={chatComparing}>
-	<div class="setup-chat">
+	<div class="setup-chat" data-tour="setup-chat">
 		{#if chatAvailable}
 			<ChatPanel
 				onComparingChange={(value) => (chatComparing = value)}
@@ -155,7 +171,7 @@
 		{/if}
 	</div>
 
-	<aside class="review-panel">
+	<aside class="review-panel" data-tour="benchmark-plan">
 		<div class="review-header">
 			<div class="state-row">
 				<p class="eyebrow">Current setup</p>
@@ -195,7 +211,42 @@
 			{/each}
 		</div>
 
-		<button class="advanced-button" type="button" onclick={() => openConfig()}>
+		<div class="focus-area" data-tour="focus-area">
+			<div class="focus-area-head">
+				<span class="label-with-help">
+					Area of interest
+					<InfoTip
+						text="Limits scoring to part of the region: draw a box, or pick administrative areas on the map. Land and country borders still apply. Leave it as the whole region to score everything."
+					/>
+				</span>
+				<small
+					>{focusArea
+						? isFocusUnits(focusArea)
+							? `Scoring limited to ${focusArea.units.length} ${focusArea.units.length === 1 ? 'area' : 'areas'}`
+							: 'Scoring limited to the box'
+						: 'Optional: score part of the region'}</small
+				>
+			</div>
+			{#if form.selectedRegionId}
+				<FocusAreaMap
+					value={focusArea}
+					extent={regionExtent}
+					regionId={form.selectedRegionId}
+					onchange={(box) => form.setSharedParam('focus_area', box)}
+				/>
+			{:else}
+				<p class="focus-area-hint">
+					Choose a region, then draw a box here to score only part of it.
+				</p>
+			{/if}
+		</div>
+
+		<button
+			class="advanced-button"
+			type="button"
+			data-tour="manual-config"
+			onclick={() => openConfig()}
+		>
 			<span>Configure it yourself</span>
 			<small>
 				{#if form.syncingConfig}
@@ -309,6 +360,8 @@
 		flex-direction: column;
 		gap: 1rem;
 		min-height: 0;
+		/* The area map can outgrow the viewport; scroll the plan rather than spill it. */
+		overflow-y: auto;
 		padding: clamp(1rem, 2vw, 1.25rem);
 		border: 1px solid var(--color-border);
 		border-radius: 0.5rem;
@@ -511,5 +564,34 @@
 		.spec-list strong {
 			text-align: left;
 		}
+	}
+
+	.focus-area {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.focus-area-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 0.75rem;
+	}
+
+	.focus-area-head small {
+		opacity: 0.7;
+	}
+
+	.focus-area-hint {
+		margin: 0;
+		opacity: 0.7;
+		font-size: 0.9em;
+	}
+
+	.label-with-help {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
 	}
 </style>

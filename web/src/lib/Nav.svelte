@@ -1,66 +1,93 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
+	import { login } from '$lib/auth';
 	import FeedbackWidget from '$lib/feedback/FeedbackWidget.svelte';
+	import { activeTour } from '$lib/tour.svelte';
 
 	let logoFailed = $state(false);
 </script>
 
 <nav class="site-nav">
 	<div class="nav-inner">
-		<a href="/" class="brand">
-			{#if logoFailed}
-				<span>Laude</span>
-				<span class="brand-mark">AI</span>
-				<span>Almanac</span>
-			{:else}
+		<div class="logo-row">
+			<a href="/" class="brand">
+				{#if logoFailed}
+					<span>Laude</span>
+					<span class="brand-mark">AI</span>
+					<span>Almanac</span>
+				{:else}
+					<img
+						class="brand-logo"
+						src="/laude-ai-almanac-logo.png"
+						alt="Laude AI Almanac"
+						onerror={() => (logoFailed = true)}
+					/>
+				{/if}
+			</a>
+			<a href="https://uchicago.edu" target="_blank" rel="noopener noreferrer">
 				<img
-					class="brand-logo"
-					src="/laude-ai-almanac-logo.png"
-					alt="Laude AI Almanac"
-					onerror={() => (logoFailed = true)}
+					class="uchicago-logo"
+					src="/partners/uchicago-wordmark.svg"
+					alt="University of Chicago"
 				/>
-			{/if}
-		</a>
-		<div class="links" aria-label="Primary navigation">
-			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
-			<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
-			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
-			<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
-			{#if account.canUseForecasting}
-				<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
-			{/if}
-			{#if account.canUseForecasting && account.isAdmin}
-				<a href="/forecast-data" class:active={$page.url.pathname.startsWith('/forecast-data')}>
-					Forecast data
-				</a>
-			{/if}
-			{#if account.canManageData}
-				<a
-					href="/data-sources"
-					class:active={$page.url.pathname.startsWith('/data-sources') ||
-						$page.url.pathname.startsWith('/regions')}
-				>
-					Data
-				</a>
-			{/if}
-			{#if account.isAdmin}
-				<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}> Settings </a>
-			{/if}
-			<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
+			</a>
 		</div>
-		<div class="nav-right">
-			<FeedbackWidget />
-			{#if account.loaded && account.isShared}
-				<a
-					class="account"
-					href="/user"
-					title={account.account?.email ?? account.account?.subject ?? ''}
-				>
-					<span class="account-name">{account.label}</span>
-					{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
-				</a>
-			{/if}
+		<div class="nav-row">
+			<div class="links" aria-label="Primary navigation" data-tour="nav-links">
+				<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
+				<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
+				<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
+				<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
+				{#if account.canUseForecasting}
+					<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
+				{/if}
+				{#if account.canUseForecasting && account.isAdmin}
+					<a href="/forecast-data" class:active={$page.url.pathname.startsWith('/forecast-data')}>
+						Forecast data
+					</a>
+				{/if}
+				{#if account.canManageData}
+					<a
+						href="/data-sources"
+						class:active={$page.url.pathname.startsWith('/data-sources') ||
+							$page.url.pathname.startsWith('/regions')}
+					>
+						Data
+					</a>
+				{/if}
+				{#if account.isAdmin}
+					<a href="/settings" class:active={$page.url.pathname.startsWith('/settings')}>
+						Settings
+					</a>
+				{/if}
+				<a href="/user" class:active={$page.url.pathname.startsWith('/user')}>Account</a>
+			</div>
+			<div class="nav-right">
+				{#if activeTour.restart}
+					<button
+						class="help-btn"
+						type="button"
+						data-tour="help"
+						title="Show a tour of this page"
+						aria-label="Show a tour of this page"
+						onclick={() => activeTour.restart?.()}>?</button
+					>
+				{/if}
+				<FeedbackWidget />
+				{#if account.isAnonymous}
+					<button class="signin-btn" onclick={() => login()}>Sign in</button>
+				{:else if account.loaded && account.isShared}
+					<a
+						class="account"
+						href="/user"
+						title={account.account?.email ?? account.account?.subject ?? ''}
+					>
+						<span class="account-name">{account.label}</span>
+						{#if account.isAdmin}<span class="role-badge">admin</span>{/if}
+					</a>
+				{/if}
+			</div>
 		</div>
 	</div>
 </nav>
@@ -76,14 +103,40 @@
 		-webkit-backdrop-filter: blur(1rem);
 	}
 
+	/* A running tour disables the nav anyway, so let it scroll away instead of occluding highlights. */
+	:global(body.driver-active) .site-nav {
+		position: static;
+	}
+
 	.nav-inner {
 		width: min(100% - 2rem, 76rem);
-		min-height: 4rem;
 		margin: 0 auto;
+		padding: 0.75rem 0 0.5rem;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.5rem;
+	}
+
+	.logo-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
+		justify-content: center;
+		gap: 1.5rem;
+	}
+
+	/* Links stay centred; the side columns absorb the slack and the right one holds the actions. */
+	.nav-row {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.links {
+		grid-column: 2;
+		min-width: 0;
+		overflow-x: auto;
 	}
 
 	.brand,
@@ -122,9 +175,17 @@
 	}
 
 	.nav-right {
+		grid-column: 3;
+		justify-self: end;
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
+	}
+
+	.uchicago-logo {
+		display: block;
+		width: auto;
+		height: 2.5rem;
 	}
 
 	.account {
@@ -146,6 +207,40 @@
 		max-width: 12rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.help-btn {
+		width: 1.75rem;
+		aspect-ratio: 1;
+		border: 1px solid var(--color-border);
+		border-radius: 50%;
+		background: var(--color-surface);
+		color: var(--color-text-muted);
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 800;
+		cursor: pointer;
+	}
+
+	.help-btn:hover {
+		border-color: var(--color-accent-border);
+		color: var(--color-accent);
+	}
+
+	.signin-btn {
+		padding: 0.35rem 0.8rem;
+		border: none;
+		border-radius: 0.4rem;
+		background: var(--color-accent);
+		color: white;
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 650;
+		cursor: pointer;
+	}
+
+	.signin-btn:hover {
+		background: var(--color-accent-hover);
 	}
 
 	.role-badge {
@@ -175,15 +270,13 @@
 	}
 
 	@media (max-width: 680px) {
-		.nav-inner {
-			align-items: flex-start;
-			flex-direction: column;
-			padding: 0.8rem 0;
+		.nav-row {
+			grid-template-columns: 1fr;
 		}
 
-		.links {
-			width: 100%;
-			overflow-x: auto;
+		.links,
+		.nav-right {
+			grid-column: 1;
 		}
 	}
 </style>

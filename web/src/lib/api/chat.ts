@@ -3,7 +3,7 @@ import { authHeaders } from '../auth';
 import { BASE_URL, request } from './core';
 import { sseEvents } from './sse';
 export { sseEvents } from './sse';
-import type { Job } from './jobs';
+import type { FocusAreaValue, Job } from './jobs';
 import type { Blend } from './blends';
 
 export type BenchmarkRunSpec = {
@@ -51,6 +51,10 @@ export type BlendRunSpec = {
 	forecast_years: string;
 	true_holdout_years: string;
 	formula_text: string;
+	focus_area?: FocusAreaValue | null;
+	threshold_mm?: number | null;
+	cutoff_month_day: string;
+	ref_onset_month_day: string;
 	status: 'collecting' | 'runnable' | 'running';
 	missing_fields: string[];
 	assumptions: string[];

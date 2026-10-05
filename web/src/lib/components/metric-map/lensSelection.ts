@@ -135,17 +135,25 @@ export function normalizeLensSelection(
 	return next;
 }
 
-export function currentLensKey(selection: LensSelection, activeRuns: RunDef[]) {
+/**
+ * `hasLayer` lets baseline mode fall back to raw values when the climatology
+ * run has no data for the metric (e.g. rainfall-error metrics, which have no
+ * climatology output), so the map shows the model instead of nothing.
+ */
+export function currentLensKey(
+	selection: LensSelection,
+	activeRuns: RunDef[],
+	hasLayer: (key: string) => boolean = () => true
+) {
 	const modelRun = selectedModelRun(selection, activeRuns);
 	if (!modelRun || !selection.selectedMetric) return null;
-	if (selection.viewMode === 'single') {
-		return rawLayerKey(
-			modelRun.jobId,
-			modelRun.modelName,
-			selection.selectedMetric,
-			selection.selectedWindow
-		);
-	}
+	const rawKey = rawLayerKey(
+		modelRun.jobId,
+		modelRun.modelName,
+		selection.selectedMetric,
+		selection.selectedWindow
+	);
+	if (selection.viewMode === 'single') return rawKey;
 	const referenceRun =
 		selection.viewMode === 'baseline'
 			? activeRuns.find((run) => run.modelName === 'climatology')
@@ -158,14 +166,9 @@ export function currentLensKey(selection: LensSelection, activeRuns: RunDef[]) {
 		!referenceRun ||
 		(sameRun(referenceRun, modelRun) && referenceWindow === selection.selectedWindow)
 	) {
-		return rawLayerKey(
-			modelRun.jobId,
-			modelRun.modelName,
-			selection.selectedMetric,
-			selection.selectedWindow
-		);
+		return rawKey;
 	}
-	return deltaLayerKey(
+	const deltaKey = deltaLayerKey(
 		modelRun.jobId,
 		modelRun.modelName,
 		selection.selectedMetric,
@@ -174,11 +177,16 @@ export function currentLensKey(selection: LensSelection, activeRuns: RunDef[]) {
 		referenceRun.modelName,
 		referenceWindow
 	);
+	return selection.viewMode === 'baseline' && !hasLayer(deltaKey) ? rawKey : deltaKey;
 }
 
-export function currentLensKeys(selection: LensSelection, activeRuns: RunDef[]) {
+export function currentLensKeys(
+	selection: LensSelection,
+	activeRuns: RunDef[],
+	hasLayer: (key: string) => boolean = () => true
+) {
 	if (selection.viewMode !== 'swipe') {
-		const key = currentLensKey(selection, activeRuns);
+		const key = currentLensKey(selection, activeRuns, hasLayer);
 		return key ? [key] : [];
 	}
 	const modelRun = selectedModelRun(selection, activeRuns);

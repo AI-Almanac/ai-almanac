@@ -3,7 +3,7 @@ import { authorization } from '@globus/sdk';
 import type { AuthorizationManager } from '@globus/sdk/core/authorization/AuthorizationManager';
 import type { StoredToken } from '@globus/sdk/core/authorization/TokenManager';
 
-const API_RESOURCE_SERVER = '50964632-afc7-4d4c-abf4-b288cc18a3af';
+const API_RESOURCE_SERVER = '83ec8157-3332-49b5-863f-1a98a42bf21c';
 const API_SCOPE = `https://auth.globus.org/scopes/${API_RESOURCE_SERVER}/api`;
 
 let manager: AuthorizationManager | null = null;

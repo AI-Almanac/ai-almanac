@@ -164,7 +164,8 @@ pixi run self-host-local-gcs
 ```
 
 This keeps the synthetic local job runner and writes durable artifacts to GCS.
-For remote execution, deploy `modal/app.py`, export `MODAL_TOKEN_ID` and
+For remote execution, deploy the Modal apps (`pixi run deploy-modal`, which
+targets the `staging` Modal environment), export `MODAL_TOKEN_ID` and
 `MODAL_TOKEN_SECRET`, and use:
 
 ```bash
@@ -175,7 +176,8 @@ The supported combinations are local storage with a local runner, GCS with a
 local runner, and GCS with Modal. Modal with local storage is invalid because a
 remote worker cannot access the Compose volume. Optional
 `MODAL_APP_NAME`, `MODAL_FUNCTION_NAME`, and `MODAL_BLENDING_APP_NAME`
-variables select non-default deployed app names.
+variables select non-default deployed app names, and `MODAL_ENVIRONMENT`
+(default `staging`) selects the Modal environment they are looked up in.
 
 Operational commands:
 

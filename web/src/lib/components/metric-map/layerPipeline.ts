@@ -35,10 +35,14 @@ export function buildModelRuns(jobs: Job[]): RunDef[] {
 	}));
 }
 
-export function buildClimatologyRun(jobs: Job[]): RunDef | null {
-	if (jobs.length === 0) return null;
+export function buildClimatologyRun(
+	jobs: Job[],
+	hasClimatology: (jobId: string) => boolean = () => true
+): RunDef | null {
+	const source = jobs.find((job) => hasClimatology(job.id));
+	if (!source) return null;
 	return {
-		jobId: jobs[0].id,
+		jobId: source.id,
 		modelName: 'climatology',
 		colorIndex: jobs.length
 	};

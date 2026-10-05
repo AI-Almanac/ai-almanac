@@ -9,19 +9,26 @@ surface the errors to an HTTP client.
 from __future__ import annotations
 
 import json
+import math
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from ai_almanac.server.db import get_db, lock_for_update
+from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services import guardrails, trajectory_sets
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
+from ai_almanac.server.services.forecast_models import (
+    archive_grid_step,
+    live_forecast_compatibility,
+)
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import romp_safe_model_name
@@ -31,7 +38,6 @@ from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
     blend_model_key,
     get_packaged_forecast_models,
-    resolve_forecast_model,
     settings,
 )
 
@@ -66,6 +72,7 @@ class RompParams(BaseModel):
     land_only: bool | None = None
     shp_only: bool | None = None
     nc_mask: str | None = None
+    focus_area: FocusArea | None = None
     ref_model_dir: str | None = None
     thresh_file: str | None = None
 
@@ -258,8 +265,68 @@ async def _resolve_obs_dir(
     return source["path"]
 
 
+# Workflow defaults the blend uses when a field is unset. Mirror
+# build_intermediates' defaults in modal/blending_app.py.
+DEFAULT_CUTOFF_MONTH_DAY = "05-01"
+DEFAULT_REF_ONSET_MONTH_DAY = "06-01"
+
+
+def _month_day_error(label: str, value: str) -> str | None:
+    """Reject anything but a zero-padded ``MM-DD`` that exists in every year.
+
+    Feb 29 is refused: the workflow builds a date from it for each season, which
+    fails in non-leap years.
+    """
+    try:
+        valid = re.fullmatch(r"\d{2}-\d{2}", value) and datetime.strptime(
+            f"2001-{value}", "%Y-%m-%d"
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        return (
+            f"{label} must be a calendar date in MM-DD form (e.g. 05-01, not Feb 29), got {value!r}"
+        )
+    return None
+
+
+def onset_param_errors(
+    threshold_mm: float | None,
+    cutoff_month_day: str | None,
+    ref_onset_month_day: str | None,
+) -> list[str]:
+    """Validate the onset-definition trio shared by the blend form, the chat
+    config, and the submission body. Returns messages, empty when valid."""
+    errors: list[str] = []
+    if threshold_mm is not None and not (math.isfinite(threshold_mm) and threshold_mm > 0):
+        errors.append(f"Onset rainfall threshold must be positive, got {threshold_mm}")
+    for label, value in (
+        ("Onset search start", cutoff_month_day),
+        ("Reference onset date", ref_onset_month_day),
+    ):
+        if value is not None:
+            err = _month_day_error(label, value)
+            if err:
+                errors.append(err)
+    # Compare effective values, so overriding one date is checked against the
+    # other's default. Zero-padded MM-DD strings compare lexically in calendar order.
+    cutoff = cutoff_month_day or DEFAULT_CUTOFF_MONTH_DAY
+    ref_onset = ref_onset_month_day or DEFAULT_REF_ONSET_MONTH_DAY
+    if not errors and ref_onset < cutoff:
+        errors.append(
+            f"Reference onset date {ref_onset} is before the onset search "
+            f"start {cutoff}; onset cannot be detected before the search begins"
+        )
+    return errors
+
+
 class BlendParams(BaseModel):
-    """Blend preparation and training hyperparameters."""
+    """Blend preparation and training hyperparameters.
+
+    The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
+    ``ref_onset_month_day``) is optional; unset values fall back to the
+    workflow defaults (20 mm, 05-01, 06-01).
+    """
 
     forecast_years: str | None = None
     obs_years: str | None = None
@@ -267,9 +334,42 @@ class BlendParams(BaseModel):
     cv_holdout_years: str
     true_holdout_years: str | None = None
     formula_text: str | None = None
-    threshold_mm: float | None = None
-    cutoff_month_day: str | None = None
-    mok_month_day: str | None = None
+    threshold_mm: float | None = Field(
+        default=None,
+        description="Rainfall accumulation (mm) over the onset window that triggers onset.",
+    )
+    cutoff_month_day: str | None = Field(
+        default=None,
+        description="MM-DD from which onset is searched each season; also the first "
+        "forecast issue date.",
+    )
+    ref_onset_month_day: str | None = Field(
+        default=None,
+        description="MM-DD reference onset date (climatological onset) that the "
+        "onset-before-reference probability is scored against.",
+    )
+    focus_area: FocusArea | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_mok_month_day(cls, data: object) -> object:
+        # onset_blending renamed "MOK date" to "reference onset"; keep the old
+        # request key working and normalize stored/echoed params to the new one.
+        if isinstance(data, dict) and "mok_month_day" in data:
+            data = dict(data)
+            legacy = data.pop("mok_month_day")
+            if data.get("ref_onset_month_day") is None and legacy is not None:
+                data["ref_onset_month_day"] = legacy
+        return data
+
+    @model_validator(mode="after")
+    def _check_onset_params(self) -> BlendParams:
+        errors = onset_param_errors(
+            self.threshold_mm, self.cutoff_month_day, self.ref_onset_month_day
+        )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
 
 
 class BlendCreate(BaseModel):
@@ -331,9 +431,23 @@ def source_year_range(source: dict | None) -> YearRange:
     return _registered_year(metadata.get("start_year")), _registered_year(metadata.get("end_year"))
 
 
-def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> dict | None:
+def source_missing_years(metadata: dict | None) -> set[int]:
+    """Years missing inside a source's registered range. Sources registered
+    before gaps were detected have none recorded: unknown, treated as gap-free."""
+    value = (metadata or {}).get("missing_years")
+    if not isinstance(value, list):
+        return set()
+    return {year for item in value if (year := _registered_year(item)) is not None}
+
+
+def blend_year_coverage(
+    obs_years: YearRange,
+    model_years: list[YearRange],
+    missing_years: Iterable[int] = (),
+) -> dict | None:
     """Years the observations and every forecast model share, plus the earliest
-    forecast year whose onset climatology has enough observations behind it.
+    forecast year whose onset climatology has enough observations behind it,
+    and the years inside that range some source has no data for.
 
     None when any source's range is unregistered: the rule is then unenforceable
     rather than violated. Mirrored by web/src/routes/blends/year-coverage.ts.
@@ -349,6 +463,7 @@ def blend_year_coverage(obs_years: YearRange, model_years: list[YearRange]) -> d
         "start": max(obs_start, *model_starts),
         "end": min(obs_end, *model_ends),
         "earliest_forecast": max(obs_start + MIN_ONSET_YEARS, *model_starts),
+        "missing": sorted(set(missing_years)),
     }
 
 
@@ -374,6 +489,12 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
         errors.append(
             f"Climatology needs {MIN_ONSET_YEARS} years of observations before the "
             f"first forecast year — start at {coverage['earliest_forecast']} or later."
+        )
+    gaps = sorted(set(forecast_years) & set(coverage.get("missing", ())))
+    if gaps:
+        errors.append(
+            f"Some chosen sources have no data for {', '.join(map(str, gaps))} — "
+            "leave those years out."
         )
     return errors
 
@@ -413,30 +534,63 @@ def blend_split_errors(
     return errors
 
 
-def models_without_live_forecast(model_names: Iterable[str]) -> list[str]:
-    """Blend members with no entry in the live forecast model registry.
+def live_forecast_blockers(members: Iterable[tuple[str, float | None]]) -> list[str]:
+    """Why each blocked member keeps the blend from running as a live forecast.
 
     Live scoring needs a rolled-out season for *every* member of the blend, so a
-    single unmatched member makes the whole blend history-only.
+    single blocked member (no live model, or one on a different grid than the
+    archive) makes the whole blend history-only. Members are (name, archive grid
+    step) pairs; an unknown grid step falls back to the registry-only check.
     """
     registry = get_packaged_forecast_models()
-    return sorted(name for name in model_names if resolve_forecast_model(registry, name) is None)
+    blockers = []
+    for name, archive_step in members:
+        verdict = live_forecast_compatibility(name, archive_step, registry)
+        if verdict.status != "ready":
+            blockers.append(f"{name}: {verdict.detail}")
+    return sorted(blockers)
 
 
-def historical_only_warning(model_names: Iterable[str]) -> list[str]:
+def historical_only_warning(members: Iterable[tuple[str, float | None]]) -> list[str]:
     """Warn, at blend submission, that a blend can never run a live forecast.
 
     History-only blends are a legitimate research result, so this does not block
     submission — but the limitation belongs at submission time, before training
     is paid for, rather than surfacing as a rejection at forecast time.
     """
-    unsupported = models_without_live_forecast(model_names)
-    if not unsupported:
+    blockers = live_forecast_blockers(members)
+    if not blockers:
         return []
     return [
-        f"No live forecast model is available for {', '.join(unsupported)}. "
-        "This blend can be trained and scored on past seasons, but it cannot be "
-        "run as a live forecast."
+        "This blend cannot be run as a live forecast. "
+        + " ".join(blockers)
+        + " It can still be trained and scored on past seasons."
+    ]
+
+
+def grid_mismatch_errors(
+    obs_step: float | None, members: Iterable[tuple[str, float | None]]
+) -> list[str]:
+    """Reject models whose registered grid differs from the observations'.
+
+    Scoring pairs observation and forecast cells by array position, not by
+    coordinate, so mismatched grids score the wrong cells (or none) instead of
+    failing loudly. Members are (name, grid step) pairs; a source registered
+    before grid steps were recorded has no step and is not checked.
+    """
+    if obs_step is None:
+        return []
+    mismatched = [
+        f"{name} is on a {step:g}° grid"
+        for name, step in members
+        if step is not None and not math.isclose(step, obs_step)
+    ]
+    if not mismatched:
+        return []
+    return [
+        f"The observations are on a {obs_step:g}° grid, but "
+        + "; ".join(sorted(mismatched))
+        + ". Choose observations and models on the same grid."
     ]
 
 
@@ -590,7 +744,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     model_years: list[YearRange] = []
     # The blend keys everything on the slug; warnings read better with the name
     # the user picked the source by.
-    display_names: list[str] = []
+    model_sources: list[dict] = []
     for model_id in body.model_ids:
         source = await _resolve_model_source(model_id, user_id)
         key = _blend_model_key(source["name"])
@@ -599,17 +753,27 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                 status_code=400, detail=f"Duplicate model in blend: {source['name']!r}"
             )
         model_names.append(key)
-        display_names.append(source["name"])
+        model_sources.append(source)
         model_files[key] = year_uris(source["path"], forecast_years)
         model_years.append(source_year_range(source))
 
-    coverage = blend_year_coverage(source_year_range(obs_source), model_years)
-    splits = blend_years(body.params)
-    coverage_errors = blend_coverage_errors(forecast_years, coverage) + blend_split_errors(
-        forecast_years, splits.training, splits.cv_holdout, splits.true_holdout
+    missing = set().union(
+        *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
     )
-    if coverage_errors:
-        raise HTTPException(status_code=400, detail=" ".join(coverage_errors))
+    coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
+    splits = blend_years(body.params)
+    source_errors = (
+        blend_coverage_errors(forecast_years, coverage)
+        + blend_split_errors(
+            forecast_years, splits.training, splits.cv_holdout, splits.true_holdout
+        )
+        + grid_mismatch_errors(
+            archive_grid_step(obs_source),
+            ((source["name"], archive_grid_step(source)) for source in model_sources),
+        )
+    )
+    if source_errors:
+        raise HTTPException(status_code=400, detail=" ".join(source_errors))
 
     # The guardrail chokepoint. Every entry point — the assistant's submit_blend
     # tool, POST /blends, and the manual UI form — passes through here, so a rule
@@ -623,11 +787,16 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if guardrail_errors:
         raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))
 
-    warnings = historical_only_warning(display_names) + guardrails.warning_messages(findings)
+    warnings = historical_only_warning(
+        (source["name"], archive_grid_step(source)) for source in model_sources
+    ) + guardrails.warning_messages(findings)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     region_id = obs_source.get("region") if obs_source else None
+    blend_params = await _with_unit_outlines(
+        body.params.model_dump(exclude_none=True), (await load_catalog()).region(region_id or "")
+    )
     config = {
         "job_type": "blend",
         "modal_app": settings.modal_blending_app_name,
@@ -640,7 +809,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "forecast_years": forecast_years,
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
-        "blend_params": body.params.model_dump(exclude_none=True),
+        "blend_params": blend_params,
         "warnings": warnings,
     }
 
@@ -791,7 +960,10 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
         )
     if not row or row["job_type"] != "blend":
         raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
-    if row["user_id"] != user_id and (row.get("visibility") or "private") != "shared":
+    if row["user_id"] != user_id and (row.get("visibility") or "private") not in (
+        "shared",
+        "example",
+    ):
         raise HTTPException(status_code=404, detail=f"Unknown blend: {blend_id!r}")
     if row["status"] != "complete":
         raise HTTPException(
@@ -837,16 +1009,31 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             status_code=400,
             detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
         )
+    # The archived sources the blend was trained from. Deliberately not scoped
+    # to the caller: running someone else's shared blend needs its members'
+    # cadence, extent, and grid, or the rollout silently produces a differently
+    # shaped season than the blend was trained on. Sharing a blend therefore
+    # shares these technical parameters. Keep it to those — never copy the
+    # source's `path` or validation error into the job.
+    model_source_ids: list[str] = blend_config.get("model_source_ids") or []
+    sources_by_name: dict[str, dict | None] = {}
+    for name, source_id in zip(model_names, model_source_ids, strict=True):
+        sources_by_name[name] = (
+            await data_source_service.get_source(source_id) if source_id else None
+        )
+
     # Every member, not just the requested subset: live scoring applies the
     # blend's whole formula, so it needs a rolled-out season for each member
     # (score_live_forecast_bundle rejects a bundle set that is missing one).
     # Without this, a request for only the runnable members is accepted and then
     # fails during scoring, after the rollout has already been paid for.
-    unsupported = models_without_live_forecast(model_names)
-    if unsupported:
+    blockers = live_forecast_blockers(
+        (name, archive_grid_step(sources_by_name.get(name) or {})) for name in model_names
+    )
+    if blockers:
         raise HTTPException(
             status_code=400,
-            detail=(f"Blend model(s) have no live forecast model to run: {', '.join(unsupported)}"),
+            detail="This blend cannot run as a live forecast. " + " ".join(blockers),
         )
     forecast_model_ids = sorted(requested)
     if not forecast_model_ids:
@@ -866,18 +1053,14 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # archived issue-day cadence, unit conversion, and spatial extent so its
     # output matches the shape/units the blend was trained against — these
     # live on the original archived data source, not the live registry.
-    model_source_ids: list[str] = blend_config.get("model_source_ids") or []
-    source_id_by_name = dict(zip(model_names, model_source_ids, strict=True))
+    from ai_almanac.server.services.forecast_pipeline import (
+        season_covered_dates,
+        shared_issue_schedule,
+    )
+
     season_model_params: dict[str, dict] = {}
     for name in forecast_model_ids:
-        source_id = source_id_by_name.get(name)
-        # Deliberately not scoped to the caller: running someone else's shared
-        # blend needs its members' cadence and extent, or the rollout silently
-        # produces a differently shaped season than the blend was trained on.
-        # Sharing a blend therefore shares these technical parameters. Keep it
-        # to those — never copy the source's `path` or validation error here.
-        source = await data_source_service.get_source(source_id) if source_id else None
-        metadata = (source or {}).get("metadata") or {}
+        metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
         season_model_params[name] = {
             "init_days": metadata.get("init_days") or "0,3",
             # The archive's fixed calendar (MM-DD) issue-date schedule, when
@@ -887,6 +1070,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             "unit_cvt": metadata.get("unit_cvt", 1.0),
             "spatial_bounds": metadata.get("spatial_bounds"),
         }
+    season_model_params = shared_issue_schedule(season_model_params)
 
     # The season loop must start counting issue dates from the same monsoon
     # cutoff the blend was trained against, not an unrelated hardcoded date.
@@ -897,8 +1081,6 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
     # when cold) and every later run scores against the cache for free.
-    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
-
     init_source = body.params.init_source or "gfs"
     season = str(datetime.now(UTC).year)
     from ai_almanac.paths import cache_dir as _cache_dir
@@ -1063,7 +1245,9 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
             .mappings()
             .fetchone()
         )
-    if not row or (row["user_id"] != user_id and (row["visibility"] or "private") != "shared"):
+    if not row or (
+        row["user_id"] != user_id and (row["visibility"] or "private") not in ("shared", "example")
+    ):
         raise HTTPException(status_code=404, detail=f"Unknown forecast: {forecast_id!r}")
 
     cfg = json.loads(row["config_json"] or "{}")
@@ -1080,6 +1264,26 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
         run_id=row["run_id"],
     )
     return await create_forecast_for_user(body, user_id)
+
+
+async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
+    """Picked administrative units need their outlines frozen into the job."""
+    if not params.get("focus_area"):
+        return params
+    if params.get("nc_mask"):
+        raise HTTPException(
+            status_code=400,
+            detail="Choose either an area of interest or a custom mask file, not both.",
+        )
+    try:
+        area = await boundaries.attach_unit_outlines(
+            parse_focus_area(params["focus_area"]), region_def
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except boundaries.BoundaryUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {**params, "focus_area": area.model_dump(mode="json")}
 
 
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
@@ -1126,6 +1330,12 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             status_code=400,
             detail=f"Model is not configured for region {region!r}",
         )
+    grid_errors = grid_mismatch_errors(
+        archive_grid_step(observation_source),
+        [(model_source["name"], archive_grid_step(model_source))],
+    )
+    if grid_errors:
+        raise HTTPException(status_code=400, detail=" ".join(grid_errors))
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
 
     job_id = str(uuid.uuid4())
@@ -1151,6 +1361,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     region_id = romp_params.get("region") or model_cfg.get("region", "")
     region_def = catalog.region(region_id)
     romp_params = apply_region_params({"region": region_id, **romp_params}, catalog)
+    romp_params = await _with_unit_outlines(romp_params, region_def)
 
     source_metadata = observation_source["metadata"] if observation_source else {}
     if region_id == "custom":

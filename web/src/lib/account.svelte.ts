@@ -37,6 +37,10 @@ class AccountState {
 		this.viewingAsUser = viewing;
 	}
 
+	get isAnonymous(): boolean {
+		return this.account?.anonymous ?? false;
+	}
+
 	get isShared(): boolean {
 		return this.account?.deployment_mode === 'shared';
 	}
@@ -56,7 +60,7 @@ class AccountState {
 	get label(): string {
 		const a = this.account;
 		if (!a) return '';
-		return a.display_name || a.email || a.subject;
+		return a.display_name || a.email || a.subject || '';
 	}
 
 	async load(): Promise<void> {

@@ -201,11 +201,15 @@ romp_image = modal.Image.from_registry(
 gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME) if ENABLE_GCS_FUNCTIONS else None
 e2s_secret = modal.Secret.from_name(E2S_SECRET_NAME) if E2S_SECRET_NAME else None
 
-E2S_METRICS_RUNNER = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/services/e2s.py"
+_SERVICES_DIR = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/services"
+E2S_METRICS_RUNNER = _SERVICES_DIR / "e2s.py"
+FOCUS_AREA_MODULE = _SERVICES_DIR / "focus_area.py"
 
 # Extends the ROMP image with earth2studio for metrics and public data readers.
-benchmark_image = romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr").add_local_file(
-    E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py"
+benchmark_image = (
+    romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr", "pydantic")
+    .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
+    .add_local_file(FOCUS_AREA_MODULE, "/almanac/focus_area.py")
 )
 
 
@@ -976,6 +980,18 @@ def _run_romp_entry(env: dict, local_out: Path, capture_output: bool) -> None:
         raise RuntimeError("ROMP segfaulted with no output")
 
 
+def _with_focus_mask(config: dict, local_obs: Path, mask_dir: Path) -> dict:
+    """Write the area-of-interest mask on the staged obs grid and point nc_mask at it."""
+    if not (config.get("romp_params") or {}).get("focus_area"):
+        return config
+    import sys
+
+    sys.path.insert(0, "/almanac")
+    from focus_area import materialize_focus_mask
+
+    return materialize_focus_mask({**config, "obs_dir": str(local_obs)}, mask_dir)
+
+
 def _run_staged_benchmark(
     job_id: str,
     config: dict,
@@ -985,6 +1001,7 @@ def _run_staged_benchmark(
     local_fig: Path,
     capture_output: bool = False,
 ) -> None:
+    config = _with_focus_mask(config, local_obs, local_out.parent)
     env = _romp_env(config, local_obs, local_model, local_out, local_fig)
     print(f"==> Running benchmark for {job_id}")
     print(f"    obs files: {sum(1 for _ in local_obs.iterdir())}")

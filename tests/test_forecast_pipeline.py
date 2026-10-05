@@ -6,7 +6,27 @@ from ai_almanac.server.services.forecast_pipeline import (
     _split_gs_uri,
     ensemble_config,
     season_issue_dates,
+    shared_issue_schedule,
 )
+
+
+def test_shared_issue_schedule_unions_archives_so_no_model_gates_the_others():
+    # FuXi and AIFS-single-v2 archives were built on different calendars; the
+    # blend inner-joins on issue date, so each must roll out on the other's too.
+    params = {
+        "fuxi": {"init_month_days": ["05-02", "05-09", "05-13"], "unit_cvt": 1.0},
+        "aifs_single_v2": {"init_month_days": ["05-01", "05-09", "05-13"], "unit_cvt": 1000.0},
+    }
+    shared = shared_issue_schedule(params)
+    assert shared["fuxi"]["init_month_days"] == ["05-01", "05-02", "05-09", "05-13"]
+    assert shared["aifs_single_v2"]["init_month_days"] == shared["fuxi"]["init_month_days"]
+    assert shared["aifs_single_v2"]["unit_cvt"] == 1000.0
+    assert params["fuxi"]["init_month_days"] == ["05-02", "05-09", "05-13"]  # input untouched
+
+
+def test_shared_issue_schedule_keeps_weekday_fallback_when_no_archive_has_one():
+    params = {"fuxi": {"init_month_days": None, "init_days": "0,3"}}
+    assert shared_issue_schedule(params) == params
 
 
 def test_ensemble_config_none_for_deterministic_models():

@@ -222,6 +222,53 @@ export const forecastModelSources: AttributionEntry[] = [
 	}
 ];
 
+export const mapDataSources: AttributionEntry[] = [
+	{
+		slug: 'openstreetmap',
+		name: 'OpenStreetMap',
+		provider: 'OpenStreetMap contributors',
+		license: 'Open Data Commons Open Database License (ODbL) 1.0',
+		usage:
+			'Underlying map data — coastlines, borders, places and labels — for every basemap style.',
+		citations: ['© OpenStreetMap contributors.'],
+		links: [{ label: 'Copyright and license', href: 'https://www.openstreetmap.org/copyright' }]
+	},
+	{
+		slug: 'carto',
+		name: 'CARTO basemaps',
+		provider: 'CARTO',
+		license: 'Free to use with attribution under the CARTO basemap terms',
+		usage: 'Default basemap styles (Dark Matter, Positron, Voyager) under the result maps.',
+		citations: ['© CARTO.'],
+		links: [{ label: 'Basemap terms', href: 'https://carto.com/basemaps' }]
+	},
+	{
+		slug: 'openfreemap',
+		name: 'OpenFreeMap',
+		provider: 'OpenFreeMap',
+		license: 'Free public tile service; tiles built from OpenMapTiles and OpenStreetMap data',
+		usage: 'Alternative basemap styles (Liberty, Bright, Positron, Dark, Fiord).',
+		citations: ['© OpenMapTiles © OpenStreetMap contributors.'],
+		links: [{ label: 'OpenFreeMap', href: 'https://openfreemap.org' }]
+	},
+	{
+		slug: 'geoboundaries',
+		name: 'geoBoundaries',
+		provider: 'William & Mary geoLab',
+		license:
+			'gbOpen: CC BY 4.0. gbHumanitarian: the license of the underlying OCHA Common Operational Dataset',
+		usage:
+			'Administrative boundary overlays and area-level outlines. The humanitarian release is used where available, otherwise the open release.',
+		citations: [
+			'Runfola, D. et al. geoBoundaries: A global database of political administrative boundaries. PLoS ONE 15(4): e0231866 (2020).'
+		],
+		links: [
+			{ label: 'geoBoundaries', href: 'https://www.geoboundaries.org' },
+			{ label: 'Paper', href: 'https://doi.org/10.1371/journal.pone.0231866' }
+		]
+	}
+];
+
 export type AttributionSection = {
 	slug: string;
 	title: string;
@@ -241,5 +288,11 @@ export const attributionSections: AttributionSection[] = [
 		title: 'Forecast models',
 		description: 'Forecast models whose output is distributed or reproduced by this platform.',
 		entries: forecastModelSources
+	},
+	{
+		slug: 'map-data',
+		title: 'Maps and boundaries',
+		description: 'Basemap tiles and administrative boundaries drawn under results.',
+		entries: mapDataSources
 	}
 ];

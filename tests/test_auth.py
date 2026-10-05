@@ -49,12 +49,15 @@ async def test_auth_me_personal_honors_proxy_header(
 
 
 @pytest.mark.asyncio
-async def test_auth_me_proxy_rejects_missing_identity(
+async def test_auth_me_proxy_missing_identity_is_anonymous(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # No credential at all resolves to the anonymous read-only identity so
+    # public pages can render; a present-but-invalid credential still 401s.
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     resp = await client.get("/auth/me")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    assert resp.json()["anonymous"] is True
 
 
 @pytest.mark.asyncio
@@ -321,14 +324,17 @@ async def test_auth_me_globus_uses_bearer_subject(
 
 
 @pytest.mark.asyncio
-async def test_auth_me_globus_rejects_missing_bearer(
+async def test_auth_me_globus_missing_bearer_is_anonymous(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "globus")
-    assert (await client.get("/auth/me")).status_code == 401
-    # A non-bearer Authorization header is also rejected.
+    resp = await client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["anonymous"] is True
+    # A non-bearer Authorization header carries no identity we accept either.
     resp = await client.get("/auth/me", headers={"Authorization": "Basic abc"})
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    assert resp.json()["anonymous"] is True
 
 
 @pytest.mark.asyncio

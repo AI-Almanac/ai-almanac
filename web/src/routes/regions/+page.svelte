@@ -262,7 +262,7 @@
 				<article>
 					<div class="title-row">
 						<h3>{region.display_name}</h3>
-						<span>{region.romp_region === 'custom' ? 'Custom bounds' : 'ROMP definition'}</span>
+						<span>{region.romp_region === 'custom' ? 'Custom bounds' : 'Built-in definition'}</span>
 					</div>
 					<p>{region.description}</p>
 					<code>{bounds(region)}</code>

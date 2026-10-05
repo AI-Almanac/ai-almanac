@@ -1247,3 +1247,17 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
         await _seed_exposed_rulesets()
 
     assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained", None]
+
+
+@pytest.mark.asyncio
+async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    session_id = (await _create_session(client, auth_headers))["id"]
+    url = f"/chat/sessions/{session_id}/benchmark/config"
+
+    await client.patch(url, headers=auth_headers, json={"region_id": "india"})
+    kept = await client.patch(url, headers=auth_headers, json={"intent": "Monsoon onset"})
+    assert kept.json()["benchmark_config"]["region_id"] == "india"
+    cleared = await client.patch(url, headers=auth_headers, json={"region_id": None})
+    assert cleared.json()["benchmark_config"]["region_id"] is None

@@ -47,7 +47,7 @@
 	 * without one.
 	 *
 	 * Deliberately not rank-within-row. Rank is relative and says nothing when a
-	 * single model ran, and using colour for both rank and the climatology
+	 * single model ran, and using color for both rank and the climatology
 	 * threshold made the two indistinguishable — most of the table came out one
 	 * flat pink that couldn't express how far below the reference a value sat.
 	 */

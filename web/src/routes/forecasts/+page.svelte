@@ -20,10 +20,13 @@
 		type JobStatus
 	} from '$lib/api';
 	import { pollWhileActive } from '$lib/poll';
+	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
+	import { installTour } from '$lib/tour.svelte';
+	import { forecastResultsSteps, forecastSetupSteps } from './tours';
 
 	$effect(() => {
 		if (account.loaded && !account.canUseForecasting) goto('/');
@@ -91,6 +94,18 @@
 		return newest.id !== selected.id && ['failed', 'canceled'].includes(newest.status);
 	});
 
+	installTour(
+		'forecast',
+		() => forecastResultsSteps(startNew),
+		() => !creating && selected?.status === 'complete'
+	);
+	installTour('forecast-setup', forecastSetupSteps, () => creating);
+
+	/** The user's newest forecast, or an example when they have none of their own. */
+	function defaultForecast(newestFirst: Forecast[]): Forecast | undefined {
+		return newestFirst.find((f) => !isExample(f)) ?? newestFirst.find(isExample);
+	}
+
 	function blendName(blendId: string): string {
 		return blends.find((b) => b.id === blendId)?.name || blendId;
 	}
@@ -140,6 +155,7 @@
 			getInitSources()
 		]);
 		if (f.status === 'fulfilled') forecasts = f.value;
+		if (!selectedId && !creating) selectedId = defaultForecast(latestForecasts)?.id ?? null;
 		if (b.status === 'fulfilled') blends = b.value;
 		if (m.status === 'fulfilled') forecastModels = m.value;
 		if (s.status === 'fulfilled') initSources = s.value;
@@ -163,10 +179,12 @@
 	}
 
 	async function deleteForecast(id: string) {
-		if (
-			!confirm('Delete this forecast? This permanently removes its outputs and cannot be undone.')
-		)
-			return;
+		const forecast = forecasts.find((f) => f.id === id);
+		if (!forecast) return;
+		const message = isExample(forecast)
+			? 'Remove this forecast from your list? This example stays available to everyone else.'
+			: 'Delete this forecast? This permanently removes its outputs and cannot be undone.';
+		if (!confirm(message)) return;
 		actionError = null;
 		try {
 			await deleteJob(id);
@@ -185,21 +203,45 @@
 		return 'mixed';
 	}
 
-	const sidebarSections = $derived<RunSection[]>([
-		{
-			title: 'My Forecasts',
-			open: true,
-			emptyLabel: loaded ? 'No forecasts yet.' : 'Loading…',
-			items: latestForecasts.map((f) => ({
-				id: f.id,
-				title: blendName(f.blend_id),
-				meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
-				count: f.forecast_model_ids.length,
-				status: sidebarStatus(f.status),
-				canDelete: !ACTIVE_STATUSES.includes(f.status)
-			}))
+	function isExample(f: (typeof forecasts)[number]): boolean {
+		// Ownership doesn't matter: the server hides (never deletes) an
+		// example for every caller, owner and admin included.
+		return f.visibility === 'example';
+	}
+
+	function toSidebarItem(f: (typeof forecasts)[number]) {
+		return {
+			id: f.id,
+			title: blendName(f.blend_id),
+			meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
+			count: f.forecast_model_ids.length,
+			status: sidebarStatus(f.status),
+			canDelete: !ACTIVE_STATUSES.includes(f.status),
+			// Deleting a non-owned example only hides it from this account.
+			deleteTitle: isExample(f) ? 'Remove example' : undefined
+		};
+	}
+
+	const sidebarSections = $derived.by<RunSection[]>(() => {
+		const mine = latestForecasts.filter((f) => !isExample(f));
+		const examples = latestForecasts.filter(isExample);
+		const result: RunSection[] = [
+			{
+				title: 'My Forecasts',
+				open: true,
+				emptyLabel: loaded ? 'No forecasts yet.' : 'Loading…',
+				items: mine.map(toSidebarItem)
+			}
+		];
+		if (examples.length > 0) {
+			result.push({
+				title: 'Examples',
+				items: examples.map(toSidebarItem),
+				open: mine.length === 0
+			});
 		}
-	]);
+		return result;
+	});
 
 	// While any forecast is active, re-fetch the list and replace items whose
 	// status changed. Bounded by the server's ~5s reconcile cadence, so a 3s
@@ -378,6 +420,8 @@
 	});
 </script>
 
+<svelte:head><title>Forecasts · AI Almanac</title></svelte:head>
+
 <div class="workspace-page" class:is-setup={creating}>
 	{#if !creating}
 		<RunSidebar
@@ -400,7 +444,7 @@
 					against the blend's trained weights.
 				</p>
 
-				<label class="field">
+				<label class="field" data-tour="forecast-blend">
 					<span>Blend</span>
 					<select bind:value={blendId}>
 						<option value="" disabled>Select a completed blend…</option>
@@ -413,7 +457,7 @@
 					{/if}
 				</label>
 
-				<label class="field">
+				<label class="field" data-tour="forecast-init">
 					<span>Initialization data source</span>
 					<select bind:value={initSource}>
 						{#each initSources as source (source.id)}
@@ -424,7 +468,7 @@
 				</label>
 
 				{#if selectedBlend}
-					<fieldset class="field">
+					<fieldset class="field" data-tour="forecast-models">
 						<legend>Forecast models</legend>
 						{#if availableModels.length === 0}
 							<p class="muted">None of this blend's models have a live forecast model available.</p>
@@ -471,6 +515,7 @@
 					<button
 						type="button"
 						class="primary"
+						data-tour="forecast-run"
 						disabled={!formValid || submitting}
 						onclick={submit}
 					>
@@ -499,6 +544,12 @@
 						</p>
 					</div>
 					<div class="detail-actions">
+						<ExampleActions
+							promoteId={selected.status === 'complete' ? selected.id : null}
+							demoteIds={[selected.id]}
+							isExample={selected.visibility === 'example'}
+							onChanged={load}
+						/>
 						<span class="status-badge {statusClass(selected.status)}"
 							>{statusLabel(selected.status)}</span
 						>
@@ -562,7 +613,7 @@
 						</div>
 					</div>
 
-					<div class="artifacts">
+					<div class="artifacts" data-tour="forecast-outputs">
 						<h2>Outputs</h2>
 						{#if downloadableArtifacts.length === 0}
 							<p class="muted">No downloadable outputs found.</p>
