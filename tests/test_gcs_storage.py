@@ -9,6 +9,7 @@ left to integration testing.
 from __future__ import annotations
 
 import pytest
+from google.api_core.exceptions import NotFound
 from google.auth import credentials as ga_credentials
 
 from ai_almanac.server.services.storage import GCSStorage
@@ -49,6 +50,8 @@ class _FakeBlob:
         self._bucket.store[self.name] = (data, content_type)
 
     def download_as_bytes(self) -> bytes:
+        if self.name not in self._bucket.store:
+            raise NotFound(self.name)
         return self._bucket.store[self.name][0]
 
     def open(self, mode: str = "rb"):
@@ -177,6 +180,15 @@ def test_chat_figure_roundtrip_and_delete(store: GCSStorage) -> None:
 
     store.delete_chat_figure("fig1")
     assert store.read_chat_figure("fig1") is None
+
+
+def test_derived_payload_is_absent_until_written(store: GCSStorage) -> None:
+    assert store.read_derived("job1", "map_grids.v1.json") is None
+
+    store.write_derived("job1", "map_grids.v1.json", b'{"grids": []}')
+
+    assert store.read_derived("job1", "map_grids.v1.json") == b'{"grids": []}'
+    assert ("output", "map_grids.v1.json") not in store.list_result_files("job1")
 
 
 def test_read_log(store: GCSStorage) -> None:
