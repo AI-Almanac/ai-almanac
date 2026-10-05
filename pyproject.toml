@@ -79,12 +79,16 @@ pythonpath = "."
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 
-[tool.pixi.pypi-dependencies]
-ai-almanac = { path = ".", editable = true }
-
 [tool.pixi.environments]
-default = { solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
+default = { features = ["devtools"], solve-group = "default" }
+dev = { features = ["devtools", "dev"], solve-group = "default" }
+# What the production image ships: runtime dependencies only, solved with the
+# others so it runs exactly the versions the tests run against.
+prod = { features = ["prod"], solve-group = "default" }
+
+[tool.pixi.feature.prod.pypi-dependencies]
+# A wheel install, so the bundled SPA lands in the package's static dir.
+ai-almanac = { path = ".", editable = false }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
@@ -121,9 +125,16 @@ format = { depends-on = [{ task = "format-python" }, { task = "format-web" }], d
 build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
 frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_API_URL = "http://localhost:8765" }, description = "Run the Vite development server" }
 
-[tool.pixi.dependencies]
+[tool.pixi.feature.devtools.dependencies]
 nodejs = ">=26.3.0,<26.4"
 process-compose = ">=1.103.0,<2"
+
+# Editable only where devtools is used: a workspace-wide declaration would
+# override prod's wheel install and leave the image pointing at a missing src/.
+[tool.pixi.feature.devtools.pypi-dependencies]
+ai-almanac = { path = ".", editable = true }
+
+[tool.pixi.dependencies]
 rasterio = ">=1.5.0,<2"
 gdal = ">=3.12.3,<4"
 proj = ">=9.7.1,<10"
