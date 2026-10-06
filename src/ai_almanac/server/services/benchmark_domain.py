@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import guardrails, job_submission
+from ai_almanac.server.services.focus_area import parse_focus_area
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
@@ -107,6 +108,7 @@ SHARED_ROMP_PARAM_KEYS = {
     "dry_spell",
     "dry_extent",
     "nc_mask",
+    "focus_area",
     "thresh_file",
     "ref_model",
     "ref_model_dir",
@@ -137,6 +139,8 @@ def _non_empty_params(params: dict[str, Any], allowed: set[str]) -> dict[str, An
 
 def _clean_advanced_params(params: dict[str, Any], model_ids: list[str]) -> dict[str, Any]:
     cleaned = _non_empty_params(params, SHARED_ROMP_PARAM_KEYS)
+    if "focus_area" in cleaned:
+        cleaned["focus_area"] = parse_focus_area(cleaned["focus_area"]).model_dump(mode="json")
     raw_per_model = params.get("per_model_params")
     if isinstance(raw_per_model, dict):
         selected = set(model_ids)
@@ -297,7 +301,7 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
         errors.append("forecast_window_days must be positive")
     if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
         errors.append(
-            "forecast_window_days must be at least 30 because ROMP's default verification window extends to day 30"
+            "forecast_window_days must be at least 30 because the default verification window extends to day 30"
         )
     per_model_params = spec.advanced_params.get("per_model_params")
     if isinstance(per_model_params, dict):
@@ -635,12 +639,67 @@ async def _exec_submit_benchmark(
     return benchmark_payload(submitted, submitted_validation, run_id=run_id, jobs=jobs)
 
 
+def _model_display_name(cfg: dict) -> str | None:
+    model_config = cfg.get("model_config") or {}
+    return (
+        cfg.get("model_display_name") or model_config.get("display_name") or cfg.get("model_name")
+    )
+
+
+def _blend_params_without_outlines(params: dict) -> dict:
+    """Frozen area-of-interest outlines are bulky GeoJSON the assistant never needs."""
+    focus_area = params.get("focus_area")
+    if not isinstance(focus_area, dict):
+        return params
+    return {**params, "focus_area": {k: v for k, v in focus_area.items() if k != "geometry"}}
+
+
+def _job_listing_fields(job_type: str | None, cfg: dict) -> dict:
+    if job_type == "blend":
+        return {
+            "job_type": job_type,
+            "blend_name": cfg.get("blend_name"),
+            "model_names": cfg.get("model_names", []),
+            "region": cfg.get("region_id"),
+        }
+    return {
+        "job_type": job_type,
+        "model_name": _model_display_name(cfg),
+        "region": cfg.get("romp_params", {}).get("region"),
+    }
+
+
+def _job_config_fields(job_type: str | None, cfg: dict) -> dict:
+    if job_type == "blend":
+        return {
+            "job_type": job_type,
+            "blend_name": cfg.get("blend_name"),
+            "model_names": cfg.get("model_names", []),
+            "model_source_ids": cfg.get("model_source_ids", []),
+            "region_id": cfg.get("region_id"),
+            "forecast_years": cfg.get("forecast_years"),
+            "obs_dir": cfg.get("obs_dir"),
+            "blend_params": _blend_params_without_outlines(cfg.get("blend_params") or {}),
+            "warnings": cfg.get("warnings", []),
+        }
+    model_config = cfg.get("model_config") or {}
+    return {
+        "job_type": job_type,
+        "model_name": _model_display_name(cfg),
+        "model_source_id": cfg.get("model_source_id") or model_config.get("id"),
+        "model_dir": cfg.get("model_dir"),
+        "obs_dir": cfg.get("obs_dir"),
+        "romp_params": cfg.get("romp_params", {}),
+    }
+
+
 async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
 
     status_filter = args.get("status")
     query = sa.select(
         _jobs.c.id,
+        _jobs.c.job_type,
         _jobs.c.dataset_id,
         _jobs.c.config_json,
         _jobs.c.status,
@@ -682,14 +741,10 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> st
     jobs = []
     for r in rows:
         cfg = json.loads(r.get("config_json") or "{}")
-        model_config = cfg.get("model_config") or {}
         jobs.append(
             {
                 "job_id": r["id"],
-                "model_name": cfg.get("model_display_name")
-                or model_config.get("display_name")
-                or cfg.get("model_name"),
-                "region": cfg.get("romp_params", {}).get("region"),
+                **_job_listing_fields(r.get("job_type"), cfg),
                 "dataset_id": r.get("dataset_id"),
                 "status": r["status"],
                 "run_id": r.get("run_id"),
@@ -708,6 +763,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
     query = (
         sa.select(
             _jobs.c.config_json,
+            _jobs.c.job_type,
             _jobs.c.status,
             _jobs.c.dataset_id,
             _jobs.c.run_id,
@@ -731,7 +787,6 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     cfg = json.loads(row.get("config_json") or "{}")
-    model_config = cfg.get("model_config") or {}
     return json.dumps(
         {
             "job_id": job_id,
@@ -741,13 +796,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
             "error": row["error"],
             "created_at": row["created_at"],
             "completed_at": row["completed_at"],
-            "model_name": cfg.get("model_display_name")
-            or model_config.get("display_name")
-            or cfg.get("model_name"),
-            "model_source_id": cfg.get("model_source_id") or model_config.get("id"),
-            "model_dir": cfg.get("model_dir"),
-            "obs_dir": cfg.get("obs_dir"),
-            "romp_params": cfg.get("romp_params", {}),
+            **_job_config_fields(row.get("job_type"), cfg),
         }
     )
 
@@ -959,7 +1008,7 @@ async def _exec_get_skill_scores(args: dict, user_id: str, scope: BenchmarkScope
         # and absent metrics are unmeasured rather than passing.
         payload["notes"] = {
             "scores_are_fair": (
-                "All values are the fair (ensemble-size debiased) variants ROMP persists."
+                "All values are the fair (ensemble-size debiased) variants the benchmark stores."
             ),
             "pooled": "Scores are pooled over the whole region, not per grid point.",
             "reference": (

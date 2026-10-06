@@ -142,3 +142,18 @@ def test_local_blend_passes_region_to_intermediate_builder(tmp_path: Path) -> No
 
     _, prep_kwargs = prepare.calls[0]
     assert prep_kwargs["region_id"] == "ethiopia"
+
+
+def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
+    from ai_almanac.envs.blend_entrypoint import intermediate_prep_kwargs
+
+    # Pre-rename job configs still carry mok_month_day.
+    assert intermediate_prep_kwargs({"mok_month_day": "06-05", "threshold_mm": 25.0}) == {
+        "threshold_mm": 25.0,
+        "ref_onset_month_day": "06-05",
+    }
+    # The new name wins when both are present; unrelated keys are not forwarded.
+    assert intermediate_prep_kwargs(
+        {"mok_month_day": "06-05", "ref_onset_month_day": "06-10", "formula_text": "x"}
+    ) == {"ref_onset_month_day": "06-10"}
+    assert intermediate_prep_kwargs({"training_years": "2020"}) == {}

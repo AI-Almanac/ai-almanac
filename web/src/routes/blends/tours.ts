@@ -32,9 +32,9 @@ export function blendResultsSteps(onNewBlend: () => void): DriveStep[] {
 		{
 			element: '[data-tour="blend-outputs"]',
 			popover: {
-				title: 'Weights and outputs',
+				title: 'Results files',
 				description:
-					'Download the trained weights and scoring files to use the blend outside the platform.',
+					'Cross-validation scores, the final blend weights and the training settings, ready to download and use outside the platform. Intermediate pipeline files are tucked away underneath.',
 				side: 'top',
 				align: 'center'
 			}

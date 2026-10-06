@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
 	import {
@@ -21,18 +22,24 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
+	import type { FocusAreaValue } from '$lib/api/jobs';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
 		computeCoverage,
+		coverageLimits,
 		defaultSplit,
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
+	import { describeSourceCoverage } from '$lib/source-coverage';
+	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
+	import BlendOutputs from './BlendOutputs.svelte';
 	import { installTour } from '$lib/tour.svelte';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
 
@@ -128,9 +135,21 @@
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
 	let formulaText = $state('');
+	let focusArea = $state<FocusAreaValue | null>(null);
+	// Onset definition overrides; blank means the workflow default.
+	let thresholdMm = $state('');
+	let cutoffMonthDay = $state('');
+	let refOnsetMonthDay = $state('');
 	let yearsDirty = $state(false);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
+
+	// An area drawn for one region means nothing in another.
+	function selectObs(id: string) {
+		const region = obsSources.find((s) => s.id === id)?.region;
+		if (region !== selectedObs?.region) focusArea = null;
+		obsDatasetId = id;
+	}
 
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
@@ -155,6 +174,24 @@
 		)
 	);
 	const insufficientData = $derived(coverage != null && coverage.earliestForecast > coverage.end);
+	const limits = $derived(
+		coverage
+			? coverageLimits(
+					selectedObs ?? undefined,
+					modelSources.filter((s) => modelIds.includes(s.id)),
+					coverage
+				)
+			: { start: [], end: [] }
+	);
+	const limitingIds = $derived(new Set([...limits.start, ...limits.end].map((s) => s.id)));
+	const limitsSummary = $derived(
+		[
+			limits.start.length ? `start set by ${limits.start.map((s) => s.name).join(', ')}` : '',
+			limits.end.length ? `end set by ${limits.end.map((s) => s.name).join(', ')}` : ''
+		]
+			.filter(Boolean)
+			.join('; ')
+	);
 
 	const yearError = $derived(
 		coverage
@@ -171,6 +208,9 @@
 		trainingYears = split.training;
 		cvHoldoutYears = split.cv;
 	});
+
+	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
+	const onsetError = $derived(onsetParamsError(onsetInput));
 
 	// Advisory only — never feeds formValid.
 	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
@@ -191,6 +231,7 @@
 			trainingYears.trim() !== '' &&
 			cvHoldoutYears.trim() !== '' &&
 			!yearError &&
+			!onsetError &&
 			!insufficientData
 	);
 
@@ -221,6 +262,10 @@
 		forecastYears = config.forecast_years ?? '';
 		trueHoldoutYears = config.true_holdout_years ?? '';
 		formulaText = config.formula_text ?? '';
+		focusArea = config.focus_area ?? null;
+		thresholdMm = config.threshold_mm != null ? String(config.threshold_mm) : '';
+		cutoffMonthDay = config.cutoff_month_day ?? '';
+		refOnsetMonthDay = config.ref_onset_month_day ?? '';
 		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
 	}
 
@@ -445,7 +490,9 @@
 				cv_holdout_years: cvHoldoutYears.trim(),
 				...(forecastYears.trim() ? { forecast_years: forecastYears.trim() } : {}),
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
-				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {})
+				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
+				...(focusArea ? { focus_area: focusArea } : {}),
+				...onsetParamsBody(onsetInput)
 			}
 		};
 		try {
@@ -455,6 +502,7 @@
 			selectedId = blend.id;
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
+			focusArea = null;
 			modelIds = [];
 			yearsDirty = false;
 		} catch (err) {
@@ -503,7 +551,7 @@
 {#snippet fieldLabel(text: string, tip: string)}
 	<span class="label-with-help">
 		{text}
-		<span class="tip" title={tip}>ⓘ</span>
+		<InfoTip text={tip} />
 	</span>
 {/snippet}
 
@@ -563,7 +611,7 @@
 							'Observations',
 							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
 						)}
-						<select bind:value={obsDatasetId}>
+						<select value={obsDatasetId} onchange={(e) => selectObs(e.currentTarget.value)}>
 							<option value="" disabled>Select an observation source…</option>
 							{#each obsSources as source (source.id)}
 								<option value={source.id}
@@ -576,11 +624,9 @@
 					<fieldset class="field" data-tour="blend-models">
 						<legend class="label-with-help">
 							Forecast models
-							<span
-								class="tip"
-								title="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
-								>ⓘ</span
-							>
+							<InfoTip
+								text="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
+							/>
 						</legend>
 						{#if !selectedObs}
 							<p class="muted">Select an observation source first to see matching models.</p>
@@ -597,7 +643,14 @@
 											checked={modelIds.includes(source.id)}
 											onchange={() => toggleModel(source.id)}
 										/>
-										<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+										<span class="model-label">
+											<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
+											{#if describeSourceCoverage(source)}
+												<small class="model-coverage" class:limits={limitingIds.has(source.id)}
+													>{describeSourceCoverage(source)}</small
+												>
+											{/if}
+										</span>
 										{#if source.live_forecast?.status === 'ready'}
 											<span
 												class="forecast-badge"
@@ -605,7 +658,7 @@
 											>
 										{:else if source.live_forecast?.status === 'grid_mismatch'}
 											<span class="forecast-badge blocked" title={source.live_forecast.detail}
-												>Grid mismatch</span
+												>Past seasons only</span
 											>
 										{/if}
 									</label>
@@ -613,7 +666,8 @@
 							</div>
 							<p class="muted forecast-legend">
 								<span class="forecast-badge">Live forecast</span> models can be extended into the current
-								season. Any model can be blended and benchmarked — those without the badge are historical-only.
+								season. Any model can be blended and benchmarked — those without the badge cover past
+								seasons only.
 							</p>
 						{/if}
 					</fieldset>
@@ -624,15 +678,19 @@
 
 					{#if liveForecastBlockers.length > 0}
 						<p class="caution">
-							This blend can't be run as a live forecast for the current season.
-							{liveForecastBlockers.join(' ')} You can still train and score it on past seasons.
+							Past seasons only: this blend can be trained and scored on past seasons, but not run
+							as a live forecast for the current season.
+							{liveForecastBlockers.join(' ')}
 						</p>
 					{/if}
 
 					{#if coverage}
 						<p class="muted coverage-hint">
-							Shared data: {coverage.start}–{coverage.end}. Forecast years start at {coverage.earliestForecast}
-							(leaves {MIN_ONSET_YEARS} years for climatology).
+							Shared data: {coverage.start}–{coverage.end}{limitsSummary
+								? ` (${limitsSummary})`
+								: ''}. Forecast years start at {coverage.earliestForecast}: the climatology baseline
+							is fitted only on observed years before the first forecast year. Grid cells with fewer
+							than {MIN_ONSET_YEARS} onsets in those years are left out.
 						</p>
 					{/if}
 
@@ -640,7 +698,7 @@
 						<label class="field">
 							{@render fieldLabel(
 								'Training years',
-								`Years used to fit the blending weights, e.g. "2008:2010". Requires at least ${MIN_ONSET_YEARS} years of observations before the first forecast year for the climatology baseline.`
+								`Years used to fit the blending weights, e.g. "2008:2010". The climatology baseline is fitted only on observed years before the first forecast year, so it never sees these years. Grid cells with fewer than ${MIN_ONSET_YEARS} onsets in those years are left out.`
 							)}
 							<input
 								type="text"
@@ -665,13 +723,25 @@
 
 					{#if insufficientData}
 						<p class="error">
-							These sources don't have {MIN_ONSET_YEARS} years of observations before any shared forecast
-							year. Pick an observation source with earlier coverage.
+							The climatology baseline needs at least {MIN_ONSET_YEARS} observed years before the first
+							forecast year, and these sources don't leave that many before any year they share. Pick
+							an observation source with earlier coverage.
 						</p>
 					{:else if yearError}
 						<p class="error">{yearError}</p>
 					{/if}
 
+					<div class="field">
+						{@render fieldLabel(
+							'Area of interest',
+							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
+						)}
+						<FocusAreaMap
+							value={focusArea}
+							regionId={selectedObs?.region ?? null}
+							onchange={(box) => (focusArea = box)}
+						/>
+					</div>
 					<details class="advanced">
 						<summary>Advanced</summary>
 						<div class="field-row">
@@ -705,6 +775,51 @@
 								placeholder="optional — model formula override"
 							/>
 						</label>
+
+						<p class="muted advanced-group">
+							Onset definition — leave blank to use the defaults ({ONSET_DEFAULTS.threshold_mm} mm,
+							{ONSET_DEFAULTS.cutoff_month_day}, {ONSET_DEFAULTS.ref_onset_month_day}). Changing
+							these redefines what counts as onset for both the observations and every model.
+						</p>
+						<div class="field-row" data-tour="blend-onset">
+							<label class="field">
+								{@render fieldLabel(
+									'Onset rainfall threshold (mm)',
+									`Total rainfall over 3 consecutive days that marks the start of the season. Default ${ONSET_DEFAULTS.threshold_mm} mm.`
+								)}
+								<input
+									type="text"
+									inputmode="decimal"
+									bind:value={thresholdMm}
+									placeholder={String(ONSET_DEFAULTS.threshold_mm)}
+								/>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'Onset search start (MM-DD)',
+									`Calendar date from which onset is searched each season; also the first forecast issue date. Default ${ONSET_DEFAULTS.cutoff_month_day}.`
+								)}
+								<input
+									type="text"
+									bind:value={cutoffMonthDay}
+									placeholder={ONSET_DEFAULTS.cutoff_month_day}
+								/>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'Reference onset date (MM-DD)',
+									`Climatological onset date the "onset before reference" probability is scored against. Default ${ONSET_DEFAULTS.ref_onset_month_day}.`
+								)}
+								<input
+									type="text"
+									bind:value={refOnsetMonthDay}
+									placeholder={ONSET_DEFAULTS.ref_onset_month_day}
+								/>
+							</label>
+						</div>
+						{#if onsetError}
+							<p class="error">{onsetError}</p>
+						{/if}
 					</details>
 
 					{#if submitError}
@@ -807,24 +922,11 @@
 						{/if}
 
 						<div class="artifacts" data-tour="blend-outputs">
-							<h2>Weights & outputs</h2>
+							<h2>Results files</h2>
 							{#if artifacts.length === 0}
-								<p class="muted">No artifacts found.</p>
+								<p class="muted">No files found.</p>
 							{:else}
-								<ul>
-									{#each artifacts as artifact (artifact.id)}
-										<li>
-											<button
-												type="button"
-												class="artifact"
-												onclick={() => downloadArtifact(artifact)}
-											>
-												<span class="artifact-name">{artifact.filename}</span>
-												<span class="muted">{(artifact.size_bytes / 1024).toFixed(0)} KB</span>
-											</button>
-										</li>
-									{/each}
-								</ul>
+								<BlendOutputs jobId={selected.id} {artifacts} ondownload={downloadArtifact} />
 							{/if}
 						</div>
 					{/if}
@@ -1008,19 +1110,6 @@
 		gap: 0.35rem;
 	}
 
-	.tip {
-		display: inline-grid;
-		place-items: center;
-		width: 1rem;
-		height: 1rem;
-		border-radius: 999px;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font-size: 0.7rem;
-		font-weight: 900;
-		cursor: help;
-	}
-
 	.field input,
 	.field select {
 		padding: 0.55rem 0.65rem;
@@ -1049,6 +1138,21 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		color: var(--color-text);
+	}
+
+	.model-label {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.model-coverage {
+		font-size: 0.8em;
+		color: var(--color-text-muted);
+	}
+
+	.model-coverage.limits {
+		color: var(--color-status-running);
+		font-weight: 600;
 	}
 
 	.forecast-badge {
@@ -1098,6 +1202,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
+	}
+
+	.advanced-group {
+		margin: 0.5rem 0 -0.5rem;
+		padding-top: 0.75rem;
+		border-top: 1px solid var(--color-border-subtle);
 	}
 
 	.form-actions {
@@ -1214,40 +1324,6 @@
 		border-radius: 50%;
 		animation: spin 0.8s linear infinite;
 		flex-shrink: 0;
-	}
-
-	.artifacts ul {
-		list-style: none;
-		margin: 0.5rem 0 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-
-	.artifact {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 1rem;
-		width: 100%;
-		padding: 0.6rem 0.75rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
-		cursor: pointer;
-		text-align: left;
-	}
-
-	.artifact:hover {
-		border-color: var(--color-accent-border);
-	}
-
-	.artifact-name {
-		font-weight: 650;
-		color: var(--color-text);
-		font-family: var(--font-mono);
-		font-size: 0.85rem;
 	}
 
 	.error,

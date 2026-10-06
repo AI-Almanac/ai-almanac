@@ -15,6 +15,7 @@ from ai_almanac.envs.manager import run_forecast as forecast_pixi_run
 from ai_almanac.paths import blending_env_dir, cache_dir
 from ai_almanac.server.services import stub_outputs
 from ai_almanac.server.services.bundle import build_job_env
+from ai_almanac.server.services.focus_area import materialize_focus_mask
 from ai_almanac.server.services.romp import write_romp_config
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import sync_engine
@@ -43,26 +44,27 @@ def _run_pixi(job_id: str, config: dict) -> None:
     output_dir_raw, figure_dir_raw = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     figure_dir = Path(figure_dir_raw)
+    config = materialize_focus_mask(config, output_dir.parent)
     config_path = write_romp_config(job_id, config, output_dir, figure_dir)
     env = build_job_env(config, output_dir_raw, figure_dir_raw)
     process_env = os.environ.copy()
     process_env.update(env)
 
-    print(f"==> ROMP config: {config_path}", flush=True)
-    print("==> Starting ROMP...", flush=True)
+    print(f"==> Benchmark config: {config_path}", flush=True)
+    print("==> Starting onset scoring...", flush=True)
     process = pixi_run(["momp-run", "-p", str(config_path)], env=process_env)
     _stream_process(process)
 
     if config.get("compute_e2s_metrics"):
-        print("==> Starting Earth2Studio metrics...", flush=True)
+        print("==> Starting rainfall verification metrics...", flush=True)
         e2s_script = Path(__file__).with_name("e2s.py")
         e2s_process = pixi_run(["python", str(e2s_script)], env=process_env)
         try:
             _stream_process(e2s_process)
         except subprocess.CalledProcessError as exc:
             print(
-                f"WARNING: Earth2Studio metrics exited with code {exc.returncode}; "
-                "ROMP outputs are still available.",
+                f"WARNING: Rainfall verification metrics exited with code {exc.returncode}; "
+                "Onset scores are still available.",
                 flush=True,
             )
 

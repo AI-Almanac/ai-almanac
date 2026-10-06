@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import uuid
 from pathlib import Path
@@ -10,7 +11,11 @@ import httpx
 import pytest
 
 from ai_almanac.paths import database_path
-from ai_almanac.server.services.artifacts import list_job_artifacts, publish_pending
+from ai_almanac.server.services.artifacts import (
+    index_job_artifacts,
+    list_job_artifacts,
+    publish_pending,
+)
 from ai_almanac.server.services.storage import get_storage
 
 
@@ -79,6 +84,20 @@ async def test_publish_pending_is_idempotent(client: httpx.AsyncClient) -> None:
     await publish_pending()
     await publish_pending()
 
+    assert len(await list_job_artifacts(job_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_publication_indexes_each_file_once(
+    client: httpx.AsyncClient,
+) -> None:
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    _write_outputs(job_id)
+
+    counts = await asyncio.gather(index_job_artifacts(job_id), index_job_artifacts(job_id))
+
+    assert sorted(counts) == [0, 2]
     assert len(await list_job_artifacts(job_id)) == 2
 
 

@@ -24,6 +24,7 @@
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
 	import { formatLatLon } from '$lib/geo';
+	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
 		buildAdm3ForecastGeoJson,
 		usesNamedAreas,
@@ -389,6 +390,7 @@
 		return `calc(${frac} * (100% - 2.8rem))`;
 	}
 
+	const dataThrough = $derived(data ? latestIssueDate(data.issue_dates) : null);
 	const dateIndex = $derived(data ? data.issue_dates.indexOf(selectedDate) : -1);
 	const dateCount = $derived(data?.issue_dates.length ?? 0);
 
@@ -484,6 +486,7 @@
 			zoom: 1.8,
 			attributionControl: false
 		});
+		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 		map.on('load', () => {
 			mapReady = true;
@@ -555,6 +558,9 @@
 					{#if data.region_name}<span class="rail-def-region">{data.region_name}</span>{/if}
 					{data.onset_definition}
 				</p>
+			{/if}
+			{#if dataThrough}
+				<p class="rail-def">Data through {formatIssueDate(dataThrough)}</p>
 			{/if}
 		</div>
 
@@ -666,9 +672,7 @@
 			</p>
 			{#if boundaries.visibleLayers.length > 0}
 				<p class="legend-note">
-					Boundaries: geoBoundaries gbOpen ({boundaries.visibleLayers
-						.map((l) => l.label)
-						.join('; ')})
+					Boundaries: geoBoundaries ({boundaries.visibleLayers.map((l) => l.label).join('; ')})
 				</p>
 			{/if}
 		</div>
@@ -831,6 +835,11 @@
 	.fullscreen-btn:hover {
 		background: #fff;
 		color: #111;
+	}
+
+	/* Keep the map credit above the date scrubber, which spans the bottom edge. */
+	.map-area:has(.scrubber) :global(.maplibregl-ctrl-bottom-right) {
+		bottom: 3.4rem;
 	}
 
 	.scrubber {

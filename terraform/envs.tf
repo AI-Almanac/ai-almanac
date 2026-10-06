@@ -62,6 +62,8 @@ locals {
       min_instances = var.backend_min_instances
       max_instances = var.backend_max_instances
       frontend_url  = var.frontend_url
+      # Modal's default environment, where the apps lived before staging split off.
+      modal_environment = "main"
     }
     staging = {
       service_name          = "almanac-backend-staging"
@@ -77,9 +79,10 @@ locals {
       upload_retention_days = var.staging_upload_retention_days
       output_retention_days = var.staging_job_output_retention_days
       # Staging tolerates cold starts; default to scaling all the way to zero.
-      min_instances = var.staging_backend_min_instances
-      max_instances = var.staging_backend_max_instances
-      frontend_url  = var.staging_frontend_url
+      min_instances     = var.staging_backend_min_instances
+      max_instances     = var.staging_backend_max_instances
+      frontend_url      = var.staging_frontend_url
+      modal_environment = "staging"
     }
   }
 }
@@ -106,6 +109,7 @@ module "env" {
   min_instances         = each.value.min_instances
   max_instances         = each.value.max_instances
   frontend_url          = each.value.frontend_url
+  modal_environment     = each.value.modal_environment
 
   sql_instance_name       = google_sql_database_instance.almanac.name
   sql_connection_name     = google_sql_database_instance.almanac.connection_name

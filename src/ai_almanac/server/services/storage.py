@@ -109,6 +109,19 @@ class LocalStorage:
             return None
         return path.read_text()
 
+    def read_derived(self, job_id: str, name: str) -> bytes | None:
+        """Read a payload the server derived from a job's outputs, or None if not built yet."""
+        path = self._contained(self._outputs_dir, f"{job_id}/derived/{name}")
+        return path.read_bytes() if path.is_file() else None
+
+    def write_derived(self, job_id: str, name: str, data: bytes) -> None:
+        path = self._contained(self._outputs_dir, f"{job_id}/derived/{name}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Write-then-rename so a crash never leaves a truncated payload to be served forever.
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+
     def result_file_uri(self, job_id: str, kind: str, filename: str) -> str:
         """Raw local path for range-read consumers (TiTiler/rio-tiler), as
         opposed to result_file_path (single-level names only) / open_result_stream
@@ -311,6 +324,25 @@ class GCSStorage:
             return None
         return blob.download_as_text()
 
+    def read_derived(self, job_id: str, name: str) -> bytes | None:
+        """Read a payload the server derived from a job's outputs, or None if not built yet."""
+        from google.api_core.exceptions import NotFound
+
+        try:
+            return (
+                self._bucket(self._outputs_bucket)
+                .blob(f"{job_id}/derived/{name}")
+                .download_as_bytes()
+            )
+        except NotFound:
+            return None
+
+    def write_derived(self, job_id: str, name: str, data: bytes) -> None:
+        # GCS object writes are atomic, so a concurrent reader never sees a partial payload.
+        self._bucket(self._outputs_bucket).blob(f"{job_id}/derived/{name}").upload_from_string(
+            data, content_type="application/json"
+        )
+
     def result_file_uri(self, job_id: str, kind: str, filename: str) -> str:
         """Raw gs:// URI for range-read consumers (TiTiler/rio-tiler via GDAL's
         /vsigs/ driver with ambient credentials), as opposed to
@@ -363,7 +395,19 @@ class GCSStorage:
         blob.reload()
         return int(blob.size or 0), (blob.md5_hash or "")
 
+    def hold_job(self, job_id: str, held: bool) -> None:
+        """Set or release a temporary hold on every output object of a job.
+
+        The bucket's lifecycle Delete rule skips held objects, which is how
+        example jobs outlive staging output retention.
+        """
+        for blob in self._client.list_blobs(self._outputs_bucket, prefix=f"{job_id}/"):
+            if bool(blob.temporary_hold) != held:
+                blob.temporary_hold = held
+                blob.patch()
+
     def delete_job(self, job_id: str) -> None:
+        self.hold_job(job_id, held=False)  # GCS refuses to delete held objects
         for blob in self._client.list_blobs(self._outputs_bucket, prefix=f"{job_id}/"):
             blob.delete()
 

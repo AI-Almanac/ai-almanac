@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ai_almanac.server.services.focus_area import FocusArea
+
 BlendStatus = Literal["collecting", "runnable", "running"]
 
 
@@ -27,6 +29,12 @@ class BlendRunSpec(BaseModel):
     forecast_years: str = ""
     true_holdout_years: str = ""
     formula_text: str = ""
+    focus_area: FocusArea | None = None
+    # Onset definition. Optional overrides of the workflow defaults
+    # (20 mm, 05-01, 06-01); empty/None means "use the default".
+    threshold_mm: float | None = None
+    cutoff_month_day: str = ""
+    ref_onset_month_day: str = ""
     status: BlendStatus = "collecting"
     missing_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)

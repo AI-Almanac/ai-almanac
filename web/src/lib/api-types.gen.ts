@@ -1019,8 +1019,8 @@ export interface paths {
          * Get Blend Forecast
          * @description Return blended onset probabilities for all issue dates and grid points.
          *
-         *     Parses blended_forecast_probabilities.csv server-side and returns a
-         *     compact structure suitable for client-side choropleth rendering.
+         *     The probabilities CSV is reshaped into per-point series once, stored beside
+         *     the job's outputs, and served from there on later reads.
          */
         get: operations["get_blend_forecast_jobs__job_id__blend_forecast_get"];
         put?: never;
@@ -1040,10 +1040,11 @@ export interface paths {
         };
         /**
          * Get Blend Summary
-         * @description Return the blend's pooled summary CSV, read server-side.
+         * @description Return one of the blend's small CV summary CSVs, read server-side.
          *
-         *     The browser parses this for the skill chart; serving it here keeps the
-         *     outputs bucket off the client (mirroring how metrics read outputs).
+         *     `pooled` is the per-model summary behind the skill chart; `yearly` is the
+         *     per-holdout-year CV scores. Serving them here keeps the outputs bucket off
+         *     the client (mirroring how metrics read outputs).
          */
         get: operations["get_blend_summary_jobs__job_id__blend_summary_get"];
         put?: never;
@@ -1140,15 +1141,18 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{job_id}/grid": {
+    "/jobs/{job_id}/grids": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Grid */
-        get: operations["get_grid_jobs__job_id__grid_get"];
+        /**
+         * Get Grids
+         * @description Every map grid for the job in one response, built once and then served as stored bytes.
+         */
+        get: operations["get_grids_jobs__job_id__grids_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1431,7 +1435,7 @@ export interface paths {
         };
         /**
          * Get Boundary
-         * @description Return simplified geoBoundaries gbOpen GeoJSON for a supported benchmark region.
+         * @description Return simplified geoBoundaries GeoJSON (gbHumanitarian, else gbOpen) for a region.
          *
          *     The frontend cannot reliably fetch the GitHub-hosted GeoJSON directly because
          *     of browser CORS restrictions, so the API fetches and caches it server-side.
@@ -2105,22 +2109,14 @@ export interface components {
             message: string;
         };
         /**
-         * BlendCellGrid
-         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         * BlendAreaMetric
+         * @description One metric's skill per named area, for domains that are not a grid.
          */
-        BlendCellGrid: {
+        BlendAreaMetric: {
             /** Metric */
             metric: string;
             /** Label */
             label: string;
-            /** Lats */
-            lats: number[];
-            /** Lons */
-            lons: number[];
-            /** Values */
-            values: (number | null)[][];
-            /** Counts */
-            counts: (number | null)[][];
             /** Scale Max Abs */
             scale_max_abs: number | null;
             /** Value Min */
@@ -2129,6 +2125,50 @@ export interface components {
             value_max: number | null;
             /** Clipped */
             clipped: number;
+            /** Areas */
+            areas: components["schemas"]["BlendAreaSkill"][];
+        };
+        /**
+         * BlendAreaSkill
+         * @description Skill at one named administrative unit, located by its centroid.
+         */
+        BlendAreaSkill: {
+            /** Id */
+            id: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /** Skill */
+            skill: number | null;
+            /** Count */
+            count: number | null;
+        };
+        /**
+         * BlendCellGrid
+         * @description One metric's per-point skill, indexed ``values[lat_index][lon_index]``.
+         */
+        BlendCellGrid: {
+            /** Metric */
+            metric: string;
+            /** Label */
+            label: string;
+            /** Scale Max Abs */
+            scale_max_abs: number | null;
+            /** Value Min */
+            value_min: number | null;
+            /** Value Max */
+            value_max: number | null;
+            /** Clipped */
+            clipped: number;
+            /** Lats */
+            lats: number[];
+            /** Lons */
+            lons: number[];
+            /** Values */
+            values: (number | null)[][];
+            /** Counts */
+            counts: (number | null)[][];
         };
         /** BlendCellMetrics */
         BlendCellMetrics: {
@@ -2142,6 +2182,13 @@ export interface components {
             min_observations: number;
             /** Grids */
             grids: components["schemas"]["BlendCellGrid"][];
+            /**
+             * Areas
+             * @default []
+             */
+            areas: components["schemas"]["BlendAreaMetric"][];
+            /** Region Id */
+            region_id?: string | null;
         };
         /** BlendConfigOut */
         BlendConfigOut: {
@@ -2168,6 +2215,16 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
+            /** Focus Area */
+            focus_area?: {
+                [key: string]: unknown;
+            } | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /** Cutoff Month Day */
+            cutoff_month_day?: string | null;
+            /** Ref Onset Month Day */
+            ref_onset_month_day?: string | null;
         };
         /** BlendCreate */
         BlendCreate: {
@@ -2220,6 +2277,10 @@ export interface components {
         /**
          * BlendParams
          * @description Blend preparation and training hyperparameters.
+         *
+         *     The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
+         *     ``ref_onset_month_day``) is optional; unset values fall back to the
+         *     workflow defaults (20 mm, 05-01, 06-01).
          */
         BlendParams: {
             /** Forecast Years */
@@ -2234,12 +2295,23 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
-            /** Threshold Mm */
+            /**
+             * Threshold Mm
+             * @description Rainfall accumulation (mm) over the onset window that triggers onset.
+             */
             threshold_mm?: number | null;
-            /** Cutoff Month Day */
+            /**
+             * Cutoff Month Day
+             * @description MM-DD from which onset is searched each season; also the first forecast issue date.
+             */
             cutoff_month_day?: string | null;
-            /** Mok Month Day */
-            mok_month_day?: string | null;
+            /**
+             * Ref Onset Month Day
+             * @description MM-DD reference onset date (climatological onset) that the onset-before-reference probability is scored against.
+             */
+            ref_onset_month_day?: string | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };
         /**
          * BlendRunSpec
@@ -2295,6 +2367,20 @@ export interface components {
              * @default
              */
             formula_text: string;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+            /** Threshold Mm */
+            threshold_mm?: number | null;
+            /**
+             * Cutoff Month Day
+             * @default
+             */
+            cutoff_month_day: string;
+            /**
+             * Ref Onset Month Day
+             * @default
+             */
+            ref_onset_month_day: string;
             /**
              * Status
              * @default collecting
@@ -2865,6 +2951,31 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** FocusBox */
+        FocusBox: {
+            /** Lat Min */
+            lat_min: number;
+            /** Lat Max */
+            lat_max: number;
+            /** Lon Min */
+            lon_min: number;
+            /** Lon Max */
+            lon_max: number;
+        };
+        /** FocusUnits */
+        FocusUnits: {
+            /**
+             * Level
+             * @constant
+             */
+            level: "adm2";
+            /** Units */
+            units: string[];
+            /** Geometry */
+            geometry?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** ForecastCreate */
         ForecastCreate: {
             /** Blend Id */
@@ -3303,6 +3414,16 @@ export interface components {
             min: number;
             /** Max */
             max: number;
+        };
+        /**
+         * JobGrids
+         * @description Every map-ready grid for one job, built once from its metrics NetCDFs and stored.
+         */
+        JobGrids: {
+            /** Job Id */
+            job_id: string;
+            /** Grids */
+            grids: components["schemas"]["JobGridResponse"][];
         };
         /** JobMetrics */
         JobMetrics: {
@@ -4005,6 +4126,8 @@ export interface components {
             shp_only?: boolean | null;
             /** Nc Mask */
             nc_mask?: string | null;
+            /** Focus Area */
+            focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             /** Ref Model Dir */
             ref_model_dir?: string | null;
             /** Thresh File */
@@ -6621,7 +6744,9 @@ export interface operations {
     };
     get_blend_summary_jobs__job_id__blend_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                table?: "pooled" | "yearly";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -6783,13 +6908,9 @@ export interface operations {
             };
         };
     };
-    get_grid_jobs__job_id__grid_get: {
+    get_grids_jobs__job_id__grids_get: {
         parameters: {
-            query: {
-                model: string;
-                window: string;
-                metric: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -6804,7 +6925,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobGridResponse"];
+                    "application/json": components["schemas"]["JobGrids"];
                 };
             };
             /** @description Validation Error */

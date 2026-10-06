@@ -18,6 +18,7 @@ from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
+from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.tables import jobs as _jobs
 
 # Per-lead columns in the blend's pooled summary CSV, ordered week 1 → later.
@@ -56,6 +57,7 @@ def _source_candidate(source: dict) -> dict:
         "region": source.get("region"),
         "start_year": meta.get("start_year"),
         "end_year": meta.get("end_year"),
+        "missing_years": meta.get("missing_years"),
         "grid_step_deg": meta.get("grid_step_deg"),
     }
 
@@ -93,6 +95,7 @@ def _coverage(obs: dict | None, models: list[dict]) -> dict | None:
     return job_submission.blend_year_coverage(
         (obs.get("start_year"), obs.get("end_year")),
         [(m.get("start_year"), m.get("end_year")) for m in models],
+        set().union(*(job_submission.source_missing_years(s) for s in [obs, *models])),
     )
 
 
@@ -171,6 +174,19 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
 
     coverage = _coverage(obs, selected_models)
     errors.extend(_year_errors(spec, coverage))
+    errors.extend(
+        job_submission.grid_mismatch_errors(
+            obs.get("grid_step_deg") if obs else None,
+            ((m["name"], m.get("grid_step_deg")) for m in selected_models),
+        )
+    )
+    errors.extend(
+        job_submission.onset_param_errors(
+            spec.threshold_mm,
+            spec.cutoff_month_day.strip() or None,
+            spec.ref_onset_month_day.strip() or None,
+        )
+    )
 
     # The same predicates the submission chokepoint enforces
     # (``job_submission.create_blend_for_user``), surfaced here so the assistant
@@ -286,6 +302,14 @@ async def get_blend_config(user_id: str, scope: BenchmarkScope, session_id: str)
     return blend_payload(spec, validation)
 
 
+def _focus_area_field(patch: dict, spec: BlendRunSpec) -> FocusArea | None:
+    """A patch may set, clear (None), or leave the focus area untouched (absent)."""
+    if "focus_area" not in patch:
+        return spec.focus_area
+    value = patch["focus_area"]
+    return parse_focus_area(value) if value else None
+
+
 async def update_blend_config(
     patch: dict, user_id: str, scope: BenchmarkScope, session_id: str
 ) -> dict:
@@ -307,6 +331,18 @@ async def update_blend_config(
         value = patch.get(key)
         return value if isinstance(value, str) else getattr(spec, key)
 
+    # Numeric override: an explicit null clears it back to the workflow default;
+    # an absent key leaves it alone. Non-numeric junk is ignored, not coerced.
+    if "threshold_mm" in patch:
+        raw_threshold = patch["threshold_mm"]
+        threshold_mm = (
+            float(raw_threshold)
+            if isinstance(raw_threshold, (int, float)) and not isinstance(raw_threshold, bool)
+            else None
+        )
+    else:
+        threshold_mm = spec.threshold_mm
+
     next_spec = spec.model_copy(
         update={
             "intent": text_field("intent"),
@@ -321,6 +357,10 @@ async def update_blend_config(
             "forecast_years": text_field("forecast_years"),
             "true_holdout_years": text_field("true_holdout_years"),
             "formula_text": text_field("formula_text"),
+            "focus_area": _focus_area_field(patch, spec),
+            "threshold_mm": threshold_mm,
+            "cutoff_month_day": text_field("cutoff_month_day"),
+            "ref_onset_month_day": text_field("ref_onset_month_day"),
         }
     )
     next_spec = _finalize_blend_config(next_spec)
@@ -362,6 +402,10 @@ def _blend_create_body(spec: BlendRunSpec, run_id: str) -> job_submission.BlendC
             forecast_years=opt(spec.forecast_years),
             true_holdout_years=opt(spec.true_holdout_years),
             formula_text=opt(spec.formula_text),
+            focus_area=spec.focus_area,
+            threshold_mm=spec.threshold_mm,
+            cutoff_month_day=opt(spec.cutoff_month_day),
+            ref_onset_month_day=opt(spec.ref_onset_month_day),
         ),
         run_id=run_id,
     )

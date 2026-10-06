@@ -223,9 +223,12 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
     async def update_benchmark_config(
         ctx: RunContext[ChatDeps], patch: chat_tools.BenchmarkConfigPatch
     ) -> dict:
-        """Patch and validate the canonical benchmark configuration for this chat session."""
+        """Patch and validate the canonical benchmark configuration for this chat session.
+
+        Omit a field to leave it unchanged; set it to null to clear it.
+        """
         return await chat_tools.update_benchmark_config(
-            patch.model_dump(exclude_none=True),
+            patch.model_dump(exclude_unset=True),
             ctx.deps.user_id,
             ctx.deps.scope,
             ctx.deps.session_id,
@@ -289,9 +292,12 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
     async def update_blend_config(
         ctx: RunContext[ChatDeps], patch: chat_tools.BlendConfigPatch
     ) -> dict:
-        """Patch and validate the canonical blend configuration for this chat session."""
+        """Patch and validate the canonical blend configuration for this chat session.
+
+        Omit a field to leave it unchanged; set it to null to clear it.
+        """
         return await chat_tools.update_blend_config(
-            patch.model_dump(exclude_none=True),
+            patch.model_dump(exclude_unset=True),
             ctx.deps.user_id,
             ctx.deps.scope,
             ctx.deps.session_id,
@@ -365,7 +371,7 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def list_jobs(ctx: RunContext[ChatDeps]) -> dict:
-        """List the user's benchmark jobs available in this chat scope, including running and failed jobs."""
+        """List the user's benchmark and blend jobs available in this chat scope, including running and failed jobs."""
         return await chat_tools.list_jobs(ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
@@ -375,7 +381,7 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def get_job_info(ctx: RunContext[ChatDeps], job_id: str) -> dict:
-        """Get configuration details for a specific job."""
+        """Get configuration details for a specific job. Blend jobs include their models, years, and blend settings."""
         return await chat_tools.get_job_info(job_id, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
@@ -385,7 +391,7 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def rerun_job(ctx: RunContext[ChatDeps], request: chat_tools.RerunJobRequest) -> dict:
-        """Clone and rerun an existing job, optionally overriding ROMP params with validated values."""
+        """Clone and rerun an existing job, optionally overriding run options with validated values."""
         return await chat_tools.rerun_job(request, ctx.deps.user_id, ctx.deps.scope)
 
     return toolset

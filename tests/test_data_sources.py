@@ -48,6 +48,41 @@ async def test_source_validation_does_not_persist_and_returns_inferred_metadata(
 
 
 @pytest.mark.asyncio
+async def test_source_validation_reports_years_missing_inside_the_range(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    fixtures = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
+    for year in (1998, 2000):
+        (tmp_path / f"{year}.nc").write_bytes((fixtures / f"{year}.nc").read_bytes())
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "obs",
+            "name": "Gappy observations",
+            "path": str(tmp_path),
+            "region": "ethiopia",
+            "metadata": {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"},
+        },
+    )
+
+    assert response.status_code == 200
+    draft = response.json()
+    assert draft["status"] == "ready"
+    assert draft["metadata"]["start_year"] == 1998
+    assert draft["metadata"]["end_year"] == 2000
+    assert draft["metadata"]["years"] == [1998, 2000]
+    assert draft["metadata"]["missing_years"] == [1999]
+
+
+def test_year_detection_keeps_the_first_year_in_each_filename() -> None:
+    from ai_almanac.server.services.data_sources import _coverage_years
+
+    files = [Path("aifs_2p0_2001_v2025.nc"), Path("aifs_2p0_2002_v2025.nc")]
+    assert _coverage_years(files) == [2001, 2002]
+
+
+@pytest.mark.asyncio
 async def test_local_sources_drive_benchmark_selection_and_submission(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],

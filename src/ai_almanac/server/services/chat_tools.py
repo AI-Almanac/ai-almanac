@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
+
+from ai_almanac.server.services.focus_area import FocusArea
 
 from . import benchmark_domain, blend_domain
 from .benchmark_state import BenchmarkRunSpec
@@ -16,6 +18,8 @@ from .chat_state import ChatScope
 
 
 class PerModelRompParams(BaseModel):
+    model_config = ConfigDict(title="PerModelRunParams")
+
     start_date: str | None = None
     end_date: str | None = None
     start_year_clim: int | None = None
@@ -42,6 +46,7 @@ class BenchmarkAdvancedParams(BaseModel):
     thresh_file: str | None = None
     ref_model: str | None = None
     ref_model_dir: str | None = None
+    focus_area: FocusArea | None = None
     per_model_params: dict[str, PerModelRompParams] | None = None
 
 
@@ -76,6 +81,22 @@ class BlendConfigPatch(BaseModel):
     forecast_years: str | None = None
     true_holdout_years: str | None = None
     formula_text: str | None = None
+    focus_area: FocusArea | None = None
+    threshold_mm: float | None = PydanticField(
+        default=None,
+        description="Onset rainfall threshold in mm over the onset window. Optional; "
+        "workflow default is 20 mm.",
+    )
+    cutoff_month_day: str | None = PydanticField(
+        default=None,
+        description="MM-DD from which onset is searched each season (also the first "
+        "forecast issue date). Optional; workflow default is 05-01.",
+    )
+    ref_onset_month_day: str | None = PydanticField(
+        default=None,
+        description="MM-DD reference (climatological) onset date the onset-before-"
+        "reference probability is scored against. Optional; workflow default is 06-01.",
+    )
 
 
 class SubmitBlendApproval(BaseModel):

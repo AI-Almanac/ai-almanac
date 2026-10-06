@@ -39,12 +39,15 @@ async def _seed_source(
     name: str,
     path: str,
     years: tuple[int, int] | None = None,
+    grid_step: float | None = None,
 ) -> str:
     from ai_almanac.server.db import get_db
 
     source_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    metadata = json.dumps({"start_year": years[0], "end_year": years[1]}) if years else "{}"
+    metadata = {"start_year": years[0], "end_year": years[1]} if years else {}
+    if grid_step is not None:
+        metadata["grid_step_deg"] = grid_step
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -59,7 +62,7 @@ async def _seed_source(
                 "kind": kind,
                 "name": name,
                 "path": path,
-                "metadata": metadata,
+                "metadata": json.dumps(metadata),
                 "now": now,
             },
         )
@@ -146,6 +149,64 @@ async def test_post_blends_rejects_thin_climatology_coverage(
 
     assert response.status_code == 400
     assert "Climatology needs 10 years of observations" in response.json()["detail"]
+
+
+def test_grid_mismatch_names_each_model_off_the_observation_grid() -> None:
+    errors = job_submission.grid_mismatch_errors(
+        0.25, [("GraphCast", 2.0), ("AIFS", 0.25), ("FuXi", 1.0), ("Legacy", None)]
+    )
+    assert errors == [
+        "The observations are on a 0.25° grid, but FuXi is on a 1° grid; "
+        "GraphCast is on a 2° grid. Choose observations and models on the same grid."
+    ]
+
+
+def test_grid_mismatch_skips_sources_without_a_recorded_grid() -> None:
+    assert job_submission.grid_mismatch_errors(None, [("GraphCast", 2.0)]) == []
+    assert job_submission.grid_mismatch_errors(0.25, [("AIFS", 0.25)]) == []
+
+
+@pytest.mark.asyncio
+async def test_post_blends_rejects_models_on_another_grid(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source(
+        "obs", "IMD 0.25", "gs://data/obs/imd", years=(1990, 2024), grid_step=0.25
+    )
+    model_id = await _seed_source(
+        "model", "GraphCast", "gs://data/models/gc", years=(1990, 2024), grid_step=2.0
+    )
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "mismatched",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2010:2020", "cv_holdout_years": "2020"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "GraphCast is on a 2° grid" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_post_jobs_rejects_a_model_on_another_grid(
+    client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    obs_id = await _seed_source("obs", "IMD 0.25", "gs://data/obs/imd", grid_step=0.25)
+    model_id = await _seed_source("model", "GraphCast", "gs://data/models/gc", grid_step=2.0)
+
+    response = await client.post(
+        "/jobs",
+        headers=auth_headers,
+        json={"dataset_id": obs_id, "model_name": model_id, "params": {"region": "india"}},
+    )
+
+    assert response.status_code == 400
+    assert "GraphCast is on a 2° grid" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -382,3 +443,74 @@ async def test_not_ready_shared_source_does_not_disclose_its_path(
     assert exc.value.status_code == 409
     assert "private-bucket" not in str(exc.value.detail)
     assert exc.value.detail == "Observation source is not ready"
+
+
+def test_blend_coverage_rejects_forecast_years_a_source_is_missing():
+    coverage = job_submission.blend_year_coverage(
+        (1990, 2012),
+        [(2000, 2012)],
+        job_submission.source_missing_years({"missing_years": [2005, "2007", "x"]}),
+    )
+
+    errors = job_submission.blend_coverage_errors([2004, 2005, 2006, 2007], coverage)
+
+    assert any("no data for 2005, 2007" in error for error in errors)
+    assert job_submission.blend_coverage_errors([2004, 2006], coverage) == []
+
+
+# --- BlendParams onset definition -------------------------------------------
+
+
+def test_blend_params_accepts_legacy_mok_month_day_alias() -> None:
+    # onset_blending renamed "MOK date" to "reference onset"; pre-rename clients
+    # and stored payloads still say mok_month_day.
+    params = job_submission.BlendParams(
+        training_years="2019:2024", cv_holdout_years="2024", mok_month_day="06-05"
+    )
+    assert params.ref_onset_month_day == "06-05"
+    dumped = params.model_dump(exclude_none=True)
+    assert "mok_month_day" not in dumped
+    assert dumped["ref_onset_month_day"] == "06-05"
+
+    # The new name wins when both are present.
+    params = job_submission.BlendParams(
+        training_years="2019:2024",
+        cv_holdout_years="2024",
+        mok_month_day="06-05",
+        ref_onset_month_day="06-10",
+    )
+    assert params.ref_onset_month_day == "06-10"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "fragment"),
+    [
+        ({"threshold_mm": 0}, "must be positive"),
+        ({"threshold_mm": -3.5}, "must be positive"),
+        ({"cutoff_month_day": "2024-05-01"}, "MM-DD"),
+        ({"cutoff_month_day": "13-01"}, "MM-DD"),
+        ({"ref_onset_month_day": "02-30"}, "MM-DD"),
+        ({"cutoff_month_day": "5-1"}, "MM-DD"),
+        ({"cutoff_month_day": "02-29"}, "not Feb 29"),
+        ({"threshold_mm": float("inf")}, "must be positive"),
+        ({"cutoff_month_day": "06-15", "ref_onset_month_day": "06-01"}, "before the onset search"),
+        # One override is checked against the other field's default (05-01 / 06-01).
+        ({"ref_onset_month_day": "04-15"}, "before the onset search start 05-01"),
+        ({"cutoff_month_day": "06-15"}, "Reference onset date 06-01 is before"),
+    ],
+)
+def test_blend_params_rejects_bad_onset_definition(overrides: dict, fragment: str) -> None:
+    with pytest.raises(ValueError, match=fragment):
+        job_submission.BlendParams(training_years="2019:2024", cv_holdout_years="2024", **overrides)
+
+
+def test_blend_params_accepts_valid_onset_definition() -> None:
+    params = job_submission.BlendParams(
+        training_years="2019:2024",
+        cv_holdout_years="2024",
+        threshold_mm=25.5,
+        cutoff_month_day="04-15",
+        ref_onset_month_day="05-01",
+    )
+    assert params.threshold_mm == 25.5
+    assert job_submission.onset_param_errors(None, None, None) == []

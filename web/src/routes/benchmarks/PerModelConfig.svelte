@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { ModelConfig } from '$lib/api';
 
 	interface Props {
@@ -23,8 +24,7 @@
 	<div class="field-row">
 		<label
 			><span class="label-text"
-				>Evaluation Start <span class="tip" data-tip="First date included for this model.">ⓘ</span
-				></span
+				>Evaluation Start <InfoTip text="First date included for this model." /></span
 			>
 			<input
 				type="date"
@@ -35,8 +35,7 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Evaluation End <span class="tip" data-tip="Last date included for this model.">ⓘ</span
-				></span
+				>Evaluation End <InfoTip text="Last date included for this model." /></span
 			>
 			<input
 				type="date"
@@ -47,10 +46,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Baseline Start Year <span
-					class="tip"
-					data-tip="First year used to build the baseline seasonal behavior.">ⓘ</span
-				></span
+				>Baseline Start Year <InfoTip
+					text="First year used to build the baseline seasonal behavior."
+				/></span
 			>
 			<input
 				type="number"
@@ -61,10 +59,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Baseline End Year <span
-					class="tip"
-					data-tip="Last year used to build the baseline seasonal behavior.">ⓘ</span
-				></span
+				>Baseline End Year <InfoTip
+					text="Last year used to build the baseline seasonal behavior."
+				/></span
 			>
 			<input
 				type="number"
@@ -74,11 +71,9 @@
 		</label>
 		<label
 			><span class="label-text"
-				>Initialization Days <span
-					class="tip"
-					data-tip="Comma-separated forecast initialization days within each week. '0,3' = Mon/Thu."
-					>ⓘ</span
-				></span
+				>Initialization Days <InfoTip
+					text="Comma-separated forecast initialization days within each week. '0,3' = Mon/Thu."
+				/></span
 			>
 			<input
 				value={getOverride(modelId, 'init_days', cfg?.init_days ?? '')}
@@ -93,10 +88,9 @@
 					onchange={(e) => setOverride(modelId, 'parallel', (e.target as HTMLInputElement).checked)}
 				/>
 				<span class="label-text"
-					>Run Years Concurrently <span
-						class="tip"
-						data-tip="Run years concurrently for faster results.">ⓘ</span
-					></span
+					>Run Years Concurrently <InfoTip
+						text="Run years concurrently for faster results."
+					/></span
 				>
 			</label>
 		{/if}
@@ -108,20 +102,17 @@
 					setOverride(modelId, 'probabilistic', (e.target as HTMLInputElement).checked)}
 			/>
 			<span class="label-text"
-				>Ensemble Forecast <span
-					class="tip"
-					data-tip="Compute ensemble metrics in addition to deterministic metrics.">ⓘ</span
-				></span
+				>Ensemble Forecast <InfoTip
+					text="Compute ensemble metrics in addition to deterministic metrics."
+				/></span
 			>
 		</label>
 		{#if getOverride(modelId, 'probabilistic', cfg?.probabilistic ?? false)}
 			<label
 				><span class="label-text"
-					>Ensemble Members <span
-						class="tip"
-						data-tip="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All'."
-						>ⓘ</span
-					></span
+					>Ensemble Members <InfoTip
+						text="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All'."
+					/></span
 				>
 				<input
 					value={getOverride(modelId, 'members', cfg?.members ?? '')}
@@ -211,56 +202,5 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
-	}
-	.tip {
-		position: relative;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 0.9rem;
-		height: 0.9rem;
-		font-size: 0.58rem;
-		font-style: normal;
-		font-weight: 600;
-		color: var(--color-text-muted);
-		border: 1px solid var(--color-border);
-		border-radius: 50%;
-		cursor: help;
-		line-height: 1;
-		transition:
-			color 0.12s,
-			border-color 0.12s;
-		flex-shrink: 0;
-		vertical-align: middle;
-	}
-	.tip:hover {
-		color: var(--color-accent);
-		border-color: var(--color-accent);
-	}
-	.tip::after {
-		content: attr(data-tip);
-		position: absolute;
-		bottom: calc(100% + 6px);
-		left: 50%;
-		transform: translateX(-50%);
-		width: 220px;
-		padding: 0.45rem 0.6rem;
-		background: var(--color-surface-raised);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.35rem;
-		font-size: 0.72rem;
-		font-weight: 400;
-		color: var(--color-text-muted);
-		line-height: 1.45;
-		white-space: normal;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
-		pointer-events: none;
-		opacity: 0;
-		transition: opacity 0.15s;
-		z-index: 1000;
-		text-align: left;
-	}
-	.tip:hover::after {
-		opacity: 1;
 	}
 </style>

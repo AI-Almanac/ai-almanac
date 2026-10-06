@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import sqlalchemy as sa
 from fastapi import (
@@ -12,15 +13,16 @@ from fastapi import (
     HTTPException,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ai_almanac.server.auth import AdminUser, CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
-from ai_almanac.server.services import blend_cells, job_access
+from ai_almanac.server.services import blend_cells, derived_outputs, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.blend_cells import BlendCellMetrics
+from ai_almanac.server.services.blend_forecast import parse_blend_forecast
 from ai_almanac.server.services.events import audit
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
@@ -37,10 +39,10 @@ from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
 
 from ..services.metrics import (
     JobCellResponse,
-    JobGridResponse,
+    JobGrids,
     JobMetrics,
+    build_job_grids,
     compute_job_cell,
-    compute_job_grid,
     compute_job_metrics,
 )
 from ..services.skill_scores import JobSkillScores, compute_job_skill_scores
@@ -156,6 +158,10 @@ def _require_complete(job: dict) -> None:
         )
 
 
+def _job_region_id(job: dict) -> str | None:
+    return json.loads(job.get("config_json") or "{}").get("region_id")
+
+
 @router.post("/{job_id}/cancel", response_model=JobOut)
 async def cancel_job(job: ModifiableJob, user: CurrentUser):
     row = await signal_cancel(job["id"]) or job
@@ -196,37 +202,31 @@ async def list_artifacts(job_id: str, job: ReadableJob):
     ]
 
 
-@router.get("/{job_id}/blend-forecast")
-async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
+_BLEND_FORECAST_PAYLOAD = "blend_forecast.v1.json"
+_EMPTY_BLEND_FORECAST = {"issue_dates": [], "points": [], "onset_threshold": None}
+
+
+@router.get("/{job_id}/blend-forecast", response_model=dict)
+async def get_blend_forecast(job_id: str, job: ReadableJob) -> Response:
     """Return blended onset probabilities for all issue dates and grid points.
 
-    Parses blended_forecast_probabilities.csv server-side and returns a
-    compact structure suitable for client-side choropleth rendering.
+    The probabilities CSV is reshaped into per-point series once, stored beside
+    the job's outputs, and served from there on later reads.
     """
-    import csv
-    import io
-    import json as _json
-
     from ai_almanac.server.services.region_catalog import get_region
 
     _require_complete(job)
 
     # The region defines what "onset" means (e.g. India → Modified Moron–Robertson,
     # Ethiopia → Kiremt); surface its name + definition so the UI can keep it visible.
-    config = _json.loads(job.get("config_json") or "{}")
-    region = await get_region(config["region_id"]) if config.get("region_id") else None
-    region_name = (region or {}).get("display_name")
-    onset_definition = (region or {}).get("description")
-
-    def _empty() -> dict:
-        return {
-            "issue_dates": [],
-            "points": [],
-            "onset_threshold": None,
-            "region_id": config.get("region_id"),
-            "region_name": region_name,
-            "onset_definition": onset_definition,
-        }
+    # Read per request rather than stored: region descriptions can be edited.
+    region_id = _job_region_id(job)
+    region = await get_region(region_id) if region_id else None
+    region_context = {
+        "region_id": region_id,
+        "region_name": (region or {}).get("display_name"),
+        "onset_definition": (region or {}).get("description"),
+    }
 
     artifact = next(
         (
@@ -236,83 +236,43 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> dict:
         ),
         None,
     )
-    if artifact is None:
-        return _empty()
-
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, artifact["kind"], artifact["filename"]
-    )
-    if not text:
-        return _empty()
-
-    reader = csv.DictReader(io.StringIO(text))
-    # point_id → {date → [w1, w2, w3, w4, later]}
-    by_point: dict[str, dict[str, list[float]]] = {}
-    coords_by_point: dict[str, tuple[float, float]] = {}
-    # preserve insertion order for issue_dates
-    date_order: dict[str, None] = {}
-    onset_threshold: float | None = None
-    for row in reader:
-        point_id = row["id"]
-        date = row["time"]
-        date_order[date] = None
-        if onset_threshold is None:
-            try:
-                onset_threshold = float(row.get("onset_threshold") or "")
-            except ValueError:
-                onset_threshold = None
-        if point_id not in by_point:
-            by_point[point_id] = {}
-        by_point[point_id][date] = [
-            float(row.get("cv_week1") or 0),
-            float(row.get("cv_week2") or 0),
-            float(row.get("cv_week3") or 0),
-            float(row.get("cv_week4") or 0),
-            float(row.get("cv_later") or 0),
-        ]
-        if point_id not in coords_by_point and row.get("lat") and row.get("lon"):
-            coords_by_point[point_id] = (float(row["lat"]), float(row["lon"]))
-
-    issue_dates = list(date_order)
-    points = []
-    for point_id, date_map in by_point.items():
-        if point_id in coords_by_point:
-            lat, lon = coords_by_point[point_id]
-        else:
-            lat_str, lon_str = point_id.split("_", 1)
-            lat, lon = float(lat_str), float(lon_str)
-        points.append(
-            {
-                "id": point_id,
-                "lat": lat,
-                "lon": lon,
-                "probs": [date_map.get(d, [0, 0, 0, 0, 0]) for d in issue_dates],
-            }
+    payload = (
+        await derived_outputs.load_or_build(
+            job_id, _BLEND_FORECAST_PAYLOAD, lambda: _build_blend_forecast(job_id, artifact)
         )
+        if artifact
+        else None
+    )
+    forecast = json.loads(payload) if payload else _EMPTY_BLEND_FORECAST
+    # Serialized directly: FastAPI's encoder is slow on ~100k nested probabilities.
+    return Response(json.dumps({**forecast, **region_context}), media_type="application/json")
 
-    return {
-        "issue_dates": issue_dates,
-        "points": points,
-        "onset_threshold": onset_threshold,
-        "region_id": config.get("region_id"),
-        "region_name": region_name,
-        "onset_definition": onset_definition,
-    }
+
+def _build_blend_forecast(job_id: str, artifact: dict) -> bytes | None:
+    text = get_storage().read_result_text(job_id, artifact["kind"], artifact["filename"])
+    return json.dumps(parse_blend_forecast(text)).encode() if text else None
+
+
+_BLEND_SUMMARY_PREFIXES = {"pooled": "summary_models_pooled", "yearly": "yearly_metrics_global"}
 
 
 @router.get("/{job_id}/blend-summary")
-async def get_blend_summary(job_id: str, job: ReadableJob) -> dict:
-    """Return the blend's pooled summary CSV, read server-side.
+async def get_blend_summary(
+    job_id: str, job: ReadableJob, table: Literal["pooled", "yearly"] = "pooled"
+) -> dict:
+    """Return one of the blend's small CV summary CSVs, read server-side.
 
-    The browser parses this for the skill chart; serving it here keeps the
-    outputs bucket off the client (mirroring how metrics read outputs).
+    `pooled` is the per-model summary behind the skill chart; `yearly` is the
+    per-holdout-year CV scores. Serving them here keeps the outputs bucket off
+    the client (mirroring how metrics read outputs).
     """
     _require_complete(job)
+    prefix = _BLEND_SUMMARY_PREFIXES[table]
     summary = next(
         (
             a
             for a in await list_job_artifacts(job_id)
-            if a["filename"].startswith("summary_models_pooled")
+            if a["filename"].startswith(prefix) and a["filename"].endswith(".csv")
         ),
         None,
     )
@@ -343,11 +303,13 @@ async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetr
         None,
     )
     if summary is None:
-        return blend_cells.build_cell_metrics(job_id, "")
+        return blend_cells.build_cell_metrics(job_id, "", region_id=_job_region_id(job))
     text = await asyncio.to_thread(
         get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
     )
-    return await asyncio.to_thread(blend_cells.build_cell_metrics, job_id, text or "")
+    return await asyncio.to_thread(
+        blend_cells.build_cell_metrics, job_id, text or "", region_id=_job_region_id(job)
+    )
 
 
 @router.get("/{job_id}/results/{kind}/{filename:path}")
@@ -435,26 +397,23 @@ async def get_skill_scores(job_id: str, job: ReadableJob):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(job_id: str, job: ReadableJob, model: str, window: str, metric: str):
+_JOB_GRIDS_PAYLOAD = "map_grids.v1.json"
+
+
+@router.get("/{job_id}/grids", response_model=JobGrids)
+async def get_grids(job_id: str, job: ReadableJob) -> Response:
+    """Every map grid for the job in one response, built once and then served as stored bytes."""
     _require_complete(job)
     try:
-        return await asyncio.to_thread(
-            compute_job_grid, job_id, get_storage(), model, window, metric
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except Exception as e:
-        logger.exception(
-            "Error computing grid for job %s model=%s window=%s metric=%s",
+        payload = await derived_outputs.load_or_build(
             job_id,
-            model,
-            window,
-            metric,
+            _JOB_GRIDS_PAYLOAD,
+            lambda: build_job_grids(job_id, get_storage()).model_dump_json().encode(),
         )
+    except Exception as e:
+        logger.exception("Error building grids for job %s", job_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
+    return Response(content=payload, media_type="application/json")
 
 
 @router.get("/{job_id}/cell", response_model=JobCellResponse)
@@ -547,6 +506,10 @@ async def delete_job(job_id: str, user: CurrentUser):
     await asyncio.to_thread(get_artifact_store().delete_job, job_id)
 
 
+async def _retain_outputs(job_id: str, keep: bool) -> None:
+    await asyncio.to_thread(get_artifact_store().retain, job_id, keep)
+
+
 async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
     async with get_db() as conn:
         row = (
@@ -561,6 +524,9 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
             .mappings()
             .fetchone()
         )
+        # Inside the transaction: if storage can't apply the hold, the
+        # visibility change rolls back instead of leaving an unprotected example.
+        await _retain_outputs(job["id"], visibility == "example")
         await audit(
             conn,
             f"job.{visibility}",
@@ -612,7 +578,8 @@ async def promote_job_to_example(job: ModifiableJob, user: AdminUser):
             )
             for sibling_id in promoted:
                 if sibling_id == job["id"]:
-                    continue  # audited below by _set_job_visibility
+                    continue  # retained and audited below by _set_job_visibility
+                await _retain_outputs(sibling_id, keep=True)
                 await audit(
                     conn,
                     "job.example",

@@ -309,9 +309,6 @@
 			<section class="window-section">
 				<h3 class="window-heading">
 					{win.model.toUpperCase()} — {windowLabel(win.window)}
-					{#if win.tolerance_days != null}
-						<span class="tolerance">±{win.tolerance_days} day tolerance</span>
-					{/if}
 				</h3>
 				<div class="table-wrap">
 					<table>
@@ -333,7 +330,12 @@
 								{#if s}
 									{@const unit = metricUnit(varKey, s.unit, definitionsById)}
 									<tr>
-										<td class="metric-name">{varLabel(varKey)}</td>
+										<td class="metric-name">
+											{varLabel(varKey)}
+											{#if win.tolerance_days != null && definitionsById.get(varKey)?.tolerance_dependent}
+												<span class="tolerance">±{win.tolerance_days} day tolerance</span>
+											{/if}
+										</td>
 										<td style="background:{cellColor(s.mean, s.min, s.max)}">{fmt(s.mean, unit)}</td
 										>
 										<td style="background:{cellColor(s.min, s.min, s.max)}">{fmt(s.min, unit)}</td>
