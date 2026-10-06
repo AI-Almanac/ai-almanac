@@ -43,8 +43,8 @@ The PyPI package (`pip install ai-almanac`) is built and published by
 `.github/workflows/release.yml` through PyPI Trusted Publishing — there is no
 API token to manage.
 
-1. Bump `version` in `pyproject.toml` (the only place it lives) and merge to
-   `main`. While the project is in rapid development, release alphas
+1. Bump `version` in `pyproject.toml` (the only place it lives) in a PR to
+   `develop`, then merge `develop` → `main` as usual. While the project is in rapid development, release alphas
    (`0.1.0a2`, `0.1.0a3`, …): PyPI treats any PEP 440 pre-release version as a
    pre-release. Installers still pick one when no stable release exists, and
    stop doing so once one does.
