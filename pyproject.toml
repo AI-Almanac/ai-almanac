@@ -1,6 +1,6 @@
 [project]
 name = "ai-almanac"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Local-first benchmarking platform for AI weather and climate models."
 readme = "README.md"
 requires-python = ">=3.12"
