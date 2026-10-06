@@ -122,10 +122,3 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           # Re-running the dry run for an unchanged version is expected.
           skip-existing: true
-
-  # The Homebrew tap and .deb package live in adjacent repos:
-  #   github.com/AI-Almanac/homebrew-ai-almanac   — formula
-  #   github.com/AI-Almanac/ai-almanac-apt        — fpm-built .deb + apt repo
-  # Each repo's own release.yml watches for the version bump and re-publishes
-  # its artifact. They're not built here so this workflow stays focused on the
-  # PyPI source of truth.
