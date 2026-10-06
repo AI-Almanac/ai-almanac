@@ -1814,7 +1814,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0
-  sha256: 1699fe92d94607e23ed64efd44508144ec63482c00e04b01a1fe54e5e08810c2
+  sha256: a0f6164394cb60c864745e9bb99f7f341e829a8b18ffaa01b04372e3824ac0c6
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0

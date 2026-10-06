@@ -288,17 +288,6 @@ explicit `postgresql+psycopg://...`. Shared deployments run migrations through
 the dedicated `migrate` service; automatic application-startup migrations are
 reserved for personal mode.
 
-Run the containerized smoke flow before deploying:
-
-```bash
-pixi run test-compose-e2e
-```
-
-This uses a disposable PostgreSQL database and stub workload, but exercises the
-complete shared application flow through Caddy: identity provisioning,
-data-source registration, job execution, metrics and artifacts, sharing,
-restart recovery, and deletion.
-
 ### What admins vs users can do
 
 - **Users** can run benchmarks, see their own private jobs, upload private
