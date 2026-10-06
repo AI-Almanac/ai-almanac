@@ -1283,15 +1283,35 @@ class InvalidBenchmarkSettings(ValueError):
     """Benchmark settings that do not parse; the message names each invalid field."""
 
 
+_FILE_SETTINGS = ("nc_mask", "thresh_file", "ref_model_dir")
+
+
+def require_cloud_paths(paths: dict[str, str | None]) -> None:
+    """Shared deployments only take gs:// URLs for job files.
+
+    The runner opens these files itself, so a host or container path would
+    let a job read files there rather than its data.
+    """
+    if settings.deployment_mode != "shared":
+        return
+    local = [name for name, path in paths.items() if path and not path.startswith("gs://")]
+    if local:
+        raise InvalidBenchmarkSettings(
+            f"Invalid benchmark settings: {', '.join(local)} must be gs:// URLs on this deployment"
+        )
+
+
 def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> RompParams:
     try:
-        return model.model_validate(params)
+        parsed = model.model_validate(params)
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
             for error in exc.errors()
         )
         raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
+    require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
+    return parsed
 
 
 def parse_benchmark_settings(params: dict) -> dict:
@@ -1379,6 +1399,10 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
     if grid_errors:
         raise HTTPException(status_code=400, detail=" ".join(grid_errors))
+    try:
+        require_cloud_paths({"obs_dir": body.obs_dir})
+    except InvalidBenchmarkSettings as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
 
     job_id = str(uuid.uuid4())

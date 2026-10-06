@@ -50,21 +50,35 @@ def launched(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return job_ids
 
 
+async def _register_sources(
+    client: httpx.AsyncClient, model_metadata: dict | None = None
+) -> tuple[str, str]:
+    obs_id = await _register(client, "obs", {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"})
+    model_id = await _register(
+        client, "model", {"file_pattern": "{}.nc", "model_var": "tp", **(model_metadata or {})}
+    )
+    return obs_id, model_id
+
+
+async def _post_job(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], sources: tuple[str, str], **job: object
+) -> httpx.Response:
+    obs_id, model_id = sources
+    return await client.post(
+        "/jobs",
+        headers=auth_headers,
+        json={"dataset_id": obs_id, "model_name": model_id, **job},
+    )
+
+
 async def _submit(
     client: httpx.AsyncClient,
     auth_headers: dict[str, str],
     params: dict,
     model_metadata: dict | None = None,
 ) -> httpx.Response:
-    obs_id = await _register(client, "obs", {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"})
-    model_id = await _register(
-        client, "model", {"file_pattern": "{}.nc", "model_var": "tp", **(model_metadata or {})}
-    )
-    return await client.post(
-        "/jobs",
-        headers=auth_headers,
-        json={"dataset_id": obs_id, "model_name": model_id, "params": params},
-    )
+    sources = await _register_sources(client, model_metadata)
+    return await _post_job(client, auth_headers, sources, params=params)
 
 
 async def _stored_settings(job_id: str) -> dict:
@@ -212,3 +226,56 @@ def test_years_skipped_for_missing_data_survive_into_the_stored_settings() -> No
 
     assert stored["years"] == [2011, 2012, 2014, 2015]
     assert stored["years_clim"] == [2011, 2012, 2013, 2014, 2015]
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        {"params": {"nc_mask": "/etc/passwd"}},
+        {"params": {"thresh_file": "data/thresholds.nc"}},
+        {"params": {"ref_model_dir": "/app"}},
+        {"obs_dir": "/etc"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_shared_deployments_reject_host_paths_in_jobs(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    launched: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    job: dict,
+) -> None:
+    sources = await _register_sources(client)
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+
+    response = await _post_job(
+        client,
+        auth_headers,
+        sources,
+        **{**job, "params": {"region": "ethiopia", **job.get("params", {})}},
+    )
+
+    assert response.status_code == 422
+    assert "must be gs:// URLs" in response.json()["detail"]
+    assert launched == []
+
+
+@pytest.mark.asyncio
+async def test_shared_deployments_accept_cloud_paths_in_jobs(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    launched: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = await _register_sources(client)
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+
+    response = await _post_job(
+        client,
+        auth_headers,
+        sources,
+        params={"region": "ethiopia", "nc_mask": "gs://almanac-data-ai-almanac/masks/eth.nc"},
+    )
+
+    assert response.status_code == 201
+    assert launched == [response.json()["id"]]

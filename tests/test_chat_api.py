@@ -1280,3 +1280,17 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     assert kept.json()["benchmark_config"]["region_id"] == "india"
     cleared = await client.patch(url, headers=auth_headers, json={"region_id": None})
     assert cleared.json()["benchmark_config"]["region_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_chat_submit_on_shared_deployment_reports_host_paths_without_creating_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+
+    payload, captured_params = await _submit_from_chat(
+        monkeypatch, advanced_params={"nc_mask": "/etc/passwd"}
+    )
+
+    assert "nc_mask must be gs:// URLs" in payload["error"]
+    assert captured_params == []
