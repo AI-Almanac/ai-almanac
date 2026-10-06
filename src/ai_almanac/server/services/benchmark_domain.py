@@ -284,6 +284,26 @@ def _model_windows(
     return windows
 
 
+def _missing_year_warnings(
+    windows: list[guardrails.ModelWindow], model_map: dict[str, dict]
+) -> list[str]:
+    """Gap years inside each model's evaluation window, which the run skips."""
+    warnings = []
+    for window in windows:
+        if window.eval_start_year is None or window.eval_end_year is None:
+            continue
+        model = model_map.get(window.model_id) or {}
+        gaps = [
+            year
+            for year in job_submission.source_missing_years(model)
+            if window.eval_start_year <= year <= window.eval_end_year
+        ]
+        if gaps:
+            name = model.get("display_name") or window.model_id
+            warnings.append(job_submission.missing_years_warning(name, gaps))
+    return warnings
+
+
 def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> BenchmarkValidation:
     errors = []
     warnings = []
@@ -331,9 +351,11 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
             ):
                 errors.append(f"{model_id}: start_year_clim must be before end_year_clim")
 
-    findings = guardrails.check_benchmark(_model_windows(spec, model_map), guardrails.current())
+    windows = _model_windows(spec, model_map)
+    findings = guardrails.check_benchmark(windows, guardrails.current())
     errors.extend(guardrails.error_messages(findings))
     warnings.extend(guardrails.warning_messages(findings))
+    warnings.extend(_missing_year_warnings(windows, model_map))
 
     can_run = not missing and not errors
     return BenchmarkValidation(
