@@ -91,6 +91,13 @@ class RompParams(BaseModel):
     thresh_file: DataPath | None = None
 
 
+class ResolvedRompParams(RompParams):
+    """Settings after submission resolves them, including the years ROMP evaluates."""
+
+    years: tuple[Year, ...] | None = None
+    years_clim: tuple[Year, ...] | None = None
+
+
 class JobCreate(BaseModel):
     dataset_id: str
     model_name: str
@@ -452,6 +459,40 @@ def source_missing_years(metadata: dict | None) -> set[int]:
     if not isinstance(value, list):
         return set()
     return {year for item in value if (year := _registered_year(item)) is not None}
+
+
+def _years_between(first: int, last: int, missing: set[int]) -> list[int]:
+    return [year for year in range(first, last + 1) if year not in missing]
+
+
+def skip_missing_years(romp_params: dict, obs_missing: set[int], model_missing: set[int]) -> dict:
+    """ROMP params with explicit year lists that leave out years with no data.
+
+    ROMP reads one ``{year}.nc`` per evaluation year (observations and model)
+    and per climatology year (observations only), so a gap year inside the
+    range fails the run. Unset lists make ROMP use the full range. Raises
+    ValueError when a gap swallows every year.
+    """
+    start_date, end_date = romp_params.get("start_date"), romp_params.get("end_date")
+    if not start_date or not end_date:
+        return romp_params
+    start, end = int(str(start_date)[:4]), int(str(end_date)[:4])
+    years = _years_between(start, end, obs_missing | model_missing)
+    years_clim = _years_between(
+        int(romp_params.get("start_year_clim") or start),
+        int(romp_params.get("end_year_clim") or end),
+        obs_missing,
+    )
+    if not years:
+        raise ValueError(f"The chosen sources have no data for any year in {start}-{end}.")
+    if not years_clim:
+        raise ValueError("The observations have no data for any climatology year.")
+    return {**romp_params, "years": years, "years_clim": years_clim}
+
+
+def missing_years_warning(source_name: str, years: Iterable[int]) -> str:
+    listed = ", ".join(map(str, sorted(years)))
+    return f"{source_name} has no data for {listed}; the benchmark skips those years."
 
 
 def blend_year_coverage(
@@ -1242,9 +1283,9 @@ class InvalidBenchmarkSettings(ValueError):
     """Benchmark settings that do not parse; the message names each invalid field."""
 
 
-def parse_romp_params(params: dict) -> RompParams:
+def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> RompParams:
     try:
-        return RompParams.model_validate(params)
+        return model.model_validate(params)
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
@@ -1260,7 +1301,7 @@ def parse_benchmark_settings(params: dict) -> dict:
     stored with the job and handed to ROMP.
     """
     try:
-        parsed = parse_romp_params(params)
+        parsed = parse_romp_params(params, ResolvedRompParams)
     except InvalidBenchmarkSettings as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
@@ -1372,6 +1413,14 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             source_metadata,
             model_source["metadata"],
         )
+    try:
+        romp_params = skip_missing_years(
+            romp_params,
+            source_missing_years(source_metadata),
+            source_missing_years(model_source["metadata"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if "obs_file_pattern" not in romp_params and source_metadata.get("obs_file_pattern"):
         romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):

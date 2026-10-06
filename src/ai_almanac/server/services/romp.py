@@ -139,6 +139,13 @@ def _init_days(value: object) -> tuple[int, ...]:
     return _INIT_DAYS.validate_python(value or "0,3")
 
 
+def _year_list(value: object) -> tuple[int, ...] | None:
+    """Explicit years for ROMP to evaluate; None makes it use the full date range."""
+    if not isinstance(value, list | tuple) or not value:
+        return None
+    return tuple(int(year) for year in value)
+
+
 def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
     params = config.get("romp_params") or {}
     model = config.get("model_config") or {}
@@ -199,6 +206,8 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "start_year_clim": int(params.get("start_year_clim") or start_date[0]),
         "end_year_clim": int(params.get("end_year_clim") or end_date[0]),
         "init_days": _init_days(params.get("init_days")),
+        "years": _year_list(params.get("years")),
+        "years_clim": _year_list(params.get("years_clim")),
         "date_filter_year": int(params.get("date_filter_year") or start_date[0]),
         "verification_window_list": ((1, 15), (16, 30)),
         "tolerance_days_list": (3, 5),

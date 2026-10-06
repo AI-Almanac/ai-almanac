@@ -13,7 +13,11 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from ai_almanac.server.services.job_submission import RompParams
+from ai_almanac.server.services.job_submission import (
+    RompParams,
+    parse_benchmark_settings,
+    skip_missing_years,
+)
 
 FIXTURES = Path(__file__).parents[1] / "testdata" / "ethiopia"
 CODE = "__import__('os').system('touch /tmp/pwned')"
@@ -195,3 +199,16 @@ async def test_chat_rerun_reports_invalid_override_without_creating_a_job(
 
     assert "obs_var" in result["error"]
     assert launched == [job_id]
+
+
+def test_years_skipped_for_missing_data_survive_into_the_stored_settings() -> None:
+    resolved = skip_missing_years(
+        {"start_date": "2011-05-01", "end_date": "2015-07-31"},
+        obs_missing=set(),
+        model_missing={2013},
+    )
+
+    stored = parse_benchmark_settings(resolved)
+
+    assert stored["years"] == [2011, 2012, 2014, 2015]
+    assert stored["years_clim"] == [2011, 2012, 2013, 2014, 2015]
