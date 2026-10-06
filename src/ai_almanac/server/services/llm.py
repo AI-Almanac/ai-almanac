@@ -228,7 +228,7 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
         Omit a field to leave it unchanged; set it to null to clear it.
         """
         return await chat_tools.update_benchmark_config(
-            patch.model_dump(exclude_unset=True),
+            patch.model_dump(mode="json", exclude_unset=True),
             ctx.deps.user_id,
             ctx.deps.scope,
             ctx.deps.session_id,

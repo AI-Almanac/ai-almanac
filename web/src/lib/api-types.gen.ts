@@ -4100,6 +4100,8 @@ export interface components {
             start_year_clim?: number | null;
             /** End Year Clim */
             end_year_clim?: number | null;
+            /** Date Filter Year */
+            date_filter_year?: number | null;
             /** Max Forecast Day */
             max_forecast_day?: number | null;
             /** Probabilistic */

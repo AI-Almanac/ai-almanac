@@ -936,7 +936,7 @@ def _patch_romp_config(config_path: str, env: dict) -> None:
     ):
         val = env.get(env_key)
         if val is not None:
-            extra.append(f"{cfg_key} = {val}")
+            extra.append(f"{cfg_key} = {float(val)!r}")
 
     with open(config_path, "a") as f:
         f.write("\n# Almanac runner overrides\n")

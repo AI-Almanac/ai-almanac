@@ -151,3 +151,9 @@ def test_blend_workload_invokes_managed_blending_environment(
     assert environments[0]["ALMANAC_BLENDING_ROOT"] == str(
         tmp_path / "blend-env" / "onset-blending"
     )
+
+
+def test_romp_safe_model_name_keeps_only_name_characters() -> None:
+    assert romp_safe_model_name('fuxi",)\n__import__("os")#') == "fuxi___import___os"
+    assert romp_safe_model_name("GraphCast (v2.1)") == "GraphCast_v2.1"
+    assert romp_safe_model_name("()") == "model"

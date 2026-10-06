@@ -13,11 +13,11 @@ import math
 import re
 import uuid
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -31,7 +31,17 @@ from ai_almanac.server.services.forecast_models import (
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
-from ai_almanac.server.services.romp import romp_safe_model_name
+from ai_almanac.server.services.romp import (
+    DataPath,
+    FilePattern,
+    InitDays,
+    Latitude,
+    Longitude,
+    Members,
+    RompName,
+    Year,
+    romp_safe_model_name,
+)
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
@@ -42,39 +52,43 @@ from ai_almanac.settings import (
 )
 
 
+# Benchmark settings, parsed into the only value shapes ROMP accepts.
+# model_dump(mode="json") gives the canonical form stored with the job and
+# handed to the ROMP runners.
 class RompParams(BaseModel):
-    obs: str | None = None
-    obs_file_pattern: str | None = None
-    obs_var: str | None = None
-    model_var: str | None = None
-    file_pattern: str | None = None
-    region: str | None = None
-    event_type: str | None = None
-    wet_threshold: float | None = None
-    wet_init: float | None = None
+    obs: RompName | None = None
+    obs_file_pattern: FilePattern | None = None
+    obs_var: RompName | None = None
+    model_var: RompName | None = None
+    file_pattern: FilePattern | None = None
+    region: RompName | None = None
+    event_type: RompName | None = None
+    wet_threshold: FiniteFloat | None = None
+    wet_init: FiniteFloat | None = None
     wet_spell: int | None = None
     dry_spell: int | None = None
     dry_extent: int | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-    start_year_clim: int | None = None
-    end_year_clim: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    start_year_clim: Year | None = None
+    end_year_clim: Year | None = None
+    date_filter_year: Year | None = None
     max_forecast_day: int | None = None
     probabilistic: bool | None = None
-    members: str | None = None
+    members: Members | None = None
     parallel: bool | None = None
-    ref_model: str | None = None
-    init_days: str | None = None
-    lat_min: float | None = None
-    lat_max: float | None = None
-    lon_min: float | None = None
-    lon_max: float | None = None
+    ref_model: RompName | None = None
+    init_days: InitDays | None = None
+    lat_min: Latitude | None = None
+    lat_max: Latitude | None = None
+    lon_min: Longitude | None = None
+    lon_max: Longitude | None = None
     land_only: bool | None = None
     shp_only: bool | None = None
-    nc_mask: str | None = None
+    nc_mask: DataPath | None = None
     focus_area: FocusArea | None = None
-    ref_model_dir: str | None = None
-    thresh_file: str | None = None
+    ref_model_dir: DataPath | None = None
+    thresh_file: DataPath | None = None
 
 
 class JobCreate(BaseModel):
@@ -1224,6 +1238,27 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     return await create_forecast_for_user(body, user_id)
 
 
+def parse_benchmark_settings(params: dict) -> dict:
+    """Parse settings assembled from the request, model, region, and source metadata.
+
+    Raises a 422 naming each invalid field. Returns the canonical JSON form
+    stored with the job and handed to ROMP.
+    """
+    try:
+        parsed = RompParams.model_validate(params)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise HTTPException(
+            status_code=422, detail=f"Invalid benchmark settings: {problems}"
+        ) from exc
+    return {
+        key: value for key, value in parsed.model_dump(mode="json").items() if value is not None
+    }
+
+
 async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     """Picked administrative units need their outlines frozen into the job."""
     if not params.get("focus_area"):
@@ -1299,7 +1334,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
 
-    romp_params = body.params.model_dump(exclude_none=True)
+    romp_params = body.params.model_dump(mode="json", exclude_none=True)
     for key in (
         "date_filter_year",
         "probabilistic",
@@ -1332,6 +1367,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):
         romp_params["obs_var"] = source_metadata["obs_var"]
+    romp_params = parse_benchmark_settings(romp_params)
     dataset_config = {
         "provider": "local",
         "source_id": body.dataset_id,
