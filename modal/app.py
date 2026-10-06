@@ -881,6 +881,10 @@ def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
     return local_obs, local_model, local_out, local_fig
 
 
+# focus_area reaches ROMP as the nc_mask _with_focus_mask writes from it.
+_SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area"})
+
+
 def _romp_env(
     config: dict,
     local_obs: Path,
@@ -896,7 +900,11 @@ def _romp_env(
         "ROMP_MODEL_NAME": config["model_name"],
         "ROMP_DIR_OUT": str(local_out),
         "ROMP_DIR_FIG": str(local_fig),
-        **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
+        **{
+            f"ROMP_{k.upper()}": str(v)
+            for k, v in romp_params.items()
+            if v is not None and k not in _SETTINGS_NOT_FOR_ROMP
+        },
     }
 
 

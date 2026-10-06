@@ -58,3 +58,4 @@ def test_area_of_interest_reaches_romp_as_a_mask_on_the_staged_obs_grid(
 
     mask = xr.open_dataset(env["ROMP_NC_MASK"])["mask"]
     assert int(mask.sum()) == 17 * 9
+    assert "ROMP_FOCUS_AREA" not in env
