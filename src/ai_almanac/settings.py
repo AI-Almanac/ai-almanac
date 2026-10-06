@@ -40,6 +40,13 @@ _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
 # Settings.
 # ---------------------------------------------------------------------------
 
+# Who can reach a feature that admins may want to try before everyone does.
+Audience = Literal["off", "admins", "everyone"]
+
+
+def audience_allows(audience: Audience, is_admin: bool) -> bool:
+    return audience == "everyone" or (audience == "admins" and is_admin)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -200,7 +207,15 @@ class Settings(BaseSettings):
     # for zero-setup local installs; managed deployments set them False in
     # config.yaml/env until the feature is ready, then flip them at runtime from
     # the admin Settings page. Name new flags `enable_<feature>` and surface them
-    # in the "Features" group of routers/settings.py.
+    # in the "Features" group of routers/settings.py. A feature admins should be
+    # able to keep to themselves uses an `<feature>_audience` instead.
+    #
+    # Custom regions and user-registered datasets. "admins" keeps the Data page
+    # to admins, e.g. to curate the shared built-in datasets before every user
+    # can register their own.
+    data_management_audience: Audience = "everyone"
+    # Deprecated in favor of data_management_audience; mapped in
+    # reload_settings() like enable_assistant_comparisons. Remove next release.
     enable_data_management: bool = True
     # On by default now that the live-forecast workflow is finalized. Admins can
     # still turn it off from the Settings page (e.g. an install with no
@@ -211,7 +226,7 @@ class Settings(BaseSettings):
     # is two LLM turns, so an install that cannot afford that, or is not
     # collecting feedback yet, should not offer it. "admins" lets admins test
     # comparisons before exposing them to everyone.
-    assistant_comparisons_audience: Literal["off", "admins", "everyone"] = "everyone"
+    assistant_comparisons_audience: Audience = "everyone"
     # Deprecated in favor of assistant_comparisons_audience; read once in
     # reload_settings() to map a stored False to audience "off". Remove next
     # release, once no overlay row or env still sets it.
@@ -225,9 +240,10 @@ class Settings(BaseSettings):
     max_llm_requests_per_minute: int = 30
 
     def comparisons_allowed(self, is_admin: bool) -> bool:
-        if self.assistant_comparisons_audience == "everyone":
-            return True
-        return self.assistant_comparisons_audience == "admins" and is_admin
+        return audience_allows(self.assistant_comparisons_audience, is_admin)
+
+    def data_management_allowed(self, is_admin: bool) -> bool:
+        return audience_allows(self.data_management_audience, is_admin)
 
     def resolve_database_url(self) -> str:
         if self.database_url:
@@ -437,6 +453,24 @@ def _apply_overlay(target: Settings, data: dict, *, env_wins: bool = True) -> No
             continue
 
 
+# Deprecated boolean flag -> the audience field that replaced it.
+_LEGACY_AUDIENCE_FLAGS: dict[str, str] = {
+    "enable_assistant_comparisons": "assistant_comparisons_audience",
+    "enable_data_management": "data_management_audience",
+}
+
+
+def _apply_legacy_audience_flags(target: Settings, yaml_overlay: dict, db_overlay: dict) -> None:
+    """A deployment that switched a feature off via its old boolean stays off
+    until it sets the replacement audience explicitly."""
+    for flag, audience in _LEGACY_AUDIENCE_FLAGS.items():
+        audience_set = (
+            audience.upper() in os.environ or audience in yaml_overlay or audience in db_overlay
+        )
+        if not getattr(target, flag) and not audience_set:
+            setattr(target, audience, "off")
+
+
 def reload_settings() -> Settings:
     """Re-resolve defaults + env + config.yaml + DB overlay; mutate the
     singleton in place.
@@ -452,15 +486,7 @@ def reload_settings() -> Settings:
     db_overlay = _load_db_overlay()
     _apply_overlay(fresh, yaml_overlay)  # config.yaml seed; env beats it
     _apply_overlay(fresh, db_overlay, env_wins=False)  # admin UI edits beat env
-    # Deprecated-flag shim: a deployment that had switched comparisons off via
-    # the old boolean stays off until it sets the audience explicitly.
-    audience_set = (
-        "ASSISTANT_COMPARISONS_AUDIENCE" in os.environ
-        or "assistant_comparisons_audience" in yaml_overlay
-        or "assistant_comparisons_audience" in db_overlay
-    )
-    if not fresh.enable_assistant_comparisons and not audience_set:
-        fresh.assistant_comparisons_audience = "off"
+    _apply_legacy_audience_flags(fresh, yaml_overlay, db_overlay)
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
     return settings
