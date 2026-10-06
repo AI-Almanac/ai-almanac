@@ -10,6 +10,10 @@
 	}
 
 	const { models, selectedIds, dataLoaded, onToggle }: Props = $props();
+
+	const selectedWithGaps = $derived(
+		models.filter((m) => selectedIds.includes(m.id) && m.missing_years?.length)
+	);
 </script>
 
 {#if models.length === 0}
@@ -34,6 +38,13 @@
 			</button>
 		{/each}
 	</div>
+
+	{#each selectedWithGaps as m (m.id)}
+		<p class="missing-years-note">
+			{m.display_name} has no data for {m.missing_years?.join(', ')}; the benchmark skips those
+			years.
+		</p>
+	{/each}
 
 	<details class="model-reference">
 		<summary>Model reference</summary>
@@ -128,6 +139,11 @@
 	}
 	.model-chip.active .chip-meta {
 		opacity: 0.8;
+	}
+	.missing-years-note {
+		margin: 0.5rem 0 0;
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
 	}
 
 	.model-reference {

@@ -89,6 +89,8 @@ export type ModelConfig = {
 	end_date: string;
 	start_year_clim: number;
 	end_year_clim: number;
+	// Absent for sources registered before gaps were detected: unknown, not gap-free.
+	missing_years?: number[];
 };
 
 export type JobResult = {
