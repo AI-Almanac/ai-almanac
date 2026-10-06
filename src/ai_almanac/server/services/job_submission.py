@@ -1238,6 +1238,21 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     return await create_forecast_for_user(body, user_id)
 
 
+class InvalidBenchmarkSettings(ValueError):
+    """Benchmark settings that do not parse; the message names each invalid field."""
+
+
+def parse_romp_params(params: dict) -> RompParams:
+    try:
+        return RompParams.model_validate(params)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
+
+
 def parse_benchmark_settings(params: dict) -> dict:
     """Parse settings assembled from the request, model, region, and source metadata.
 
@@ -1245,15 +1260,9 @@ def parse_benchmark_settings(params: dict) -> dict:
     stored with the job and handed to ROMP.
     """
     try:
-        parsed = RompParams.model_validate(params)
-    except ValidationError as exc:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        )
-        raise HTTPException(
-            status_code=422, detail=f"Invalid benchmark settings: {problems}"
-        ) from exc
+        parsed = parse_romp_params(params)
+    except InvalidBenchmarkSettings as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         key: value for key, value in parsed.model_dump(mode="json").items() if value is not None
     }

@@ -173,3 +173,25 @@ def test_settings_already_stored_on_jobs_still_parse(stored: dict) -> None:
     assert RompParams.model_validate(canonical).model_dump(mode="json") == (
         RompParams.model_validate(stored).model_dump(mode="json")
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_rerun_reports_invalid_override_without_creating_a_job(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    user_id: str,
+    launched: list[str],
+) -> None:
+    from ai_almanac.server.services import benchmark_domain
+    from ai_almanac.server.services.benchmark_state import BenchmarkScope
+
+    job_id = (await _submit(client, auth_headers, {"region": "ethiopia"})).json()["id"]
+
+    result = await benchmark_domain._exec_rerun_job(
+        {"job_id": job_id, "params_override": {"obs_var": f'RAINFALL"\n{CODE}'}},
+        user_id,
+        BenchmarkScope(kind="benchmark_setup", key="setup", title="Setup"),
+    )
+
+    assert "obs_var" in result["error"]
+    assert launched == [job_id]
