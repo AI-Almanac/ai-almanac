@@ -329,13 +329,15 @@ async def require_admin(
     return user
 
 
-async def require_data_management() -> None:
-    """Gate routes behind the data-management feature flag.
+async def require_data_management(
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+) -> None:
+    """Gate routes on the data-management audience.
 
-    Used as a route-level dependency so disabled mutations 404 (hiding the
-    in-development feature) while their read counterparts stay available.
+    Used as a route-level dependency so mutations 404 for anyone outside the
+    audience (hiding the feature) while their read counterparts stay available.
     """
-    if not settings.enable_data_management:
+    if not settings.data_management_allowed(user.is_admin):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
