@@ -152,9 +152,9 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         "Features",
         [
             (
-                "enable_data_management",
+                "data_management_audience",
                 "Data management",
-                "Let users create custom regions and register their own datasets",
+                "Who can create custom regions and register datasets. 'admins' keeps the Data page to admins",
             ),
             (
                 "enable_forecasting",
