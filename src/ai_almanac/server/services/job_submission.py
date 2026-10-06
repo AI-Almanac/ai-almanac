@@ -101,7 +101,6 @@ class ResolvedRompParams(RompParams):
 class JobCreate(BaseModel):
     dataset_id: str
     model_name: str
-    obs_dir: str | None = None
     params: RompParams = RompParams()
     run_id: str | None = None
 
@@ -263,12 +262,8 @@ def _not_ready_detail(source: dict, user_id: str, fallback: str) -> str:
     return fallback
 
 
-async def _resolve_obs_dir(
-    dataset_id: str, obs_dir_override: str | None, user_id: str
-) -> str | None:
+async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
     """Resolve an observation source to the path a runner reads."""
-    if obs_dir_override:
-        return obs_dir_override
     source = await data_source_service.get_source(dataset_id)
     if not source:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -743,7 +738,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None, user_id)
+    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
 
     try:
@@ -1286,7 +1281,7 @@ class InvalidBenchmarkSettings(ValueError):
 _FILE_SETTINGS = ("nc_mask", "thresh_file", "ref_model_dir")
 
 
-def require_cloud_paths(paths: dict[str, str | None]) -> None:
+def _require_cloud_paths(paths: dict[str, str | None]) -> None:
     """Shared deployments only take gs:// URLs for job files.
 
     The runner opens these files itself, so a host or container path would
@@ -1310,7 +1305,7 @@ def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> Rom
             for error in exc.errors()
         )
         raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
-    require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
+    _require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
     return parsed
 
 
@@ -1399,11 +1394,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
     if grid_errors:
         raise HTTPException(status_code=400, detail=" ".join(grid_errors))
-    try:
-        require_cloud_paths({"obs_dir": body.obs_dir})
-    except InvalidBenchmarkSettings as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
+    obs_dir = await _resolve_obs_dir(body.dataset_id, user_id)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()

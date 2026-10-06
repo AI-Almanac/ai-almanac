@@ -3385,8 +3385,6 @@ export interface components {
             dataset_id: string;
             /** Model Name */
             model_name: string;
-            /** Obs Dir */
-            obs_dir?: string | null;
             /** @default {} */
             params: components["schemas"]["RompParams"];
             /** Run Id */

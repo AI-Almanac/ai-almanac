@@ -234,7 +234,6 @@ def test_years_skipped_for_missing_data_survive_into_the_stored_settings() -> No
         {"params": {"nc_mask": "/etc/passwd"}},
         {"params": {"thresh_file": "data/thresholds.nc"}},
         {"params": {"ref_model_dir": "/app"}},
-        {"obs_dir": "/etc"},
     ],
 )
 @pytest.mark.asyncio
@@ -279,3 +278,21 @@ async def test_shared_deployments_accept_cloud_paths_in_jobs(
 
     assert response.status_code == 201
     assert launched == [response.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_jobs_read_their_registered_observations_whatever_obs_dir_is_sent(
+    client: httpx.AsyncClient,
+    auth_headers: dict[str, str],
+    launched: list[str],
+) -> None:
+    response = await _post_job(
+        client,
+        auth_headers,
+        await _register_sources(client),
+        obs_dir="gs://almanac-uploads-ai-almanac/another-users-job/",
+        params={"region": "ethiopia"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["obs_dir"] == str((FIXTURES / "obs").resolve())
