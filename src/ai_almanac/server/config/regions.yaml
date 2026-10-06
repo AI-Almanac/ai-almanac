@@ -14,6 +14,11 @@
   romp_name: "Ethiopia"
   boundary_iso: "ETH"
   description: "Kiremt (June–September) rainy season onset over the Ethiopian highlands."
+  # Blends aggregate the grid onto these named units (woredas). Paths are gs:// URIs
+  # or relative to the pinned onset_blending checkout.
+  subdistricts:
+    grid_mapping: Monsoon_Data/grid_to_district_mapping.csv
+    cells: Monsoon_Data/dissemination_cells.csv
   lat_min: 3.0
   lat_max: 15.0
   lon_min: 33.0

@@ -96,7 +96,7 @@ _ONSET_BASE = {
     "max_day": 45,
     "cutoff_month_day": "05-01",
     "ref_onset_month_day": "06-01",
-    "adm3_domain": False,
+    "subdistrict_mapping_sha256": None,
     "focus_area": None,
 }
 
@@ -123,3 +123,30 @@ def test_parts_are_not_reused_across_onset_definitions(workflow, tmp_path: Path)
 def test_cache_key_records_the_fixed_onset_rule(workflow) -> None:
     key = workflow._intermediates_cache_params(**_ONSET_BASE)
     assert key["onset_rule"] == workflow.ONSET_RULE
+
+
+def test_subdistrict_mapping_keys_parts_without_changing_grid_keys(workflow) -> None:
+    grid = workflow._intermediates_cache_params(**_ONSET_BASE)
+    # Grid keys match the ones cached before subdistricts were configurable.
+    assert grid["adm3_domain"] is False
+    assert "subdistrict_mapping_sha256" not in grid
+
+    first = workflow._intermediates_cache_params(
+        **{**_ONSET_BASE, "subdistrict_mapping_sha256": "aaa"}
+    )
+    second = workflow._intermediates_cache_params(
+        **{**_ONSET_BASE, "subdistrict_mapping_sha256": "bbb"}
+    )
+    assert first["adm3_domain"] is True
+    assert first != second
+
+
+def test_subdistrict_files_resolve_inside_the_blending_checkout(workflow) -> None:
+    mapping = workflow.BLENDING_ROOT / "Monsoon_Data" / "map.csv"
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text("adm3_name,lat,lon,weight\n")
+
+    assert workflow._subdistrict_mapping({"grid_mapping": "Monsoon_Data/map.csv"}) == mapping
+    assert workflow._subdistrict_mapping(None) is None
+    with pytest.raises(FileNotFoundError, match="missing from the blending checkout"):
+        workflow._subdistrict_files({"grid_mapping": "Monsoon_Data/map.csv", "cells": "nope.csv"})

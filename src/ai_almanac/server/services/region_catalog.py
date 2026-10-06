@@ -183,3 +183,10 @@ async def delete_region(region_id: str) -> bool:
             {"id": region_id},
         )
         return result.rowcount > 0
+
+
+def packaged_subdistricts(region_id: str | None) -> dict | None:
+    """The subdistrict files a built-in region's blends run on, or None to blend on the grid."""
+    key = (region_id or "").strip().lower()
+    region = next((r for r in get_packaged_regions() if r["id"] == key), None)
+    return (region or {}).get("subdistricts")

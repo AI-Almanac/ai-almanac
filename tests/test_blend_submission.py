@@ -123,6 +123,8 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
+    # India blends on the grid; only regions with subdistrict files remap.
+    assert config["subdistricts"] is None
 
 
 @pytest.mark.asyncio
@@ -514,3 +516,12 @@ def test_blend_params_accepts_valid_onset_definition() -> None:
     )
     assert params.threshold_mm == 25.5
     assert job_submission.onset_param_errors(None, None, None) == []
+
+
+def test_packaged_subdistricts_come_from_the_region_config() -> None:
+    from ai_almanac.server.services.region_catalog import packaged_subdistricts
+
+    ethiopia = packaged_subdistricts(" Ethiopia ")
+    assert ethiopia and set(ethiopia) == {"grid_mapping", "cells"}
+    assert packaged_subdistricts("india") is None
+    assert packaged_subdistricts(None) is None

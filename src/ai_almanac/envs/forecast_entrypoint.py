@@ -69,6 +69,7 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
     params = {
         **(blend_config.get("blend_params") or {}),
         "region_id": blend_config.get("region_id"),
+        "subdistricts": blend_config.get("subdistricts"),
     }
     model_names = blend_config["model_names"]
 

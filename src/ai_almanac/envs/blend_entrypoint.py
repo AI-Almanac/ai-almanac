@@ -137,6 +137,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     prep_kwargs = intermediate_prep_kwargs(params)
     if config.get("region_id"):
         prep_kwargs["region_id"] = config["region_id"]
+    prep_kwargs["subdistricts"] = config.get("subdistricts")
 
     print("==> Building blending intermediates", flush=True)
     intermediates = workflow.build_lat_lon_intermediates_bundle.local(
@@ -148,7 +149,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     )
     combined = workflow._read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
 
-    train_kwargs = {"cores": os.cpu_count() or 1}
+    train_kwargs = {"cores": os.cpu_count() or 1, "subdistricts": config.get("subdistricts")}
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
     print("==> Training blend weights", flush=True)
