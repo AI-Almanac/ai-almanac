@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
@@ -407,6 +407,21 @@
 		});
 	}
 
+	const BLEND_LAYERS = ['blend-cells', 'blend-outlines'];
+
+	function setCellsVisible(visible: boolean) {
+		if (!map) return;
+		for (const id of BLEND_LAYERS) {
+			if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+		}
+	}
+
+	// Hide the previous view's cells until the selected view's payload arrives,
+	// so the map never disagrees with the legend and controls.
+	$effect(() => {
+		if (mapReady) setCellsVisible(data != null);
+	});
+
 	$effect(() => {
 		if (mapReady && data && selectedDate) {
 			selectedBin; // track
@@ -463,21 +478,31 @@
 			: 1
 	);
 
+	function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+		const { [key]: _removed, ...rest } = record;
+		return rest;
+	}
+
 	async function loadView(v: BlendForecastView) {
 		const key = viewKey(v);
 		if (requestedViews.has(key)) return;
 		requestedViews.add(key);
+		viewErrors = withoutKey(viewErrors, key);
 		try {
 			const payload = await getBlendForecast(jobId, v);
 			payloads = { ...payloads, [key]: payload };
 		} catch (e) {
 			const message = e instanceof Error ? e.message : 'Failed to load blend forecast';
 			viewErrors = { ...viewErrors, [key]: message };
+			// Selecting this view again retries it.
+			requestedViews.delete(key);
 		}
 	}
 
 	$effect(() => {
-		void loadView(view);
+		const v = view;
+		// Track only the selected view; loadView reads and writes the error map.
+		untrack(() => void loadView(v));
 	});
 
 	// Views share issue dates, but keep the selection valid if one ever differs.
