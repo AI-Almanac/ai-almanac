@@ -181,3 +181,32 @@ def test_render_romp_config_without_year_lists_lets_romp_use_the_full_range() ->
 
     assert namespace["years"] is None
     assert namespace["years_clim"] is None
+
+
+def test_render_romp_config_names_the_model_files_dims_for_romp() -> None:
+    config = _job_config()
+    config["model_config"] = {
+        **config["model_config"],
+        "forecast_dims": {"init_time": "time", "step": "prediction_timedelta_daily"},
+    }
+    namespace: dict = {}
+
+    exec(render_romp_config(config, Path("/tmp/out"), Path("/tmp/fig")), {}, namespace)
+
+    assert namespace["model_dims_list"] == (
+        {"init_time": "time", "step": "prediction_timedelta_daily"},
+    )
+
+
+def test_render_romp_config_rejects_dim_names_that_are_not_plain_names() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    config = _job_config()
+    config["model_config"] = {
+        **config["model_config"],
+        "forecast_dims": {"init_time": "time'); __import__('os').system('true"},
+    }
+
+    with pytest.raises(ValidationError):
+        render_romp_config(config, Path("/tmp/out"), Path("/tmp/fig"))
