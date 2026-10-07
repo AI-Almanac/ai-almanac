@@ -11,6 +11,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from ai_almanac.settings import settings
 
 _APP_PATH = Path(__file__).parents[1] / "modal" / "app.py"
@@ -23,6 +25,17 @@ def _load_modal_app():
     return module
 
 
+@pytest.fixture
+def almanac_modules(monkeypatch):
+    """The server modules benchmark_image copies under /almanac, importable by their image names."""
+    import sys
+
+    from ai_almanac.server.services import focus_area, romp
+
+    monkeypatch.setitem(sys.modules, "focus_area", focus_area)
+    monkeypatch.setitem(sys.modules, "almanac_romp", romp)
+
+
 def test_modal_app_matches_runner_configuration() -> None:
     module = _load_modal_app()
     assert module.app.name == settings.modal_app_name
@@ -31,16 +44,11 @@ def test_modal_app_matches_runner_configuration() -> None:
 
 
 def test_area_of_interest_reaches_romp_as_a_mask_on_the_staged_obs_grid(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, almanac_modules
 ) -> None:
-    import sys
-
     import numpy as np
     import xarray as xr
 
-    from ai_almanac.server.services import focus_area
-
-    monkeypatch.setitem(sys.modules, "focus_area", focus_area)
     module = _load_modal_app()
     local_obs, local_model, local_out, local_fig = module._stage_paths(tmp_path)
     lat, lon = np.arange(3.0, 15.01, 0.25), np.arange(33.0, 48.01, 0.25)
@@ -61,7 +69,7 @@ def test_area_of_interest_reaches_romp_as_a_mask_on_the_staged_obs_grid(
     assert "ROMP_FOCUS_AREA" not in env
 
 
-def test_model_file_units_and_dims_reach_romp(tmp_path: Path) -> None:
+def test_model_file_units_and_dims_reach_romp(tmp_path: Path, almanac_modules) -> None:
     import json
 
     module = _load_modal_app()
@@ -72,3 +80,15 @@ def test_model_file_units_and_dims_reach_romp(tmp_path: Path) -> None:
 
     assert float(env["ROMP_UNIT_CVT"]) == 1000.0
     assert json.loads(env["ROMP_MODEL_DIMS"]) == dims
+
+
+def test_dim_names_that_are_not_plain_names_never_reach_romp(
+    tmp_path: Path, almanac_modules
+) -> None:
+    from pydantic import ValidationError
+
+    module = _load_modal_app()
+    config = {"model_name": "m", "model_config": {"forecast_dims": {"init_time": "a'); x('"}}}
+
+    with pytest.raises(ValidationError):
+        module._romp_env(config, *module._stage_paths(tmp_path))

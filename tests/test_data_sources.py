@@ -367,6 +367,35 @@ async def test_timedelta_lead_time_is_found_whatever_it_is_called(
 
 
 @pytest.mark.asyncio
+async def test_start_date_under_any_name_sets_the_initialization_schedule(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    renamed = _write_fuxi_variant(tmp_path / "issued", lambda ds: ds.rename({"time": "issued"}))
+    original = _write_fuxi_variant(tmp_path / "time", lambda ds: ds)
+
+    renamed_draft = await _validate_model(client, renamed)
+    original_draft = await _validate_model(client, original)
+
+    schedule = ("init_days", "init_days_source", "init_month_days", "start_date", "end_date")
+    assert {key: renamed_draft["metadata"][key] for key in schedule} == {
+        key: original_draft["metadata"][key] for key in schedule
+    }
+    assert renamed_draft["metadata"]["init_days_source"] == "inferred"
+
+
+@pytest.mark.asyncio
+async def test_dim_names_romp_cannot_carry_are_rejected_at_registration(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "spaced", lambda ds: ds.rename({"day": "lead day"}))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "lead day" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
 async def test_leftover_dim_is_recorded_as_the_ensemble_member(
     client: httpx.AsyncClient, tmp_path: Path
 ) -> None:

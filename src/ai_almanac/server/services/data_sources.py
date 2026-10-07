@@ -25,12 +25,6 @@ Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
 _LATITUDE_NAMES = ("lat", "latitude")
 _LONGITUDE_NAMES = ("lon", "longitude")
-_INITIALIZATION_TIME_NAMES = (
-    "time",
-    "init_time",
-    "initialization_time",
-    "forecast_reference_time",
-)
 
 
 def _now() -> str:
@@ -116,11 +110,7 @@ def _grid_step_deg(dataset) -> float | None:
     return step
 
 
-def _initialization_days(dataset) -> tuple[str, str, int] | None:
-    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
-    if coordinate is None or dataset[coordinate].ndim != 1:
-        return None
-
+def _initialization_days(dataset, coordinate: str) -> tuple[str, str, int] | None:
     values = dataset[coordinate]
     if values.size < 2:
         return None
@@ -133,7 +123,7 @@ def _initialization_days(dataset) -> tuple[str, str, int] | None:
     return ",".join(str(day) for day in weekdays), coordinate, int(values.size)
 
 
-def _initialization_schedule(dataset) -> list[str] | None:
+def _initialization_schedule(dataset, coordinate: str) -> list[str] | None:
     """The archive's fixed-calendar issue-date schedule as sorted ``MM-DD``.
 
     Archives pin issue dates to fixed calendar dates (e.g. Apr 1, 4, 8), not
@@ -143,9 +133,6 @@ def _initialization_schedule(dataset) -> list[str] | None:
     calendar cadence (see forecast_pipeline.season_issue_dates). The month-days
     are stable across years, so the first file is representative.
     """
-    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
-    if coordinate is None or dataset[coordinate].ndim != 1:
-        return None
     values = dataset[coordinate]
     if values.size < 2:
         return None
@@ -328,7 +315,23 @@ def _forecast_dims(dataset, variable: str) -> dict[str, str]:
         raise ValueError(f"Expected at most one ensemble member dimension, found {remaining}.")
     if remaining:
         roles["member"] = remaining[0]
-    return roles
+    return _romp_safe_dims(roles)
+
+
+def _romp_safe_dims(roles: dict[str, str]) -> dict[str, str]:
+    """Reject dim names ROMP's config cannot carry now, not when a job is submitted."""
+    from pydantic import ValidationError
+
+    from ai_almanac.server.services.romp import parse_model_dims
+
+    try:
+        return parse_model_dims(roles)
+    except ValidationError:
+        names = ", ".join(sorted(set(roles.values())))
+        raise ValueError(
+            "Dimension names may only use letters, digits, '_', '.' and '-' "
+            f"(and must not start with '.' or '-'). Found: {names}."
+        ) from None
 
 
 # Multipliers from a precipitation total's CF `units` to the millimetres ROMP
@@ -375,8 +378,6 @@ def _finalize_inspection(
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             grid_step_deg = _grid_step_deg(dataset)
-            initialization_days = _initialization_days(dataset) if kind == "model" else None
-            initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
             units = dataset[variable].attrs.get("units") if variable in dataset.data_vars else None
             forecast_dims, layout_error = None, None
             if kind == "model" and variable in dataset.data_vars:
@@ -384,6 +385,13 @@ def _finalize_inspection(
                     forecast_dims = _forecast_dims(dataset, variable)
                 except ValueError as exc:
                     layout_error = str(exc)
+            init_coordinate = (forecast_dims or {}).get("init_time")
+            initialization_days = (
+                _initialization_days(dataset, init_coordinate) if init_coordinate else None
+            )
+            initialization_schedule = (
+                _initialization_schedule(dataset, init_coordinate) if init_coordinate else None
+            )
     except Exception as exc:
         return (
             "invalid",

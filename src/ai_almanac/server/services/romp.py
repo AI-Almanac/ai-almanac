@@ -139,7 +139,8 @@ def _members(value: object) -> str | tuple[int, ...]:
     return _MEMBERS.validate_python(value)
 
 
-def _model_dims(value: object) -> dict[str, str] | None:
+def parse_model_dims(value: object) -> dict[str, str] | None:
+    """Parse a forecast dims mapping; raises pydantic.ValidationError for unsafe names."""
     return _MODEL_DIMS.validate_python(value or None)
 
 
@@ -190,7 +191,7 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "model_var_list": (model_var,),
         "unit_cvt_list": (model.get("unit_cvt"),),
         "file_pattern_list": (model_pattern,),
-        "model_dims_list": (_model_dims(model.get("forecast_dims")),),
+        "model_dims_list": (parse_model_dims(model.get("forecast_dims")),),
         "region": str(params.get("region") or config.get("romp_region") or "Ethiopia"),
         "lat_min": params.get("lat_min"),
         "lat_max": params.get("lat_max"),
