@@ -11,7 +11,8 @@ import {
 	onsetHasPassed,
 	probScaleMax,
 	rampColor,
-	windowColor
+	windowColor,
+	windowGradient
 } from '../src/lib/onset';
 
 const ISSUE = '2025-05-01';
@@ -134,5 +135,26 @@ describe('windowColor', () => {
 		expect(windowColor(WEEKLY_BINS, 0)).toBe(rampColor(1));
 		expect(windowColor(DAILY_BINS, DAILY_BINS.laterIndex)).toBe(rampColor(0));
 		expect(windowColor(WEEKLY_BINS, 0, true)).toBe(rampColor(0));
+	});
+});
+
+// Normalizes '#rrggbb' and 'rgb(r, g, b)' so colors from either source compare.
+function rgb(color: string): number[] {
+	if (color.startsWith('#')) return [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+	return (color.match(/\d+/g) ?? []).map(Number);
+}
+
+function gradientEnds(gradient: string): [number[], number[]] {
+	const stops = gradient.match(/#[0-9a-f]{6}|rgb\([^)]*\)/gi) ?? [];
+	return [rgb(stops[0]), rgb(stops[stops.length - 1])];
+}
+
+describe('windowGradient', () => {
+	it('runs from the soonest bin color on the left to the Later color on the right', () => {
+		for (const reversed of [false, true]) {
+			const [left, right] = gradientEnds(windowGradient(reversed));
+			expect(left).toEqual(rgb(windowColor(DAILY_BINS, 0, reversed)));
+			expect(right).toEqual(rgb(windowColor(DAILY_BINS, DAILY_BINS.laterIndex, reversed)));
+		}
 	});
 });
