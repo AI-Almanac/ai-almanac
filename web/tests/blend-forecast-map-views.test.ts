@@ -92,6 +92,28 @@ describe('BlendForecastMap views', () => {
 		expect(screen.queryByText('Day-level blend')).toBeNull();
 	});
 
+	it('retries a view that failed once it is chosen again', async () => {
+		let failDaily = true;
+		api.getBlendForecast.mockImplementation(async (_job: string, view: BlendForecastView) => {
+			if (view.resolution === 'daily' && failDaily) throw new Error('Daily forecast unavailable');
+			return payload(view, ALL_VIEWS);
+		});
+		render(BlendForecastMap, { jobId: 'job-1' });
+
+		await fireEvent.click(await screen.findByText('By day'));
+		await screen.findByText('Daily forecast unavailable');
+		// A failure is not retried on its own.
+		expect(requestedViews()).toEqual([ALL_VIEWS[0], ALL_VIEWS[2]]);
+
+		failDaily = false;
+		await fireEvent.click(screen.getByText('By week'));
+		await fireEvent.click(screen.getByText('By day'));
+
+		await screen.findByText('Jun 2 · Day 1');
+		expect(screen.queryByText('Daily forecast unavailable')).toBeNull();
+		expect(requestedViews()).toEqual([ALL_VIEWS[0], ALL_VIEWS[2], ALL_VIEWS[2]]);
+	});
+
 	it('switches the weekly view to the day-level blend', async () => {
 		serve(ALL_VIEWS);
 		render(BlendForecastMap, { jobId: 'job-1' });
