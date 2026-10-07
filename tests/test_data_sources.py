@@ -432,6 +432,18 @@ async def test_more_than_one_leftover_dim_is_rejected(
 
 
 @pytest.mark.asyncio
+async def test_single_valued_leftover_dim_is_not_taken_for_an_ensemble(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "height", lambda ds: ds.expand_dims(height=1))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "'height'" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
 async def test_precipitation_in_metres_converts_to_millimetres(
     client: httpx.AsyncClient, tmp_path: Path
 ) -> None:

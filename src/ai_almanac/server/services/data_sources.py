@@ -296,7 +296,7 @@ def _forecast_dims(dataset, variable: str) -> dict[str, str]:
 
     Roles come from the coordinates' types, not their names: the datetime dim
     is the start date and the timedelta dim the lead time, whatever they are
-    called, and a dim left over is the ensemble member.
+    called, and a dim left over with more than one value is the ensemble member.
     """
     import numpy as np
 
@@ -310,12 +310,27 @@ def _forecast_dims(dataset, variable: str) -> dict[str, str]:
         ),
     }
     roles["step"] = _lead_time_dim(dataset, [dim for dim in dims if dim not in roles.values()])
-    remaining = [dim for dim in dims if dim not in roles.values()]
+    member = _ensemble_member_dim(dataset, [dim for dim in dims if dim not in roles.values()])
+    if member:
+        roles["member"] = member
+    return _romp_safe_dims(roles)
+
+
+def _ensemble_member_dim(dataset, remaining: list[str]) -> str | None:
+    """The one dim left after the other roles, which must span several members."""
     if len(remaining) > 1:
         raise ValueError(f"Expected at most one ensemble member dimension, found {remaining}.")
-    if remaining:
-        roles["member"] = remaining[0]
-    return _romp_safe_dims(roles)
+    if not remaining:
+        return None
+    member = remaining[0]
+    # A single-valued extra axis (e.g. a size-1 height) is not an ensemble; taking
+    # it as one would silently make the source probabilistic.
+    if dataset.sizes[member] < 2:
+        raise ValueError(
+            f"Dimension {member!r} has a single value, so it is not an ensemble member. "
+            "Remove it, or give the forecast start date, lead time, lat and lon only."
+        )
+    return member
 
 
 def _romp_safe_dims(roles: dict[str, str]) -> dict[str, str]:
