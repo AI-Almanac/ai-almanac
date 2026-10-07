@@ -146,7 +146,9 @@ function rgb(color: string): number[] {
 
 function gradientEnds(gradient: string): [number[], number[]] {
 	const stops = gradient.match(/#[0-9a-f]{6}|rgb\([^)]*\)/gi) ?? [];
-	return [rgb(stops[0]), rgb(stops[stops.length - 1])];
+	const [first, last] = [stops.at(0), stops.at(-1)];
+	if (!first || !last) throw new Error(`no color stops in ${gradient}`);
+	return [rgb(first), rgb(last)];
 }
 
 describe('windowGradient', () => {
