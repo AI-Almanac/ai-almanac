@@ -15,8 +15,9 @@ AI Almanac runs in one of two modes, selected by `DEPLOYMENT_MODE`:
 | LLM host-side code execution | Enabled                                     | Disabled                                  |
 | Storage / runner             | Local filesystem, local process             | Local filesystem or GCS; local process or Modal |
 
-See [Current limitations](#current-limitations) before standing up a shared
-deployment.
+Shared mode is an early version, and we are working to make multi-user setup
+simpler. See [Current limitations](#current-limitations) before standing up a
+shared deployment.
 
 ---
 
@@ -195,6 +196,10 @@ internal Compose network, and Caddy only listens on loopback.
 
 ## Shared / hosted
 
+> **Early version.** This is a first pass at multi-user hosting. We are working
+> to streamline it, so expect setup steps and settings to change between
+> releases.
+
 Shared mode adds authentication and per-user ownership, in one of two ways
 selected by `AUTH_MODE`:
 
@@ -289,7 +294,7 @@ Shared mode **fails fast** unless the configuration is safe. It:
 - requires at least one administrator (`ADMIN_SUBJECTS`, `ADMIN_EMAILS`, or
   `ADMIN_GROUPS`);
 - in `proxy` mode, requires group admission (`ALLOWED_GROUPS`); in `globus`
-  mode, requires `GLOBUS_CLIENT_ID`;
+  mode, requires `GLOBUS_CLIENT_ID` and `GLOBUS_CLIENT_SECRET`;
 - requires `CREDENTIAL_ENCRYPTION_KEY` and a non-default
   `CHAT_FIGURE_SIGNING_SECRET`;
 - with local storage, requires `DATASET_MOUNT_ROOTS` so data sources cannot be
@@ -338,8 +343,7 @@ oauth2-proxy in front. Set:
 
 - `GLOBUS_CLIENT_ID` and `GLOBUS_CLIENT_SECRET` — a Globus confidential client
   allowed to introspect tokens for the AI Almanac API scope. Startup fails
-  without the client ID; without the secret, token checks fail and no one can
-  sign in.
+  unless both are set.
 - `ADMIN_SUBJECTS` / `ADMIN_EMAILS` — Globus identity IDs or emails to make
   administrators. Any valid Globus identity is admitted as a user;
   `ALLOWED_GROUPS` is not used in this mode.
@@ -420,7 +424,7 @@ and `VITE_GLOBUS_REDIRECT_URL` (default `<origin>/callback`).
 | ----------------------- | ------ | -------------------------------- | ------------------------------------------------------ |
 | `DEPLOYMENT_MODE`       | both   | `personal`                       | `personal` \| `shared`                                 |
 | `AUTH_MODE`             | both   | `none`                           | `none` \| `proxy` \| `globus`; shared accepts `proxy` or `globus` and treats anything else as `proxy` |
-| `GLOBUS_CLIENT_ID` / `GLOBUS_CLIENT_SECRET` | shared | — | Confidential client for Globus token checks; the ID is required when `AUTH_MODE=globus` |
+| `GLOBUS_CLIENT_ID` / `GLOBUS_CLIENT_SECRET` | shared | — | Confidential client for Globus token checks; both required when `AUTH_MODE=globus` |
 | `DATABASE_URL`          | both   | SQLite                           | PostgreSQL required in shared; the reference stack derives it from `POSTGRES_PASSWORD` |
 | `AI_ALMANAC_DATA_DIR`   | both   | per-user dir                     | DB (personal) + all artifacts                          |
 | `ADMIN_SUBJECTS`        | shared | —                                | Comma-separated OIDC subjects                          |
