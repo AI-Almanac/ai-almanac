@@ -59,3 +59,16 @@ def test_area_of_interest_reaches_romp_as_a_mask_on_the_staged_obs_grid(
     mask = xr.open_dataset(env["ROMP_NC_MASK"])["mask"]
     assert int(mask.sum()) == 17 * 9
     assert "ROMP_FOCUS_AREA" not in env
+
+
+def test_model_file_units_and_dims_reach_romp(tmp_path: Path) -> None:
+    import json
+
+    module = _load_modal_app()
+    dims = {"init_time": "time", "step": "prediction_timedelta_daily", "member": "number"}
+    config = {"model_name": "m", "model_config": {"unit_cvt": 1000.0, "forecast_dims": dims}}
+
+    env = module._romp_env(config, *module._stage_paths(tmp_path))
+
+    assert float(env["ROMP_UNIT_CVT"]) == 1000.0
+    assert json.loads(env["ROMP_MODEL_DIMS"]) == dims

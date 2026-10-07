@@ -271,14 +271,91 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
     )
 
 
-# Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
-_ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
+# Integer lead-time dims carry no timedelta dtype, so they are known by name.
+_INTEGER_LEAD_TIME_KEYWORDS = ("day", "step", "lead")
 
 
-def _has_ensemble_dim(dataset) -> bool:
-    return any(
-        keyword in str(name).lower() for name in dataset.dims for keyword in _ENSEMBLE_DIM_KEYWORDS
+def _dims_where(dataset, dims: list[str], predicate) -> list[str]:
+    return [dim for dim in dims if dim in dataset.coords and predicate(dataset[dim])]
+
+
+def _only(candidates: list[str], label: str) -> str:
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ValueError(f"No {label} dimension was found.")
+    raise ValueError(f"Found several possible {label} dimensions: {', '.join(candidates)}.")
+
+
+def _lead_time_dim(dataset, dims: list[str]) -> str:
+    import numpy as np
+
+    timedeltas = _dims_where(dataset, dims, lambda c: np.issubdtype(c.dtype, np.timedelta64))
+    if timedeltas:
+        return _only(timedeltas, "lead time")
+    named_integers = _dims_where(
+        dataset,
+        dims,
+        lambda c: (
+            np.issubdtype(c.dtype, np.integer)
+            and any(word in str(c.name).lower() for word in _INTEGER_LEAD_TIME_KEYWORDS)
+        ),
     )
+    return _only(named_integers, "lead time")
+
+
+def _forecast_dims(dataset, variable: str) -> dict[str, str]:
+    """Which of `variable`'s dims plays each role ROMP needs, keyed by ROMP's name.
+
+    Roles come from the coordinates' types, not their names: the datetime dim
+    is the start date and the timedelta dim the lead time, whatever they are
+    called, and a dim left over is the ensemble member.
+    """
+    import numpy as np
+
+    dims = [str(dim) for dim in dataset[variable].dims]
+    roles = {
+        "lat": _coordinate_name(dataset, _LATITUDE_NAMES),
+        "lon": _coordinate_name(dataset, _LONGITUDE_NAMES),
+        "init_time": _only(
+            _dims_where(dataset, dims, lambda c: np.issubdtype(c.dtype, np.datetime64)),
+            "forecast start date",
+        ),
+    }
+    roles["step"] = _lead_time_dim(dataset, [dim for dim in dims if dim not in roles.values()])
+    remaining = [dim for dim in dims if dim not in roles.values()]
+    if len(remaining) > 1:
+        raise ValueError(f"Expected at most one ensemble member dimension, found {remaining}.")
+    if remaining:
+        roles["member"] = remaining[0]
+    return roles
+
+
+# Multipliers from a precipitation total's CF `units` to the millimetres ROMP
+# thresholds assume.
+_MILLIMETRES_PER_UNIT = {
+    "m": 1000.0,
+    "metres": 1000.0,
+    "meters": 1000.0,
+    "m/day": 1000.0,
+    "mm": 1.0,
+    "mm/day": 1.0,
+    "mm day-1": 1.0,
+    "mm d-1": 1.0,
+    "kg m-2": 1.0,
+    "kg m**-2": 1.0,
+    "kg/m2": 1.0,
+}
+
+
+def _precipitation_unit_cvt(units: object) -> float:
+    try:
+        return _MILLIMETRES_PER_UNIT[str(units).strip().lower()]
+    except KeyError:
+        supported = ", ".join(repr(name) for name in _MILLIMETRES_PER_UNIT)
+        raise ValueError(
+            f"Unrecognized precipitation units {units!r}. Supported units: {supported}."
+        ) from None
 
 
 def _finalize_inspection(
@@ -298,9 +375,15 @@ def _finalize_inspection(
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             grid_step_deg = _grid_step_deg(dataset)
-            has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
             initialization_days = _initialization_days(dataset) if kind == "model" else None
             initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
+            units = dataset[variable].attrs.get("units") if variable in dataset.data_vars else None
+            forecast_dims, layout_error = None, None
+            if kind == "model" and variable in dataset.data_vars:
+                try:
+                    forecast_dims = _forecast_dims(dataset, variable)
+                except ValueError as exc:
+                    layout_error = str(exc)
     except Exception as exc:
         return (
             "invalid",
@@ -313,7 +396,12 @@ def _finalize_inspection(
         # An ensemble member dim can only be evaluated by ROMP's probabilistic
         # path; the deterministic path crashes on the extra dim. The file's
         # shape decides the mode, so this overrides any stored flag.
-        normalized["probabilistic"] = has_ensemble or bool(normalized.get("probabilistic"))
+        normalized["probabilistic"] = "member" in (forecast_dims or {}) or bool(
+            normalized.get("probabilistic")
+        )
+        # ROMP renames these to its own names before scoring, so model files
+        # keep whatever dim names their producer chose.
+        normalized["forecast_dims"] = forecast_dims
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {
@@ -359,6 +447,15 @@ def _finalize_inspection(
             f"Variable {variable!r} was not found in {files[0].name}. Available variables: {names}.",
             normalized,
         )
+    if kind == "model" and layout_error:
+        return "invalid", f"{files[0].name}: {layout_error}", normalized
+    if kind == "model" and units is not None:
+        # Declared units decide the conversion, like the ensemble dim decides
+        # probabilistic; files without a units attribute keep the stored value.
+        try:
+            normalized["unit_cvt"] = _precipitation_unit_cvt(units)
+        except ValueError as exc:
+            return "invalid", f"{variable!r} in {files[0].name}: {exc}", normalized
     if kind == "model" and normalized.get("start_year") is None:
         return (
             "invalid",

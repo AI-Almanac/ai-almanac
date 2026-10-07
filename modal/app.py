@@ -18,6 +18,7 @@ For GCS-free dev deployment, set:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tarfile
@@ -885,6 +886,16 @@ def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
 _SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area"})
 
 
+def _model_file_env(model_config: dict) -> dict:
+    """The model files' units and dim names, as found when the source was registered."""
+    env = {}
+    if model_config.get("unit_cvt") is not None:
+        env["ROMP_UNIT_CVT"] = repr(float(model_config["unit_cvt"]))
+    if model_config.get("forecast_dims"):
+        env["ROMP_MODEL_DIMS"] = json.dumps(model_config["forecast_dims"])
+    return env
+
+
 def _romp_env(
     config: dict,
     local_obs: Path,
@@ -895,6 +906,7 @@ def _romp_env(
     romp_params = config.get("romp_params", {})
     return {
         **os.environ,
+        **_model_file_env(config.get("model_config") or {}),
         "ROMP_OBS_DIR": str(local_obs),
         "ROMP_MODEL_DIR": str(local_model),
         "ROMP_MODEL_NAME": config["model_name"],
