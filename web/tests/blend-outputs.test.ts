@@ -13,6 +13,8 @@ const files = [
 	'coefs_blended_model_global_year2015.pkl',
 	'coefs_blended_model_global_final.pkl',
 	'coefs_blended_model_global_final.csv',
+	'forest_blended_forest_global_final.pkl',
+	'cv_preds_blended_forest_global.pkl',
 	'training_spec.yml',
 	'manifest.json'
 ].map((filename) => ({ filename }));
@@ -23,6 +25,7 @@ describe('groupBlendOutputs', () => {
 		expect(groups.map((g) => [g.key, g.files.map((f) => f.filename)])).toEqual([
 			['cv', ['summary_models_pooled.csv', 'summary_models.csv', 'yearly_metrics_global.csv']],
 			['final', ['coefs_blended_model_global_final.pkl', 'coefs_blended_model_global_final.csv']],
+			['final_day', ['forest_blended_forest_global_final.pkl']],
 			['spec', ['training_spec.yml']],
 			[
 				'other',
@@ -32,6 +35,7 @@ describe('groupBlendOutputs', () => {
 					'summary_models.pkl',
 					'yearly_metrics_global.pkl',
 					'coefs_blended_model_global_year2015.pkl',
+					'cv_preds_blended_forest_global.pkl',
 					'manifest.json'
 				]
 			]
