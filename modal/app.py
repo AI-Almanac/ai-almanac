@@ -40,9 +40,13 @@ ENABLE_GCS_FUNCTIONS = os.environ.get("ALMANAC_MODAL_ENABLE_GCS", "1").lower() n
     "false",
     "no",
 }
+# Pinned by digest: Modal caches from_registry builds by the image string, so a
+# mutable tag like :latest keeps serving whatever it resolved to first. Bump this
+# (and the momp rev in src/ai_almanac/envs/benchmark.pixi.toml) when ROMP changes.
+# This digest is romp:sha-af44762, hholb/ROMP main at af44762.
 ROMP_IMAGE_URI = os.environ.get(
     "ALMANAC_MODAL_ROMP_IMAGE_URI",
-    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp:latest",
+    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:5bc9422333408d2ed28dc96e336772f2a522da15b25e7ebf6df7d186cc72df65",
 )
 GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentials")
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
