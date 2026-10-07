@@ -37,9 +37,11 @@ project and read/write access to the `ai-almanac-tf-state` GCS bucket.
 
 CI owns image rollouts: pushes to `develop` deploy staging, pushes to `main`
 deploy prod (`.github/workflows/deploy-*.yml`), authenticating via Workload
-Identity Federation as `almanac-ci@`. Terraform deliberately ignores image,
-label, and scaling drift that CI deploys create — `tofu apply` never rolls a
-revision unless the config itself changed.
+Identity Federation as `almanac-ci@`. The `romp` image comes from hholb/ROMP's
+publish workflow, which authenticates the same way as `romp-publisher@`, a
+push-only account trusted only from that repo's `main` and `v*` tags.
+Terraform deliberately ignores image, label, and scaling drift that CI deploys
+create — `tofu apply` never rolls a revision unless the config itself changed.
 
 ## Manual, out-of-band steps
 
