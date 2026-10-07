@@ -1,27 +1,7 @@
-// Shared onset-forecast domain helpers: window labels, the color ramps, and
+// Shared onset-forecast domain helpers: the onset bins, the color ramps, and
 // pure formatting/derivation used by both the map and the cell inspector.
 // Keeping the ramps here means the map fill, the legend, and the inspector
 // heatmap all draw from one source of truth.
-
-export const WEEKS = ['week1', 'week2', 'week3', 'week4', 'later'] as const;
-export type Week = (typeof WEEKS)[number];
-
-export const WEEK_LABELS: Record<Week, string> = {
-	week1: 'Week 1',
-	week2: 'Week 2',
-	week3: 'Week 3',
-	week4: 'Week 4',
-	later: 'Later'
-};
-
-// Short labels for tight grids (the inset column headers).
-export const WEEK_SHORT: Record<Week, string> = {
-	week1: 'W1',
-	week2: 'W2',
-	week3: 'W3',
-	week4: 'W4',
-	later: 'Later'
-};
 
 // Only India's season is a monsoon; elsewhere (e.g. Ethiopia's Kiremt) the
 // accurate term is the start of the rainy season.
@@ -32,23 +12,15 @@ export function onsetEventName(regionId: string | null | undefined): string {
 }
 
 // The onset palette is matplotlib "plasma" — the ramp the science team uses in
-// their published onset graphics: soonest onset window = purple, latest =
-// yellow. One palette drives the map fill, the legend, the tooltip, and the
-// inspector so a hue means the same window everywhere. Sampled from purple up
-// (plasma's near-black low end is skipped so the dimmest dot still reads on the
-// dark basemap; the trade is that the yellow end sits low-contrast on the light
-// inspector panel — the block borders and ring carry it there).
-
-// Ordinal "which onset window" (week1..later), indexed to match WEEKS. Discrete
-// plasma samples running yellow (soonest onset — reads hot/imminent) → purple
-// (latest — recedes). Note: this reverses the science team's static legend
-// (purple=soonest → yellow=latest); we flip it so the nearest onset pops and
-// yellow stays "high signal" as in the magnitude ramp.
-export const WINDOW_RAMP = ['#f0f921', '#fb9f3a', '#d9586a', '#9e199d', '#4903a0'];
-
-// Continuous magnitude ramp (probability 0→1) built from the same plasma stops,
-// so the "by window" dots and the legend bar stay in the same palette: low reads
-// as dim purple, high as vivid yellow (hot = likely on the near-black basemap).
+// their published onset graphics. One palette drives the map fill, the legend,
+// the tooltip, and the inspector so a hue means the same thing everywhere.
+// Sampled from purple up (plasma's near-black low end is skipped so the dimmest
+// dot still reads on the dark basemap; the trade is that the yellow end sits
+// low-contrast on the light inspector panel — the block borders and ring carry
+// it there).
+//
+// Continuous magnitude ramp (probability 0→1): low reads as dim purple, high as
+// vivid yellow (hot = likely on the near-black basemap).
 export const PROB_RAMP: [number, string][] = [
 	[0, '#4903a0'],
 	[0.25, '#9e199d'],
@@ -93,6 +65,20 @@ export function rampColor(v: number, reversed = false): string {
 	return interpRamp(PROB_RAMP, reversed ? 1 - v : v);
 }
 
+// Ordinal "which onset bin" color: the same plasma run yellow (soonest onset —
+// reads hot/imminent) → purple (Later — recedes). This reverses the science
+// team's static legend (purple = soonest); we flip it so the nearest onset pops
+// and yellow stays "high signal" as in the magnitude ramp. `reversed` restores
+// their direction.
+export function windowColor(bins: OnsetBins, idx: number, reversed = false): string {
+	return rampColor(1 - idx / bins.laterIndex, reversed);
+}
+
+// Legend gradient for the ordinal bin colors, soonest on the left.
+export function windowGradient(reversed = false): string {
+	return probGradient(!reversed);
+}
+
 export function argmax(arr: number[]): number {
 	let idx = 0;
 	for (let i = 1; i < arr.length; i++) if (arr[i] > arr[idx]) idx = i;
@@ -114,18 +100,19 @@ export function monthLabel(iso: string): string {
 	return MONTHS[parseInt(iso.slice(5, 7)) - 1];
 }
 
-// ---- Absolute calendar dates for the onset windows -------------------------
+// ---- Onset bins: how a forecast's probabilities map onto the calendar ------
 //
-// The CSV has no absolute onset dates — only the forecast issue date (`time`)
-// and probabilities binned into 7-day lead windows. Per onset_blending's
-// `connect_utils.sum_week_probs`, the per-lead-day onset probabilities
-// `p_onset_day_0..27` are summed into weeks with day_0 in Week 1, and day_0 is
-// the issue date (lead 0). So:
-//   Week 1 = issue+0..+6, Week 2 = +7..+13, Week 3 = +14..+20, Week 4 = +21..+27,
-//   Later  = issue+28 onward (open-ended; onset beyond the 4-week horizon).
-// Isolated here so a single edit corrects every date shown if that binning changes.
-export const ONSET_WINDOW_DAYS = 7;
-export const LATER_START_DAY = ONSET_WINDOW_DAYS * 4; // issue + 28
+// The CSVs carry no absolute onset dates — only the forecast issue date
+// (`time`) and probabilities binned by lead day, where lead day d is the
+// calendar date issue + d (onset_blending's `assign_lead_bin`; lead 0, the
+// issue date itself, is never a bin). The pipeline's horizon is 28 lead days:
+//   Day d   = issue + d                  (d = 1..28)
+//   Week w  = issue + 7(w-1)+1 .. 7w     (Week 1 = issue+1..+7, Week 4 = +22..+28)
+//   Later   = issue + 29 onward          (open-ended; onset beyond the horizon)
+// Each binning is an `OnsetBins` descriptor, so a binning change touches only
+// this block and every date the UI shows follows it.
+export const ONSET_HORIZON_DAYS = 28;
+export const LATER_START_DAY = ONSET_HORIZON_DAYS + 1; // issue + 29
 const MS_PER_DAY = 86_400_000;
 
 // Whole days since the Unix epoch for a 'YYYY-MM-DD' string (UTC, no tz drift).
@@ -138,21 +125,93 @@ export function dayToIso(day: number): string {
 	return new Date(day * MS_PER_DAY).toISOString().slice(0, 10);
 }
 
-// Absolute [start, end] day-numbers for a bounded window (weekIndex 0..3).
-// The "later" bucket (index 4) has no bounded end and is handled separately.
-export function windowDayRange(
-	issueIso: string,
-	weekIndex: number
-): { start: number; end: number } {
-	const start = isoToDay(issueIso) + ONSET_WINDOW_DAYS * weekIndex;
-	return { start, end: start + ONSET_WINDOW_DAYS - 1 };
+export type OnsetResolution = 'weekly' | 'daily';
+
+export type DayRange = { start: number; end: number };
+
+export type OnsetBins = {
+	resolution: OnsetResolution;
+	// Every bin, the open-ended "Later" bin last.
+	count: number;
+	laterIndex: number;
+	// Calendar days covered by each bounded bin.
+	binDays: number;
+	labels: readonly string[];
+	shortLabels: readonly string[];
+	// Absolute [start, end] day numbers of a bounded bin (idx < laterIndex).
+	dayRange(issueIso: string, idx: number): DayRange;
+};
+
+function onsetBins(
+	resolution: OnsetResolution,
+	binDays: number,
+	label: (n: number) => string,
+	shortLabel: (n: number) => string
+): OnsetBins {
+	const bounded = Array.from({ length: ONSET_HORIZON_DAYS / binDays }, (_, i) => i + 1);
+	return {
+		resolution,
+		count: bounded.length + 1,
+		laterIndex: bounded.length,
+		binDays,
+		labels: [...bounded.map(label), 'Later'],
+		shortLabels: [...bounded.map(shortLabel), 'Later'],
+		dayRange(issueIso, idx) {
+			const start = isoToDay(issueIso) + binDays * idx + 1;
+			return { start, end: start + binDays - 1 };
+		}
+	};
+}
+
+export const WEEKLY_BINS = onsetBins(
+	'weekly',
+	7,
+	(w) => `Week ${w}`,
+	(w) => `W${w}`
+);
+export const DAILY_BINS = onsetBins(
+	'daily',
+	1,
+	(d) => `Day ${d}`,
+	(d) => `D${d}`
+);
+
+export function binsFor(resolution: OnsetResolution): OnsetBins {
+	return resolution === 'daily' ? DAILY_BINS : WEEKLY_BINS;
+}
+
+// First calendar day of the open-ended "Later" bin.
+export function laterStartDay(issueIso: string): number {
+	return isoToDay(issueIso) + LATER_START_DAY;
+}
+
+// Calendar description of one bin for one forecast: "Jun 2–Jun 8", "Jun 5",
+// or "after Jun 29" for Later.
+export function binDateLabel(bins: OnsetBins, issueIso: string, idx: number): string {
+	if (idx >= bins.laterIndex) return `after ${fmtDate(dayToIso(laterStartDay(issueIso) - 1))}`;
+	const r = bins.dayRange(issueIso, idx);
+	return r.start === r.end
+		? fmtDate(dayToIso(r.start))
+		: `${fmtDate(dayToIso(r.start))}–${fmtDate(dayToIso(r.end))}`;
+}
+
+// Top of the colour ramp. Weekly bins and "Later" use the full 0–100%; daily
+// probabilities are small (mostly under 15%), so a 0–100% ramp would paint
+// every day the same dim colour. They scale to the largest bounded-day
+// probability in `rows`, rounded up to a whole percent so the legend reads true.
+export function probScaleMax(bins: OnsetBins, rows: number[][], binIdx?: number): number {
+	if (bins.resolution === 'weekly' || binIdx === bins.laterIndex) return 1;
+	let peak = 0;
+	for (const row of rows)
+		for (let i = 0; i < bins.laterIndex; i++) if ((row[i] ?? 0) > peak) peak = row[i];
+	return Math.min(1, Math.max(0.01, Math.ceil(peak * 100 - 1e-9) / 100));
 }
 
 // ---- "Peak onset window passed" --------------------------------------------
 //
-// Every forecast's windows are forward-looking (onset *begins* in week N after
-// issue), so once a forecast is issued past the window when onset was most
-// likely, it has no window left to place real mass in and dumps it into "Later"
+// Every forecast's bins are forward-looking (onset *begins* in bin N after
+// issue), so once a forecast is issued past the bin when onset was most
+// likely, it has no bin left to place real mass in and dumps it into "Later"
 // — a misleading bright dot. We gray those cells out, matching the science
 // team's static figures. This is NOT a claim that onset was observed: we have no
 // observed onset date, so we estimate the most-likely onset per cell from the
@@ -162,19 +221,23 @@ export function windowDayRange(
 export const ONSET_PASSED_COLOR = '#8b929c';
 
 // Probability-weighted consensus onset day for a cell across the whole season,
-// using only the bounded windows ("Later" carries no date). null if no forecast
+// using only the bounded bins ("Later" carries no date). null if no forecast
 // ever dated the onset. Forecasts that dump their mass into "Later" contribute
 // nothing, so the estimate is driven by the forecasts that actually placed onset
 // on the calendar — i.e. where the models agree.
-export function consensusOnsetDay(issueDates: string[], probs: number[][]): number | null {
+export function consensusOnsetDay(
+	bins: OnsetBins,
+	issueDates: string[],
+	probs: number[][]
+): number | null {
 	let wsum = 0;
 	let dsum = 0;
 	issueDates.forEach((iso, di) => {
 		const row = probs[di] ?? [];
-		for (let w = 0; w < 4; w++) {
-			const p = row[w] ?? 0;
+		for (let b = 0; b < bins.laterIndex; b++) {
+			const p = row[b] ?? 0;
 			if (p <= 0) continue;
-			const r = windowDayRange(iso, w);
+			const r = bins.dayRange(iso, b);
 			wsum += p;
 			dsum += (p * (r.start + r.end)) / 2;
 		}

@@ -12,7 +12,12 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
-	import { getBlendCellMetrics, type BlendCellMetrics, type SkillLayer } from '$lib/api';
+	import {
+		getBlendCellMetrics,
+		type BlendCellMetrics,
+		type BlendModel,
+		type SkillLayer
+	} from '$lib/api';
 	import { getRegionBoundary } from '$lib/api/regions';
 	import SegmentedTabs, { type SegmentedTabOption } from '$lib/components/SegmentedTabs.svelte';
 	import { interpolateStops } from '$lib/components/metric-map/gridData';
@@ -28,6 +33,7 @@
 		shareBeatingBaseline,
 		skillBounds
 	} from './blend-skill-map';
+	import { DEFAULT_BLEND_MODEL, blendLabel } from './blend-summary';
 
 	type Props = { jobId: string };
 	let { jobId }: Props = $props();
@@ -51,6 +57,8 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let requested = $state<string | null>(null);
+	/** Remembered per blend job, so opening another job starts on the default blend. */
+	let modelChoice = $state<{ jobId: string; model: BlendModel } | null>(null);
 	/** ADM3 outlines for named areas; null draws them as centroid squares instead. */
 	let boundaries = $state<GeoJSON.FeatureCollection | null>(null);
 	/** Areas with no matching outline, drawn as markers at their centroid. */
@@ -79,6 +87,13 @@
 	const options = $derived<SegmentedTabOption[]>(
 		grids.map((g) => ({ value: g.metric, label: g.label }))
 	);
+	const model = $derived<BlendModel>(
+		modelChoice?.jobId === jobId ? modelChoice.model : DEFAULT_BLEND_MODEL
+	);
+	const modelOptions = $derived<SegmentedTabOption[]>(
+		(metrics?.available_models ?? []).map((m) => ({ value: m, label: blendLabel(m) }))
+	);
+	const shownBlend = $derived(metrics ? blendLabel(metrics.blend_model).toLowerCase() : 'blend');
 	const share = $derived(grid ? shareBeatingBaseline(grid) : null);
 	const extent = $derived(grid?.scale_max_abs ?? 0);
 	const lowCountPoints = $derived(
@@ -148,18 +163,32 @@
 		}
 	}
 
-	// Reload when the selected blend changes; the component is reused across blends.
+	function selectModel(value: string) {
+		const chosen = metrics?.available_models.find((m) => m === value);
+		if (chosen) modelChoice = { jobId, model: chosen };
+	}
+
+	/**
+	 * Reload when the selected job or blend changes; the component is reused across
+	 * jobs. Switching blend within a job keeps the current map, metric and outlines
+	 * on screen until the new values arrive, so the camera and basemap stay put.
+	 */
 	$effect(() => {
 		const id = jobId;
+		const blend = model;
+		const sameJob = untrack(() => metrics?.job_id === id);
 		let cancelled = false;
 		loading = true;
 		error = null;
-		metrics = null;
-		requested = null;
-		getBlendCellMetrics(id)
+		if (!sameJob) {
+			metrics = null;
+			requested = null;
+		}
+		getBlendCellMetrics(id, blend)
 			.then((result) => {
 				if (cancelled) return;
 				metrics = result;
+				if (sameJob) return;
 				boundaries = null;
 				if (result.areas.length && result.region_id) void loadBoundaries(result.region_id);
 			})
@@ -320,17 +349,27 @@
 >
 	<div class="map-topline">
 		<h3>{byArea ? 'By area' : 'By grid point'}</h3>
-		{#if options.length > 1}
-			<SegmentedTabs
-				{options}
-				value={grid?.metric ?? ''}
-				onSelect={(value) => (requested = value)}
-				ariaLabel="Map metric"
-			/>
-		{/if}
+		<div class="map-choices">
+			{#if modelOptions.length > 1}
+				<SegmentedTabs
+					options={modelOptions}
+					value={model}
+					onSelect={selectModel}
+					ariaLabel="Blend shown on the map"
+				/>
+			{/if}
+			{#if options.length > 1}
+				<SegmentedTabs
+					{options}
+					value={grid?.metric ?? ''}
+					onSelect={(value) => (requested = value)}
+					ariaLabel="Map metric"
+				/>
+			{/if}
+		</div>
 	</div>
 
-	{#if loading}
+	{#if loading && !metrics}
 		<p class="muted">Loading per-point skill…</p>
 	{:else if error}
 		<p class="muted">{error}</p>
@@ -383,7 +422,7 @@
 		<p class="caption">
 			{#if share && share.total > 0}
 				{grid?.label} against Traditional Climatology at each {byArea ? 'area' : 'grid point'}. The
-				blend beats it at
+				{shownBlend} beats it at
 				<strong>{share.better} of {share.total}</strong>
 				{unitWord} ({Math.round((100 * share.better) / share.total)}%).
 			{/if}
@@ -421,6 +460,13 @@
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
+		gap: 0.6rem;
+	}
+
+	.map-choices {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
 		gap: 0.6rem;
 	}
 

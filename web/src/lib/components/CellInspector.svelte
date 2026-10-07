@@ -1,40 +1,48 @@
 <script lang="ts">
 	import type { BlendForecastPoint } from '$lib/api';
 	import {
-		WEEKS,
-		WEEK_LABELS,
 		rampColor,
 		argmax,
+		binDateLabel,
 		fmtProb,
 		fmtDate,
 		isoToDay,
 		dayToIso,
-		windowDayRange,
 		consensusOnsetDay,
 		monthLabel,
-		LATER_START_DAY
+		probScaleMax,
+		type OnsetBins
 	} from '$lib/onset';
 	import { formatCoord } from '$lib/geo';
 
 	type Props = {
 		point: BlendForecastPoint;
+		bins: OnsetBins;
 		issueDates: string[];
 		regionName: string | null;
 		selectedDate: string;
 		soonestColor: 'yellow' | 'purple';
 		onClose: () => void;
 	};
-	let { point, issueDates, regionName, selectedDate, soonestColor, onClose }: Props = $props();
+	let { point, bins, issueDates, regionName, selectedDate, soonestColor, onClose }: Props =
+		$props();
 
 	// Matches the map toggle: the vivid end marks the highest probability.
 	const reversed = $derived(soonestColor === 'purple');
 
-	// Season date axis: earliest Week-1 start → latest Week-4 end, across all
-	// forecasts. "Later" is open-ended so it lives off-axis in its own column.
+	const boundedBins = $derived(Array.from({ length: bins.laterIndex }, (_, i) => i));
+	// Daily probabilities are small, so the dated bins scale to this cell's season
+	// peak; "Later" keeps the full 0–100% (see probScaleMax).
+	const scaleMax = $derived(probScaleMax(bins, point.probs));
+	const laterScaleMax = $derived(probScaleMax(bins, point.probs, bins.laterIndex));
+
+	// Season date axis: the earliest forecast's first bin → the end of the latest
+	// forecast's last dated bin. "Later" is open-ended so it lives off-axis in its
+	// own column.
 	const axis = $derived.by(() => {
 		const days = issueDates.map(isoToDay);
-		const start = Math.min(...days) + 1; // earliest Week 1 start
-		const end = Math.max(...days) + 28; // latest Week 4 end
+		const start = bins.dayRange(dayToIso(Math.min(...days)), 0).start;
+		const end = bins.dayRange(dayToIso(Math.max(...days)), bins.laterIndex - 1).end + 1;
 		const span = Math.max(1, end - start);
 
 		const ticks: { label: string; day: number }[] = [];
@@ -66,16 +74,12 @@
 		return row.some((p) => p > 0) ? argmax(row) : -1;
 	}
 
-	function laterStartIso(issueIso: string): string {
-		return dayToIso(isoToDay(issueIso) + LATER_START_DAY);
-	}
-
 	// Probability-weighted consensus onset date across all forecasts, using only
 	// the bounded (dated) windows. Early forecasts that put their mass in "Later"
 	// contribute little, so the estimate is driven by forecasts that actually
 	// place onset on the calendar — i.e. where the models agree.
 	const consensus = $derived.by(() => {
-		const mid = consensusOnsetDay(issueDates, point.probs);
+		const mid = consensusOnsetDay(bins, issueDates, point.probs);
 		if (mid == null) return null;
 		return { start: Math.round(mid - 3), end: Math.round(mid + 3) };
 	});
@@ -125,7 +129,7 @@
 		</div>
 
 		{#each issueDates as d, di (d)}
-			{@const row = point.probs[di] ?? [0, 0, 0, 0, 0]}
+			{@const row = point.probs[di] ?? []}
 			{@const best = bestIndex(row)}
 			<div class="cal-row">
 				<span class="cal-date" class:current={d === selectedDate}>{fmtDate(d)}</span>
@@ -138,26 +142,24 @@
 							)}%"
 						></span>
 					{/if}
-					{#each [0, 1, 2, 3] as w (w)}
-						{@const r = windowDayRange(d, w)}
+					{#each boundedBins as w (w)}
 						<span
 							class="cal-seg"
 							class:best={w === best}
-							style="left: {leftPct(r.start)}%; width: {widthPct(7)}%; background: {rampColor(
-								row[w] ?? 0,
-								reversed
-							)}"
-							title="{WEEK_LABELS[WEEKS[w]]} · {fmtDate(dayToIso(r.start))}–{fmtDate(
-								dayToIso(r.end)
-							)}: {fmtProb(row[w] ?? 0)}"
+							style="left: {leftPct(bins.dayRange(d, w).start)}%; width: {widthPct(
+								bins.binDays
+							)}%; background: {rampColor((row[w] ?? 0) / scaleMax, reversed)}"
+							title="{bins.labels[w]} · {binDateLabel(bins, d, w)}: {fmtProb(row[w] ?? 0)}"
 						></span>
 					{/each}
 				</div>
 				<span
 					class="cal-later"
-					class:best={best === 4}
-					style="background: {rampColor(row[4] ?? 0, reversed)}"
-					title="Later · onset after {fmtDate(laterStartIso(d))}: {fmtProb(row[4] ?? 0)}"
+					class:best={best === bins.laterIndex}
+					style="background: {rampColor((row[bins.laterIndex] ?? 0) / laterScaleMax, reversed)}"
+					title="Later · onset {binDateLabel(bins, d, bins.laterIndex)}: {fmtProb(
+						row[bins.laterIndex] ?? 0
+					)}"
 				></span>
 			</div>
 		{/each}

@@ -289,3 +289,42 @@ def test_coverage_summary_reads_areas_too() -> None:
     coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job", _TWO_AREAS))
     brier = next(c for c in coverage if c.metric == "brier_skill_score")
     assert (brier.points, brier.points_better) == (2, 1)
+
+
+# The day-level blend beats the baseline at both points (rps 0.20 vs 0.80 and 0.40),
+# so its skill is +0.75 and +0.5 where the week-level blend scores +0.5 and -1.0.
+_BOTH_BLENDS = _csv(
+    _row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model"),
+    _row("10.25_33.00", "0.80", "0.80", "0.60", "24", "blended_model"),
+    _row("10.00_33.00", "0.40", "0.20", "0.72", "24", "blended_forest"),
+    _row("10.25_33.00", "0.30", "0.20", "0.66", "24", "blended_forest"),
+    _row("10.00_33.00", "1.00", "0.80", "0.65", "24", "unc_clim_raw"),
+    _row("10.25_33.00", "0.40", "0.40", "0.62", "24", "unc_clim_raw"),
+)
+
+
+def test_defaults_to_the_week_level_blend() -> None:
+    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS)
+    grid = _grid(result, "ranked_probability_skill_score")
+    assert result.blend_model == "blended_model"
+    assert [row[0] for row in grid.values] == [pytest.approx(0.5), pytest.approx(-1.0)]
+
+
+def test_scores_the_day_level_blend_when_asked() -> None:
+    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS, model="blended_forest")
+    grid = _grid(result, "ranked_probability_skill_score")
+    assert result.blend_model == "blended_forest"
+    assert [row[0] for row in grid.values] == [pytest.approx(0.75), pytest.approx(0.5)]
+
+
+def test_names_every_blend_the_summary_scores() -> None:
+    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS)
+    assert result.available_models == ["blended_model", "blended_forest"]
+
+
+def test_a_blend_trained_before_the_day_level_blend_offers_only_the_week_level() -> None:
+    result = blend_cells.build_cell_metrics("job-1", _TWO_POINTS)
+    assert result.available_models == ["blended_model"]
+    missing = blend_cells.build_cell_metrics("job-1", _TWO_POINTS, model="blended_forest")
+    assert missing.grids == [] and missing.areas == []
+    assert missing.available_models == ["blended_model"]

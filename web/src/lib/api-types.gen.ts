@@ -1019,8 +1019,10 @@ export interface paths {
          * Get Blend Forecast
          * @description Return blended onset probabilities for all issue dates and grid points.
          *
-         *     The probabilities CSV is reshaped into per-point series once, stored beside
-         *     the job's outputs, and served from there on later reads.
+         *     `model` picks the week-level or day-level blend; `resolution` bins its
+         *     probabilities by week or by day (only the day-level blend has days). The
+         *     probabilities CSV is reshaped into per-point series once per view, stored
+         *     beside the job's outputs, and served from there on later reads.
          */
         get: operations["get_blend_forecast_jobs__job_id__blend_forecast_get"];
         put?: never;
@@ -1064,12 +1066,14 @@ export interface paths {
         };
         /**
          * Get Blend Cell Metrics
-         * @description Return per-grid-point blend skill, reshaped into grids for the map.
+         * @description Return one blend's per-grid-point skill, reshaped into grids for the map.
          *
          *     Returns empty ``grids`` rather than 404 when the per-cell summary is absent or
-         *     lacks the blend and baseline rows: the frontend's request wrapper throws on
-         *     any non-OK status, so a 404 would paint an error state over a run that simply
-         *     has nothing to map.
+         *     lacks the requested blend and baseline rows: the frontend's request wrapper
+         *     throws on any non-OK status, so a 404 would paint an error state over a run
+         *     that simply has nothing to map. ``available_models`` names the blends the
+         *     summary does score, so a blend trained before the day-level blend existed
+         *     offers no choice.
          */
         get: operations["get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get"];
         put?: never;
@@ -2174,8 +2178,15 @@ export interface components {
         BlendCellMetrics: {
             /** Job Id */
             job_id: string;
+            /**
+             * Blend Model
+             * @enum {string}
+             */
+            blend_model: "blended_forest" | "blended_model";
             /** Baseline Model */
             baseline_model: string;
+            /** Available Models */
+            available_models: ("blended_forest" | "blended_model")[];
             /** Cell Size Deg */
             cell_size_deg: number | null;
             /** Min Observations */
@@ -6720,7 +6731,10 @@ export interface operations {
     };
     get_blend_forecast_jobs__job_id__blend_forecast_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: "daily_model" | "weekly_model";
+                resolution?: "daily" | "weekly";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -6788,7 +6802,9 @@ export interface operations {
     };
     get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: "blended_forest" | "blended_model";
+            };
             header?: never;
             path: {
                 job_id: string;

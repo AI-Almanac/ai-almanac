@@ -3,23 +3,32 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
-	import { getBlendForecast, type BlendForecastData, type BlendForecastPoint } from '$lib/api';
+	import {
+		DEFAULT_BLEND_FORECAST_VIEW,
+		getBlendForecast,
+		type BlendForecastData,
+		type BlendForecastModel,
+		type BlendForecastPoint,
+		type BlendForecastResolution,
+		type BlendForecastView
+	} from '$lib/api';
 	import { getRegionBoundary } from '$lib/api/regions';
 	import {
-		WEEKS,
-		WEEK_LABELS,
 		probGradient,
-		WINDOW_RAMP,
+		windowColor,
+		windowGradient,
 		ONSET_PASSED_COLOR,
 		rampColor,
 		consensusOnsetDay,
 		onsetHasPassed,
 		argmax,
+		binDateLabel,
+		binsFor,
+		probScaleMax,
 		fmtProb,
 		fmtDate,
 		monthLabel,
-		onsetEventName,
-		type Week
+		onsetEventName
 	} from '$lib/onset';
 	import CellInspector from './CellInspector.svelte';
 	import MapTooltip from './MapTooltip.svelte';
@@ -57,14 +66,45 @@
 		return isDark ? 'rgba(255,255,255,0.35)' : 'rgba(20,25,35,0.4)';
 	}
 
-	let data = $state<BlendForecastData | null>(null);
+	// One payload per (model, resolution) view, fetched on first selection: the
+	// daily payload is several times the weekly one, so it never loads up front.
+	let payloads = $state.raw<Record<string, BlendForecastData>>({});
+	let viewErrors = $state.raw<Record<string, string>>({});
+	const requestedViews = new Set<string>();
+
+	let resolution = $state<BlendForecastResolution>('weekly');
+	// Only the day-level blend has daily probabilities; the weekly view offers both.
+	let weeklyModel = $state<BlendForecastModel>('weekly_model');
+	const view = $derived<BlendForecastView>(
+		resolution === 'daily'
+			? { model: 'daily_model', resolution: 'daily' }
+			: { model: weeklyModel, resolution: 'weekly' }
+	);
+	const data = $derived(payloads[viewKey(view)] ?? null);
+	const error = $derived(viewErrors[viewKey(view)] ?? null);
+	const loading = $derived(!data && !error);
+	const bins = $derived(binsFor(view.resolution));
+
+	// Read from the default payload, which every forecast has and loads first.
+	const availableViews = $derived(
+		payloads[viewKey(DEFAULT_BLEND_FORECAST_VIEW)]?.available_views ?? []
+	);
+	const offersDailyView = $derived(availableViews.some((v) => v.resolution === 'daily'));
+	const offersModelChoice = $derived(
+		availableViews.some((v) => v.resolution === 'weekly' && v.model === 'daily_model')
+	);
+
+	function viewKey(v: BlendForecastView): string {
+		return `${v.model}.${v.resolution}`;
+	}
+
 	let adm3Boundaries = $state<GeoJSON.FeatureCollection | null>(null);
 	let boundaryError = $state<string | null>(null);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
 
 	let selectedDate = $state('');
-	let selectedWeek = $state<Week>('week1');
+	// The highlighted onset bin, remembered per resolution so toggling keeps each.
+	let selectedBins = $state<Record<BlendForecastResolution, number>>({ weekly: 0, daily: 0 });
+	const selectedBin = $derived(selectedBins[view.resolution]);
 	// 'window' colors by the selected window's probability (magnitude); 'expected'
 	// collapses the distribution to each point's most-likely window (which window).
 	let colorMode = $state<'window' | 'expected'>('window');
@@ -75,12 +115,11 @@
 	// The toggle flips the whole plasma direction: the vivid end marks both the
 	// soonest window and the highest probability.
 	const reversed = $derived(soonestColor === 'purple');
-	const windowRamp = $derived(reversed ? [...WINDOW_RAMP].reverse() : WINDOW_RAMP);
 
 	// Per-cell estimated onset day (index-aligned to data.points), used to gray a
 	// cell once the shown forecast was issued after onset likely occurred.
 	const cellConsensus = $derived.by(() =>
-		data ? data.points.map((pt) => consensusOnsetDay(data!.issue_dates, pt.probs)) : []
+		data ? data.points.map((pt) => consensusOnsetDay(bins, data!.issue_dates, pt.probs)) : []
 	);
 
 	let playing = $state(false);
@@ -95,7 +134,17 @@
 	let tooltipLon = $state(0);
 	let tooltipProbs = $state<number[] | null>(null);
 
-	let selectedCell = $state<BlendForecastPoint | null>(null);
+	// Keyed rather than held, so the inspector follows the cell across views.
+	let selectedCellKey = $state<string | null>(null);
+	const selectedCell = $derived(
+		selectedCellKey && data
+			? (data.points.find((pt) => pointKey(pt) === selectedCellKey) ?? null)
+			: null
+	);
+
+	function pointKey(pt: BlendForecastPoint): string {
+		return pt.id ?? `${pt.lat}_${pt.lon}`;
+	}
 
 	// Subtler boundary styling than the benchmark map's: this map's bright plasma
 	// cells are the focus, so thin translucent lines over a soft dark halo keep
@@ -127,7 +176,7 @@
 	);
 	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
 
-	const EMPTY_PROBS = [0, 0, 0, 0, 0];
+	const EMPTY_PROBS: number[] = [];
 
 	// Smallest positive gap between unique coordinate values — the native grid
 	// step. Using the min (not the mean) keeps cells from overlapping when the
@@ -159,7 +208,7 @@
 	// MapLibre expression.
 	function featureStyle(
 		row: number[],
-		week: Week,
+		bin: number,
 		passed: boolean
 	): { color: string; opacity: number } {
 		// Onset already occurred by this issue date: the forward outlook is stale,
@@ -169,9 +218,10 @@
 			const w = argmax(row);
 			// Fainter where the timing is uncertain — a weak plurality reads as
 			// "we don't really know when," with a visible floor so no dot vanishes.
-			return { color: windowRamp[w], opacity: 0.4 + 0.55 * Math.min(1, row[w]) };
+			const certainty = Math.min(1, (row[w] ?? 0) / scaleMax);
+			return { color: windowColor(bins, w, reversed), opacity: 0.4 + 0.55 * certainty };
 		}
-		return { color: rampColor(row[WEEKS.indexOf(week)] ?? 0, reversed), opacity: 0.9 };
+		return { color: rampColor((row[bin] ?? 0) / scaleMax, reversed), opacity: 0.9 };
 	}
 
 	function stylePoint(
@@ -179,18 +229,18 @@
 		pt: BlendForecastPoint,
 		idx: number,
 		date: string,
-		week: Week
+		bin: number
 	) {
 		const dateIdx = d.issue_dates.indexOf(date);
 		const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
 		const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[idx] ?? null);
-		return featureStyle(row, week, passed);
+		return featureStyle(row, bin, passed);
 	}
 
 	function buildPointGeoJson(
 		d: BlendForecastData,
 		date: string,
-		week: Week
+		bin: number
 	): ForecastFeatureCollection {
 		const dateIdx = d.issue_dates.indexOf(date);
 		const hx = gridStep.dx / 2;
@@ -200,7 +250,7 @@
 			features: d.points.map((pt, i) => {
 				const row = dateIdx >= 0 ? (pt.probs[dateIdx] ?? EMPTY_PROBS) : EMPTY_PROBS;
 				const passed = dateIdx >= 0 && onsetHasPassed(date, cellConsensus[i] ?? null);
-				const { color, opacity } = featureStyle(row, week, passed);
+				const { color, opacity } = featureStyle(row, bin, passed);
 				// A square covering the point's grid cell, so cells tile the grid
 				// and scale with zoom (geographic units) rather than overlapping.
 				const ring = [
@@ -219,20 +269,25 @@
 		};
 	}
 
-	function buildGeoJson(d: BlendForecastData, date: string, week: Week): ForecastFeatureCollection {
+	function buildGeoJson(
+		d: BlendForecastData,
+		date: string,
+		bin: number
+	): ForecastFeatureCollection {
 		if (adm3Boundaries && usesAdm3Polygons(d)) {
 			const polygonGeojson = buildAdm3ForecastGeoJson(d, adm3Boundaries, (pt, idx) =>
-				stylePoint(d, pt, idx, date, week)
+				stylePoint(d, pt, idx, date, bin)
 			);
 			if (polygonGeojson) return polygonGeojson;
 		}
-		return buildPointGeoJson(d, date, week);
+		return buildPointGeoJson(d, date, bin);
 	}
 
 	function updateSource() {
 		if (!map || !data || !selectedDate) return;
 		const src = map.getSource('blend') as maplibregl.GeoJSONSource | undefined;
-		if (src) src.setData(buildGeoJson(data, selectedDate, selectedWeek));
+		if (src) src.setData(buildGeoJson(data, selectedDate, selectedBin));
+		else initLayer(data);
 	}
 
 	// Nudge the dark basemap so land reads as a surface a shade above the void
@@ -254,7 +309,7 @@
 
 	function initLayer(d: BlendForecastData, { fit = true } = {}) {
 		if (!map) return;
-		const geojson = buildGeoJson(d, selectedDate, selectedWeek);
+		const geojson = buildGeoJson(d, selectedDate, selectedBin);
 		if (map.getSource('blend')) {
 			(map.getSource('blend') as maplibregl.GeoJSONSource).setData(geojson);
 			return;
@@ -304,19 +359,20 @@
 			const { geojson } = await getRegionBoundary(regionId, 'adm3');
 			if (!isFeatureCollection(geojson)) throw new Error('ADM3 boundary response was not GeoJSON');
 			const joined = buildAdm3ForecastGeoJson(d, geojson, (pt, idx) =>
-				stylePoint(d, pt, idx, selectedDate, selectedWeek)
+				stylePoint(d, pt, idx, selectedDate, selectedBin)
 			);
 			if (!joined) throw new Error('ADM3 boundaries did not match forecast areas');
 			adm3Boundaries = geojson;
 			boundaryError = null;
-			if (mapReady) {
-				initLayer(d, { fit: false });
-				fitToData(d);
+			// The view may have changed while the boundaries loaded; draw the current one.
+			if (mapReady && data) {
+				initLayer(data, { fit: false });
+				fitToData(data);
 			}
 		} catch (e) {
 			boundaryError = e instanceof Error ? e.message : 'Failed to load ADM3 boundaries';
 			adm3Boundaries = null;
-			if (mapReady) initLayer(d, { fit: false });
+			if (mapReady && data) initLayer(data, { fit: false });
 		}
 	}
 
@@ -338,7 +394,7 @@
 	function fitToData(d: BlendForecastData) {
 		if (!map || !d.points.length) return;
 		const bounds = new maplibregl.LngLatBounds();
-		const geojson = buildGeoJson(d, selectedDate, selectedWeek);
+		const geojson = buildGeoJson(d, selectedDate, selectedBin);
 		if (geojson.features.some((feature) => feature.geometry.type !== 'Point')) {
 			for (const feature of geojson.features)
 				extendBoundsWithCoordinates(bounds, feature.geometry.coordinates);
@@ -354,7 +410,7 @@
 
 	$effect(() => {
 		if (mapReady && data && selectedDate) {
-			selectedWeek; // track
+			selectedBin; // track
 			colorMode; // track
 			soonestColor; // track
 			updateSource();
@@ -394,6 +450,52 @@
 	const dataThrough = $derived(data ? latestIssueDate(data.issue_dates) : null);
 	const dateIndex = $derived(data ? data.issue_dates.indexOf(selectedDate) : -1);
 	const dateCount = $derived(data?.issue_dates.length ?? 0);
+
+	// Top of the colour ramp for the shown issue date: 100% for weeks, the peak
+	// daily probability for days (see probScaleMax). Expected-onset mode scales
+	// its certainty fade by the same peak.
+	const scaleMax = $derived(
+		data && dateIndex >= 0
+			? probScaleMax(
+					bins,
+					data.points.map((pt) => pt.probs[dateIndex] ?? EMPTY_PROBS),
+					colorMode === 'window' ? selectedBin : undefined
+				)
+			: 1
+	);
+
+	async function loadView(v: BlendForecastView) {
+		const key = viewKey(v);
+		if (requestedViews.has(key)) return;
+		requestedViews.add(key);
+		try {
+			const payload = await getBlendForecast(jobId, v);
+			payloads = { ...payloads, [key]: payload };
+		} catch (e) {
+			const message = e instanceof Error ? e.message : 'Failed to load blend forecast';
+			viewErrors = { ...viewErrors, [key]: message };
+		}
+	}
+
+	$effect(() => {
+		void loadView(view);
+	});
+
+	// Views share issue dates, but keep the selection valid if one ever differs.
+	$effect(() => {
+		if (data && !data.issue_dates.includes(selectedDate)) selectedDate = data.issue_dates[0] ?? '';
+	});
+
+	let adm3Requested = false;
+	$effect(() => {
+		if (!data || adm3Requested) return;
+		adm3Requested = true;
+		void loadAdm3Boundaries(data);
+	});
+
+	function selectBin(idx: number) {
+		selectedBins = { ...selectedBins, [view.resolution]: idx };
+	}
 
 	function selectDate(d: string) {
 		stopPlay();
@@ -445,12 +547,28 @@
 	// selection so the reader never has to infer the reference frame.
 	const caption = $derived.by(() => {
 		if (colorMode === 'expected') {
-			return 'Most likely onset window per location. Fainter dots mean the timing is less certain.';
+			const unit = view.resolution === 'daily' ? 'day' : 'window';
+			return `Most likely onset ${unit} per location. Fainter dots mean the timing is less certain.`;
 		}
 		const thr = data?.onset_threshold;
 		const onset = `${onsetName.toLowerCase()}${thr != null ? ` (rainfall ≥ ${thr} mm)` : ''}`;
-		return `Chance ${onset} begins in ${WEEK_LABELS[selectedWeek]}.`;
+		return `Chance ${onset} begins ${binPhrase(selectedBin)}.`;
 	});
+
+	// "in Week 2 (Jun 9–Jun 15)", "on Jun 12", or "after Jun 29" for the shown forecast.
+	function binPhrase(idx: number): string {
+		if (!selectedDate) return `in ${bins.labels[idx]}`;
+		const dates = binDateLabel(bins, selectedDate, idx);
+		if (idx === bins.laterIndex) return dates;
+		return view.resolution === 'daily' ? `on ${dates}` : `in ${bins.labels[idx]} (${dates})`;
+	}
+
+	// The day selector's readout: the calendar date, with its lead day for context.
+	function dayBinLabel(idx: number): string {
+		if (!selectedDate) return bins.labels[idx];
+		if (idx === bins.laterIndex) return `Later (${binDateLabel(bins, selectedDate, idx)})`;
+		return `${binDateLabel(bins, selectedDate, idx)} · ${bins.labels[idx]}`;
+	}
 
 	function nearestPoint(lng: number, lat: number) {
 		if (!data) return null;
@@ -477,10 +595,10 @@
 
 	function selectFeatureCell(e: maplibregl.MapMouseEvent) {
 		const pt = featurePoint(e.point);
-		if (pt) selectedCell = pt;
+		if (pt) selectedCellKey = pointKey(pt);
 	}
 
-	onMount(async () => {
+	onMount(() => {
 		if (!mapHost) return;
 		map = new maplibregl.Map({
 			container: mapHost,
@@ -525,18 +643,6 @@
 		map.on('mouseleave', 'blend-cells', () => {
 			if (map) map.getCanvas().style.cursor = '';
 		});
-
-		try {
-			const d = await getBlendForecast(jobId);
-			data = d;
-			if (d.issue_dates.length) selectedDate = d.issue_dates[0];
-			if (mapReady) initLayer(d);
-			void loadAdm3Boundaries(d);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load blend forecast';
-		} finally {
-			loading = false;
-		}
 	});
 
 	onDestroy(() => {
@@ -567,6 +673,40 @@
 			{/if}
 		</div>
 
+		{#if offersDailyView}
+			<div class="rail-group">
+				<span class="rail-label">Onset timing</span>
+				<div class="mode-toggle">
+					<button class:active={resolution === 'weekly'} onclick={() => (resolution = 'weekly')}>
+						By week
+					</button>
+					<button class:active={resolution === 'daily'} onclick={() => (resolution = 'daily')}>
+						By day
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		{#if offersModelChoice && resolution === 'weekly'}
+			<div class="rail-group">
+				<span class="rail-label">Blend</span>
+				<div class="mode-toggle">
+					<button
+						class:active={weeklyModel === 'weekly_model'}
+						onclick={() => (weeklyModel = 'weekly_model')}
+					>
+						Week-level blend
+					</button>
+					<button
+						class:active={weeklyModel === 'daily_model'}
+						onclick={() => (weeklyModel = 'daily_model')}
+					>
+						Day-level blend
+					</button>
+				</div>
+			</div>
+		{/if}
+
 		<div class="rail-group">
 			<span class="rail-label">View</span>
 			<div class="mode-toggle">
@@ -591,19 +731,35 @@
 			</div>
 		</div>
 
-		{#if colorMode === 'window'}
+		{#if colorMode === 'window' && view.resolution === 'weekly'}
 			<div class="rail-group">
 				<span class="rail-label">Onset window</span>
 				<div class="week-buttons">
-					{#each WEEKS as w (w)}
-						<button
-							class="week-btn"
-							class:active={w === selectedWeek}
-							onclick={() => (selectedWeek = w)}
-						>
-							{WEEK_LABELS[w]}
+					{#each bins.labels as label, i (label)}
+						<button class="week-btn" class:active={i === selectedBin} onclick={() => selectBin(i)}>
+							{label}
 						</button>
 					{/each}
+				</div>
+			</div>
+		{:else if colorMode === 'window'}
+			<div class="rail-group">
+				<label class="rail-label" for="onset-day">Onset day</label>
+				<span class="day-readout">{dayBinLabel(selectedBin)}</span>
+				<input
+					id="onset-day"
+					class="day-slider"
+					type="range"
+					min="0"
+					max={bins.laterIndex}
+					step="1"
+					value={selectedBin}
+					aria-valuetext={dayBinLabel(selectedBin)}
+					oninput={(e) => selectBin(Number(e.currentTarget.value))}
+				/>
+				<div class="day-slider-ends">
+					<span>{selectedDate ? binDateLabel(bins, selectedDate, 0) : bins.labels[0]}</span>
+					<span>Later</span>
 				</div>
 			</div>
 		{/if}
@@ -651,15 +807,26 @@
 				</div>
 				<div class="legend-labels">
 					<span>0%</span>
-					<span>50%</span>
-					<span>100%</span>
+					<span>{fmtProb(scaleMax / 2)}</span>
+					<span>{fmtProb(scaleMax)}</span>
+				</div>
+				{#if scaleMax < 1}
+					<p class="legend-note">
+						Daily chances are small, so the scale tops out at this forecast's highest daily chance.
+					</p>
+				{/if}
+			{:else if view.resolution === 'daily'}
+				<div class="legend-bar" style="background: {windowGradient(reversed)}"></div>
+				<div class="legend-labels">
+					<span>{selectedDate ? binDateLabel(bins, selectedDate, 0) : bins.labels[0]}</span>
+					<span>Later</span>
 				</div>
 			{:else}
 				<div class="window-swatches">
-					{#each WEEKS as w, i (w)}
+					{#each bins.labels as label, i (label)}
 						<div class="swatch-item">
-							<span class="swatch" style="background: {windowRamp[i]}"></span>
-							<span>{WEEK_LABELS[w]}</span>
+							<span class="swatch" style="background: {windowColor(bins, i, reversed)}"></span>
+							<span>{label}</span>
 						</div>
 					{/each}
 				</div>
@@ -700,11 +867,12 @@
 		{#if selectedCell && data}
 			<CellInspector
 				point={selectedCell}
+				{bins}
 				issueDates={data.issue_dates}
 				regionName={data.region_name}
 				{selectedDate}
 				{soonestColor}
-				onClose={() => (selectedCell = null)}
+				onClose={() => (selectedCellKey = null)}
 			/>
 		{/if}
 
@@ -722,22 +890,53 @@
 
 		{#if tooltipVisible && !loading}
 			<MapTooltip x={tooltipX} y={tooltipY} coords={formatLatLon(tooltipLat, tooltipLon)}>
-				{#if tooltipProbs}
+				{#if tooltipProbs && view.resolution === 'daily'}
+					{@const probs = tooltipProbs}
+					{@const peak = argmax(probs)}
+					{@const top = Math.max(0.01, probs[peak] ?? 0)}
+					<span class="tt-caption">{onsetName} timing</span>
+					<div class="tt-days">
+						{#each bins.labels as label, i (label)}
+							<div
+								class="tt-day"
+								class:active={colorMode === 'window' && i === selectedBin}
+								class:later={i === bins.laterIndex}
+								title="{dayBinLabel(i)}: {fmtProb(probs[i] ?? 0)}"
+							>
+								<div
+									class="tt-bar-fill"
+									style="height: {Math.max(
+										3,
+										((probs[i] ?? 0) / top) * 100
+									)}%; background: {windowColor(bins, i, reversed)}"
+								></div>
+							</div>
+						{/each}
+					</div>
+					<span class="tt-summary"
+						>Most likely {dayBinLabel(peak)} · {fmtProb(probs[peak] ?? 0)}</span
+					>
+					{#if colorMode === 'window' && selectedBin !== peak}
+						<span class="tt-summary">
+							{dayBinLabel(selectedBin)} · {fmtProb(probs[selectedBin] ?? 0)}
+						</span>
+					{/if}
+				{:else if tooltipProbs}
 					<span class="tt-caption">{onsetName} timing</span>
 					<div class="tt-spark">
-						{#each WEEKS as w, i (w)}
-							<div class="tt-col" class:active={colorMode === 'window' && w === selectedWeek}>
+						{#each bins.labels as label, i (label)}
+							<div class="tt-col" class:active={colorMode === 'window' && i === selectedBin}>
 								<div class="tt-bar-track">
 									<div
 										class="tt-bar-fill"
 										style="height: {Math.max(
 											3,
 											(tooltipProbs[i] ?? 0) * 100
-										)}%; background: {windowRamp[i]}"
+										)}%; background: {windowColor(bins, i, reversed)}"
 									></div>
 								</div>
 								<span class="tt-val">{fmtProb(tooltipProbs[i] ?? 0)}</span>
-								<span class="tt-lbl">{WEEK_LABELS[w]}</span>
+								<span class="tt-lbl">{label}</span>
 							</div>
 						{/each}
 					</div>
@@ -1115,6 +1314,40 @@
 		white-space: nowrap;
 	}
 
+	.tt-days {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.08rem;
+		width: 14rem;
+		height: 2.6rem;
+	}
+
+	.tt-day {
+		flex: 1;
+		height: 100%;
+		display: flex;
+		align-items: flex-end;
+		border-radius: 0.1rem;
+		background: rgba(31, 43, 52, 0.06);
+	}
+
+	/* "Later" is open-ended, not one more day: set it apart from the run of days. */
+	.tt-day.later {
+		flex: 2;
+		margin-left: 0.25rem;
+	}
+
+	.tt-day.active {
+		box-shadow: 0 0 0 1.5px var(--color-accent);
+	}
+
+	.tt-summary {
+		font-size: 0.62rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		color: #46555c;
+	}
+
 	.tt-col.active .tt-val {
 		color: #18252b;
 	}
@@ -1303,6 +1536,28 @@
 		background: var(--color-accent);
 		border-color: var(--color-accent);
 		color: #fff;
+	}
+
+	.day-readout {
+		font-size: 0.78rem;
+		font-weight: 800;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-text);
+	}
+
+	.day-slider {
+		width: 100%;
+		margin: 0;
+		accent-color: var(--color-accent);
+		cursor: pointer;
+	}
+
+	.day-slider-ends {
+		display: flex;
+		justify-content: space-between;
+		font-size: 0.62rem;
+		font-weight: 600;
+		color: var(--color-text-muted);
 	}
 
 	.rail-select {

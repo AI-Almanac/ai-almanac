@@ -9,7 +9,8 @@
 	 * climatology could not be drawn as worse. Both come from
 	 * $lib/components/SkillCurveChart now, shared with the benchmarks page.
 	 */
-	import { BLEND_COLOR, modelColor } from '$lib/chart-colors';
+	import type { BlendModel } from '$lib/api';
+	import { BLEND_COLOR, DAY_BLEND_COLOR, modelColor } from '$lib/chart-colors';
 	import SegmentedTabs, { type SegmentedTabOption } from '$lib/components/SegmentedTabs.svelte';
 	import SkillCurveChart from '$lib/components/SkillCurveChart.svelte';
 	import { skillAgainstReference } from '$lib/metric-portrait';
@@ -19,6 +20,8 @@
 		LEAD_METRICS,
 		OVERALL_METRICS,
 		SKILL_AXES,
+		blendLabel,
+		isBlendModel,
 		isDefaultVisibleSeries,
 		type LeadMetric,
 		type OverallMetric,
@@ -61,15 +64,25 @@
 	);
 
 	/**
-	 * The blend keeps its own near-black stroke and does not consume a palette
-	 * slot, so its constituents keep stable colors as models are added.
+	 * Each blend keeps its own stroke and does not consume a palette slot, so its
+	 * constituents keep stable colors as models are added.
 	 */
+	const BLEND_COLORS: Record<BlendModel, string> = {
+		blended_model: BLEND_COLOR,
+		blended_forest: DAY_BLEND_COLOR
+	};
+
 	const colors = $derived.by(() => {
 		let next = 0;
 		return new Map(
-			series.map((row) => [row.model, row.isBlend ? BLEND_COLOR : modelColor(next++)])
+			series.map((row) => [
+				row.model,
+				isBlendModel(row.model) ? BLEND_COLORS[row.model] : modelColor(next++)
+			])
 		);
 	});
+
+	const hasDayBlend = $derived(series.some((row) => row.model === 'blended_forest'));
 
 	const curves = $derived<SkillCurveSeries[]>(
 		series.map((row) => ({
@@ -239,9 +252,22 @@
 				</dd>
 			</div>
 			<div>
-				<dt>Blend</dt>
-				<dd>The trained combination of the models above — what this job produced.</dd>
+				<dt>{blendLabel('blended_model')}</dt>
+				<dd>
+					The trained combination of the models above, predicting the week onset falls in — what
+					this job produced.
+				</dd>
 			</div>
+			{#if hasDayBlend}
+				<div>
+					<dt>{blendLabel('blended_forest')}</dt>
+					<dd>
+						A second combination of the same models, trained alongside the first, that predicts the
+						day onset falls on. Its daily probabilities are added up into weeks so it is scored on
+						the same footing.
+					</dd>
+				</div>
+			{/if}
 		</dl>
 	</details>
 </section>

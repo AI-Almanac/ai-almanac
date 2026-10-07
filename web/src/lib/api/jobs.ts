@@ -418,9 +418,16 @@ export type BlendCellGrid = {
 	clipped: number;
 };
 
+/** The week-level blend, and the day-level blend that newer jobs also train. */
+export type BlendModel = 'blended_model' | 'blended_forest';
+
 export type BlendCellMetrics = {
 	job_id: string;
+	/** The blend these skill values score. */
+	blend_model: BlendModel;
 	baseline_model: string;
+	/** Blends the per-point summary scores; older jobs have only the week-level one. */
+	available_models: BlendModel[];
 	cell_size_deg: number | null;
 	min_observations: number;
 	grids: BlendCellGrid[];
@@ -453,9 +460,14 @@ export type BlendAreaMetric = {
 export type SkillLayer = BlendCellGrid | BlendAreaMetric;
 
 /**
- * Per-grid-point blend skill. A run whose per-cell summary is missing, or which
- * lacks the blend or baseline rows, returns empty `grids` rather than an error.
+ * One blend's per-grid-point skill. A run whose per-cell summary is missing, or
+ * which lacks that blend or the baseline rows, returns empty `grids` rather than
+ * an error.
  */
-export async function getBlendCellMetrics(id: string): Promise<BlendCellMetrics> {
-	return request<BlendCellMetrics>(`/jobs/${id}/blend-cell-metrics`);
+export async function getBlendCellMetrics(
+	id: string,
+	model: BlendModel = 'blended_model'
+): Promise<BlendCellMetrics> {
+	const params = new URLSearchParams({ model });
+	return request<BlendCellMetrics>(`/jobs/${id}/blend-cell-metrics?${params}`);
 }

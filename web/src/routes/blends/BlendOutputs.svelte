@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getBlendSummary, type JobArtifact } from '$lib/api';
 	import { groupBlendOutputs, parseYearlyScores, type YearlyScore } from './blend-outputs';
+	import { modelLabel } from './blend-summary';
 
 	let {
 		jobId,
@@ -80,7 +81,7 @@
 				{#each yearly as row (`${row.year}-${row.model}`)}
 					<tr>
 						<td>{row.year}</td>
-						{#if showModel}<td>{row.model}</td>{/if}
+						{#if showModel}<td>{modelLabel(row.model)}</td>{/if}
 						<td>{fmt(row.brier)}</td>
 						<td>{fmt(row.rps)}</td>
 						<td>{fmt(row.auc)}</td>
