@@ -22,3 +22,6 @@ geopandas = ">=1.1.3,<2"
 tqdm = ">=4.68.3,<5"
 cartopy = ">=0.25.0,<0.26"
 kdepy = ">=1.1.12,<2"
+
+[pypi-dependencies]
+onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "c3a822306d16c81f4c48ae62d68e464a405bb30c" }

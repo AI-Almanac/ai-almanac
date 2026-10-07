@@ -30,7 +30,9 @@ Examples:
 The image clones onset_blending-adm3 at a pinned commit by default. Override
 these during Modal build if needed:
     ALMANAC_BLENDING_REPO_URL=https://github.com/hholb/onset_blending-adm3.git
-    ALMANAC_BLENDING_REPO_REF=2a59cec0680dcfb575104fa03b59ee64dc110f82
+    ALMANAC_BLENDING_REPO_REF=0a216aa436b36d83375407de64c803169beccd57
+    ALMANAC_FOREST_REPO_URL=https://github.com/AI-Almanac/onset-forest.git
+    ALMANAC_FOREST_REPO_REF=c3a822306d16c81f4c48ae62d68e464a405bb30c
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ import tarfile
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import NamedTuple
 
 import modal
 
@@ -53,7 +56,10 @@ DEFAULT_LOCAL_DATA_DIR = Path("/Users/hayden/code/ROMP/data")
 DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 # Keep in sync with ai_almanac.envs.manager.BLENDING_REPO_REF (local blend env).
 # See docs/onset-blending-haiyang-integration.md for the pin history.
-DEFAULT_REPO_REF = "2a59cec0680dcfb575104fa03b59ee64dc110f82"
+DEFAULT_REPO_REF = "0a216aa436b36d83375407de64c803169beccd57"
+# The day-level blend's model library, installed into the same image.
+FOREST_REPO_URL = "https://github.com/AI-Almanac/onset-forest.git"
+FOREST_REPO_REF = "c3a822306d16c81f4c48ae62d68e464a405bb30c"
 
 # Worker count for run_blend's intermediates process pools (per-file onset
 # processing, climatology) and 1_blend_evaluation.py --cores. Both phases run in
@@ -93,6 +99,12 @@ def _intermediate_prep_kwargs(params: dict) -> dict:
 # Written by train_blending_model_bundle's final fit; applied by
 # apply_blend_coefs_bundle to score live seasons without retraining.
 FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
+# The day-level blend trains alongside the weekly one and ships its final fit
+# next to FINAL_COEF_FILENAME; forecasts apply it to write DAILY_FORECAST_FILENAME.
+FOREST_MODEL_NAME = "blended_forest"
+FOREST_MODEL_FILENAME = "forest_blended_forest_global_final.pkl"
+WEEKLY_FORECAST_FILENAME = "blended_forecast_probabilities.csv"
+DAILY_FORECAST_FILENAME = "daily_onset_probabilities.csv"
 
 # Bump to invalidate cached blend intermediates when the builder's schema
 # changes; onset_blending code bumps invalidate via the repo-ref key segment, and
@@ -150,6 +162,8 @@ app = modal.App(APP_NAME)
 def _image() -> modal.Image:
     repo_url = os.environ.get("ALMANAC_BLENDING_REPO_URL", DEFAULT_REPO_URL)
     repo_ref = os.environ.get("ALMANAC_BLENDING_REPO_REF", DEFAULT_REPO_REF)
+    forest_url = os.environ.get("ALMANAC_FOREST_REPO_URL", FOREST_REPO_URL)
+    forest_ref = os.environ.get("ALMANAC_FOREST_REPO_REF", FOREST_REPO_REF)
 
     return (
         modal.Image.debian_slim(python_version="3.11")
@@ -167,8 +181,11 @@ def _image() -> modal.Image:
             f"cd {BLENDING_ROOT} && git fetch --depth 1 origin {repo_ref}",
             f"cd {BLENDING_ROOT} && git checkout {repo_ref}",
             f"cd {BLENDING_ROOT} && uv pip install --system -r requirements.txt",
+            f"uv pip install --system git+{forest_url}@{forest_ref}",
         )
         .pip_install("google-cloud-storage")
+        # numba's on-disk JIT cache must be writable; the install dir is not.
+        .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     )
 
 
@@ -2009,6 +2026,169 @@ def _default_formula_text(model_names: list[str]) -> str:
     return "outcome ~ " + " * ".join(formula_terms)
 
 
+def _blend_output_tag(cutoff_tag: str, holdout_years: list[int]) -> str:
+    """The `{cutoff}{years}` suffix 1_blend_evaluation.py puts on every artifact."""
+    years = sorted(set(int(year) for year in holdout_years))
+    if not years:
+        return cutoff_tag
+    return cutoff_tag + (f"_{years[0]}" if len(years) == 1 else f"_{years[0]}_{years[-1]}")
+
+
+def _multinomial_scoreable(weekly):
+    """Rows the weekly model can score: the feature-NaN filter
+    1_blend_evaluation.py applies before predicting."""
+    feature_cols = [
+        column
+        for column in weekly.columns
+        if column.startswith(("prob_clim_mr", "diff_", "min_", "max_"))
+    ]
+    return weekly.dropna(subset=feature_cols)
+
+
+def _cv_folds(
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None,
+) -> list[tuple[int, tuple[int, ...]]]:
+    """compute_cv_global's leave-one-year-out folds as (test_year, train_years).
+
+    Test years are the true holdouts then the CV holdouts, in configured order
+    (configured_holdout_years); each trains on the training years minus the
+    test year and every true holdout.
+    """
+    true_holdouts = [int(year) for year in true_holdout_years or []]
+    test_years = true_holdouts + [int(year) for year in cv_holdout_years]
+    return [
+        (
+            test_year,
+            tuple(
+                sorted(
+                    {
+                        int(year)
+                        for year in training_years
+                        if int(year) != test_year and int(year) not in true_holdouts
+                    }
+                )
+            ),
+        )
+        for test_year in test_years
+    ]
+
+
+def _final_forest_years(
+    training_years: list[int], true_holdout_years: list[int] | None
+) -> list[int]:
+    excluded = {int(year) for year in true_holdout_years or []}
+    return sorted({int(year) for year in training_years} - excluded)
+
+
+_FOREST_INPUT_COLUMN = re.compile(r"^(?:.+_rain_mean_day_\d+|clim_p_onset_day_\d+)$")
+
+
+def _issue_keyed(frame):
+    """(id, time) normalized so the connector's date-typed issue times and the
+    combined table's timestamps join."""
+    import pandas as pd
+
+    return frame.assign(
+        id=frame["id"].astype(str).str.strip(),
+        time=pd.to_datetime(frame["time"]).dt.normalize(),
+    )
+
+
+def _forest_frame(weekly, combined):
+    """The connector's weekly rows (lat/lon, outcome, ...) with the daily inputs
+    the day-level blend reads from combined_wide joined on (id, time)."""
+    import pandas as pd
+
+    daily_cols = [column for column in combined.columns if _FOREST_INPUT_COLUMN.match(column)]
+    daily = _issue_keyed(combined[["id", "time", "true_onset_date", *daily_cols]]).assign(
+        true_onset_date=lambda f: pd.to_datetime(f["true_onset_date"])
+    )
+    joined = _issue_keyed(weekly).merge(
+        daily, on=["id", "time"], how="left", validate="one_to_one", indicator=True
+    )
+    unmatched = joined["_merge"] != "both"
+    if unmatched.any():
+        raise ValueError(
+            f"{int(unmatched.sum())} weekly rows have no daily inputs in the combined table"
+        )
+    return joined.drop(columns="_merge")
+
+
+def _dissemination_rows(frame, dissemination_path: Path):
+    """restrict_to_allowed: training rows come from dissemination cells only."""
+    import pandas as pd
+
+    allowed = set(pd.read_csv(dissemination_path, dtype=str)["adm3_name"].str.strip())
+    return frame[frame["id"].isin(allowed)]
+
+
+def _forest_cv_preds_filename(output_tag: str) -> str:
+    return f"cv_preds_{FOREST_MODEL_NAME}_global{output_tag}.pkl"
+
+
+def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
+    return [{"name": FOREST_MODEL_NAME, "file": cv_preds_filename, "method": "global"}]
+
+
+def _cross_validate_forest(
+    forest_frame, dissemination_path: Path, folds: list, model_names: list[str]
+):
+    """Out-of-fold day-level predictions on the rows the weekly model is scored
+    on, so both models' CV skill covers the same sample."""
+    import onset_forest
+
+    return onset_forest.cross_validate(
+        _dissemination_rows(forest_frame, dissemination_path),
+        _multinomial_scoreable(forest_frame),
+        folds,
+        model_names,
+    )
+
+
+def _fit_final_forest(
+    forest_frame, dissemination_path: Path, years: list[int], model_names: list[str]
+) -> bytes:
+    import onset_forest
+
+    allowed = _dissemination_rows(forest_frame, dissemination_path)
+    fitted = onset_forest.fit(allowed[allowed["year"].isin(years)], model_names)
+    return onset_forest.to_bytes(fitted)
+
+
+_DAILY_FORECAST_KEY_COLUMNS = ("id", "time", "lat", "lon")
+
+
+def _daily_onset_rows(fitted, forest_frame, live_year: int):
+    """Day-level probabilities for every live-season row; the forest imputes
+    missing inputs, so rows the weekly model drops are kept."""
+    import onset_forest
+    import pandas as pd
+
+    live = forest_frame[forest_frame["year"] == int(live_year)]
+    if live.empty:
+        raise RuntimeError(f"No rows for live season {live_year} to score day by day")
+    probs = onset_forest.predict(fitted, live)
+    return pd.concat([live[list(_DAILY_FORECAST_KEY_COLUMNS)], probs], axis=1)[
+        [*_DAILY_FORECAST_KEY_COLUMNS, *onset_forest.DAILY_COLUMNS, *onset_forest.WEEKLY_COLUMNS]
+    ]
+
+
+class LiveScores(NamedTuple):
+    """A live season's scored rows as CSV bytes: the weekly blend always, the
+    day-level blend when the trained blend shipped one."""
+
+    weekly_csv: bytes
+    daily_csv: bytes | None = None
+
+
+def _write_live_scores(scores: LiveScores, output_dir: Path) -> None:
+    (output_dir / WEEKLY_FORECAST_FILENAME).write_bytes(scores.weekly_csv)
+    if scores.daily_csv is not None:
+        (output_dir / DAILY_FORECAST_FILENAME).write_bytes(scores.daily_csv)
+
+
 def _build_blend_spec(
     model_names: list[str],
     training_years: list[int],
@@ -2021,6 +2201,7 @@ def _build_blend_spec(
     work_dir: Path,
     results_dir: Path,
     dissemination_path: Path,
+    external_predictions: list[dict] | None = None,
 ) -> dict:
     forecast_extras = [
         {
@@ -2067,6 +2248,7 @@ def _build_blend_spec(
             ],
             "forecasts": forecast_extras,
             "forecast_variants": {"base": "", BLEND_CUTOFF_MODE: f"_{BLEND_CUTOFF_MODE}"},
+            **({"external_predictions": external_predictions} if external_predictions else {}),
         },
     }
 
@@ -2088,8 +2270,11 @@ def train_blending_model_bundle(
     include_calibrated_forecasts: bool = True,
     cores: int | None = None,
     return_outputs: bool = True,
+    train_forest: bool = True,
 ) -> dict:
-    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    """Train/evaluate the weekly blend and, with train_forest, the day-level
+    blend from a combined wide pickle. Both are cross-validated and scored by
+    1_blend_evaluation.py, and both final fits ship in the outputs."""
     import pickle
     import subprocess
     import sys
@@ -2116,6 +2301,23 @@ def train_blending_model_bundle(
         rain_window,
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
+    output_tag = _blend_output_tag(
+        make_cutoff_tag(cutoff_mode), cv_holdout_years + (true_holdout_years or [])
+    )
+
+    forest_frame = None
+    external_predictions = None
+    if train_forest:
+        forest_frame = _forest_frame(weekly, combined)
+        # 1_blend_evaluation.py scores these alongside the weekly model's CV.
+        cv_preds_filename = _forest_cv_preds_filename(output_tag)
+        _cross_validate_forest(
+            forest_frame,
+            dissemination_path,
+            _cv_folds(training_years, cv_holdout_years, true_holdout_years),
+            model_names,
+        ).to_pickle(results_dir / cv_preds_filename)
+        external_predictions = _forest_external_predictions(cv_preds_filename)
 
     formula_text = formula_text or _default_formula_text(model_names)
     blend_spec = _build_blend_spec(
@@ -2130,6 +2332,7 @@ def train_blending_model_bundle(
         work_dir=work_dir,
         results_dir=results_dir,
         dissemination_path=dissemination_path,
+        external_predictions=external_predictions,
     )
 
     spec_id = f"almanac_training_{uuid.uuid4().hex}"
@@ -2183,10 +2386,15 @@ def train_blending_model_bundle(
         with suppress(FileNotFoundError):
             spec_path.unlink()
 
-    output_tag = f"{make_cutoff_tag(cutoff_mode)}"
-    holdouts = sorted(set(int(year) for year in cv_holdout_years + (true_holdout_years or [])))
-    if holdouts:
-        output_tag += f"_{holdouts[0]}" if len(holdouts) == 1 else f"_{holdouts[0]}_{holdouts[-1]}"
+    if forest_frame is not None and final_fit is not None and final_fit.returncode == 0:
+        (results_dir / FOREST_MODEL_FILENAME).write_bytes(
+            _fit_final_forest(
+                forest_frame,
+                dissemination_path,
+                _final_forest_years(training_years, true_holdout_years),
+                model_names,
+            )
+        )
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
@@ -2262,11 +2470,13 @@ def apply_blend_coefs_bundle(
     n_weeks: int = 4,
     rain_window: int = 3,
     formula_text: str | None = None,
-) -> bytes:
+    forest_pkl: bytes | None = None,
+) -> LiveScores:
     """Score one live season by applying a trained blend's saved coef bundle
     (the FINAL_COEF_FILENAME pickle written by train_blending_model_bundle's
     final fit) via predict/apply_blend_model.py — the fast path that skips CV
-    retraining entirely. Returns the live season's scored rows as CSV bytes."""
+    retraining entirely. With forest_pkl (FOREST_MODEL_FILENAME) the season is
+    also scored day by day."""
     import subprocess
     import sys
     import uuid
@@ -2278,7 +2488,7 @@ def apply_blend_coefs_bundle(
     if not cv_holdout_years:
         raise ValueError("cv_holdout_years must not be empty")
 
-    work_dir, _, weekly, _, dissemination_path = _prepare_blend_workspace(
+    work_dir, combined, weekly, _, dissemination_path = _prepare_blend_workspace(
         combined_wide_pkl,
         model_names,
         cutoff_mode,
@@ -2289,14 +2499,8 @@ def apply_blend_coefs_bundle(
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-apply-results-"))
 
-    # Same feature-NaN filter 1_blend_evaluation.py applies before predicting,
-    # so this path scores the same rows the retrain path would have.
-    feature_cols = [
-        column
-        for column in weekly.columns
-        if column.startswith(("prob_clim_mr", "diff_", "min_", "max_"))
-    ]
-    live_rows = weekly[weekly["year"] == int(live_year)].dropna(subset=feature_cols)
+    # Scores the same rows the retrain path would have.
+    live_rows = _multinomial_scoreable(weekly[weekly["year"] == int(live_year)])
     if live_rows.empty:
         raise RuntimeError(f"No scoreable rows for live season {live_year}")
     live_input_path = work_dir / f"live_input_{int(live_year)}.pkl"
@@ -2359,7 +2563,17 @@ def apply_blend_coefs_bundle(
         raise RuntimeError(
             f"apply_blend_model.py failed (returncode {completed.returncode}):\n{tail}"
         )
-    return preds_csv.read_bytes()
+    daily_csv = None
+    if forest_pkl is not None:
+        daily_csv = _daily_onset_csv(forest_pkl, _forest_frame(weekly, combined), live_year)
+    return LiveScores(weekly_csv=preds_csv.read_bytes(), daily_csv=daily_csv)
+
+
+def _daily_onset_csv(forest_pkl: bytes, forest_frame, live_year: int) -> bytes:
+    import onset_forest
+
+    rows = _daily_onset_rows(onset_forest.from_bytes(forest_pkl), forest_frame, live_year)
+    return rows.to_csv(index=False).encode("utf-8")
 
 
 def _merge_forecast_bundle(historical_bundle: bytes, live_bundle: bytes) -> bytes:
@@ -2401,7 +2615,8 @@ def score_live_forecast(
     live_year: int,
     coef_pkl: bytes | None = None,
     cache_dir: str | None = None,
-) -> bytes:
+    forest_pkl: bytes | None = None,
+) -> LiveScores:
     """Score a live/in-progress season against an already-trained blend, given
     already-staged bundles (no GCS or local-file knowledge here — that's the
     caller's job, mirroring how run_blend stages before calling
@@ -2422,8 +2637,11 @@ def score_live_forecast(
     merged (historical `{year}.nc` files + the live season's file) by the
     caller via _merge_forecast_bundle.
 
-    Returns the live season's scored rows as CSV bytes
-    (blended_forecast_probabilities.csv content).
+    forest_pkl (the blend's FOREST_MODEL_FILENAME) adds day-level scores; it
+    only applies alongside coef_pkl — the retrain fallback is weekly-only.
+
+    Returns the live season's scored rows (WEEKLY_FORECAST_FILENAME and, with
+    a forest, DAILY_FORECAST_FILENAME content).
     """
     import pickle
     import time
@@ -2442,7 +2660,7 @@ def score_live_forecast(
     if coef_pkl is not None:
         print(f"==> Applying trained blend coefficients to live season {live_year}")
         t0 = time.perf_counter()
-        csv_bytes = apply_blend_coefs_bundle.local(
+        scores = apply_blend_coefs_bundle.local(
             combined,
             coef_pkl,
             model_names,
@@ -2450,11 +2668,10 @@ def score_live_forecast(
             cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
             live_year=live_year,
             formula_text=blend_params.get("formula_text") or None,
+            forest_pkl=forest_pkl,
         )
-        if _should_use_adm3_domain(blend_params.get("region_id"), None):
-            csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
         print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
-        return csv_bytes
+        return _with_live_centroids(scores, blend_params.get("region_id"))
 
     train_kwargs = {}
     if blend_params.get("formula_text"):
@@ -2471,6 +2688,7 @@ def score_live_forecast(
         cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
         true_holdout_years=true_holdout_years,
         return_outputs=True,
+        train_forest=False,
         **train_kwargs,
     )
     print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
@@ -2485,10 +2703,27 @@ def score_live_forecast(
     live_rows = cv_preds[cv_preds["year"] == live_year].copy()
     if live_rows.empty:
         raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
-    csv_bytes = live_rows.to_csv(index=False).encode("utf-8")
-    if _should_use_adm3_domain(blend_params.get("region_id"), None):
-        csv_bytes = _attach_adm3_centroids_to_csv(csv_bytes)
-    return csv_bytes
+    scores = LiveScores(weekly_csv=live_rows.to_csv(index=False).encode("utf-8"))
+    return _with_live_centroids(scores, blend_params.get("region_id"))
+
+
+def _with_live_centroids(scores: LiveScores, region_id: str | None) -> LiveScores:
+    if not _should_use_adm3_domain(region_id, None):
+        return scores
+    return LiveScores(
+        weekly_csv=_attach_adm3_centroids_to_csv(scores.weekly_csv),
+        daily_csv=(
+            _attach_adm3_centroids_to_csv(scores.daily_csv)
+            if scores.daily_csv is not None
+            else None
+        ),
+    )
+
+
+def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | None:
+    bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
+    blob = client.bucket(bucket_name).blob(f"{prefix.rstrip('/')}/{filename}")
+    return blob.download_as_bytes() if blob.exists() else None
 
 
 @app.function(
@@ -2553,15 +2788,16 @@ def score_live_forecast_bundle(
                 )
 
             coef_pkl = None
+            forest_pkl = None
             blend_output_uri = blend_config.get("blend_output_uri")
             if blend_output_uri:
-                bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
-                coef_blob = client.bucket(bucket_name).blob(
-                    f"{prefix.rstrip('/')}/{FINAL_COEF_FILENAME}"
-                )
-                if coef_blob.exists():
-                    print("==> Staging trained blend coefficients (skipping CV retrain)")
-                    coef_pkl = coef_blob.download_as_bytes()
+                coef_pkl = _blend_artifact(client, blend_output_uri, FINAL_COEF_FILENAME)
+                if coef_pkl is not None:
+                    print("==> Staged trained blend coefficients (skipping CV retrain)")
+                    # Blends trained before the day-level model have no forest.
+                    forest_pkl = _blend_artifact(client, blend_output_uri, FOREST_MODEL_FILENAME)
+                    if forest_pkl is not None:
+                        print("==> Staged trained day-level blend")
                 else:
                     print(
                         "==> Blend outputs have no final coef bundle; "
@@ -2569,7 +2805,7 @@ def score_live_forecast_bundle(
                     )
 
             cache_bucket = (blend_config.get("gcs_cache_bucket") or "").strip()
-            csv_bytes = score_live_forecast.local(
+            scores = score_live_forecast.local(
                 obs_bundle,
                 forecast_bundles,
                 model_names,
@@ -2577,11 +2813,12 @@ def score_live_forecast_bundle(
                 live_year,
                 coef_pkl=coef_pkl,
                 cache_dir=f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None,
+                forest_pkl=forest_pkl,
             )
 
             out_local = stage_root / "output"
             out_local.mkdir()
-            (out_local / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
+            _write_live_scores(scores, out_local)
             _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
             print("==> Done.")
         except Exception as exc:  # noqa: BLE001 — surfaced via run.log + raise

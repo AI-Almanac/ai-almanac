@@ -157,3 +157,78 @@ def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
         {"mok_month_day": "06-05", "ref_onset_month_day": "06-10", "formula_text": "x"}
     ) == {"ref_onset_month_day": "06-10"}
     assert intermediate_prep_kwargs({"training_years": "2020"}) == {}
+
+
+def _local_forecast_scoring(tmp_path: Path, monkeypatch, blend_files: dict[str, bytes]):
+    """Run the local forecast scorer against a locally trained blend whose
+    output directory holds `blend_files`; returns (output_dir, score calls)."""
+    from ai_almanac.envs import forecast_entrypoint
+
+    obs_dir = tmp_path / "obs"
+    obs_dir.mkdir()
+    (obs_dir / "2023.nc").write_bytes(b"obs")
+    historical = tmp_path / "aifs-2023.nc"
+    historical.write_bytes(b"forecast")
+    live = tmp_path / "aifs.nc"
+    live.write_bytes(b"live")
+    blend_output = tmp_path / "blend-output"
+    blend_output.mkdir()
+    for name, data in blend_files.items():
+        (blend_output / name).write_bytes(data)
+
+    workflow = _load_workflow()
+    calls: list[dict] = []
+
+    def score_live_forecast(*_args, forest_pkl=None, **kwargs):  # noqa: ANN002, ANN003
+        calls.append({"forest_pkl": forest_pkl, **kwargs})
+        daily = b"daily" if forest_pkl is not None else None
+        return workflow.LiveScores(weekly_csv=b"weekly", daily_csv=daily)
+
+    monkeypatch.setattr(workflow, "_bundle_files", lambda files: b"bundle")
+    monkeypatch.setattr(workflow, "_merge_forecast_bundle", lambda historical, live: b"merged")
+    monkeypatch.setattr(workflow, "score_live_forecast", SimpleNamespace(local=score_live_forecast))
+    monkeypatch.setattr(forecast_entrypoint, "_load_workflow", lambda: workflow)
+
+    output_dir = tmp_path / "output"
+    forecast_entrypoint._score_live(
+        {
+            "blend_config_snapshot": {
+                "obs_dir": str(obs_dir),
+                "model_names": ["aifs"],
+                "model_files": {"aifs": [str(historical)]},
+                "blend_output_uri": str(blend_output),
+            }
+        },
+        {"aifs": live},
+        output_dir,
+    )
+    return workflow, output_dir, calls
+
+
+def test_local_forecast_writes_daily_scores_when_the_blend_has_a_day_level_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    probe = _load_workflow()
+    workflow, output_dir, calls = _local_forecast_scoring(
+        tmp_path,
+        monkeypatch,
+        {probe.FINAL_COEF_FILENAME: b"coefs", probe.FOREST_MODEL_FILENAME: b"forest"},
+    )
+
+    assert calls[0]["coef_pkl"] == b"coefs"
+    assert calls[0]["forest_pkl"] == b"forest"
+    assert (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_bytes() == b"weekly"
+    assert (output_dir / workflow.DAILY_FORECAST_FILENAME).read_bytes() == b"daily"
+
+
+def test_local_forecast_from_an_older_blend_writes_weekly_scores_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    probe = _load_workflow()
+    workflow, output_dir, calls = _local_forecast_scoring(
+        tmp_path, monkeypatch, {probe.FINAL_COEF_FILENAME: b"coefs"}
+    )
+
+    assert calls[0]["forest_pkl"] is None
+    assert (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_bytes() == b"weekly"
+    assert not (output_dir / workflow.DAILY_FORECAST_FILENAME).exists()
