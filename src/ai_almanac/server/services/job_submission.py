@@ -40,6 +40,7 @@ from ai_almanac.server.services.romp import (
     Members,
     RompName,
     Year,
+    parse_model_dims,
     romp_safe_model_name,
 )
 from ai_almanac.server.services.runner_registry import get_job_runner
@@ -609,6 +610,34 @@ def grid_mismatch_errors(
     ]
 
 
+def blend_model_layout(metadata: dict) -> dict:
+    """A source's registered dim names and unit conversion, for the blend runner."""
+    return {
+        "forecast_dims": parse_model_dims(metadata.get("forecast_dims")),
+        "unit_cvt": float(metadata.get("unit_cvt") or 1.0),
+    }
+
+
+def blend_layout_errors(layouts: Iterable[tuple[str, dict]]) -> list[str]:
+    """Reject sources whose start-date dim blending cannot decode.
+
+    The blending reader decodes forecast start dates only from a dim literally
+    named "time"; any other name would be read as raw numbers, not dates.
+    """
+    renamed = [
+        f"{name} names it {dims['init_time']!r}"
+        for name, layout in layouts
+        if (dims := layout["forecast_dims"]) and dims.get("init_time", "time") != "time"
+    ]
+    if not renamed:
+        return []
+    return [
+        "Blending reads the forecast start date from a dimension named 'time', but "
+        + "; ".join(sorted(renamed))
+        + "."
+    ]
+
+
 def year_uris(base_uri: str, years: Iterable[int]) -> list[str]:
     """Per-year ``{year}.nc`` file URIs under a dataset dir (path or ``gs://``).
 
@@ -756,6 +785,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     # year filter and backend resolution live on the server, and run_blend just
     # downloads the files it is given.
     model_files: dict[str, list[str]] = {}
+    # Per-model dim names and unit conversion from registration, so the blend
+    # reads each archive as uploaded.
+    model_layouts: dict[str, dict] = {}
     model_years: list[YearRange] = []
     # The blend keys everything on the slug; warnings read better with the name
     # the user picked the source by.
@@ -770,15 +802,23 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         model_names.append(key)
         model_sources.append(source)
         model_files[key] = year_uris(source["path"], forecast_years)
+        model_layouts[key] = blend_model_layout(source.get("metadata") or {})
         model_years.append(source_year_range(source))
 
     missing = set().union(
         *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
     )
     coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
-    source_errors = blend_coverage_errors(forecast_years, coverage) + grid_mismatch_errors(
-        archive_grid_step(obs_source),
-        ((source["name"], archive_grid_step(source)) for source in model_sources),
+    source_errors = (
+        blend_coverage_errors(forecast_years, coverage)
+        + grid_mismatch_errors(
+            archive_grid_step(obs_source),
+            ((source["name"], archive_grid_step(source)) for source in model_sources),
+        )
+        + blend_layout_errors(
+            (source["name"], model_layouts[key])
+            for key, source in zip(model_names, model_sources, strict=True)
+        )
     )
     if source_errors:
         raise HTTPException(status_code=400, detail=" ".join(source_errors))
@@ -812,6 +852,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "blend_name": body.name,
         "obs_dir": obs_dir,
         "model_files": model_files,
+        "model_layouts": model_layouts,
         "model_names": model_names,
         "model_source_ids": list(body.model_ids),
         "forecast_years": forecast_years,

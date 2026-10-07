@@ -570,6 +570,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 cache_dir=cache_dir,
                 file_workers=RUN_BLEND_CPU,
                 climatology_workers=RUN_BLEND_CPU,
+                model_layouts=config.get("model_layouts"),
                 **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
@@ -1359,6 +1360,39 @@ def _process_obs_wide(path: Path, context: dict):
     return _process_obs_part(path, {**context, "obs_spec": wide_only})["wide"]
 
 
+def _in_millimetres(df, unit_cvt: float):
+    """Scale the lead-day rainfall columns by the source's unit conversion (e.g. m -> mm)."""
+    if unit_cvt == 1.0:
+        return df
+    rain_cols = [col for col in df.columns if col.startswith("rain_day_")]
+    return df.assign(**{col: df[col] * unit_cvt for col in rain_cols})
+
+
+def _forecast_spec_for(base_spec: dict, forecast_dims: dict | None) -> dict:
+    """base_spec with renames from a source's registered dims to the names blending reads.
+
+    forecast_dims is keyed by ROMP's names (init_time/step/member/lat/lon), as
+    stored at registration; blending calls the lead time "day" and members "number".
+    """
+    if not forecast_dims:
+        return base_spec
+    blend_names = {
+        "init_time": "time",
+        "step": "day",
+        "member": "number",
+        "lat": "lat",
+        "lon": "lon",
+    }
+    renames = {
+        forecast_dims[role]: name for role, name in blend_names.items() if role in forecast_dims
+    }
+    dimensions = {
+        **base_spec["dimensions"],
+        "rename": {**base_spec["dimensions"]["rename"], **renames},
+    }
+    return {**base_spec, "dimensions": dimensions}
+
+
 def _process_forecast_part(path: Path, context: dict) -> dict:
     """Onset processing of one forecast file: its wide frame and ensemble member counts."""
     import sys
@@ -1379,6 +1413,7 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
         day_dim="day",
         prefix="rain",
     )
+    df = _in_millimetres(df, context.get("unit_cvt", 1.0))
     df = _add_lat_lon_id(df, precision=context["id_precision"])
     df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
     member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
@@ -1433,8 +1468,12 @@ def build_intermediates_from_dirs(
     cache_dir: str | None = None,
     file_workers: int = 1,
     climatology_workers: int = 1,
+    model_layouts: dict[str, dict] | None = None,
 ) -> dict:
     """Build real blending intermediate pickle files from directories of NetCDFs.
+
+    model_layouts maps a forecast_dirs key to that source's registered
+    {"forecast_dims", "unit_cvt"}, so archives keep their own dim names and units.
 
     cache_dir enables a read-through cache (local path or gs:// URI) of the
     per-file processed parts and the climatology — the expensive,
@@ -1598,12 +1637,20 @@ def build_intermediates_from_dirs(
 
     for model_name, input_dir in forecast_dirs.items():
         forecast_paths_in = sorted(input_dir.glob("*.nc"))
-        # The forecast spec is model-agnostic, so the key needs no model
-        # name: identical files reuse one entry across models.
+        layout = (model_layouts or {}).get(model_name) or {}
+        model_context = {
+            **part_context,
+            "forecast_spec": _forecast_spec_for(forecast_spec, layout.get("forecast_dims")),
+            "unit_cvt": float(layout.get("unit_cvt") or 1.0),
+        }
+        # The key carries the layout, not the model name: identical files with
+        # the same layout reuse one entry across models.
         forecast_keys = [
             {
                 **static_cache_params,
                 "forecast_value_col": forecast_value_col,
+                "forecast_dims": layout.get("forecast_dims"),
+                "unit_cvt": model_context["unit_cvt"],
                 "file_sha256": _file_sha256(path) if cache_dir else None,
             }
             for path in forecast_paths_in
@@ -1614,7 +1661,7 @@ def build_intermediates_from_dirs(
             forecast_keys,
             forecast_paths_in,
             _process_forecast_part,
-            part_context,
+            model_context,
             file_workers,
         )
         forecast_wide_parts = [entry["wide"] for entry, _ in forecast_results]
