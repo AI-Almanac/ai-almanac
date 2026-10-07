@@ -3385,8 +3385,6 @@ export interface components {
             dataset_id: string;
             /** Model Name */
             model_name: string;
-            /** Obs Dir */
-            obs_dir?: string | null;
             /** @default {} */
             params: components["schemas"]["RompParams"];
             /** Run Id */
@@ -4100,6 +4098,8 @@ export interface components {
             start_year_clim?: number | null;
             /** End Year Clim */
             end_year_clim?: number | null;
+            /** Date Filter Year */
+            date_filter_year?: number | null;
             /** Max Forecast Day */
             max_forecast_day?: number | null;
             /** Probabilistic */

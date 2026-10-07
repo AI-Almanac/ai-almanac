@@ -622,13 +622,24 @@ async def _exec_submit_benchmark(
         "region": spec.region_id,
         "max_forecast_day": spec.forecast_window_days,
     }
-    for model in models:
-        params = {**shared_params, **_clamp_model_params(model, spec)}
+    try:
+        params_by_model = [
+            (
+                model,
+                job_submission.parse_romp_params(
+                    {**shared_params, **_clamp_model_params(model, spec)}
+                ),
+            )
+            for model in models
+        ]
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return benchmark_payload(spec, validation, error=str(exc))
+    for model, romp_params in params_by_model:
         job = await job_submission.create_job_for_user(
             job_submission.JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
-                params=job_submission.RompParams(**params),
+                params=romp_params,
                 run_id=run_id,
             ),
             user_id,
@@ -893,14 +904,19 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
     if not row:
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
-    params = {**(cfg.get("romp_params") or {}), **params_override}
+    try:
+        romp_params = job_submission.parse_romp_params(
+            {**(cfg.get("romp_params") or {}), **params_override}
+        )
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return {"error": str(exc)}
     rerun = await job_submission.create_job_for_user(
         job_submission.JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
             or (cfg.get("model_config") or {}).get("id")
             or cfg.get("model_name", ""),
-            params=job_submission.RompParams(**params),
+            params=romp_params,
             run_id=row["run_id"],
         ),
         user_id,
