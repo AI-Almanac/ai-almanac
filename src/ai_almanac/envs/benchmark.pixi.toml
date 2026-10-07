@@ -33,4 +33,4 @@ seaborn = "*"
 scipy = "*"
 
 [pypi-dependencies]
-momp = { git = "https://github.com/hholb/ROMP.git", rev = "5a8a380ec42c97a92e4028cbbb1f456c6739a1eb" }
+momp = { git = "https://github.com/hholb/ROMP.git", rev = "af447626b95bd4385f8e961f27e8439411657e67" }
