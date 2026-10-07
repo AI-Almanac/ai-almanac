@@ -93,6 +93,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
         "return_outputs": True,
         "threshold_mm": 25.0,
         "cache_dir": str(tmp_path / "blend-intermediates"),
+        "model_layouts": None,
     }
     _, train_kwargs = train.calls[0]
     assert train_kwargs["model_names"] == ["aifs"]
@@ -103,7 +104,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
     assert (output_dir / "weights.pkl").read_bytes() == b"weights"
 
 
-def test_local_blend_passes_region_to_intermediate_builder(tmp_path: Path) -> None:
+def test_local_blend_passes_job_inputs_to_intermediate_builder(tmp_path: Path) -> None:
     obs_dir = tmp_path / "obs"
     model_dir = tmp_path / "aifs"
     obs_dir.mkdir()
@@ -127,12 +128,16 @@ def test_local_blend_passes_region_to_intermediate_builder(tmp_path: Path) -> No
         build_lat_lon_intermediates_bundle=prepare,
         train_blending_model_bundle=train,
     )
+    layouts = {
+        "aifs": {"forecast_dims": {"step": "prediction_timedelta_daily"}, "unit_cvt": 1000.0}
+    }
 
     run(
         {
             "obs_dir": str(obs_dir),
             "model_names": ["aifs"],
             "model_files": {"aifs": [str(forecast_path)]},
+            "model_layouts": layouts,
             "region_id": "ethiopia",
             "blend_params": {"training_years": "2020", "cv_holdout_years": "2021"},
         },
@@ -142,6 +147,7 @@ def test_local_blend_passes_region_to_intermediate_builder(tmp_path: Path) -> No
 
     _, prep_kwargs = prepare.calls[0]
     assert prep_kwargs["region_id"] == "ethiopia"
+    assert prep_kwargs["model_layouts"] == layouts
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:

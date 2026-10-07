@@ -109,3 +109,42 @@ def test_a_failing_worker_fails_the_whole_map(
     missing = [tmp_path / "missing-1.nc", tmp_path / "missing-2.nc"]
     with pytest.raises(Exception):  # noqa: B017 - any worker error must surface
         blending_app._map_parts(blending_app._process_obs_part, missing, {}, workers=2)
+
+
+def test_registered_dims_are_renamed_to_the_names_blending_reads() -> None:
+    app = _load_blending_app()
+    base = {"input": {}, "dimensions": {"rename": {"day": "day", "number": "number"}}}
+    dims = {
+        "init_time": "time",
+        "step": "prediction_timedelta_daily",
+        "member": "realization",
+        "lat": "latitude",
+        "lon": "longitude",
+    }
+
+    renames = app._forecast_spec_for(base, dims)["dimensions"]["rename"]
+
+    assert renames["prediction_timedelta_daily"] == "day"
+    assert renames["realization"] == "number"
+    assert renames["latitude"] == "lat"
+    assert renames["day"] == "day"  # the shared renames still apply
+
+
+def test_sources_without_registered_dims_keep_the_shared_spec() -> None:
+    app = _load_blending_app()
+    base = {"input": {}, "dimensions": {"rename": {"day": "day"}}}
+
+    assert app._forecast_spec_for(base, None) is base
+
+
+def test_forecast_rainfall_is_scaled_to_millimetres() -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    df = pd.DataFrame({"lat": [10.0], "rain_day_1": [0.004], "rain_day_2": [0.02]})
+
+    scaled = app._in_millimetres(df, 1000.0)
+
+    assert scaled["rain_day_1"].tolist() == pytest.approx([4.0])
+    assert scaled["rain_day_2"].tolist() == pytest.approx([20.0])
+    assert scaled["lat"].tolist() == [10.0]
