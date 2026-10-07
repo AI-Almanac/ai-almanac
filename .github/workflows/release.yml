@@ -1,5 +1,8 @@
 name: release
 
+# Tag pushes (v*) publish to PyPI. A manual dispatch runs the same build and
+# smoke test and publishes to TestPyPI, as a dry run before cutting a tag —
+# PyPI never lets a version be re-uploaded.
 on:
   push:
     tags:
@@ -17,15 +20,26 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
 
-      - name: Build SvelteKit SPA
+      - name: Tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          cd web
+          package_version="$(uv version --short)"
+          if [ "v${package_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match pyproject.toml version ${package_version}"
+            exit 1
+          fi
+
+      - name: Build SvelteKit SPA
+        working-directory: web
+        run: |
           npm ci
           npm run build
 
@@ -40,12 +54,48 @@ jobs:
           name: dist
           path: dist/
 
-  publish-pypi:
+  # Install the wheel the way the README tells users to, outside the checkout,
+  # and boot it: catches missing package data, a missing SPA bundle, or
+  # migrations that only work from a source tree.
+  smoke-test:
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install as a uv tool
+        run: uv tool install --python "${{ matrix.python }}" dist/*.whl
+
+      - name: Serve the UI and API
+        env:
+          AI_ALMANAC_DATA_DIR: ${{ runner.temp }}/almanac-data
+        run: |
+          ai-almanac version
+          ai-almanac serve --no-open --port 8765 > serve.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8765/api/regions > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8765/ | grep -q '<html' || { cat serve.log; exit 1; }
+          curl -sf http://127.0.0.1:8765/api/regions > /dev/null || { cat serve.log; exit 1; }
+
+  publish-pypi:
+    needs: smoke-test
     if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ai-almanac/
     permissions:
-      id-token: write   # OIDC trust for PyPI Trusted Publishers
+      id-token: write # OIDC trust for PyPI Trusted Publishers
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -53,9 +103,22 @@ jobs:
           path: dist
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
-  # The Homebrew tap and .deb package live in adjacent repos:
-  #   github.com/AI-Almanac/homebrew-ai-almanac   — formula
-  #   github.com/AI-Almanac/ai-almanac-apt        — fpm-built .deb + apt repo
-  # Each repo's own release.yml watches for the version bump and re-publishes
-  # its artifact. They're not built here so this workflow stays focused on the
-  # PyPI source of truth.
+  publish-testpypi:
+    needs: smoke-test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/ai-almanac/
+    permissions:
+      id-token: write # OIDC trust for PyPI Trusted Publishers
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Re-running the dry run for an unchanged version is expected.
+          skip-existing: true

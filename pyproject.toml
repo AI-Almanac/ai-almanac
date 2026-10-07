@@ -1,11 +1,25 @@
 [project]
 name = "ai-almanac"
-version = "0.1.0"
+version = "0.1.0a2"
 description = "Local-first benchmarking platform for AI weather and climate models."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "AI Almanac contributors" }]
+keywords = ["weather", "climate", "forecasting", "benchmarking", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
 dependencies = [
     "fastapi>=0.135.3",
     "uvicorn[standard]>=0.44.0",
@@ -30,6 +44,11 @@ dependencies = [
     "psycopg[binary]>=3.3.4,<4",
     "cryptography>=48.0.1,<51", "google-cloud-storage>=3.12.0,<4", "gcsfs>=2026.5.0,<2027", "modal>=1.5.0,<2", "globus-sdk>=4.8.0,<5", "titiler-core>=2.0.5,<3", "certifi", "pyjwt>=2.14.0", "anyio>=4.14.2",
 ]
+
+[project.urls]
+Homepage = "https://ai-almanac.org"
+Source = "https://github.com/AI-Almanac/ai-almanac"
+Issues = "https://github.com/AI-Almanac/ai-almanac/issues"
 
 [project.scripts]
 ai-almanac = "ai_almanac.cli:app"
@@ -56,8 +75,10 @@ packages = ["src/ai_almanac"]
 "modal/blending_app.py" = "ai_almanac/envs/blending_app.py"
 
 [tool.hatch.build.targets.sdist]
-# The wheel is built from the sdist by standard Python build frontends.
+# The wheel is built from the sdist by standard Python build frontends, so the
+# sdist carries exactly what the wheel needs — not infra, CI, or agent config.
 # Include the generated SPA even though web/build is ignored by Git.
+only-include = ["src", "web/build", "modal/blending_app.py", "README.md", "LICENSE"]
 artifacts = ["web/build", "modal/blending_app.py"]
 
 [tool.ruff]

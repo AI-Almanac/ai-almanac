@@ -15,25 +15,25 @@ from ai_almanac.settings import (
 def test_overlay_persists_across_reload() -> None:
     """An admin's setting change survives a settings reload (i.e. a redeploy),
     because it lives in the database overlay, not the ephemeral config.yaml."""
-    original = settings.enable_data_management
+    original = settings.data_management_audience
     try:
-        write_settings_overlay({"enable_data_management": False})
+        write_settings_overlay({"data_management_audience": "off"})
         # Simulate a fresh process / redeploy: drop the in-memory value, then
         # re-resolve settings from scratch.
-        settings.enable_data_management = True
+        settings.data_management_audience = "everyone"
         reload_settings()
-        assert settings.enable_data_management is False
+        assert settings.data_management_audience == "off"
     finally:
-        write_settings_overlay({"enable_data_management": None})
+        write_settings_overlay({"data_management_audience": None})
         reload_settings()
-        assert settings.enable_data_management == original
+        assert settings.data_management_audience == original
 
 
 @pytest.mark.asyncio
 async def test_capability_reports_flag_state(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "enable_data_management", False)
+    monkeypatch.setattr(settings, "data_management_audience", "off")
     caps = (await client.get("/auth/me")).json()["capabilities"]
     assert caps["can_manage_data"] is False
 
@@ -42,7 +42,7 @@ async def test_capability_reports_flag_state(
 async def test_region_mutations_hidden_when_disabled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "enable_data_management", False)
+    monkeypatch.setattr(settings, "data_management_audience", "off")
     resp = await client.post("/regions", json={"display_name": "Nope"})
     assert resp.status_code == 404
 
@@ -54,7 +54,7 @@ async def test_region_mutations_hidden_when_disabled(
 async def test_region_create_allowed_when_enabled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "enable_data_management", True)
+    monkeypatch.setattr(settings, "data_management_audience", "everyone")
     resp = await client.post(
         "/regions",
         json={
@@ -67,6 +67,29 @@ async def test_region_create_allowed_when_enabled(
     )
     # Not a 404 from the flag gate; the feature is reachable.
     assert resp.status_code != 404
+
+
+@pytest.mark.asyncio
+async def test_admins_audience_hides_data_management_from_users_only(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "data_management_audience", "admins")
+
+    admin_caps = (await client.get("/auth/me")).json()["capabilities"]
+    assert admin_caps["can_manage_data"] is True
+    # Past the gate: an empty body fails validation instead of hiding the route.
+    assert (await client.post("/data-sources/validate", json={})).status_code == 422
+
+    monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setattr(settings, "admin_subjects", "")
+    monkeypatch.setattr(settings, "admin_emails", "")
+    user_headers = {"X-Forwarded-User": "rando"}
+    user_caps = (await client.get("/auth/me", headers=user_headers)).json()["capabilities"]
+    assert user_caps["can_manage_data"] is False
+    hidden = await client.post("/data-sources/validate", json={}, headers=user_headers)
+    assert hidden.status_code == 404
+    # Reads stay available so a user's benchmarks can still list datasets.
+    assert (await client.get("/data-sources", headers=user_headers)).status_code == 200
 
 
 @pytest.mark.asyncio

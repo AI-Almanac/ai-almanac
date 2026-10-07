@@ -13,11 +13,11 @@ import math
 import re
 import uuid
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -31,7 +31,17 @@ from ai_almanac.server.services.forecast_models import (
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
-from ai_almanac.server.services.romp import romp_safe_model_name
+from ai_almanac.server.services.romp import (
+    DataPath,
+    FilePattern,
+    InitDays,
+    Latitude,
+    Longitude,
+    Members,
+    RompName,
+    Year,
+    romp_safe_model_name,
+)
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
@@ -42,45 +52,55 @@ from ai_almanac.settings import (
 )
 
 
+# Benchmark settings, parsed into the only value shapes ROMP accepts.
+# model_dump(mode="json") gives the canonical form stored with the job and
+# handed to the ROMP runners.
 class RompParams(BaseModel):
-    obs: str | None = None
-    obs_file_pattern: str | None = None
-    obs_var: str | None = None
-    model_var: str | None = None
-    file_pattern: str | None = None
-    region: str | None = None
-    event_type: str | None = None
-    wet_threshold: float | None = None
-    wet_init: float | None = None
+    obs: RompName | None = None
+    obs_file_pattern: FilePattern | None = None
+    obs_var: RompName | None = None
+    model_var: RompName | None = None
+    file_pattern: FilePattern | None = None
+    region: RompName | None = None
+    event_type: RompName | None = None
+    wet_threshold: FiniteFloat | None = None
+    wet_init: FiniteFloat | None = None
     wet_spell: int | None = None
     dry_spell: int | None = None
     dry_extent: int | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-    start_year_clim: int | None = None
-    end_year_clim: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    start_year_clim: Year | None = None
+    end_year_clim: Year | None = None
+    date_filter_year: Year | None = None
     max_forecast_day: int | None = None
     probabilistic: bool | None = None
-    members: str | None = None
+    members: Members | None = None
     parallel: bool | None = None
-    ref_model: str | None = None
-    init_days: str | None = None
-    lat_min: float | None = None
-    lat_max: float | None = None
-    lon_min: float | None = None
-    lon_max: float | None = None
+    ref_model: RompName | None = None
+    init_days: InitDays | None = None
+    lat_min: Latitude | None = None
+    lat_max: Latitude | None = None
+    lon_min: Longitude | None = None
+    lon_max: Longitude | None = None
     land_only: bool | None = None
     shp_only: bool | None = None
-    nc_mask: str | None = None
+    nc_mask: DataPath | None = None
     focus_area: FocusArea | None = None
-    ref_model_dir: str | None = None
-    thresh_file: str | None = None
+    ref_model_dir: DataPath | None = None
+    thresh_file: DataPath | None = None
+
+
+class ResolvedRompParams(RompParams):
+    """Settings after submission resolves them, including the years ROMP evaluates."""
+
+    years: tuple[Year, ...] | None = None
+    years_clim: tuple[Year, ...] | None = None
 
 
 class JobCreate(BaseModel):
     dataset_id: str
     model_name: str
-    obs_dir: str | None = None
     params: RompParams = RompParams()
     run_id: str | None = None
 
@@ -242,12 +262,8 @@ def _not_ready_detail(source: dict, user_id: str, fallback: str) -> str:
     return fallback
 
 
-async def _resolve_obs_dir(
-    dataset_id: str, obs_dir_override: str | None, user_id: str
-) -> str | None:
+async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
     """Resolve an observation source to the path a runner reads."""
-    if obs_dir_override:
-        return obs_dir_override
     source = await data_source_service.get_source(dataset_id)
     if not source:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -438,6 +454,40 @@ def source_missing_years(metadata: dict | None) -> set[int]:
     if not isinstance(value, list):
         return set()
     return {year for item in value if (year := _registered_year(item)) is not None}
+
+
+def _years_between(first: int, last: int, missing: set[int]) -> list[int]:
+    return [year for year in range(first, last + 1) if year not in missing]
+
+
+def skip_missing_years(romp_params: dict, obs_missing: set[int], model_missing: set[int]) -> dict:
+    """ROMP params with explicit year lists that leave out years with no data.
+
+    ROMP reads one ``{year}.nc`` per evaluation year (observations and model)
+    and per climatology year (observations only), so a gap year inside the
+    range fails the run. Unset lists make ROMP use the full range. Raises
+    ValueError when a gap swallows every year.
+    """
+    start_date, end_date = romp_params.get("start_date"), romp_params.get("end_date")
+    if not start_date or not end_date:
+        return romp_params
+    start, end = int(str(start_date)[:4]), int(str(end_date)[:4])
+    years = _years_between(start, end, obs_missing | model_missing)
+    years_clim = _years_between(
+        int(romp_params.get("start_year_clim") or start),
+        int(romp_params.get("end_year_clim") or end),
+        obs_missing,
+    )
+    if not years:
+        raise ValueError(f"The chosen sources have no data for any year in {start}-{end}.")
+    if not years_clim:
+        raise ValueError("The observations have no data for any climatology year.")
+    return {**romp_params, "years": years, "years_clim": years_clim}
+
+
+def missing_years_warning(source_name: str, years: Iterable[int]) -> str:
+    listed = ", ".join(map(str, sorted(years)))
+    return f"{source_name} has no data for {listed}; the benchmark skips those years."
 
 
 def blend_year_coverage(
@@ -688,7 +738,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None, user_id)
+    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
 
     try:
@@ -1224,6 +1274,56 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     return await create_forecast_for_user(body, user_id)
 
 
+class InvalidBenchmarkSettings(ValueError):
+    """Benchmark settings that do not parse; the message names each invalid field."""
+
+
+_FILE_SETTINGS = ("nc_mask", "thresh_file", "ref_model_dir")
+
+
+def _require_cloud_paths(paths: dict[str, str | None]) -> None:
+    """Shared deployments only take gs:// URLs for job files.
+
+    The runner opens these files itself, so a host or container path would
+    let a job read files there rather than its data.
+    """
+    if settings.deployment_mode != "shared":
+        return
+    local = [name for name, path in paths.items() if path and not path.startswith("gs://")]
+    if local:
+        raise InvalidBenchmarkSettings(
+            f"Invalid benchmark settings: {', '.join(local)} must be gs:// URLs on this deployment"
+        )
+
+
+def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> RompParams:
+    try:
+        parsed = model.model_validate(params)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
+    _require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
+    return parsed
+
+
+def parse_benchmark_settings(params: dict) -> dict:
+    """Parse settings assembled from the request, model, region, and source metadata.
+
+    Raises a 422 naming each invalid field. Returns the canonical JSON form
+    stored with the job and handed to ROMP.
+    """
+    try:
+        parsed = parse_romp_params(params, ResolvedRompParams)
+    except InvalidBenchmarkSettings as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        key: value for key, value in parsed.model_dump(mode="json").items() if value is not None
+    }
+
+
 async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     """Picked administrative units need their outlines frozen into the job."""
     if not params.get("focus_area"):
@@ -1294,12 +1394,12 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
     if grid_errors:
         raise HTTPException(status_code=400, detail=" ".join(grid_errors))
-    obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
+    obs_dir = await _resolve_obs_dir(body.dataset_id, user_id)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
 
-    romp_params = body.params.model_dump(exclude_none=True)
+    romp_params = body.params.model_dump(mode="json", exclude_none=True)
     for key in (
         "date_filter_year",
         "probabilistic",
@@ -1328,10 +1428,19 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             source_metadata,
             model_source["metadata"],
         )
+    try:
+        romp_params = skip_missing_years(
+            romp_params,
+            source_missing_years(source_metadata),
+            source_missing_years(model_source["metadata"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if "obs_file_pattern" not in romp_params and source_metadata.get("obs_file_pattern"):
         romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):
         romp_params["obs_var"] = source_metadata["obs_var"]
+    romp_params = parse_benchmark_settings(romp_params)
     dataset_config = {
         "provider": "local",
         "source_id": body.dataset_id,

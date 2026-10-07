@@ -438,7 +438,7 @@ async def test_not_ready_shared_source_does_not_disclose_its_path(
         )
 
     with pytest.raises(HTTPException) as exc:
-        await job_submission._resolve_obs_dir(obs_id, None, user_id)
+        await job_submission._resolve_obs_dir(obs_id, user_id)
 
     assert exc.value.status_code == 409
     assert "private-bucket" not in str(exc.value.detail)

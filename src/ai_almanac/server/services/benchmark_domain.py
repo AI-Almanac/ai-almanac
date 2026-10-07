@@ -284,6 +284,26 @@ def _model_windows(
     return windows
 
 
+def _missing_year_warnings(
+    windows: list[guardrails.ModelWindow], model_map: dict[str, dict]
+) -> list[str]:
+    """Gap years inside each model's evaluation window, which the run skips."""
+    warnings = []
+    for window in windows:
+        if window.eval_start_year is None or window.eval_end_year is None:
+            continue
+        model = model_map.get(window.model_id) or {}
+        gaps = [
+            year
+            for year in job_submission.source_missing_years(model)
+            if window.eval_start_year <= year <= window.eval_end_year
+        ]
+        if gaps:
+            name = model.get("display_name") or window.model_id
+            warnings.append(job_submission.missing_years_warning(name, gaps))
+    return warnings
+
+
 def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> BenchmarkValidation:
     errors = []
     warnings = []
@@ -331,9 +351,11 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
             ):
                 errors.append(f"{model_id}: start_year_clim must be before end_year_clim")
 
-    findings = guardrails.check_benchmark(_model_windows(spec, model_map), guardrails.current())
+    windows = _model_windows(spec, model_map)
+    findings = guardrails.check_benchmark(windows, guardrails.current())
     errors.extend(guardrails.error_messages(findings))
     warnings.extend(guardrails.warning_messages(findings))
+    warnings.extend(_missing_year_warnings(windows, model_map))
 
     can_run = not missing and not errors
     return BenchmarkValidation(
@@ -600,13 +622,24 @@ async def _exec_submit_benchmark(
         "region": spec.region_id,
         "max_forecast_day": spec.forecast_window_days,
     }
-    for model in models:
-        params = {**shared_params, **_clamp_model_params(model, spec)}
+    try:
+        params_by_model = [
+            (
+                model,
+                job_submission.parse_romp_params(
+                    {**shared_params, **_clamp_model_params(model, spec)}
+                ),
+            )
+            for model in models
+        ]
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return benchmark_payload(spec, validation, error=str(exc))
+    for model, romp_params in params_by_model:
         job = await job_submission.create_job_for_user(
             job_submission.JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
-                params=job_submission.RompParams(**params),
+                params=romp_params,
                 run_id=run_id,
             ),
             user_id,
@@ -871,14 +904,19 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
     if not row:
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
-    params = {**(cfg.get("romp_params") or {}), **params_override}
+    try:
+        romp_params = job_submission.parse_romp_params(
+            {**(cfg.get("romp_params") or {}), **params_override}
+        )
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return {"error": str(exc)}
     rerun = await job_submission.create_job_for_user(
         job_submission.JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
             or (cfg.get("model_config") or {}).get("id")
             or cfg.get("model_name", ""),
-            params=job_submission.RompParams(**params),
+            params=romp_params,
             run_id=row["run_id"],
         ),
         user_id,

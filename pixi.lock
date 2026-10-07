@@ -2671,8 +2671,8 @@ packages:
   timestamp: 1733762153202
 - pypi: ./
   name: ai-almanac
-  version: 0.1.0
-  sha256: 49b150bf7edb1911dc794f78f13d13a2e9006a99d792e57ff8c8e17fc2adf50c
+  version: 0.1.0a2
+  sha256: 176a889929de2ffc1cb957225fea767e35834ec729de6c7394c882eae9db47b7
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0

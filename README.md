@@ -1,191 +1,192 @@
 # ai-almanac
 
-Local-first benchmarking platform for AI weather and climate models.
+Assess AI weather models, blend them, and forecast the weather events people
+plan around — starting with the onset of the rainy season.
 
-Pick a region and an event type (e.g. monsoon onset), select one or more models,
-submit a benchmark, and see per-grid-point skill maps (MAE, FAR, miss rate, RMSE,
-ACC, bias) rendered in your browser. The whole thing — web UI, API, benchmark
-runner, and database — is a single Python process you launch on your own GPU
-workstation (NVIDIA DGX Spark, a lab box, your laptop for the LLM-driven UI).
+Pick a region, compare how well AI and conventional weather models have
+predicted monsoon onset there, combine the best of them into a blended
+forecast, and run that blend live for the current season. A built-in assistant
+can set up each step for you from a plain-language request.
+
+> **Try it without installing:** [ai-almanac.org](https://ai-almanac.org) is
+> the hosted version. Browse example results without an account, or sign in to
+> run your own.
+
+To run it on your own machine, with your own data:
 
 ```bash
-pipx install ai-almanac      # or `uv tool install ai-almanac`
+uv tool install ai-almanac   # or `pipx install ai-almanac`
 ai-almanac serve             # opens http://localhost:8765 in your browser
 ```
 
-That's it.
-
 ---
 
-## What you get
+## What you can do
 
-| Layer            | Where it lives                                                      |
-| ---------------- | ------------------------------------------------------------------- |
-| Web UI           | SvelteKit SPA, bundled into the wheel                               |
-| API              | FastAPI, served on the same port as the UI                          |
-| Database         | SQLite under `~/.local/share/ai-almanac/almanac.db` (auto-migrated) |
-| Storage          | Filesystem under the same data directory                            |
-| Benchmark runner | Detached local supervisor, with ROMP in a Pixi-managed environment  |
-| Access model     | Local, single-user application bound to the loopback interface      |
+- **Benchmarks** — score one or more models against observations for a region
+  and season. Results are per-grid-point skill maps (false alarm rate, miss
+  rate, and onset error in days), lead-time skill curves, and, for ensemble
+  models, probabilistic scores (Brier, RPS, AUC, reliability). Limit scoring to
+  an area of interest by drawing a box or picking administrative areas.
+- **Blends** — train a weighted combination of several models on past seasons,
+  check its skill on held-out years, and download the trained weights and
+  scores.
+- **Forecasts** — run a trained blend's AI models forward from today's GFS or
+  IFS analysis and map the blended probability of onset across the region.
+- **Assistant** — describe what you want ("which models best predict Kiremt
+  onset in Ethiopia?") and the assistant fills in the benchmark or blend setup,
+  explains results, and digs into failed runs. Nothing is submitted without
+  your approval.
+- **Almanac** — reference pages on AI weather model families, architectures,
+  and observation datasets, plus a glossary.
 
-One Python package. One process. One port. One data directory.
-
-Benchmark jobs run in detached local supervisor processes. Closing or restarting
-the web server does not stop active work. Restarting `ai-almanac serve`
-reconciles queued and running jobs from SQLite, and active jobs can be canceled
-from the benchmark UI.
+Ethiopia (Kiremt) and India (monsoon onset) are built-in regions; you can add
+your own.
 
 ---
 
 ## Install
 
 ```bash
-# Recommended — uv tool install gives you a managed venv per CLI
-uv tool install ai-almanac
-
-# Or pipx
-pipx install ai-almanac
-
-# Or pip (less isolated)
-pip install ai-almanac
+uv tool install ai-almanac   # recommended: an isolated, managed environment
+pipx install ai-almanac      # equivalent
+pip install ai-almanac       # into the current environment
 ```
 
-Once a homebrew tap / .deb is published, `brew install ai-almanac` and
-`apt install ai-almanac` will be available too. The PyPI package is the
-source of truth — those channels are thin wrappers.
+AI Almanac supports Linux and Apple Silicon macOS, with Python 3.12 or newer.
+It is in early development, so releases are published as pre-releases
+(`0.1.0a1`, …); the commands above install the latest one.
 
-### Prerequisites for running real benchmarks and blends
+### Workload environments
 
-Actual benchmark and model-blending execution need separate scientific Python
-stacks. Those dependencies live in isolated Pixi-managed environments to keep
-the core install small:
+Benchmarks, blends, and forecasts each need a scientific Python stack that is
+kept apart from the app. [Pixi](https://pixi.sh) installs and manages them:
 
 ```bash
-# Install pixi (one-time): https://pixi.sh
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Materialize both workload environments (takes a few minutes the first time)
-ai-almanac env prepare
+curl -fsSL https://pixi.sh/install.sh | bash   # one-time
+ai-almanac env prepare                         # a few minutes the first time
 ```
 
-This also checks out the blending workflow at the version pinned by AI Almanac.
-Subsequent `ai-almanac serve` runs reuse both environments. `ai-almanac env
-info` prints the installed benchmark package versions.
+| Workflow   | Runs on                                                              |
+| ---------- | -------------------------------------------------------------------- |
+| Benchmarks | Linux or Apple Silicon macOS, CPU only                               |
+| Blends     | Linux or Apple Silicon macOS, CPU only                               |
+| Forecasts  | Linux with an NVIDIA GPU (CUDA); model weights download on first run |
+
+On macOS, `env prepare` skips the forecast environment. Re-run it after
+upgrading AI Almanac to pick up new pinned versions.
+
+---
+
+## Getting started
+
+1. **Add data.** Open **Data** and register an observation dataset and one or
+   more model forecast datasets. Each is a pointer to a local directory or a
+   `gs://` prefix of NetCDF files. AI Almanac checks the files and variable
+   before saving and never modifies them. A fresh install has no datasets.
+2. **Run a benchmark.** Open **Benchmarks**, describe it to the assistant or
+   choose **Manual configuration**, and submit.
+3. **Train a blend** from the models you benchmarked, then **run a forecast**
+   from it.
+
+Runs continue in the background: closing or restarting `ai-almanac serve` does
+not stop them, and the app reconnects to them when it starts again. Cancel a
+run from its results page.
+
+### Setting up the assistant
+
+The assistant needs an LLM. Point it at any OpenAI-compatible endpoint with
+environment variables:
+
+```bash
+export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_MODEL=gpt-5
+export LLM_API_KEY=sk-...
+ai-almanac serve
+```
+
+Local servers (Ollama, vLLM, LM Studio) work the same way; leave `LLM_API_KEY`
+unset if the server doesn't check it. The same keys, lowercased
+(`llm_base_url`, …), can live in `config.yaml` in the data directory instead.
+Without an LLM, every workflow still works through manual configuration.
 
 ---
 
 ## Usage
 
 ```bash
-ai-almanac serve                       # default: 127.0.0.1:8765, opens browser
-ai-almanac serve --port 9000           # alternate port
-ai-almanac serve --no-open             # don't auto-launch a browser tab
-ai-almanac serve --reload              # dev mode (uvicorn auto-reload)
-ai-almanac env prepare                 # install / update workload environments
-ai-almanac env info                    # show installed package versions
-
-ai-almanac reset --confirm             # wipe ~/.local/share/ai-almanac/
+ai-almanac serve                 # 127.0.0.1:8765, opens a browser tab
+ai-almanac serve --port 9000     # alternate port
+ai-almanac serve --no-open       # don't open a browser tab
+ai-almanac env prepare           # install or update workload environments
+ai-almanac env info              # show benchmark package versions
+ai-almanac db upgrade            # apply database migrations (serve does this too)
+ai-almanac reset --confirm       # delete everything in the data directory
 ai-almanac version
 ```
 
-### Test shared mode locally
-
-Run the complete multi-user architecture locally without DNS, TLS, an OIDC
-provider, or a GPU:
-
-```bash
-pixi run self-host-local
-```
-
-Open `http://localhost:18080`. The stack uses PostgreSQL, shared ownership and
-authorization, persistent Docker volumes, and synthetic benchmark outputs.
-Switch between the built-in administrator and regular user at
-`http://localhost:18080/__dev`.
-
-On a host with NVIDIA Container Toolkit, run real benchmarks instead:
-
-```bash
-pixi run self-host-local-gpu
-```
-
-The same shared stack can exercise GCS artifact storage or the deployed Modal
-runner. GCS requires three bucket names and a service-account or Application
-Default Credentials JSON file:
-
-```bash
-export GCS_DATA_BUCKET=my-data-bucket
-export GCS_UPLOADS_BUCKET=my-uploads-bucket
-export GCS_OUTPUTS_BUCKET=my-outputs-bucket
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
-
-pixi run self-host-local-gcs
-```
-
-To submit jobs to Modal, also export `MODAL_TOKEN_ID` and
-`MODAL_TOKEN_SECRET`, deploy the Modal app, then run:
-
-```bash
-pixi run self-host-local-modal
-```
-
-Modal mode uses GCS because remote workers cannot access the local Compose
-volume. The local runner supports either local storage or GCS.
-
-Stop the stack with `pixi run self-host-local-down`. Use
-`pixi run self-host-local-reset` to also delete its PostgreSQL and application
-data volumes.
-
-For an internet-accessible or multi-user installation, follow the
-[deployment guide](./docs/deployment.md). Do not expose personal mode to
-untrusted users.
+`ai-almanac serve` only listens on the loopback interface: it is a single-user
+app with no sign-in. To share an installation with a team, see
+[Running for a team](#running-for-a-team).
 
 ### Where data lives
 
-Everything goes under `$AI_ALMANAC_DATA_DIR`, defaulting to:
-
-- Linux: `~/.local/share/ai-almanac/`
-- macOS: `~/Library/Application Support/ai-almanac/`
-- Windows: `%LOCALAPPDATA%\ai-almanac\`
+Everything goes under `$AI_ALMANAC_DATA_DIR`, defaulting to
+`~/.local/share/ai-almanac/` on Linux and
+`~/Library/Application Support/ai-almanac/` on macOS.
 
 ```
 $AI_ALMANAC_DATA_DIR/
-├── almanac.db          ← SQLite (WAL mode)
-├── uploads/            ← user-uploaded obs datasets
-├── jobs/<job_id>/      ← run logs, NetCDF outputs, figures
-├── benchmark-env/      ← Pixi environment (ROMP + scientific/geo dependencies)
-├── blending-env/       ← Pixi environment and pinned blending workflow
-└── cache/              ← weight cache (HuggingFace), ARCO chunks
+├── almanac.db       ← SQLite database
+├── config.yaml      ← optional settings file
+├── jobs/<job_id>/   ← run logs, NetCDF outputs, figures
+├── cache/           ← blend intermediates, cached forecast rollouts
+├── benchmark-env/   ← workload environments (from `env prepare`)
+├── blending-env/
+└── forecast-env/    ← Linux only
 ```
 
-Override with `AI_ALMANAC_DATA_DIR=/some/path ai-almanac serve` to move one
-instance's private state. Do not point multiple running instances at the same
-application data directory. Researchers may register the same read-only input
-dataset directories from separate AI Almanac instances.
+Registered datasets stay where they are; only pointers to them are stored.
+Set `AI_ALMANAC_DATA_DIR=/some/path` to keep a separate instance. Don't point
+two running instances at the same data directory.
 
 ---
 
-## Adding data
+## Running for a team
 
-Open **Data** in the web UI and register local observation or model-output
-directories. AI Almanac checks the file pattern and configured NetCDF variable
-before making a source available to benchmark workflows.
+The installed `ai-almanac serve` is single-user; never expose it to untrusted
+users. To give a team its own installation, run AI Almanac in shared mode:
+multiple signed-in users, PostgreSQL, per-user ownership, admin roles, and
+optional GCS storage and Modal-hosted runs.
+
+Shared mode runs as Docker containers built from this repository, so it starts
+from a clone (with Docker and [Pixi](https://pixi.sh)) rather than the PyPI
+package:
+
+```bash
+git clone https://github.com/AI-Almanac/ai-almanac.git && cd ai-almanac
+pixi run self-host-local   # try the full shared stack locally
+```
+
+The [deployment guide](./docs/deployment.md) covers configuration and running
+it on a real host.
 
 ---
 
 ## Development
 
-Install [Pixi](https://pixi.sh/), then start the complete development stack:
+Install [Pixi](https://pixi.sh/) and run:
 
 ```bash
 pixi run dev
 ```
 
-This runs FastAPI with Python auto-reload on `http://localhost:8765` and the
-SvelteKit Vite server with hot module replacement on `http://localhost:5173`.
-See [`DEVELOPMENT.md`](./DEVELOPMENT.md) for the full task list.
+This starts the API with auto-reload on `http://localhost:8765` and the web UI
+with hot reload on `http://localhost:5173`. See
+[`DEVELOPMENT.md`](./DEVELOPMENT.md) and [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ---
 
 ## License
 
-MIT.
+[MIT](./LICENSE)
