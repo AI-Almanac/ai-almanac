@@ -175,3 +175,19 @@ def test_daily_scores_cover_live_rows_the_weekly_model_cannot_score(workflow, mo
     ]
     assert rows["id"].tolist() == ["10.0_20.0", "10.0_20.0", "11.0_21.0"]
     assert rows["p_later"].tolist() == [0.75, 0.75, 0.75]
+
+
+def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow, capsys) -> None:
+    def broken_step():
+        raise KeyError("aifs_rain_mean_day_40")
+
+    result, error = workflow._try_day_level("scoring", broken_step)
+
+    assert result is None
+    assert "day-level blend scoring failed" in error
+    assert "aifs_rain_mean_day_40" in error
+    assert "continuing with the week-level blend only" in capsys.readouterr().out
+
+
+def test_a_successful_day_level_step_returns_its_result(workflow) -> None:
+    assert workflow._try_day_level("final fit", lambda: b"model") == (b"model", None)

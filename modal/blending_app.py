@@ -44,6 +44,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import traceback
 from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple
@@ -2128,6 +2129,19 @@ def _forest_cv_preds_filename(output_tag: str) -> str:
     return f"cv_preds_{FOREST_MODEL_NAME}_global{output_tag}.pkl"
 
 
+def _try_day_level(step: str, run):
+    """Run one day-level blend step. A failure drops only the day-level blend,
+    logged with its traceback, so the week-level blend still ships.
+    Returns (result, None) or (None, error message)."""
+    try:
+        return run(), None
+    except Exception as exc:
+        traceback.print_exc()
+        message = f"day-level blend {step} failed: {type(exc).__name__}: {exc}"
+        print(f"WARNING: {message}; continuing with the week-level blend only")
+        return None, message
+
+
 def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
     return [{"name": FOREST_MODEL_NAME, "file": cv_preds_filename, "method": "global"}]
 
@@ -2307,17 +2321,24 @@ def train_blending_model_bundle(
 
     forest_frame = None
     external_predictions = None
+    day_level_error = None
     if train_forest:
-        forest_frame = _forest_frame(weekly, combined)
-        # 1_blend_evaluation.py scores these alongside the weekly model's CV.
         cv_preds_filename = _forest_cv_preds_filename(output_tag)
-        _cross_validate_forest(
-            forest_frame,
-            dissemination_path,
-            _cv_folds(training_years, cv_holdout_years, true_holdout_years),
-            model_names,
-        ).to_pickle(results_dir / cv_preds_filename)
-        external_predictions = _forest_external_predictions(cv_preds_filename)
+
+        def cross_validate_forest():
+            frame = _forest_frame(weekly, combined)
+            # 1_blend_evaluation.py scores these alongside the weekly model's CV.
+            _cross_validate_forest(
+                frame,
+                dissemination_path,
+                _cv_folds(training_years, cv_holdout_years, true_holdout_years),
+                model_names,
+            ).to_pickle(results_dir / cv_preds_filename)
+            return frame
+
+        forest_frame, day_level_error = _try_day_level("cross-validation", cross_validate_forest)
+        if forest_frame is not None:
+            external_predictions = _forest_external_predictions(cv_preds_filename)
 
     formula_text = formula_text or _default_formula_text(model_names)
     blend_spec = _build_blend_spec(
@@ -2387,14 +2408,17 @@ def train_blending_model_bundle(
             spec_path.unlink()
 
     if forest_frame is not None and final_fit is not None and final_fit.returncode == 0:
-        (results_dir / FOREST_MODEL_FILENAME).write_bytes(
-            _fit_final_forest(
+        forest_pkl, day_level_error = _try_day_level(
+            "final fit",
+            lambda: _fit_final_forest(
                 forest_frame,
                 dissemination_path,
                 _final_forest_years(training_years, true_holdout_years),
                 model_names,
-            )
+            ),
         )
+        if forest_pkl is not None:
+            (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
@@ -2411,6 +2435,7 @@ def train_blending_model_bundle(
         "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
         "true_holdout_years": sorted(int(year) for year in (true_holdout_years or [])),
         "formula_text": formula_text,
+        "day_level_blend_error": day_level_error,
         "combined": {
             "rows": int(len(combined)),
             "columns": int(len(combined.columns)),
@@ -2565,7 +2590,10 @@ def apply_blend_coefs_bundle(
         )
     daily_csv = None
     if forest_pkl is not None:
-        daily_csv = _daily_onset_csv(forest_pkl, _forest_frame(weekly, combined), live_year)
+        daily_csv, _ = _try_day_level(
+            "scoring",
+            lambda: _daily_onset_csv(forest_pkl, _forest_frame(weekly, combined), live_year),
+        )
     return LiveScores(weekly_csv=preds_csv.read_bytes(), daily_csv=daily_csv)
 
 
