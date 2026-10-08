@@ -174,3 +174,38 @@ def test_forecast_rows_outside_the_blendable_cells_are_dropped() -> None:
 
     assert app._only_cells(df, frozenset({"land"}))["rain_day_1"].tolist() == [1.0, 3.0]
     assert app._only_cells(df, None) is df
+
+
+def test_year_slices_keep_their_rows_positions_in_the_full_table(tmp_path: Path) -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    clim = pd.DataFrame({"id": ["b", "a", "b", "a"], "year": [2012, 2012, 2013, 2013]})
+
+    paths = app._write_year_slices(clim, tmp_path, "conditional", [[2012], [2013]])
+
+    assert pd.read_pickle(paths[1]).index.tolist() == [2, 3]
+
+
+def test_year_by_year_partitions_reassemble_in_climatology_row_order(tmp_path: Path) -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    row = app._CLIM_ROW
+    # Climatology order is cell b before cell a; each year's partition keeps it.
+    first = pd.DataFrame({"id": ["b", "a"], "year": [2012, 2012], row: [0, 2]})
+    second = pd.DataFrame({"id": ["b", "a"], "year": [2013, 2013], row: [1, 3]})
+    paths = [tmp_path / "0.pkl", tmp_path / "1.pkl"]
+    first.to_pickle(paths[0])
+    second.to_pickle(paths[1])
+
+    combined = app._assemble_combined(paths, restore_clim_order=True)
+
+    assert combined[["id", "year"]].values.tolist() == [
+        ["b", 2012],
+        ["b", 2013],
+        ["a", 2012],
+        ["a", 2013],
+    ]
+    assert row not in combined.columns
+    assert combined.index.tolist() == [0, 1, 2, 3]
