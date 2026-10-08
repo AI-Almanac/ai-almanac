@@ -2790,6 +2790,8 @@ export interface components {
             obs_year_start?: number | null;
             /** Obs Year End */
             obs_year_end?: number | null;
+            /** Grid Step Deg */
+            grid_step_deg?: number | null;
         };
         /**
          * Feature

@@ -15,7 +15,7 @@
 	const regions = $derived(form.regions);
 	const datasets = $derived(form.datasets);
 	const dataLoaded = $derived(form.dataLoaded);
-	const models = $derived(form.models);
+	const models = $derived(form.availableModels);
 	const selectedRegionId = $derived(form.selectedRegionId);
 	const selectedDatasetId = $derived(form.selectedDatasetId);
 	const selectedModelIds = $derived(form.selectedModelIds);
@@ -189,7 +189,9 @@
 									Select ground truth and benchmark coverage to see available models.
 								</p>
 							{:else if models.length === 0}
-								<p class="empty">No models are available for the selected region.</p>
+								<p class="empty">
+									No models are available for the selected ground truth's region and grid.
+								</p>
 							{:else}
 								<div class="model-table">
 									<div class="model-row header" aria-hidden="true">

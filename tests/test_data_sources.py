@@ -150,11 +150,14 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
 
     datasets_response = await client.get("/datasets", headers=auth_headers)
     assert datasets_response.status_code == 200
-    assert obs["id"] in {dataset["id"] for dataset in datasets_response.json()}
+    listed_obs = {dataset["id"]: dataset for dataset in datasets_response.json()}
+    assert listed_obs[obs["id"]]["grid_step_deg"] == 0.25
 
     models_response = await client.get("/jobs/models?region=ethiopia")
     assert models_response.status_code == 200
-    assert model["id"] in {item["id"] for item in models_response.json()}
+    assert model["metadata"]["grid_step_deg"] is not None
+    listed_models = {item["id"]: item for item in models_response.json()}
+    assert listed_models[model["id"]]["grid_step_deg"] == model["metadata"]["grid_step_deg"]
 
     launched: list[str] = []
 

@@ -28,8 +28,22 @@ export function formatYearSpan(span: YearSpan): string {
 	return span.start === span.end ? `${span.start}` : `${span.start}–${span.end}`;
 }
 
+export function gridStep(source: HasMetadata | undefined): number | null {
+	return metaNumber(source, 'grid_step_deg');
+}
+
+// Mirrors the server's grid_mismatch_errors: a source registered before grid
+// steps were recorded has no step and is not ruled out.
+export function gridsMatch(
+	obsStep: number | null | undefined,
+	modelStep: number | null | undefined
+): boolean {
+	if (obsStep == null || modelStep == null) return true;
+	return Math.abs(obsStep - modelStep) <= 1e-9 * Math.max(Math.abs(obsStep), Math.abs(modelStep));
+}
+
 export function formatGridStep(source: HasMetadata | undefined): string | null {
-	const step = metaNumber(source, 'grid_step_deg');
+	const step = gridStep(source);
 	return step == null ? null : `${Number(step.toFixed(3))}°`;
 }
 

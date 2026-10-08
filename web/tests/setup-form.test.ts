@@ -113,6 +113,26 @@ describe('BenchmarkSetupForm', () => {
 		expect(override.end_year_clim).toBe(2022);
 	});
 
+	it('offers only models on the ground truth grid and drops off-grid picks', async () => {
+		api.getModels.mockResolvedValue([
+			modelConfig({ id: 'fuxi', grid_step_deg: 2 }),
+			modelConfig({ id: 'aifs_v2', grid_step_deg: 0.25 })
+		]);
+		const form = setupForm();
+		form.datasets = [
+			dataset({ id: 'imd-2', grid_step_deg: 2 }),
+			dataset({ id: 'imd-025', grid_step_deg: 0.25 })
+		];
+		form.setDatasetId('imd-2');
+		await vi.waitFor(() => expect(form.models).toHaveLength(2));
+		form.toggleModel('fuxi');
+
+		form.setDatasetId('imd-025');
+
+		expect(form.availableModels.map((model) => model.id)).toEqual(['aifs_v2']);
+		expect(form.selectedModelIds).toEqual([]);
+	});
+
 	it('applies a chat-produced spec to the selection state', () => {
 		api.getModels.mockResolvedValue([modelConfig()]);
 		const form = setupForm();

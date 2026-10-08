@@ -35,7 +35,7 @@
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
-	import { describeSourceCoverage } from '$lib/source-coverage';
+	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
@@ -153,13 +153,17 @@
 
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
-	// Models are region-specific: only offer ones matching the chosen observation
-	// dataset's region, mirroring the benchmark setup flow.
+	// Only offer models on the chosen observations' region and grid,
+	// mirroring the benchmark setup flow.
 	const availableModels = $derived(
-		selectedObs ? modelSources.filter((s) => s.region === selectedObs.region) : []
+		selectedObs
+			? modelSources.filter(
+					(s) => s.region === selectedObs.region && gridsMatch(gridStep(selectedObs), gridStep(s))
+				)
+			: []
 	);
 
-	// Drop any selected model that no longer matches the chosen region.
+	// Drop any selected model that no longer matches the chosen observations.
 	$effect(() => {
 		const ids = new Set(availableModels.map((s) => s.id));
 		if (modelIds.some((id) => !ids.has(id))) {
@@ -632,7 +636,8 @@
 							<p class="muted">Select an observation source first to see matching models.</p>
 						{:else if availableModels.length === 0}
 							<p class="muted">
-								No ready forecast models for this region. Add some under Data first.
+								No ready forecast models match these observations' region and grid. Add some under
+								Data first.
 							</p>
 						{:else}
 							<div class="model-grid">
