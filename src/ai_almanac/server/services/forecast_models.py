@@ -9,14 +9,17 @@ of these by id (`metadata.forecast_model_id`), chosen at registration.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ValidationError, model_validator
 
 from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
 from ai_almanac.settings import forecast_model_by_id, get_packaged_forecast_models
+
+logger = logging.getLogger(__name__)
 
 _INTERNAL_FIELDS = ("earth2studio_class", "gpu", "env", "ensemble", "nensemble")
 
@@ -52,11 +55,19 @@ def model_training(
 
     Archives not linked to a registry model, and models whose training years
     were never published, have none — callers must not fill the gap with a guess.
+    A malformed entry counts as unknown too, so one bad edit to the registry
+    leaves that model's years blank rather than breaking every model list.
     """
     registry = registry if registry is not None else get_packaged_forecast_models()
     entry = forecast_model_by_id(registry, forecast_model_id)
     training = (entry or {}).get("training")
-    return TrainingHistory.model_validate(training) if training else None
+    if not training:
+        return None
+    try:
+        return TrainingHistory.model_validate(training)
+    except ValidationError:
+        logger.warning("Ignoring malformed training block for %s", forecast_model_id, exc_info=True)
+        return None
 
 
 def training_summary(forecast_model_id: str | None) -> dict | None:

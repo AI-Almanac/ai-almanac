@@ -7,7 +7,11 @@ from pydantic import ValidationError
 
 from ai_almanac.server.services import benchmark_domain
 from ai_almanac.server.services.blend_domain import _model_candidate
-from ai_almanac.server.services.forecast_models import model_training
+from ai_almanac.server.services.forecast_models import (
+    TrainingHistory,
+    TrainingPeriod,
+    model_training,
+)
 from ai_almanac.settings import get_packaged_forecast_models
 
 _REGISTRY = {
@@ -72,14 +76,19 @@ def test_unknown_training_years_stay_unknown():
 
 def test_reversed_years_are_rejected():
     with pytest.raises(ValidationError):
-        model_training("backwards", _REGISTRY)
+        TrainingPeriod(stage="pretraining", dataset="ERA5", start_year=2017, end_year=1979)
+
+
+def test_a_malformed_entry_reads_as_unknown_rather_than_failing():
+    assert model_training("backwards", _REGISTRY) is None
 
 
 def test_every_packaged_training_history_parses():
     registry = get_packaged_forecast_models()
 
     for entry in registry["models"]:
-        model_training(entry["id"], registry)
+        if "training" in entry:
+            TrainingHistory.model_validate(entry["training"])
 
 
 def test_blend_candidates_carry_the_linked_models_training_years():

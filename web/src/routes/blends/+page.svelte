@@ -7,7 +7,7 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
-		getPlatformThresholds,
+		getGuardrailThresholds,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -251,7 +251,7 @@
 			listDataSources('obs'),
 			listDataSources('model'),
 			getCapabilities(),
-			getPlatformThresholds()
+			getGuardrailThresholds()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;

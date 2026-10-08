@@ -362,4 +362,4 @@ async def test_guardrail_thresholds_endpoint_reports_the_enforced_minimum(monkey
 
     monkeypatch.setattr(guardrails, "current", lambda: guardrails.Guardrails(min_training_years=15))
 
-    assert guardrail_thresholds()["min_training_years"] == 15
+    assert (await guardrail_thresholds(None)).min_training_years == 15

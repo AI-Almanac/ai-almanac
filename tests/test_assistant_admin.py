@@ -204,12 +204,12 @@ async def test_guardrail_thresholds_are_reported_read_only(
     """Shown so an admin can see what the {{placeholders}} resolve to. There is
     no PUT: changing them is a platform setting, because the chokepoint reads the
     same value."""
-    res = await client.get("/assistant/guardrails", headers=auth_headers)
+    res = await client.get("/config/guardrails", headers=auth_headers)
     assert res.status_code == 200, res.text
     assert res.json()["min_training_years"] >= 1
 
     assert (
-        await client.put("/assistant/guardrails", headers=auth_headers, json={})
+        await client.put("/config/guardrails", headers=auth_headers, json={})
     ).status_code == 405
 
 
@@ -258,7 +258,6 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
     ("method", "path"),
     [
         ("GET", "/assistant/rulesets"),
-        ("GET", "/assistant/guardrails"),
         ("GET", "/assistant/rulesets/builtin"),
         ("PUT", "/assistant/rulesets/builtin"),
         ("POST", "/assistant/rulesets/builtin/clone"),

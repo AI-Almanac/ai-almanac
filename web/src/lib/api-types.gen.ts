@@ -21,23 +21,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/assistant/guardrails": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Guardrails */
-        get: operations["read_guardrails_assistant_guardrails_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/assistant/rulesets/{ruleset_id}": {
         parameters: {
             query?: never;
@@ -641,10 +624,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Guardrail Thresholds
-         * @description The thresholds the platform enforces, so forms prefill values it will accept.
-         */
+        /** Guardrail Thresholds */
         get: operations["guardrail_thresholds_config_guardrails_get"];
         put?: never;
         post?: never;
@@ -3322,11 +3302,12 @@ export interface components {
         };
         /**
          * GuardrailThresholds
-         * @description The enforced thresholds, read-only here.
+         * @description The thresholds the platform enforces, read-only.
          *
-         *     Surfaced so an admin editing prose can see the numbers the {{placeholders}}
-         *     will resolve to. Editing them is a platform setting (PATCH /settings), not a
-         *     ruleset edit, because the submission chokepoint reads the same value.
+         *     Shown to admins editing assistant prose, so they see what its {{placeholders}}
+         *     resolve to, and read by forms so they prefill values the server will accept.
+         *     Editing them is a platform setting (PATCH /settings), because the submission
+         *     chokepoint reads the same value.
          */
         GuardrailThresholds: {
             /** Min Onset Years */
@@ -4905,26 +4886,6 @@ export interface operations {
             };
         };
     };
-    read_guardrails_assistant_guardrails_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GuardrailThresholds"];
-                };
-            };
-        };
-    };
     read_ruleset_assistant_rulesets__ruleset_id__get: {
         parameters: {
             query?: never;
@@ -6050,9 +6011,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: number;
-                    };
+                    "application/json": components["schemas"]["GuardrailThresholds"];
                 };
             };
         };
