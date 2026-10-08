@@ -89,6 +89,7 @@
 		const scopeKind = asScopeKind(params.get('scopeKind'));
 		const scopeKey = params.get('scopeKey');
 		if (blendId) selectedId = blendId;
+		else if (params.get('new') === '1') startNew();
 		if (chatId && scopeKind && scopeKey) {
 			continuedSessionId = chatId;
 			continuedScope = { kind: scopeKind, key: scopeKey };
