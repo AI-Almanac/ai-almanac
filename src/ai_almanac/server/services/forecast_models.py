@@ -39,10 +39,12 @@ def linked_forecast_model_id(source: dict) -> str | None:
     """The live forecast model chosen for a model archive at registration.
 
     Remote-provider sources skip inspection and keep metadata verbatim, so a
-    non-string value is treated as no link rather than trusted.
+    non-string or blank value is treated as no link rather than trusted.
     """
     model_id = (source.get("metadata") or {}).get("forecast_model_id")
-    return model_id if isinstance(model_id, str) else None
+    if not isinstance(model_id, str):
+        return None
+    return model_id.strip() or None
 
 
 def live_forecast_compatibility(

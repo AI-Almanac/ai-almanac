@@ -638,7 +638,8 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     assert json.loads(row["config_json"])["forecast_models"] == linked
 
 
-def test_non_string_link_on_uninspected_source_counts_as_unlinked() -> None:
+@pytest.mark.parametrize("link", [["aifs"], "", "  "])
+def test_malformed_link_on_uninspected_source_counts_as_unlinked(link) -> None:
     cfg = {"model_names": ["remote"], "model_source_ids": ["s1"]}
-    sources = {"s1": {"metadata": {"forecast_model_id": ["aifs"]}}}
+    sources = {"s1": {"metadata": {"forecast_model_id": link}}}
     assert job_submission.blend_forecast_models(cfg, sources) == {}
