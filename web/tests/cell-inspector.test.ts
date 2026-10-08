@@ -45,6 +45,7 @@ describe('CellInspector', () => {
 		renderInspector('2025-07-10');
 		expect(screen.getByText('May 30 – Jun 5')).toBeTruthy();
 		expect(screen.getByText(/doesn't describe a new onset/)).toBeTruthy();
+		expect(screen.getByText('How the onset date is estimated')).toBeTruthy();
 	});
 
 	it('folds forecasts issued after onset until asked to show them', async () => {

@@ -4,6 +4,15 @@ import { argmax, binDateLabel, onsetHasPassed, type OnsetBins } from '$lib/onset
 // The estimated onset comes from consensusOnsetDay; a forecast issued after it
 // still answers "when will onset begin?", which no longer applies there.
 
+// How consensusOnsetDay works, in the reader's terms. Shown wherever the
+// estimate drives what's on screen, so the map and inspector explain it alike.
+export const ONSET_ESTIMATE_EXPLANATION =
+	'The likely onset date is the average of the dates the forecasts predicted, weighted by their chances. ' +
+	'Chances of onset more than 4 weeks out have no date, so they don’t count. ' +
+	'Forecasts issued after that date are left out and the average is taken again until it settles, ' +
+	'because a forecast issued once the rains have begun still predicts onset just after its own issue date. ' +
+	'It’s an estimate from the forecasts, not an observed onset.';
+
 export type OnsetBand = { start: number; end: number };
 
 const BAND_HALF_WIDTH_DAYS = 3;

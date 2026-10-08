@@ -14,7 +14,12 @@
 		probScaleMax,
 		type OnsetBins
 	} from '$lib/onset';
-	import { consensusBand, forecastOutlook, splitAtOnset } from '$lib/onset-outlook';
+	import {
+		ONSET_ESTIMATE_EXPLANATION,
+		consensusBand,
+		forecastOutlook,
+		splitAtOnset
+	} from '$lib/onset-outlook';
 	import { formatCoord } from '$lib/geo';
 
 	type Props = {
@@ -248,6 +253,13 @@
 					{showAfterOnset ? 'Hide' : 'Show'}
 				</button>
 			</div>
+		{/if}
+
+		{#if band}
+			<details class="estimate-note">
+				<summary>How the onset date is estimated</summary>
+				<p>{ONSET_ESTIMATE_EXPLANATION}</p>
+			</details>
 		{/if}
 	</section>
 </aside>
@@ -549,6 +561,22 @@
 		background: rgba(31, 43, 52, 0.06);
 		font-size: 0.65rem;
 		color: #46555c;
+	}
+
+	.estimate-note {
+		font-size: 0.63rem;
+		line-height: 1.4;
+		color: #627174;
+	}
+
+	.estimate-note summary {
+		cursor: pointer;
+		font-weight: 700;
+		color: #46555c;
+	}
+
+	.estimate-note p {
+		margin: 0.3rem 0 0;
 	}
 
 	.fold button {
