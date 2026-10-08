@@ -896,6 +896,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
+        "train_day_level_blend": settings.enable_day_level_blend,
         "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }

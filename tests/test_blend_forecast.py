@@ -20,6 +20,7 @@ from ai_almanac.server.services.blend_forecast import (
     parse_blend_forecast,
     parse_forecast_view,
 )
+from ai_almanac.settings import settings
 
 _CSV = """id,time,lat,lon,onset_threshold,cv_week1,cv_week2,cv_week3,cv_week4,cv_later
 9.0_39.0,2024-06-01,9.0,39.0,20,0.123456,0.2,0.3,0.1,0.276544
@@ -97,6 +98,17 @@ def test_available_views_follow_the_csvs_present() -> None:
     ]
 
 
+def test_available_views_hide_the_day_level_blend_while_it_is_switched_off() -> None:
+    assert available_views([_DAILY_FILE, _WEEKLY_FILE], day_level_enabled=False) == [
+        {"model": "weekly_model", "resolution": "weekly"}
+    ]
+
+
+@pytest.fixture
+def day_level_blend_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "enable_day_level_blend", True)
+
+
 async def _insert_forecast_job(user_id: str, job_id: str) -> None:
     from ai_almanac.server.db import get_db
 
@@ -162,7 +174,7 @@ async def test_blend_forecast_defaults_to_the_weekly_blend(
 
 @pytest.mark.asyncio
 async def test_blend_forecast_serves_each_view_from_its_csv(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, auth_headers: dict[str, str], day_level_blend_on
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV), (_DAILY_FILE, _daily_csv()))
 
@@ -182,8 +194,25 @@ async def test_blend_forecast_serves_each_view_from_its_csv(
 
 
 @pytest.mark.asyncio
-async def test_blend_forecast_without_the_daily_csv_is_empty_for_daily_views(
+async def test_blend_forecast_offers_only_the_weekly_blend_while_the_day_level_blend_is_off(
     client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV), (_DAILY_FILE, _daily_csv()))
+
+    resp = await client.get(
+        f"/jobs/{job_id}/blend-forecast",
+        params={"model": "daily_model", "resolution": "daily"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["points"] == []
+    assert resp.json()["available_views"] == [{"model": "weekly_model", "resolution": "weekly"}]
+
+
+@pytest.mark.asyncio
+async def test_blend_forecast_without_the_daily_csv_is_empty_for_daily_views(
+    client, user_id: str, auth_headers: dict[str, str], day_level_blend_on
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV))
 

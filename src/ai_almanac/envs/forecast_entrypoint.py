@@ -64,6 +64,15 @@ def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path
     )
 
 
+def _local_blend_artifact(blend_output_uri: str, filename: str) -> bytes | None:
+    """A trained blend's output file when the blend ran locally; cloud blends
+    (gs://) are scored on Modal, not here."""
+    if not blend_output_uri or blend_output_uri.startswith("gs://"):
+        return None
+    path = Path(blend_output_uri) / filename
+    return path.read_bytes() if path.is_file() else None
+
+
 def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: Path) -> None:
     """Merge each model's live season file with its local historical archive
     and score against the trained blend, reusing blending_app.py's pure
@@ -84,17 +93,17 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
         live_bundle = workflow._bundle_files([live_forecast_paths[name]])
         forecast_bundles[name] = workflow._merge_forecast_bundle(historical_bundle, live_bundle)
 
-    coef_pkl = None
     blend_output_uri = str(blend_config.get("blend_output_uri") or "")
-    if blend_output_uri and not blend_output_uri.startswith("gs://"):
-        coef_path = Path(blend_output_uri) / workflow.FINAL_COEF_FILENAME
-        if coef_path.is_file():
-            print("==> Using trained blend coefficients (skipping CV retrain)", flush=True)
-            coef_pkl = coef_path.read_bytes()
+    coef_pkl = _local_blend_artifact(blend_output_uri, workflow.FINAL_COEF_FILENAME)
+    forest_pkl = None
+    if coef_pkl is not None:
+        print("==> Using trained blend coefficients (skipping CV retrain)", flush=True)
+        # Blends trained before the day-level model have no forest.
+        forest_pkl = _local_blend_artifact(blend_output_uri, workflow.FOREST_MODEL_FILENAME)
 
     live_year = datetime.now(UTC).year
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
-    csv_bytes = workflow.score_live_forecast.local(
+    scores = workflow.score_live_forecast.local(
         obs_bundle,
         forecast_bundles,
         model_names,
@@ -102,9 +111,10 @@ def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: 
         live_year,
         coef_pkl=coef_pkl,
         cache_dir=str(cache_dir() / "blend-intermediates"),
+        forest_pkl=forest_pkl,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "blended_forecast_probabilities.csv").write_bytes(csv_bytes)
+    workflow._write_live_scores(scores, output_dir)
 
 
 def run_inference(config: dict, model_ids: list[str], staging_dir: Path) -> None:

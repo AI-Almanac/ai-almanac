@@ -125,6 +125,33 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
+    assert config["train_day_level_blend"] is False
+
+
+@pytest.mark.asyncio
+async def test_blend_trains_the_day_level_blend_when_it_is_switched_on(
+    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.db import get_db
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "enable_day_level_blend", True)
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="day-level",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["train_day_level_blend"] is True
 
 
 @pytest.mark.asyncio
