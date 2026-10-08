@@ -1551,7 +1551,13 @@ def _combine_partition(
 
 def _assemble_combined(part_paths: list[Path], restore_clim_order: bool):
     """Concatenate the partitions; an inner join kept each partition in
-    climatology order, so sorting on that position reproduces a one-shot combine."""
+    climatology order, so sorting on that position reproduces a one-shot combine.
+
+    External contract: this relies on onset_blending's
+    read_and_format_climatology_wide keeping the index of the slice it reads
+    (it does as of the pinned ref). CI checks the logic against order-keeping
+    stand-ins only; after bumping the onset_blending pin, re-check that a blend's
+    combined_wide.pkl is unchanged, row order included."""
     import pandas as pd
 
     combined = pd.concat([pd.read_pickle(path) for path in part_paths], ignore_index=True)
@@ -2096,6 +2102,17 @@ def build_intermediates_from_dirs(
                 clim_unc.filter(regex=r"^predicted_prob_day_").notna().sum().sum()
             ),
         }
+        # With a combine, the climatology lives on only as per-year slices
+        # feeding it; without one, return the tables themselves.
+        if not build_combined:
+            for name, table in (
+                ("climatology_issue.pkl", clim),
+                ("climatology_issue_unc.pkl", clim_unc),
+            ):
+                table_path = output_dir / name
+                with table_path.open("wb") as f:
+                    pickle.dump(table, f)
+                manifest["outputs"][name] = {"bytes": table_path.stat().st_size}
 
     if build_combined:
         from python.prepare_data.combine_forecasts_utils import read_ground_truth_wide
