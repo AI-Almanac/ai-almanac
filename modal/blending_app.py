@@ -2786,6 +2786,8 @@ def train_blending_model_bundle(
         )
         if forest_pkl is not None:
             (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
+    elif forest_frame is not None:
+        day_level_error = "day-level blend final fit skipped: the week-level blend did not finish"
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
