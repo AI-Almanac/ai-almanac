@@ -258,7 +258,7 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
 
     files = [Path(identifier) for identifier in identifiers]
     return _finalize_inspection(
-        kind, metadata, files, lambda: storage.open_nc_dataset(identifiers[0])
+        kind, metadata, files, lambda: storage.open_nc_metadata(identifiers[0])
     )
 
 

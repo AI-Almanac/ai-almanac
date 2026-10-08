@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
@@ -24,6 +25,20 @@ _CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
 
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
+
+# `open_nc_dataset` holds a whole file in memory, which suits job-output grids
+# (a few MB) but would take the server down on a forecast archive.
+_MAX_EAGER_NC_BYTES = 256 * 2**20
+_METADATA_BLOCK_BYTES = 2 * 2**20
+
+
+def _ensure_small_enough_to_load(path, size: int) -> None:
+    if size > _MAX_EAGER_NC_BYTES:
+        raise ValueError(
+            f"{path} is {size / 2**20:.0f} MiB, over the "
+            f"{_MAX_EAGER_NC_BYTES / 2**20:.0f} MiB limit for loading a NetCDF file whole."
+        )
+
 
 _CHAT_FIGURE_FORMATS: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
@@ -175,6 +190,7 @@ class LocalStorage:
     def open_nc_dataset(self, path):
         import xarray as xr
 
+        _ensure_small_enough_to_load(path, Path(path).stat().st_size)
         with _nc_lock:
             return xr.load_dataset(path)
 
@@ -438,15 +454,37 @@ class GCSStorage:
         base = str(path).removeprefix("gs://").rstrip("/")
         return [f"gs://{match}" for match in sorted(fs.glob(f"{base}/{glob}"))]
 
+    @contextmanager
+    def open_nc_metadata(self, path: str) -> Iterator:
+        """Open a `gs://` NetCDF lazily, fetching only what is read from it.
+
+        Inspecting a forecast archive needs its header and coordinates, not
+        its data, so the object is read in ranged blocks rather than whole:
+        memory stays a few blocks however large the archive is.
+        """
+        import xarray as xr
+
+        handle = self._fs().open(
+            str(path).removeprefix("gs://"),
+            "rb",
+            block_size=_METADATA_BLOCK_BYTES,
+            cache_type="blockcache",
+        )
+        with handle, _nc_lock, xr.open_dataset(handle, engine="h5netcdf") as dataset:
+            yield dataset
+
     def open_nc_dataset(self, path):
         import io
 
         import xarray as xr
 
+        fs = self._fs()
+        key = str(path).removeprefix("gs://")
+        _ensure_small_enough_to_load(path, fs.size(key))
         # One GET for the whole object, outside the lock: h5netcdf over a
         # streaming gcsfs handle turns every internal seek into a separate
         # GCS range request, all serialized behind _nc_lock.
-        data = self._fs().cat_file(str(path).removeprefix("gs://"))
+        data = fs.cat_file(key)
         with _nc_lock:
             return xr.load_dataset(io.BytesIO(data), engine="h5netcdf")
 

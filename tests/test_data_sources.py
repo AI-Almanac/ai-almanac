@@ -698,11 +698,11 @@ async def test_gs_path_survives_registration_unmangled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ai_almanac.server.services import storage as storage_mod
-    from tests.test_gcs_source_validation import _FakeGcsStorage
+    from tests.range_read_fs import gcs_storage_over
 
     gs_path = "gs://bucket/ethiopia/obs"
-    fake = _FakeGcsStorage(_OBS_ROOT, gs_path)
-    monkeypatch.setattr(storage_mod, "get_storage", lambda: fake)
+    storage, _ = gcs_storage_over(_OBS_ROOT, gs_path)
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: storage)
 
     created = await client.post("/data-sources", json=_obs_body("GCS obs", path=gs_path))
     assert created.status_code == 201
