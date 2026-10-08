@@ -40,8 +40,8 @@
 	let splitEl = $state<HTMLElement | null>(null);
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
-	let manualSetupRequested = $state(false);
 	let initialized = $state(false);
+	const manualSetupRequested = takeSetupRequest('manual');
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
 	const inSetupMode = $derived(store.showForm || promptSetupActive);
@@ -57,7 +57,6 @@
 	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
 		preferredChatSessionId = $page.url.searchParams.get('chat');
-		manualSetupRequested = takeSetupRequest('manual');
 		if (initialPrompt || manualSetupRequested) {
 			store.showForm = true;
 			store.selectedGroupKey = null;
