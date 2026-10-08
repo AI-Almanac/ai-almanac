@@ -82,9 +82,10 @@ export function coverageLimits(
 	};
 }
 
-// Below this many training years the blend weights do not generalize. Mirrors
-// the default `min_training_years` guardrail in services/guardrails.py.
-export const MIN_TRAINING_YEARS = 10;
+// Below this many training years the blend weights do not generalize. The
+// server's `min_training_years` guardrail is admin-configurable; this is its
+// default, used until the live value loads.
+export const DEFAULT_MIN_TRAINING_YEARS = 10;
 
 // Share of the valid forecast years reserved as a true holdout by default.
 export const TRUE_HOLDOUT_SHARE = 0.2;
@@ -96,11 +97,14 @@ function yearSpan(lo: number, hi: number): string {
 }
 
 // How many of the most recent years to hold out: about a fifth of them, but
-// never so many that training drops below MIN_TRAINING_YEARS.
-export function trueHoldoutCount(validYears: number): number {
+// never so many that training drops below minTrainingYears.
+export function trueHoldoutCount(
+	validYears: number,
+	minTrainingYears = DEFAULT_MIN_TRAINING_YEARS
+): number {
 	return Math.max(
 		0,
-		Math.min(Math.floor(validYears * TRUE_HOLDOUT_SHARE), validYears - MIN_TRAINING_YEARS)
+		Math.min(Math.floor(validYears * TRUE_HOLDOUT_SHARE), validYears - minTrainingYears)
 	);
 }
 
@@ -109,11 +113,14 @@ export function trueHoldoutCount(validYears: number): number {
 // that same span (each year is scored while left out of its own fit). null when
 // no valid forecast year exists (not enough observation runway). Mirrored by
 // default_year_split in services/blend_domain.py.
-export function defaultSplit(cov: Coverage): YearSplit | null {
+export function defaultSplit(
+	cov: Coverage,
+	minTrainingYears = DEFAULT_MIN_TRAINING_YEARS
+): YearSplit | null {
 	const lo = cov.earliestForecast;
 	const hi = cov.end;
 	if (lo > hi) return null;
-	const held = trueHoldoutCount(hi - lo + 1);
+	const held = trueHoldoutCount(hi - lo + 1, minTrainingYears);
 	const training = yearSpan(lo, hi - held);
 	return { training, cv: training, trueHoldout: held ? yearSpan(hi - held + 1, hi) : '' };
 }

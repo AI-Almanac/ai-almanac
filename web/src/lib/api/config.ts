@@ -1,5 +1,6 @@
 // ---- App config: capabilities, metric definitions, ROMP defaults -------------
 import { request } from './core';
+import type { GuardrailThresholds } from './assistant';
 
 export type MetricDefinition = {
 	id: string;
@@ -54,4 +55,8 @@ export async function getRompDefaults() {
 
 export async function getCapabilities(): Promise<AppCapabilities> {
 	return request<AppCapabilities>('/config/capabilities');
+}
+
+export async function getPlatformThresholds(): Promise<GuardrailThresholds> {
+	return request<GuardrailThresholds>('/config/guardrails');
 }

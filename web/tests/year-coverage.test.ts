@@ -153,3 +153,11 @@ describe('coverageLimits', () => {
 		});
 	});
 });
+
+describe('defaultSplit with a raised training minimum', () => {
+	it('holds out fewer years so training still meets the enforced minimum', () => {
+		expect(
+			defaultSplit({ start: 1990, end: 2023, earliestForecast: 2000, missing: [] }, 22)
+		).toEqual({ training: '2000:2021', cv: '2000:2021', trueHoldout: '2022:2023' });
+	});
+});

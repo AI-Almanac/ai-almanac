@@ -354,3 +354,12 @@ def test_default_year_split_keeps_the_minimum_training_years() -> None:
     assert blend_domain.default_year_split(short, 10).true_holdout_years == "2010"
     assert blend_domain.default_year_split(tiny, 10).true_holdout_years == ""
     assert blend_domain.default_year_split(None, 10) is None
+
+
+async def test_guardrail_thresholds_endpoint_reports_the_enforced_minimum(monkeypatch) -> None:
+    from ai_almanac.server.routers.config import guardrail_thresholds
+    from ai_almanac.server.services import guardrails
+
+    monkeypatch.setattr(guardrails, "current", lambda: guardrails.Guardrails(min_training_years=15))
+
+    assert guardrail_thresholds()["min_training_years"] == 15

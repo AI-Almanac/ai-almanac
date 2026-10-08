@@ -7,6 +7,7 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
+		getPlatformThresholds,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -29,7 +30,7 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
-		MIN_TRAINING_YEARS,
+		DEFAULT_MIN_TRAINING_YEARS,
 		computeCoverage,
 		coverageLimits,
 		defaultSplit,
@@ -136,6 +137,8 @@
 	let cvHoldoutYears = $state('');
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
+	// The enforced minimum, so the prefilled split is one the server accepts.
+	let minTrainingYears = $state(DEFAULT_MIN_TRAINING_YEARS);
 	let formulaText = $state('');
 	let focusArea = $state<FocusAreaValue | null>(null);
 	// Onset definition overrides; blank means the workflow default.
@@ -209,7 +212,7 @@
 	// the user edits the year fields themselves.
 	$effect(() => {
 		if (!coverage || yearsDirty) return;
-		const split = defaultSplit(coverage);
+		const split = defaultSplit(coverage, minTrainingYears);
 		if (!split) return;
 		trainingYears = split.training;
 		cvHoldoutYears = split.cv;
@@ -243,11 +246,12 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps] = await Promise.allSettled([
+		const [b, obs, models, caps, thresholds] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities()
+			getCapabilities(),
+			getPlatformThresholds()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
@@ -255,6 +259,7 @@
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		if (thresholds.status === 'fulfilled') minTrainingYears = thresholds.value.min_training_years;
 		loaded = true;
 	}
 
@@ -730,7 +735,7 @@
 						<label class="field">
 							{@render fieldLabel(
 								'True holdout years',
-								`Years kept out of training and cross-validation entirely, so their scores show how the blend does on seasons it has never seen — the closest stand-in for a new season. Defaults to the most recent fifth of the shared years, as long as at least ${MIN_TRAINING_YEARS} training years remain. Leave empty to train on every year.`
+								`Years kept out of training and cross-validation entirely, so their scores show how the blend does on seasons it has never seen — the closest stand-in for a new season. Defaults to the most recent fifth of the shared years, as long as at least ${minTrainingYears} training years remain. Leave empty to train on every year.`
 							)}
 							<input
 								type="text"

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 from fastapi import APIRouter
 from fastapi.responses import Response
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.routers.feedback import feedback_enabled
+from ai_almanac.server.services import guardrails
 from ai_almanac.settings import get_metric_definitions, get_romp_defaults, settings
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -33,6 +35,12 @@ def list_metrics() -> list[dict]:
 @router.get("/romp-defaults")
 def romp_defaults() -> dict:
     return get_romp_defaults()
+
+
+@router.get("/guardrails")
+def guardrail_thresholds() -> dict[str, int]:
+    """The thresholds the platform enforces, so forms prefill values it will accept."""
+    return asdict(guardrails.current())
 
 
 @router.get("/capabilities")
