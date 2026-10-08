@@ -9,8 +9,8 @@ import { argmax, binDateLabel, onsetHasPassed, type OnsetBins } from '$lib/onset
 export const ONSET_ESTIMATE_EXPLANATION =
 	'The likely onset date is the average of the dates the forecasts predicted, weighted by their chances. ' +
 	'Chances of onset more than 4 weeks out have no date, so they don’t count. ' +
-	'Forecasts issued after that date are left out and the average is taken again until it settles, ' +
-	'because a forecast issued once the rains have begun still predicts onset just after its own issue date. ' +
+	'Forecasts made after the rains have started still predict onset a few days out, which would push the date later. ' +
+	'So forecasts issued after the estimated date are dropped, and the date is recalculated until it stops changing. ' +
 	'It’s an estimate from the forecasts, not an observed onset.';
 
 export type OnsetBand = { start: number; end: number };
