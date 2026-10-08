@@ -54,6 +54,31 @@ async def _job_row(job_id: str) -> dict:
     return dict(row)
 
 
+async def _finish_jobs(*job_ids: str) -> None:
+    """Free the single local job slot so later supervisor tests don't wait for it."""
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        for job_id in job_ids:
+            await conn.execute(
+                text("UPDATE jobs SET status = 'complete' WHERE id = :id"), {"id": job_id}
+            )
+
+
+async def _wait_for_status(job_id: str, status: str, timeout: float = 10.0) -> None:
+    """Poll until the job reaches ``status``; the deadline absorbs slow subprocess
+    startup on loaded CI runners while still failing fast on real hangs."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    observed = None
+    while loop.time() < deadline:
+        observed = (await _job_row(job_id))["status"]
+        if observed == status:
+            return
+        await asyncio.sleep(0.1)
+    pytest.fail(f"job did not enter {status} state within {timeout:.0f}s (last: {observed})")
+
+
 @pytest.mark.asyncio
 async def test_cancel_job_persists_requested_state(
     client: httpx.AsyncClient,
@@ -190,15 +215,18 @@ async def test_reconcile_leaves_healthy_jobs_alone(
     monkeypatch.setattr(job_manager, "launch_job", fake_launch)
     running_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=_now())
     queued_id = await _insert_job(user_id, "queued", worker_pid=os.getpid(), heartbeat_at=_now())
-    await job_manager.reconcile_jobs()
+    try:
+        await job_manager.reconcile_jobs()
 
-    assert (await _job_row(running_id))["status"] == "running"
-    queued = await _job_row(queued_id)
-    assert queued["status"] == "queued"
-    assert queued["worker_pid"] is not None  # not reset for relaunch
-    # Other tests may leave relaunchable rows behind; ours must not be in there.
-    assert queued_id not in launched
-    assert running_id not in launched
+        assert (await _job_row(running_id))["status"] == "running"
+        queued = await _job_row(queued_id)
+        assert queued["status"] == "queued"
+        assert queued["worker_pid"] is not None  # not reset for relaunch
+        # Other tests may leave relaunchable rows behind; ours must not be in there.
+        assert queued_id not in launched
+        assert running_id not in launched
+    finally:
+        await _finish_jobs(running_id, queued_id)
 
 
 @pytest.mark.asyncio
@@ -240,37 +268,12 @@ async def test_supervisor_cancels_running_workload(user_id: str) -> None:
     )
     supervisor = asyncio.create_task(asyncio.to_thread(execute_job, job_id))
 
-    from ai_almanac.server.db import get_db
-
-    for _ in range(50):
-        async with get_db() as conn:
-            status = (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id"),
-                    {"id": job_id},
-                )
-            ).scalar_one()
-        if status == "running":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("job did not enter running state")
+    await _wait_for_status(job_id, "running")
 
     await request_cancel(job_id, user_id)
     await asyncio.wait_for(supervisor, timeout=15)
 
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status FROM jobs WHERE id = :id"),
-                    {"id": job_id},
-                )
-            )
-            .mappings()
-            .one()
-        )
-    assert row["status"] == "canceled"
+    assert (await _job_row(job_id))["status"] == "canceled"
 
 
 # ---------------------------------------------------------------------------
