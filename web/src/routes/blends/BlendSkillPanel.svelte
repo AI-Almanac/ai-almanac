@@ -171,7 +171,10 @@
 	{#if available.length > 0}
 		<div class="by-lead">
 			<div class="lead-topline">
-				<h3>By forecast lead</h3>
+				<div>
+					<h3>By forecast lead</h3>
+					<p class="lead-scale">{metric.label} · {metric.scale}</p>
+				</div>
 				{#if options.length > 1}
 					<SegmentedTabs
 						{options}
@@ -350,6 +353,12 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.6rem;
+	}
+
+	.lead-scale {
+		margin: 0.15rem 0 0;
+		font-size: 0.82rem;
+		color: var(--color-text-muted);
 	}
 
 	.lead-topline h3 {
