@@ -211,6 +211,23 @@ def test_year_by_year_partitions_reassemble_in_climatology_row_order(tmp_path: P
     assert combined.index.tolist() == [0, 1, 2, 3]
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"build_climatology": False}, "build_climatology"),
+        ({"forecast_dirs": {}}, "at least one forecast model"),
+    ],
+)
+def test_a_combine_without_its_inputs_fails_before_any_work(
+    tmp_path: Path, overrides: dict, message: str
+) -> None:
+    app = _load_blending_app()
+    kwargs = {"obs_dir": tmp_path, "forecast_dirs": {"aifs": tmp_path}, **overrides}
+
+    with pytest.raises(ValueError, match=message):
+        app.build_intermediates_from_dirs(**kwargs)
+
+
 def _install_order_keeping_combine_readers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand-ins for onset_blending's combine readers (not installed in CI).
 

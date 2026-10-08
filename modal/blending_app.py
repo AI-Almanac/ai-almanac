@@ -1743,9 +1743,12 @@ def build_intermediates_from_dirs(
 
     import pandas as pd
 
-    # Fail before any per-file work: the combine joins against the climatology.
+    # Fail before any per-file work: the combine joins the climatology to at
+    # least one model's forecasts.
     if build_combined and not build_climatology:
         raise ValueError("build_combined requires build_climatology=True")
+    if build_combined and not forecast_dirs:
+        raise ValueError("build_combined requires at least one forecast model")
 
     sys.path.insert(0, str(BLENDING_ROOT))
 
