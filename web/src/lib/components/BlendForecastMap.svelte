@@ -30,7 +30,7 @@
 		monthLabel,
 		onsetEventName
 	} from '$lib/onset';
-	import { ONSET_ESTIMATE_EXPLANATION } from '$lib/onset-outlook';
+	import { ONSET_ESTIMATE_CAVEAT } from '$lib/onset-outlook';
 	import CellInspector from './CellInspector.svelte';
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
@@ -866,7 +866,7 @@
 			</div>
 			<p class="legend-note">
 				Gray means this forecast was issued after onset likely began here, so its outlook no longer
-				applies. {ONSET_ESTIMATE_EXPLANATION}
+				applies. {ONSET_ESTIMATE_CAVEAT}
 			</p>
 			{#if boundaries.visibleLayers.length > 0}
 				<p class="legend-note">
