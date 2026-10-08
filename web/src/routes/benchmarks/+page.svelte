@@ -21,6 +21,7 @@
 	} from '$lib/api';
 	import { EVENT_TYPES } from '$lib/data/event-types';
 	import { modelDisplayName } from '$lib/model-names';
+	import { takeSetupRequest } from '$lib/setup-request';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 	import { installTour } from '$lib/tour.svelte';
@@ -39,11 +40,11 @@
 	let splitEl = $state<HTMLElement | null>(null);
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
+	let manualSetupRequested = $state(false);
 	let initialized = $state(false);
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
-	const manualSetupRequested = $derived($page.url.searchParams.get('manual') === '1');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
-	const inSetupMode = $derived(store.showForm || promptSetupActive || manualSetupRequested);
+	const inSetupMode = $derived(store.showForm || promptSetupActive);
 	const resultsTourActive = $derived(
 		!inSetupMode && (store.selectedGroup?.jobs.some((job) => job.status === 'complete') ?? false)
 	);
@@ -56,6 +57,7 @@
 	async function initializePage() {
 		const groupKey = $page.url.searchParams.get('group');
 		preferredChatSessionId = $page.url.searchParams.get('chat');
+		manualSetupRequested = takeSetupRequest('manual');
 		if (initialPrompt || manualSetupRequested) {
 			store.showForm = true;
 			store.selectedGroupKey = null;

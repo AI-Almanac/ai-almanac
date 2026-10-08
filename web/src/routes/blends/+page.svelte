@@ -41,6 +41,7 @@
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
 	import { installTour } from '$lib/tour.svelte';
+	import { takeSetupRequest } from '$lib/setup-request';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
@@ -89,7 +90,7 @@
 		const scopeKind = asScopeKind(params.get('scopeKind'));
 		const scopeKey = params.get('scopeKey');
 		if (blendId) selectedId = blendId;
-		else if (params.get('new') === '1') startNew();
+		else if (takeSetupRequest('new')) startNew();
 		if (chatId && scopeKind && scopeKey) {
 			continuedSessionId = chatId;
 			continuedScope = { kind: scopeKind, key: scopeKey };
