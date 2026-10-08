@@ -658,3 +658,16 @@ def test_blend_out_reports_true_holdout_years() -> None:
     }
 
     assert blend_row_to_out(row, None).true_holdout_years == [2020, 2021, 2022]
+
+
+def test_blend_out_reads_a_malformed_stored_holdout_as_none() -> None:
+    from ai_almanac.server.services.job_submission import blend_row_to_out
+
+    row = {
+        "id": "b2",
+        "status": "complete",
+        "created_at": "2026-10-08T00:00:00Z",
+        "config_json": json.dumps({"blend_params": {"true_holdout_years": "20x0"}}),
+    }
+
+    assert blend_row_to_out(row, None).true_holdout_years == []

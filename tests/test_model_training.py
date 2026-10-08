@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
+from ai_almanac.server.services import benchmark_domain
 from ai_almanac.server.services.blend_domain import _model_candidate
 from ai_almanac.server.services.forecast_models import model_training
 from ai_almanac.settings import get_packaged_forecast_models
@@ -87,3 +90,18 @@ def test_blend_candidates_carry_the_linked_models_training_years():
 
     assert linked["training"]["periods"][-1]["end_year"] == 2015
     assert unlinked["training"] is None
+
+
+async def test_benchmark_model_list_carries_the_linked_models_training_years(monkeypatch):
+    async def registry(region, user_id=None):
+        return [
+            {"id": "src-1", "display_name": "FuXi", "forecast_model_id": "fuxi"},
+            {"id": "src-2", "display_name": "Pangu"},
+        ]
+
+    monkeypatch.setattr(benchmark_domain, "load_model_registry", registry)
+
+    models = json.loads(await benchmark_domain._exec_list_models({}, "user-1", None))
+
+    assert models[0]["training"]["periods"][-1]["end_year"] == 2015
+    assert models[1]["training"] is None

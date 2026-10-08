@@ -741,6 +741,14 @@ def _blend_forecast_years(params: BlendParams) -> list[int]:
     )
 
 
+def _years_or_empty(value: str | None) -> list[int]:
+    """A stored or submitted year spec, with a malformed one read as no years."""
+    try:
+        return _parse_year_spec(value)
+    except ValueError:
+        return []
+
+
 def blend_years(params: BlendParams) -> guardrails.BlendYears:
     """A blend's three year sets parsed for the guardrail predicates.
 
@@ -750,16 +758,10 @@ def blend_years(params: BlendParams) -> guardrails.BlendYears:
     from turning one syntax error into a second, more confusing complaint.
     """
 
-    def years(value: str | None) -> list[int]:
-        try:
-            return _parse_year_spec(value)
-        except ValueError:
-            return []
-
     return guardrails.BlendYears(
-        training=years(params.training_years),
-        cv_holdout=years(params.cv_holdout_years),
-        true_holdout=years(params.true_holdout_years),
+        training=_years_or_empty(params.training_years),
+        cv_holdout=_years_or_empty(params.cv_holdout_years),
+        true_holdout=_years_or_empty(params.true_holdout_years),
     )
 
 
@@ -782,8 +784,8 @@ def blend_row_to_out(
         run_id=row.get("run_id"),
         warnings=cfg.get("warnings") or [],
         forecast_models=blend_forecast_models(cfg, sources_by_id or {}),
-        true_holdout_years=_parse_year_spec(
-            (cfg.get("blend_params") or {}).get("true_holdout_years") or ""
+        true_holdout_years=_years_or_empty(
+            (cfg.get("blend_params") or {}).get("true_holdout_years")
         ),
     )
 
