@@ -585,7 +585,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             intermediates = build_intermediates_from_dirs(
                 obs_local,
                 forecast_dirs,
-                return_outputs=True,
+                return_outputs=False,
                 cache_dir=cache_dir,
                 file_workers=RUN_BLEND_CPU,
                 climatology_workers=RUN_BLEND_CPU,
@@ -593,7 +593,9 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-            combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+            # Read from disk, never held as bytes: on large grids the combined
+            # table is the biggest object the run handles.
+            combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
 
             train_kwargs = {"cores": RUN_BLEND_TRAINING_CORES}
             if params.get("formula_text"):
@@ -601,7 +603,8 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             print("==> Training blend weights")
             t0 = time.perf_counter()
             training = train_blending_model_bundle.local(
-                combined,
+                None,
+                combined_wide_path=str(combined_path),
                 model_names=model_names,
                 training_years=_parse_years(params.get("training_years") or "") or [],
                 cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
@@ -618,7 +621,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
 
             out_local = stage_root / "output"
             out_local.mkdir()
-            (out_local / "combined_wide.pkl").write_bytes(combined)
+            shutil.move(combined_path, out_local / "combined_wide.pkl")
             if training.get("outputs_tar"):
                 with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
                     tar.extractall(out_local)
@@ -2129,23 +2132,70 @@ def build_intermediates_from_dirs(
         include_names = set(manifest["outputs"])
         outputs_tar = _tar_directory(output_dir, include_names=include_names)
 
-    return {"manifest": manifest, "outputs_tar": outputs_tar}
+    # In-process callers read combined_wide.pkl straight from output_dir rather
+    # than unpacking a copy from outputs_tar.
+    return {"manifest": manifest, "outputs_tar": outputs_tar, "output_dir": str(output_dir)}
+
+
+def _combined_input_path(
+    work_dir: Path, combined_wide_pkl: bytes | None, combined_wide_path: str | None
+) -> Path:
+    """The combined table on disk: the caller's file when given, else the bytes written out."""
+    if combined_wide_path:
+        path = Path(combined_wide_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Combined wide file not found: {path}")
+        return path
+    if not combined_wide_pkl:
+        raise ValueError("A combined wide table is required (bytes or a file path)")
+    path = work_dir / "combined_wide.pkl"
+    path.write_bytes(combined_wide_pkl)
+    return path
+
+
+def _combined_summary(combined_path: Path, model_names: list[str]) -> dict:
+    """Check the combined table has every model's columns and summarize it.
+
+    The table is released on return, before the weekly connector reads it,
+    so the two never hold a copy at the same time."""
+    import pickle
+
+    import pandas as pd
+
+    with combined_path.open("rb") as f:
+        combined = pickle.load(f)
+    if not isinstance(combined, pd.DataFrame):
+        combined = pd.DataFrame(combined)
+    missing_model_cols = [
+        f"{name}_onset_thresh"
+        for name in model_names
+        if f"{name}_onset_thresh" not in combined.columns
+    ]
+    if missing_model_cols:
+        raise ValueError(
+            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
+        )
+    return {
+        "rows": int(len(combined)),
+        "columns": int(len(combined.columns)),
+        "years": sorted(int(year) for year in combined["year"].dropna().unique()),
+    }
 
 
 def _prepare_blend_workspace(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     model_names: list[str],
     cutoff_mode: str,
     day_max: int,
     days_per_week: int,
     n_weeks: int,
     rain_window: int,
+    combined_wide_path: str | None = None,
 ):
     """Materialize the workspace both training and coef-apply need: the
     combined wide pickle on disk, the weekly connect output (the pipeline
     input every blending script reads), and the dissemination cells CSV.
-    Returns (work_dir, combined, weekly, pipeline_input_path, dissemination_path)."""
-    import pickle
+    Returns (work_dir, combined_summary, weekly, pipeline_input_path, dissemination_path)."""
     import sys
 
     import pandas as pd
@@ -2158,24 +2208,9 @@ def _prepare_blend_workspace(
         raise ValueError("model_names must not be empty")
 
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
-    combined_path = work_dir / "combined_wide.pkl"
     pipeline_input_path = work_dir / input_rds_from_cutoff(cutoff_mode)
-    combined_path.write_bytes(combined_wide_pkl)
-
-    with combined_path.open("rb") as f:
-        combined = pickle.load(f)
-    if not isinstance(combined, pd.DataFrame):
-        combined = pd.DataFrame(combined)
-
-    missing_model_cols = [
-        f"{name}_onset_thresh"
-        for name in model_names
-        if f"{name}_onset_thresh" not in combined.columns
-    ]
-    if missing_model_cols:
-        raise ValueError(
-            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
-        )
+    combined_path = _combined_input_path(work_dir, combined_wide_pkl, combined_wide_path)
+    combined_summary = _combined_summary(combined_path, model_names)
 
     connect_spec = {
         "mode": cutoff_mode,
@@ -2208,7 +2243,7 @@ def _prepare_blend_workspace(
         dissemination_path,
         index=False,
     )
-    return work_dir, combined, weekly, pipeline_input_path, dissemination_path
+    return work_dir, combined_summary, weekly, pipeline_input_path, dissemination_path
 
 
 def _default_formula_text(model_names: list[str]) -> str:
@@ -2295,8 +2330,12 @@ def train_blending_model_bundle(
     include_calibrated_forecasts: bool = True,
     cores: int | None = None,
     return_outputs: bool = True,
+    combined_wide_path: str | None = None,
 ) -> dict:
-    """Train/evaluate weekly-bin blending models from a combined wide pickle."""
+    """Train/evaluate weekly-bin blending models from a combined wide pickle.
+
+    In-process callers pass combined_wide_path (and None for the bytes) so the
+    table is read from disk instead of held in memory as a second copy."""
     import pickle
     import subprocess
     import sys
@@ -2313,14 +2352,17 @@ def train_blending_model_bundle(
     if not cv_holdout_years:
         raise ValueError("cv_holdout_years must not be empty")
 
-    work_dir, combined, weekly, pipeline_input_path, dissemination_path = _prepare_blend_workspace(
-        combined_wide_pkl,
-        model_names,
-        cutoff_mode,
-        day_max,
-        days_per_week,
-        n_weeks,
-        rain_window,
+    work_dir, combined_summary, weekly, pipeline_input_path, dissemination_path = (
+        _prepare_blend_workspace(
+            combined_wide_pkl,
+            model_names,
+            cutoff_mode,
+            day_max,
+            days_per_week,
+            n_weeks,
+            rain_window,
+            combined_wide_path=combined_wide_path,
+        )
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
 
@@ -2410,11 +2452,7 @@ def train_blending_model_bundle(
         "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
         "true_holdout_years": sorted(int(year) for year in (true_holdout_years or [])),
         "formula_text": formula_text,
-        "combined": {
-            "rows": int(len(combined)),
-            "columns": int(len(combined.columns)),
-            "years": sorted(int(year) for year in combined["year"].dropna().unique()),
-        },
+        "combined": combined_summary,
         "weekly": {
             "rows": int(len(weekly)),
             "columns": int(len(weekly.columns)),
@@ -2469,11 +2507,13 @@ def apply_blend_coefs_bundle(
     n_weeks: int = 4,
     rain_window: int = 3,
     formula_text: str | None = None,
+    combined_wide_path: str | None = None,
 ) -> bytes:
     """Score one live season by applying a trained blend's saved coef bundle
     (the FINAL_COEF_FILENAME pickle written by train_blending_model_bundle's
     final fit) via predict/apply_blend_model.py — the fast path that skips CV
-    retraining entirely. Returns the live season's scored rows as CSV bytes."""
+    retraining entirely. Returns the live season's scored rows as CSV bytes.
+    In-process callers pass combined_wide_path instead of the bytes."""
     import subprocess
     import sys
     import uuid
@@ -2493,6 +2533,7 @@ def apply_blend_coefs_bundle(
         days_per_week,
         n_weeks,
         rain_window,
+        combined_wide_path=combined_wide_path,
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-apply-results-"))
 
@@ -2641,18 +2682,19 @@ def score_live_forecast(
     if blend_params.get("region_id"):
         prep_kwargs["region_id"] = blend_params["region_id"]
     intermediates = build_lat_lon_intermediates_bundle.local(
-        obs_bundle, forecast_bundles, return_outputs=True, cache_dir=cache_dir, **prep_kwargs
+        obs_bundle, forecast_bundles, return_outputs=False, cache_dir=cache_dir, **prep_kwargs
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-    combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+    combined_path = str(Path(intermediates["output_dir"]) / "combined_wide.pkl")
 
     if coef_pkl is not None:
         print(f"==> Applying trained blend coefficients to live season {live_year}")
         t0 = time.perf_counter()
         csv_bytes = apply_blend_coefs_bundle.local(
-            combined,
+            None,
             coef_pkl,
             model_names,
+            combined_wide_path=combined_path,
             training_years=_parse_years(blend_params.get("training_years") or "") or [],
             cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
             live_year=live_year,
@@ -2672,7 +2714,8 @@ def score_live_forecast(
     print(f"==> Scoring live season {live_year} against trained blend")
     t0 = time.perf_counter()
     training = train_blending_model_bundle.local(
-        combined,
+        None,
+        combined_wide_path=combined_path,
         model_names=model_names,
         training_years=_parse_years(blend_params.get("training_years") or "") or [],
         cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],

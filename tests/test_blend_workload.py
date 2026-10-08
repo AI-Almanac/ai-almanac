@@ -20,6 +20,14 @@ def _archive(files: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def _built_intermediates(root: Path, combined: bytes) -> dict:
+    """What build_intermediates_from_dirs returns in-process: its output dir."""
+    output_dir = root / "intermediates"
+    output_dir.mkdir()
+    (output_dir / "combined_wide.pkl").write_bytes(combined)
+    return {"manifest": {}, "outputs_tar": None, "output_dir": str(output_dir)}
+
+
 class _LocalFunction:
     def __init__(self, result: dict):
         self.result = result
@@ -52,7 +60,8 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
     source_marker.write_text("")
 
     combined = b"combined-data"
-    prepare = _LocalFunction({"outputs_tar": _archive({"combined_wide.pkl": combined})})
+    built = _built_intermediates(tmp_path, combined)
+    prepare = _LocalFunction(built)
     train = _LocalFunction(
         {
             "manifest": {"ok": True},
@@ -90,12 +99,17 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
     prep_args, prep_kwargs = prepare.calls[0]
     assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]})
     assert prep_kwargs == {
-        "return_outputs": True,
+        "return_outputs": False,
         "threshold_mm": 25.0,
         "cache_dir": str(tmp_path / "blend-intermediates"),
         "model_layouts": None,
     }
-    _, train_kwargs = train.calls[0]
+    train_args, train_kwargs = train.calls[0]
+    # Training reads the combined table from the build's output dir, not bytes.
+    assert train_args == (None,)
+    assert train_kwargs["combined_wide_path"] == str(
+        Path(built["output_dir"]) / "combined_wide.pkl"
+    )
     assert train_kwargs["model_names"] == ["aifs"]
     assert train_kwargs["training_years"] == [2020, 2021]
     assert train_kwargs["cv_holdout_years"] == [2022]
@@ -118,7 +132,7 @@ def test_local_blend_passes_job_inputs_to_intermediate_builder(tmp_path: Path) -
     source_marker.write_text("")
 
     combined = b"combined-data"
-    prepare = _LocalFunction({"outputs_tar": _archive({"combined_wide.pkl": combined})})
+    prepare = _LocalFunction(_built_intermediates(tmp_path, combined))
     train = _LocalFunction({"manifest": {"ok": True}, "outputs_tar": _archive({})})
     workflow = SimpleNamespace(
         BLENDING_ROOT=blending_root,
