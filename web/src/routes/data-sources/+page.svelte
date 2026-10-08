@@ -8,9 +8,11 @@
 		revalidateDataSource,
 		deleteDataSource,
 		getRegions,
+		getForecastModels,
 		type DataSource,
 		type DataSourceCreate,
 		type DataSourceValidation,
+		type ForecastModel,
 		type Region
 	} from '$lib/api';
 	import { goto } from '$app/navigation';
@@ -38,12 +40,16 @@
 	let formModelType = $state('AIWP');
 	let formInitDays = $state('');
 	let formInitDaysSource = $state('');
+	let formForecastModelId = $state('');
 	let submitting = $state(false);
 	let pickerOpen = $state(false);
 	let editingId = $state<string | null>(null);
 	let revalidatingId = $state<string | null>(null);
 	let validationDraft = $state<DataSourceValidation | null>(null);
 	let validatedSignature = $state('');
+	// Live forecast models a model archive can be linked to. Empty when live
+	// forecasting is unavailable, which hides nothing but the choices.
+	let forecastModels = $state<ForecastModel[]>([]);
 
 	async function load() {
 		loading = true;
@@ -57,7 +63,12 @@
 		}
 	}
 
-	onMount(load);
+	onMount(() => {
+		void load();
+		getForecastModels()
+			.then((list) => (forecastModels = list))
+			.catch(() => {});
+	});
 
 	function formMetadata(): Record<string, unknown> {
 		if (formKind === 'obs') {
@@ -71,7 +82,8 @@
 			...(formModelType && { model_type: formModelType }),
 			...(formFilePattern && { file_pattern: formFilePattern }),
 			...(formInitDays && { init_days: formInitDays }),
-			...(formInitDaysSource && { init_days_source: formInitDaysSource })
+			...(formInitDaysSource && { init_days_source: formInitDaysSource }),
+			...(formForecastModelId && { forecast_model_id: formForecastModelId })
 		};
 	}
 
@@ -90,6 +102,7 @@
 		const metadata = { ...body.metadata };
 		delete metadata.init_days;
 		delete metadata.init_days_source;
+		delete metadata.forecast_model_id;
 		return JSON.stringify({ ...body, metadata });
 	}
 
@@ -139,6 +152,8 @@
 					delete metadata.init_time_coordinate;
 					delete metadata.init_time_sample_count;
 				}
+				if (formForecastModelId) metadata.forecast_model_id = formForecastModelId;
+				else delete metadata.forecast_model_id;
 			}
 			await createDataSource({ ...formBody(), metadata });
 			resetForm();
@@ -177,6 +192,7 @@
 		formModelType = 'AIWP';
 		formInitDays = '';
 		formInitDaysSource = '';
+		formForecastModelId = '';
 		validationDraft = null;
 		validatedSignature = '';
 	}
@@ -185,6 +201,7 @@
 		formVar = formKind === 'obs' ? 'RAINFALL' : 'tp';
 		formInitDays = '';
 		formInitDaysSource = '';
+		formForecastModelId = '';
 		validationDraft = null;
 	}
 
@@ -204,6 +221,7 @@
 		formModelType = String(source.metadata.model_type ?? 'AIWP');
 		formInitDays = String(source.metadata.init_days ?? '');
 		formInitDaysSource = String(source.metadata.init_days_source ?? '');
+		formForecastModelId = String(source.metadata.forecast_model_id ?? '');
 		validationDraft = null;
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 	}
@@ -250,6 +268,32 @@
 
 	const obsSources = $derived(sources.filter((s) => s.kind === 'obs'));
 	const modelSources = $derived(sources.filter((s) => s.kind === 'model'));
+	// The archive's grid, once known, narrows the choices to models that run on
+	// it; the server rejects any other link. A saved link always stays listed.
+	const archiveGridStep = $derived(
+		(editingId
+			? sources.find((source) => source.id === editingId)?.metadata.grid_step_deg
+			: validationIsCurrent
+				? validationDraft?.metadata.grid_step_deg
+				: undefined) as number | undefined
+	);
+	const linkableModels = $derived(
+		forecastModels.filter(
+			(model) =>
+				model.id === formForecastModelId ||
+				typeof archiveGridStep !== 'number' ||
+				Math.abs(model.resolution_deg - archiveGridStep) < 1e-6
+		)
+	);
+
+	function liveForecastSummary(source: DataSource): string | null {
+		const live = source.live_forecast;
+		if (!live) return null;
+		if (live.status !== 'ready') return live.detail ?? null;
+		const model = forecastModels.find((candidate) => candidate.id === live.model_id);
+		return `Live forecasts with ${model?.display_name ?? live.model_id}`;
+	}
+
 	const selectedRegion = $derived(regions.find((region) => region.id === formRegion) ?? null);
 
 	function regionName(regionId: string | null): string | null {
@@ -397,6 +441,18 @@
 							<option value="NWP">NWP (numerical)</option>
 							<option value="climatology">Climatology</option>
 						</select>
+					</label>
+					<label class="grow">
+						<span>Live forecast model</span>
+						<select bind:value={formForecastModelId}>
+							<option value="">None (past seasons only)</option>
+							{#each linkableModels as model (model.id)}
+								<option value={model.id}>{model.display_name} · {model.resolution_deg}°</option>
+							{/each}
+						</select>
+						<small
+							>The model that produced this data. Blends trained on it can then run live forecasts.</small
+						>
 					</label>
 					{#if editingId}
 						<label class="grow">
@@ -598,6 +654,9 @@
 			{/if}
 			{#if initializationSchedule(src)}
 				<p class="coverage">{initializationSchedule(src)}</p>
+			{/if}
+			{#if liveForecastSummary(src)}
+				<p class="coverage">{liveForecastSummary(src)}</p>
 			{/if}
 			{#if src.validation_error}
 				<p class="validation-error">{src.validation_error}</p>

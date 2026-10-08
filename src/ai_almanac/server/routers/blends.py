@@ -13,6 +13,7 @@ from fastapi import APIRouter, status
 
 from ai_almanac.server.auth import CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.job_submission import (
     BlendCreate,
@@ -47,4 +48,9 @@ async def list_blends(user: OptionalCurrentUser):
             .mappings()
             .fetchall()
         )
-    return [blend_row_to_out(dict(r), user.id if user else "") for r in rows]
+    # Unscoped on purpose: an example blend's members may be its curator's
+    # private sources, and viewers need their live-model links to forecast from
+    # it. Like create_forecast_for_user, sharing a blend shares its members'
+    # technical parameters; only public registry ids reach the response.
+    sources_by_id = {s["id"]: s for s in await data_source_service.list_sources(kind="model")}
+    return [blend_row_to_out(dict(r), user.id if user else "", sources_by_id) for r in rows]

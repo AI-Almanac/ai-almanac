@@ -3,7 +3,6 @@
 	import PerModelConfig from './PerModelConfig.svelte';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
-	import { getForecastModels, forecastModelFor, type ForecastModel } from '$lib/api';
 
 	interface Props {
 		open: boolean;
@@ -40,16 +39,6 @@
 	function isSelected(modelId: string) {
 		return selectedModelIds.includes(modelId);
 	}
-
-	// Forecast registry; a model can run live forecasts when its name resolves
-	// to an entry (same gate as the blend form). Rejects (feature off) leave
-	// the list empty so no badges show.
-	let forecastModels = $state<ForecastModel[]>([]);
-	$effect(() => {
-		getForecastModels()
-			.then((list) => (forecastModels = list))
-			.catch(() => {});
-	});
 
 	function closeOnEscape(event: KeyboardEvent) {
 		if (open && event.key === 'Escape') onClose();
@@ -220,7 +209,7 @@
 											</span>
 											<span>
 												<strong>{model.display_name}</strong>
-												{#if forecastModelFor(forecastModels, model.display_name)}
+												{#if model.forecast_model_id}
 													<span
 														class="forecast-badge"
 														title="This model can also generate live forecasts.">Live forecast</span
