@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
 from sqlalchemy import text
+
+
+@pytest.fixture(autouse=True)
+def _no_detached_supervisors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reconcile_jobs relaunches every leftover queued row in the shared test
+    database; a real launch spawns a detached supervisor that takes the single
+    job slot and outlives the test. Tests that care about launches patch over this."""
+    from ai_almanac.server.services import job_manager
+
+    async def no_launch(_job_id: str) -> None:
+        pass
+
+    monkeypatch.setattr(job_manager, "launch_job", no_launch)
 
 
 def _now() -> str:
@@ -127,11 +143,6 @@ async def test_reconcile_relaunches_queued_jobs(
     assert job_id in launched
 
 
-async def _no_launch(_job_id: str) -> None:
-    """Stub for reconcile tests: leftover queued fixture rows must never spawn
-    real supervisor subprocesses (they outlive the test database and hang)."""
-
-
 @pytest.mark.asyncio
 async def test_reconcile_marks_missing_supervisor_failed(
     user_id: str,
@@ -141,7 +152,6 @@ async def test_reconcile_marks_missing_supervisor_failed(
 
     job_id = await _insert_job(user_id, "running", worker_pid=999_999_999)
     monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
-    monkeypatch.setattr(job_manager, "launch_job", _no_launch)
     await job_manager.reconcile_jobs()
 
     from ai_almanac.server.db import get_db
@@ -172,7 +182,6 @@ async def test_reconcile_fails_hung_supervisor_with_stale_heartbeat(
 
     from ai_almanac.server.services import job_manager
 
-    monkeypatch.setattr(job_manager, "launch_job", _no_launch)
     stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
     job_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=stale)
     await job_manager.reconcile_jobs()
@@ -257,23 +266,42 @@ async def test_supervisor_runs_stub_workload_to_completion(user_id: str) -> None
     assert row["exit_code"] == 0
 
 
-@pytest.mark.asyncio
-async def test_supervisor_cancels_running_workload(user_id: str) -> None:
-    from ai_almanac.server.services.job_manager import execute_job, request_cancel
-
-    job_id = await _insert_job(
-        user_id,
-        "queued",
-        config={"model_name": "cancel-test"},
+def _start_unending_workload(_job_id: str, _log_path: Path) -> subprocess.Popen:
+    """A workload that only stops when signalled. The stub workload finishes in
+    about two supervisor polls, so a cancel that lands after the first poll would
+    race its natural exit and the job would end ``complete``."""
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        start_new_session=True,
     )
-    supervisor = asyncio.create_task(asyncio.to_thread(execute_job, job_id))
 
-    await _wait_for_status(job_id, "running")
 
-    await request_cancel(job_id, user_id)
-    await asyncio.wait_for(supervisor, timeout=15)
+@pytest.mark.asyncio
+async def test_supervisor_cancels_running_workload(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
 
-    assert (await _job_row(job_id))["status"] == "canceled"
+    workloads: list[subprocess.Popen] = []
+
+    def start_workload(job_id: str, log_path: Path) -> subprocess.Popen:
+        workloads.append(_start_unending_workload(job_id, log_path))
+        return workloads[-1]
+
+    monkeypatch.setattr(job_manager, "_start_workload", start_workload)
+    job_id = await _insert_job(user_id, "queued", config={"model_name": "cancel-test"})
+    supervisor = asyncio.create_task(asyncio.to_thread(job_manager.execute_job, job_id))
+    try:
+        await _wait_for_status(job_id, "running")
+
+        await job_manager.request_cancel(job_id, user_id)
+        await asyncio.wait_for(supervisor, timeout=15)
+
+        assert (await _job_row(job_id))["status"] == "canceled"
+        assert workloads[0].poll() is not None
+    finally:
+        for workload in workloads:
+            workload.kill()
 
 
 # ---------------------------------------------------------------------------

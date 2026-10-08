@@ -35,7 +35,7 @@
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
-	import { describeSourceCoverage } from '$lib/source-coverage';
+	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
@@ -89,6 +89,7 @@
 		const scopeKind = asScopeKind(params.get('scopeKind'));
 		const scopeKey = params.get('scopeKey');
 		if (blendId) selectedId = blendId;
+		else if (params.get('new') === '1') startNew();
 		if (chatId && scopeKind && scopeKey) {
 			continuedSessionId = chatId;
 			continuedScope = { kind: scopeKind, key: scopeKey };
@@ -153,13 +154,17 @@
 
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
-	// Models are region-specific: only offer ones matching the chosen observation
-	// dataset's region, mirroring the benchmark setup flow.
+	// Only offer models on the chosen observations' region and grid,
+	// mirroring the benchmark setup flow.
 	const availableModels = $derived(
-		selectedObs ? modelSources.filter((s) => s.region === selectedObs.region) : []
+		selectedObs
+			? modelSources.filter(
+					(s) => s.region === selectedObs.region && gridsMatch(gridStep(selectedObs), gridStep(s))
+				)
+			: []
 	);
 
-	// Drop any selected model that no longer matches the chosen region.
+	// Drop any selected model that no longer matches the chosen observations.
 	$effect(() => {
 		const ids = new Set(availableModels.map((s) => s.id));
 		if (modelIds.some((id) => !ids.has(id))) {
@@ -632,7 +637,8 @@
 							<p class="muted">Select an observation source first to see matching models.</p>
 						{:else if availableModels.length === 0}
 							<p class="muted">
-								No ready forecast models for this region. Add some under Data first.
+								No ready forecast models match these observations' region and grid. Add some under
+								Data first.
 							</p>
 						{:else}
 							<div class="model-grid">
@@ -849,12 +855,23 @@
 			>
 				<section class="card detail">
 					<header class="detail-header">
-						<div>
+						<div class="detail-id">
 							<p class="eyebrow">Blend</p>
-							<h1>{selected.name || 'Untitled blend'}</h1>
-							<p class="muted">
-								{selected.model_names.join(', ')}
-								{#if selected.region_id}· {selected.region_id}{/if}
+							<h1 class="detail-title" title={selected.name || 'Untitled blend'}>
+								{selected.name || 'Untitled blend'}
+							</h1>
+							<p class="detail-meta">
+								<span>{selected.model_names.join(', ')}</span>
+								{#if selected.region_id}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>{selected.region_id}</span>
+								{/if}
+								<span class="dot" aria-hidden="true">·</span>
+								<span>Submitted {formatDate(selected.created_at)}</span>
+								{#if selected.completed_at}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>Completed {formatDate(selected.completed_at)}</span>
+								{/if}
 							</p>
 						</div>
 						<div class="detail-actions">
@@ -883,21 +900,6 @@
 					{#if actionError}
 						<p class="error">{actionError}</p>
 					{/if}
-
-					<dl class="facts">
-						<div>
-							<dt>Submitted</dt>
-							<dd>{formatDate(selected.created_at)}</dd>
-						</div>
-						<div>
-							<dt>Completed</dt>
-							<dd>{formatDate(selected.completed_at)}</dd>
-						</div>
-						<div>
-							<dt>Models</dt>
-							<dd>{selected.model_names.length}</dd>
-						</div>
-					</dl>
 
 					{#if ACTIVE_STATUSES.includes(selected.status)}
 						<div class="running-state">
@@ -1266,33 +1268,31 @@
 		gap: 0.6rem;
 	}
 
-	.facts {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-		gap: 0.6rem;
-		margin: 0;
+	.detail-id {
+		min-width: 0;
+		flex: 1;
 	}
 
-	.facts div {
-		padding: 0.65rem 0.7rem;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
+	h1.detail-title {
+		font-size: clamp(1.15rem, 2vw, 1.5rem);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
 	}
 
-	.facts dt {
+	.detail-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.4rem;
+		margin: 0.35rem 0 0;
+		font-size: 0.82rem;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
-		font-weight: 750;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		margin-bottom: 0.2rem;
 	}
 
-	.facts dd {
-		margin: 0;
-		color: var(--color-text);
-		font-weight: 650;
+	.detail-meta .dot {
+		color: var(--color-text-dim);
 	}
 
 	.running-state {

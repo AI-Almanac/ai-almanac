@@ -11,6 +11,7 @@ export type Dataset = {
 	obs_file_pattern?: string | null;
 	obs_year_start?: number | null;
 	obs_year_end?: number | null;
+	grid_step_deg?: number | null;
 	provider?: string | null;
 };
 

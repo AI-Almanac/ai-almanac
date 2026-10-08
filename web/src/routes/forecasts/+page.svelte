@@ -5,7 +5,6 @@
 		refreshForecast as refreshForecastRun,
 		listBlends,
 		getForecastModels,
-		forecastModelFor,
 		getInitSources,
 		getJobArtifacts,
 		cancelJob,
@@ -24,6 +23,7 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import { installTour } from '$lib/tour.svelte';
 	import { forecastResultsSteps, forecastSetupSteps } from './tours';
@@ -125,17 +125,25 @@
 	const completedBlends = $derived(blends.filter((b) => b.status === 'complete'));
 	const selectedBlend = $derived(blends.find((b) => b.id === blendId) ?? null);
 
-	// Only a blend's own models that resolve to a live forecast model can be
-	// requested — matches the validation create_forecast_for_user enforces.
-	// The blend's model NAME is what gets submitted (it keys the blend formula
-	// server-side); the registry entry is just its display/run counterpart.
+	// A blend member can be requested when its data is linked to a live
+	// forecast model. The blend's model NAME is what gets submitted (it keys the
+	// blend formula server-side); the registry entry is its display/run model.
 	const availableModels = $derived.by(() => {
 		if (!selectedBlend) return [];
+		const linked = selectedBlend.forecast_models ?? {};
 		return selectedBlend.model_names.flatMap((name) => {
-			const model = forecastModelFor(forecastModels, name);
+			const model = forecastModels.find((m) => m.id === linked[name]);
 			return model ? [{ name, model }] : [];
 		});
 	});
+
+	// Live scoring applies the blend's whole formula, so the server rejects a
+	// forecast unless every member is linked.
+	const unlinkedModels = $derived(
+		selectedBlend
+			? selectedBlend.model_names.filter((name) => !(name in (selectedBlend.forecast_models ?? {})))
+			: []
+	);
 
 	// Drop any selected model that's no longer available for the chosen blend.
 	$effect(() => {
@@ -145,7 +153,9 @@
 		}
 	});
 
-	const formValid = $derived(blendId !== '' && forecastModelIds.length > 0);
+	const formValid = $derived(
+		blendId !== '' && forecastModelIds.length > 0 && unlinkedModels.length === 0
+	);
 
 	async function load() {
 		const [f, b, m, s] = await Promise.allSettled([
@@ -273,6 +283,14 @@
 		if (idx === -1 || forecasts[idx].status === status) return;
 		forecasts[idx] = { ...forecasts[idx], status };
 	}
+
+	// "?new=1" opens the setup form, as the home page's Get started dialog links.
+	let newRequestHandled = false;
+	$effect(() => {
+		if (newRequestHandled) return;
+		newRequestHandled = true;
+		if ($page.url.searchParams.get('new') === '1') startNew();
+	});
 
 	function startNew() {
 		creating = true;
@@ -470,9 +488,14 @@
 				{#if selectedBlend}
 					<fieldset class="field" data-tour="forecast-models">
 						<legend>Forecast models</legend>
-						{#if availableModels.length === 0}
-							<p class="muted">None of this blend's models have a live forecast model available.</p>
-						{:else}
+						{#if unlinkedModels.length > 0}
+							<p class="muted">
+								Every model in a blend needs a live forecast model before the blend can forecast.
+								Not linked yet: {unlinkedModels.join(', ')}. Choose one for each in its data source
+								settings.
+							</p>
+						{/if}
+						{#if availableModels.length > 0}
 							<div class="model-grid">
 								{#each availableModels as entry (entry.name)}
 									<label class="checkbox">

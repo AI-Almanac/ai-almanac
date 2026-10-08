@@ -27,8 +27,10 @@
 		probScaleMax,
 		fmtProb,
 		fmtDate,
-		monthLabel
+		monthLabel,
+		onsetEventName
 	} from '$lib/onset';
+	import { ONSET_ESTIMATE_CAVEAT } from '$lib/onset-outlook';
 	import CellInspector from './CellInspector.svelte';
 	import MapTooltip from './MapTooltip.svelte';
 	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
@@ -565,6 +567,8 @@
 		});
 	}
 
+	const onsetName = $derived(onsetEventName(data?.region_id ?? regionId));
+
 	// Plain-language statement of what the colors mean, tied to the current
 	// selection so the reader never has to infer the reference frame.
 	const caption = $derived.by(() => {
@@ -573,13 +577,15 @@
 			return `Most likely onset ${unit} per location. Fainter dots mean the timing is less certain.`;
 		}
 		const thr = data?.onset_threshold;
-		const onset = thr != null ? `monsoon onset (rainfall ≥ ${thr} mm)` : 'monsoon onset';
+		const onset = `${onsetName.toLowerCase()}${thr != null ? ` (rainfall ≥ ${thr} mm)` : ''}`;
 		return `Chance ${onset} begins ${binPhrase(selectedBin)}.`;
 	});
 
 	// "in Week 2 (Jun 9–Jun 15)", "on Jun 12", or "after Jun 29" for the shown forecast.
 	function binPhrase(idx: number): string {
-		if (!selectedDate) return `in ${bins.labels[idx]}`;
+		if (!selectedDate) {
+			return idx === bins.laterIndex ? 'more than 4 weeks after issue' : `in ${bins.labels[idx]}`;
+		}
 		const dates = binDateLabel(bins, selectedDate, idx);
 		if (idx === bins.laterIndex) return dates;
 		return view.resolution === 'daily' ? `on ${dates}` : `in ${bins.labels[idx]} (${dates})`;
@@ -588,7 +594,8 @@
 	// The day selector's readout: the calendar date, with its lead day for context.
 	function dayBinLabel(idx: number): string {
 		if (!selectedDate) return bins.labels[idx];
-		if (idx === bins.laterIndex) return `Later (${binDateLabel(bins, selectedDate, idx)})`;
+		if (idx === bins.laterIndex)
+			return `${bins.labels[idx]} (${binDateLabel(bins, selectedDate, idx)})`;
 		return `${binDateLabel(bins, selectedDate, idx)} · ${bins.labels[idx]}`;
 	}
 
@@ -679,7 +686,7 @@
 	<aside class="control-rail" class:collapsed data-tour="forecast-controls">
 		<div class="rail-top">
 			<div class="rail-header">
-				<span class="rail-title">Monsoon onset</span>
+				<span class="rail-title">{onsetName}</span>
 				<button class="rail-collapse" aria-label="Hide controls" onclick={() => (collapsed = true)}>
 					«
 				</button>
@@ -858,9 +865,8 @@
 				<span>Peak onset window passed</span>
 			</div>
 			<p class="legend-note">
-				Gray means this forecast was issued after the window when onset was most likely — the peak
-				probability has passed, so the outlook ahead no longer applies. This is estimated from the
-				forecasts, not a confirmation that onset occurred.
+				Gray means this forecast was issued after onset likely began here, so its outlook no longer
+				applies. {ONSET_ESTIMATE_CAVEAT}
 			</p>
 			{#if boundaries.visibleLayers.length > 0}
 				<p class="legend-note">
@@ -891,7 +897,7 @@
 				point={selectedCell}
 				{bins}
 				issueDates={data.issue_dates}
-				regionName={data.region_name}
+				{onsetName}
 				{selectedDate}
 				{soonestColor}
 				onClose={() => (selectedCellKey = null)}
@@ -916,7 +922,7 @@
 					{@const probs = tooltipProbs}
 					{@const peak = argmax(probs)}
 					{@const top = Math.max(0.01, probs[peak] ?? 0)}
-					<span class="tt-caption">Monsoon onset timing</span>
+					<span class="tt-caption">{onsetName} timing</span>
 					<div class="tt-days">
 						{#each bins.labels as label, i (label)}
 							<div
@@ -944,7 +950,7 @@
 						</span>
 					{/if}
 				{:else if tooltipProbs}
-					<span class="tt-caption">Monsoon onset timing</span>
+					<span class="tt-caption">{onsetName} timing</span>
 					<div class="tt-spark">
 						{#each bins.labels as label, i (label)}
 							<div class="tt-col" class:active={colorMode === 'window' && i === selectedBin}>

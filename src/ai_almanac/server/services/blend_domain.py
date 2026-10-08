@@ -59,6 +59,7 @@ def _source_candidate(source: dict) -> dict:
         "end_year": meta.get("end_year"),
         "missing_years": meta.get("missing_years"),
         "grid_step_deg": meta.get("grid_step_deg"),
+        "forecast_model_id": meta.get("forecast_model_id"),
     }
 
 
@@ -168,7 +169,8 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
 
     warnings.extend(
         job_submission.historical_only_warning(
-            (m["name"], m.get("grid_step_deg")) for m in selected_models
+            job_submission.BlendMember(m["name"], m["forecast_model_id"], m["grid_step_deg"])
+            for m in selected_models
         )
     )
 

@@ -31,11 +31,16 @@ from pathlib import Path
 from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
 from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
-from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+from ai_almanac.settings import (
+    forecast_model_by_id,
+    get_packaged_forecast_models,
+    member_forecast_model_id,
+)
 
 
-def _registry_entry(model_id: str) -> dict:
-    entry = resolve_forecast_model(get_packaged_forecast_models(), model_id)
+def _registry_entry(config: dict, member: str) -> dict:
+    model_id = member_forecast_model_id(config, member)
+    entry = forecast_model_by_id(get_packaged_forecast_models(), model_id)
     if entry is None:
         raise KeyError(f"Unknown forecast model id: {model_id!r}")
     return entry
@@ -44,7 +49,7 @@ def _registry_entry(model_id: str) -> dict:
 def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path:
     """Season-scoring deliverable: loop this model across the season-to-date
     and write one NetCDF matching the historical `{year}.nc` schema."""
-    model_entry = _registry_entry(model_id)
+    model_entry = _registry_entry(config, model_id)
     scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{model_id}-"))
     stage_root = Path(tempfile.mkdtemp(prefix=f"season-{model_id}-"))
     year = datetime.now(UTC).year

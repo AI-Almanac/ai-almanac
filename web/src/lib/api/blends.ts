@@ -7,6 +7,8 @@ export type Blend = {
 	name: string;
 	status: JobStatus;
 	model_names: string[];
+	// Member name → live forecast model id, for members whose data is linked to one.
+	forecast_models?: Record<string, string>;
 	region_id?: string | null;
 	created_at: string;
 	completed_at?: string | null;

@@ -82,6 +82,8 @@ export type LeadMetric = {
 	/** The value at which the metric indicates no skill. */
 	reference: number;
 	referenceLabel: string;
+	/** What the numbers are measured against, shown beside the chart. */
+	scale: string;
 	caption: string;
 };
 
@@ -97,16 +99,18 @@ export const LEAD_METRICS: LeadMetric[] = [
 		label: 'Brier Skill Score',
 		reference: 0,
 		referenceLabel: 'No skill (Traditional Climatology)',
+		scale: 'Relative to Traditional Climatology',
 		caption:
-			'Probability accuracy by forecast lead, measured against Traditional Climatology. 0 matches it, 1 is perfect, below 0 is worse — higher is better. Click a model to toggle it; hover for exact values.'
+			'Probability accuracy by forecast lead. 0 matches Traditional Climatology, 1 is perfect, below 0 is worse — higher is better. Click a model to toggle it; hover for exact values.'
 	},
 	{
 		key: 'aucByLead',
 		label: 'Area Under ROC Curve',
 		reference: 0.5,
 		referenceLabel: 'No skill (chance)',
+		scale: 'Absolute score, not relative to climatology',
 		caption:
-			'Ability to rank onset weeks correctly, by forecast lead. 0.5 is no skill, 1.0 is perfect — higher is better. Click a model to toggle it; hover for exact values.'
+			'Ability to rank onset weeks correctly, by forecast lead. 0.5 is chance, 1.0 is perfect — higher is better. The climatology lines are shown for comparison. Click a model to toggle it; hover for exact values.'
 	}
 ];
 

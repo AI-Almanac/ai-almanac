@@ -150,11 +150,14 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
 
     datasets_response = await client.get("/datasets", headers=auth_headers)
     assert datasets_response.status_code == 200
-    assert obs["id"] in {dataset["id"] for dataset in datasets_response.json()}
+    listed_obs = {dataset["id"]: dataset for dataset in datasets_response.json()}
+    assert listed_obs[obs["id"]]["grid_step_deg"] == 0.25
 
     models_response = await client.get("/jobs/models?region=ethiopia")
     assert models_response.status_code == 200
-    assert model["id"] in {item["id"] for item in models_response.json()}
+    assert model["metadata"]["grid_step_deg"] is not None
+    listed_models = {item["id"]: item for item in models_response.json()}
+    assert listed_models[model["id"]]["grid_step_deg"] == model["metadata"]["grid_step_deg"]
 
     launched: list[str] = []
 
@@ -698,11 +701,11 @@ async def test_gs_path_survives_registration_unmangled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ai_almanac.server.services import storage as storage_mod
-    from tests.test_gcs_source_validation import _FakeGcsStorage
+    from tests.range_read_fs import gcs_storage_over
 
     gs_path = "gs://bucket/ethiopia/obs"
-    fake = _FakeGcsStorage(_OBS_ROOT, gs_path)
-    monkeypatch.setattr(storage_mod, "get_storage", lambda: fake)
+    storage, _ = gcs_storage_over(_OBS_ROOT, gs_path)
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: storage)
 
     created = await client.post("/data-sources", json=_obs_body("GCS obs", path=gs_path))
     assert created.status_code == 201
@@ -759,3 +762,57 @@ async def test_remote_provider_source_registers_ready_without_inspection(
     assert row["metadata"]["provider"] == "era5_arco"
 
     await client.delete(f"/data-sources/{row['id']}")
+
+
+def _fuxi_draft(forecast_model_id: str | None) -> dict:
+    metadata = {"file_pattern": "{}.nc", "model_var": "tp", "model_type": "AIWP"}
+    if forecast_model_id is not None:
+        metadata["forecast_model_id"] = forecast_model_id
+    return {
+        "kind": "model",
+        "name": "Ethiopia hindcasts",
+        "path": str(Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"),
+        "region": "ethiopia",
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_source_links_to_the_live_forecast_model_chosen_at_registration(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post("/data-sources", json=_fuxi_draft("fuxi"))
+
+    assert response.status_code == 201
+    source = response.json()
+    assert source["status"] == "ready"
+    assert source["metadata"]["forecast_model_id"] == "fuxi"
+    assert source["live_forecast"] == {"status": "ready", "detail": None, "model_id": "fuxi"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forecast_model_id", [None, "", "  "])
+async def test_unlinked_model_source_is_valid_for_past_seasons_only(
+    client: httpx.AsyncClient, forecast_model_id: str | None
+) -> None:
+    response = await client.post("/data-sources", json=_fuxi_draft(forecast_model_id))
+
+    source = response.json()
+    assert source["status"] == "ready"
+    assert "forecast_model_id" not in source["metadata"]
+    assert source["live_forecast"]["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("forecast_model_id", "reason"),
+    [("graphcast", "1° grid"), ("no_such_model", "not an available live forecast model")],
+)
+async def test_model_source_rejects_a_live_forecast_model_that_cannot_extend_it(
+    client: httpx.AsyncClient, forecast_model_id: str, reason: str
+) -> None:
+    response = await client.post("/data-sources/validate", json=_fuxi_draft(forecast_model_id))
+
+    draft = response.json()
+    assert draft["status"] == "invalid"
+    assert reason in draft["validation_error"]

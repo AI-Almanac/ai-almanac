@@ -217,26 +217,20 @@ def _load_model_registry() -> dict:
     return yaml.safe_load(Path("/almanac/forecast_models.yaml").read_text())
 
 
-def _registry_entry(model_id: str) -> dict:
-    """Resolve a blend model name to its registry entry — by id, normalized
-    display name, or alias. Duplicates settings.resolve_forecast_model (this
-    app runs standalone in its image and doesn't import ai_almanac)."""
-    import re
-
-    key = re.sub(r"[^0-9a-z]+", "_", model_id.lower()).strip("_")
-    registry = _load_model_registry()
-    for entry in registry.get("models") or []:
-        display_key = re.sub(r"[^0-9a-z]+", "_", (entry.get("display_name") or "").lower()).strip(
-            "_"
-        )
-        if key in (entry["id"], display_key) or key in (entry.get("aliases") or []):
+def _registry_entry(config: dict, member: str) -> dict:
+    """Registry entry a blend member runs: the id the server linked it to in
+    `forecast_models`. Mirrors settings.member_forecast_model_id (this app runs
+    standalone in its image and doesn't import ai_almanac)."""
+    model_id = (config.get("forecast_models") or {}).get(member, member)
+    for entry in _load_model_registry().get("models") or []:
+        if entry["id"] == model_id:
             return entry
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
 
 
-def _model_env(model_id: str) -> str:
-    """Execution-environment name for a model (base/aifs2/aifs2ens)."""
-    return _registry_entry(model_id).get("env", "base")
+def _model_env(config: dict, member: str) -> str:
+    """Execution-environment name for a member's model (base/aifs2/aifs2ens)."""
+    return _registry_entry(config, member).get("env", "base")
 
 
 _VOLUME_RUNS_ROOT = Path("/cache/runs")
@@ -265,7 +259,7 @@ def _forecast_inference_impl(job_id: str, model_id: str, config: dict) -> dict:
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
 
     pipeline = _load_pipeline()
-    model_entry = _registry_entry(model_id)
+    model_entry = _registry_entry(config, model_id)
     zarr_path = _zarr_volume_path(job_id, model_id)
     run_info = pipeline.run_forecast_inference(config, model_entry, zarr_path)
     print("==> Committing volume (uploads any newly-downloaded model weights)")
@@ -346,7 +340,7 @@ def render_forecast_products(
     _write_gcp_credentials_from_secret()
     client = gcs.Client()
     pipeline = _load_pipeline()
-    model_entry = _registry_entry(model_id)
+    model_entry = _registry_entry(config, model_id)
     zarr_path = _zarr_volume_path(job_id, model_id)
 
     with tempfile.TemporaryDirectory(prefix=f"forecast-products-{job_id}-{model_id}-") as tmp:
@@ -374,7 +368,7 @@ def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params:
         cache_dir = Path("/cache/season-forecasts")
 
     pipeline = _load_pipeline()
-    model_entry = _registry_entry(model_id)
+    model_entry = _registry_entry(config, model_id)
     year = datetime.now(UTC).year
     stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{model_id}-"))
     scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{job_id}-{model_id}-"))
@@ -468,7 +462,7 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             season_model_ids = list(model_ids)
             print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
             season_calls = {
-                model_id: SEASON_BUNDLE_FNS[_model_env(model_id)].spawn(
+                model_id: SEASON_BUNDLE_FNS[_model_env(config, model_id)].spawn(
                     job_id, model_id, config, season_model_params.get(model_id) or {}
                 )
                 for model_id in season_model_ids

@@ -7,6 +7,7 @@ import {
 	dayToIso,
 	isoToDay,
 	laterStartDay,
+	onsetEventName,
 	onsetHasPassed,
 	probScaleMax,
 	rampColor,
@@ -35,8 +36,8 @@ describe('onset bins', () => {
 	it('puts "Later" last, starting at issue + 29 for both binnings', () => {
 		expect(WEEKLY_BINS.count).toBe(5);
 		expect(DAILY_BINS.count).toBe(29);
-		expect(WEEKLY_BINS.labels[WEEKLY_BINS.laterIndex]).toBe('Later');
-		expect(DAILY_BINS.labels[DAILY_BINS.laterIndex]).toBe('Later');
+		expect(WEEKLY_BINS.labels[WEEKLY_BINS.laterIndex]).toBe('After 4 weeks');
+		expect(DAILY_BINS.labels[DAILY_BINS.laterIndex]).toBe('After 4 weeks');
 		expect(laterStartDay(ISSUE)).toBe(issueDay + 29);
 	});
 
@@ -75,6 +76,14 @@ describe('consensusOnsetDay', () => {
 		// issue+1 at weight 1, (issue+7)+1 at weight 3.
 		expect(day).toBe(issueDay + 1 + (3 * 7) / 4);
 	});
+
+	it('ignores forecasts issued after the onset the earlier ones agree on', () => {
+		// Both early forecasts date onset to Jun 2; each later one rings its own Week 1,
+		// as a blend does once the rains are under way.
+		const dates = ['2025-05-15', '2025-05-29', '2025-06-12', '2025-06-26', '2025-07-10'];
+		const probs = [[0, 0, 1, 0, 0], ...Array(4).fill([1, 0, 0, 0, 0])];
+		expect(consensusOnsetDay(WEEKLY_BINS, dates, probs)).toBe(isoToDay('2025-06-02'));
+	});
 });
 
 describe('onsetHasPassed', () => {
@@ -92,6 +101,21 @@ describe('onsetHasPassed', () => {
 
 	it('is false when the cell never dated an onset', () => {
 		expect(onsetHasPassed('2025-07-15', null)).toBe(false);
+	});
+});
+
+describe('onsetEventName', () => {
+	it('names the event a monsoon onset over India', () => {
+		expect(onsetEventName('india')).toBe('Monsoon onset');
+	});
+
+	it('names the event a rainy season onset over Ethiopia', () => {
+		expect(onsetEventName('ethiopia')).toBe('Rainy season onset');
+	});
+
+	it('defaults to rainy season onset when the region is unknown', () => {
+		expect(onsetEventName(null)).toBe('Rainy season onset');
+		expect(onsetEventName('custom')).toBe('Rainy season onset');
 	});
 });
 

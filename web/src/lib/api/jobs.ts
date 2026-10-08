@@ -91,6 +91,10 @@ export type ModelConfig = {
 	end_year_clim: number;
 	// Absent for sources registered before gaps were detected: unknown, not gap-free.
 	missing_years?: number[];
+	// The live forecast model this data was produced by, when linked at registration.
+	forecast_model_id?: string | null;
+	// Absent for sources registered before grid steps were recorded.
+	grid_step_deg?: number | null;
 };
 
 export type JobResult = {

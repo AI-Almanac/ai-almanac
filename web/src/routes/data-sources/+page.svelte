@@ -8,16 +8,19 @@
 		revalidateDataSource,
 		deleteDataSource,
 		getRegions,
+		getForecastModels,
 		type DataSource,
 		type DataSourceCreate,
 		type DataSourceValidation,
+		type ForecastModel,
 		type Region
 	} from '$lib/api';
 	import { goto } from '$app/navigation';
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
-	import { describeSourceCoverage, missingYears } from '$lib/source-coverage';
+	import { describeSourceCoverage, formatDegrees, missingYears } from '$lib/source-coverage';
+	import { groupSources } from './source-groups';
 	import { account } from '$lib/account.svelte';
 
 	$effect(() => {
@@ -38,12 +41,16 @@
 	let formModelType = $state('AIWP');
 	let formInitDays = $state('');
 	let formInitDaysSource = $state('');
+	let formForecastModelId = $state('');
 	let submitting = $state(false);
 	let pickerOpen = $state(false);
 	let editingId = $state<string | null>(null);
 	let revalidatingId = $state<string | null>(null);
 	let validationDraft = $state<DataSourceValidation | null>(null);
 	let validatedSignature = $state('');
+	// Live forecast models a model archive can be linked to. Empty when live
+	// forecasting is unavailable, which hides nothing but the choices.
+	let forecastModels = $state<ForecastModel[]>([]);
 
 	async function load() {
 		loading = true;
@@ -57,7 +64,12 @@
 		}
 	}
 
-	onMount(load);
+	onMount(() => {
+		void load();
+		getForecastModels()
+			.then((list) => (forecastModels = list))
+			.catch(() => {});
+	});
 
 	function formMetadata(): Record<string, unknown> {
 		if (formKind === 'obs') {
@@ -71,7 +83,8 @@
 			...(formModelType && { model_type: formModelType }),
 			...(formFilePattern && { file_pattern: formFilePattern }),
 			...(formInitDays && { init_days: formInitDays }),
-			...(formInitDaysSource && { init_days_source: formInitDaysSource })
+			...(formInitDaysSource && { init_days_source: formInitDaysSource }),
+			...(formForecastModelId && { forecast_model_id: formForecastModelId })
 		};
 	}
 
@@ -90,6 +103,7 @@
 		const metadata = { ...body.metadata };
 		delete metadata.init_days;
 		delete metadata.init_days_source;
+		delete metadata.forecast_model_id;
 		return JSON.stringify({ ...body, metadata });
 	}
 
@@ -139,6 +153,8 @@
 					delete metadata.init_time_coordinate;
 					delete metadata.init_time_sample_count;
 				}
+				if (formForecastModelId) metadata.forecast_model_id = formForecastModelId;
+				else delete metadata.forecast_model_id;
 			}
 			await createDataSource({ ...formBody(), metadata });
 			resetForm();
@@ -177,6 +193,7 @@
 		formModelType = 'AIWP';
 		formInitDays = '';
 		formInitDaysSource = '';
+		formForecastModelId = '';
 		validationDraft = null;
 		validatedSignature = '';
 	}
@@ -185,6 +202,7 @@
 		formVar = formKind === 'obs' ? 'RAINFALL' : 'tp';
 		formInitDays = '';
 		formInitDaysSource = '';
+		formForecastModelId = '';
 		validationDraft = null;
 	}
 
@@ -204,6 +222,7 @@
 		formModelType = String(source.metadata.model_type ?? 'AIWP');
 		formInitDays = String(source.metadata.init_days ?? '');
 		formInitDaysSource = String(source.metadata.init_days_source ?? '');
+		formForecastModelId = String(source.metadata.forecast_model_id ?? '');
 		validationDraft = null;
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 	}
@@ -250,6 +269,32 @@
 
 	const obsSources = $derived(sources.filter((s) => s.kind === 'obs'));
 	const modelSources = $derived(sources.filter((s) => s.kind === 'model'));
+	// The archive's grid, once known, narrows the choices to models that run on
+	// it; the server rejects any other link. A saved link always stays listed.
+	const archiveGridStep = $derived(
+		(editingId
+			? sources.find((source) => source.id === editingId)?.metadata.grid_step_deg
+			: validationIsCurrent
+				? validationDraft?.metadata.grid_step_deg
+				: undefined) as number | undefined
+	);
+	const linkableModels = $derived(
+		forecastModels.filter(
+			(model) =>
+				model.id === formForecastModelId ||
+				typeof archiveGridStep !== 'number' ||
+				Math.abs(model.resolution_deg - archiveGridStep) < 1e-6
+		)
+	);
+
+	function liveForecastSummary(source: DataSource): string | null {
+		const live = source.live_forecast;
+		if (!live) return null;
+		if (live.status !== 'ready') return live.detail ?? null;
+		const model = forecastModels.find((candidate) => candidate.id === live.model_id);
+		return `Live forecasts with ${model?.display_name ?? live.model_id}`;
+	}
+
 	const selectedRegion = $derived(regions.find((region) => region.id === formRegion) ?? null);
 
 	function regionName(regionId: string | null): string | null {
@@ -398,6 +443,18 @@
 							<option value="climatology">Climatology</option>
 						</select>
 					</label>
+					<label class="grow">
+						<span>Live forecast model</span>
+						<select bind:value={formForecastModelId}>
+							<option value="">None (past seasons only)</option>
+							{#each linkableModels as model (model.id)}
+								<option value={model.id}>{model.display_name} · {model.resolution_deg}°</option>
+							{/each}
+						</select>
+						<small
+							>The model that produced this data. Blends trained on it can then run live forecasts.</small
+						>
+					</label>
 					{#if editingId}
 						<label class="grow">
 							<span>Initialization days</span>
@@ -545,11 +602,7 @@
 				No obs datasets registered. Add one above to make it available to the benchmark UI.
 			</p>
 		{:else}
-			<ul class="sources">
-				{#each obsSources as src (src.id)}
-					{@render sourceRow(src)}
-				{/each}
-			</ul>
+			{@render sourceGroups(obsSources)}
 		{/if}
 	</section>
 
@@ -562,11 +615,7 @@
 				No model directories registered. Add one above to enable it in benchmark submissions.
 			</p>
 		{:else}
-			<ul class="sources">
-				{#each modelSources as src (src.id)}
-					{@render sourceRow(src)}
-				{/each}
-			</ul>
+			{@render sourceGroups(modelSources)}
 		{/if}
 	</section>
 </main>
@@ -580,12 +629,37 @@
 	onselect={(p) => (formPath = p)}
 />
 
+{#snippet sourceGroups(list: DataSource[])}
+	{#each groupSources(list, (id) => regionName(id) ?? id) as group (group.region)}
+		<details class="region-group" open>
+			<summary>
+				{group.region ? regionName(group.region) : 'No region'}
+				<span class="count">({group.size})</span>
+			</summary>
+			<div class="grid-groups">
+				{#each group.grids as grid (grid.step)}
+					<div class="grid-group">
+						<h3>
+							{grid.step == null ? 'Grid not detected' : `${formatDegrees(grid.step)} grid`}
+							<span class="count">({grid.sources.length})</span>
+						</h3>
+						<ul class="sources">
+							{#each grid.sources as src (src.id)}
+								{@render sourceRow(src)}
+							{/each}
+						</ul>
+					</div>
+				{/each}
+			</div>
+		</details>
+	{/each}
+{/snippet}
+
 {#snippet sourceRow(src: DataSource)}
 	<li class="source" class:missing={src.status === 'invalid'}>
 		<div class="meta">
 			<div class="name">
 				{src.name}
-				{#if regionName(src.region)}<span class="tag">{regionName(src.region)}</span>{/if}
 				<span class:warn={src.status === 'invalid'} class="tag">{src.status}</span>
 				<span class="tag">{src.visibility === 'shared' ? 'shared' : 'private'}</span>
 			</div>
@@ -598,6 +672,9 @@
 			{/if}
 			{#if initializationSchedule(src)}
 				<p class="coverage">{initializationSchedule(src)}</p>
+			{/if}
+			{#if liveForecastSummary(src)}
+				<p class="coverage">{liveForecastSummary(src)}</p>
 			{/if}
 			{#if src.validation_error}
 				<p class="validation-error">{src.validation_error}</p>
@@ -723,6 +800,31 @@
 	button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+	.region-group summary {
+		cursor: pointer;
+		font-weight: 650;
+		padding: 0.35rem 0;
+	}
+	.grid-groups {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 0.5rem 0 1rem 1rem;
+		border-left: 2px solid var(--color-border-subtle);
+	}
+	.grid-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.grid-group h3 {
+		margin: 0;
+		font-size: 0.78rem;
+		font-weight: 750;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
 	}
 	.sources {
 		list-style: none;

@@ -3,6 +3,14 @@
 // Keeping the ramps here means the map fill, the legend, and the inspector
 // heatmap all draw from one source of truth.
 
+// Only India's season is a monsoon; elsewhere (e.g. Ethiopia's Kiremt) the
+// accurate term is the start of the rainy season.
+const MONSOON_REGIONS = new Set(['india']);
+
+export function onsetEventName(regionId: string | null | undefined): string {
+	return regionId && MONSOON_REGIONS.has(regionId) ? 'Monsoon onset' : 'Rainy season onset';
+}
+
 // The onset palette is matplotlib "plasma" — the ramp the science team uses in
 // their published onset graphics. One palette drives the map fill, the legend,
 // the tooltip, and the inspector so a hue means the same thing everywhere.
@@ -105,6 +113,8 @@ export function monthLabel(iso: string): string {
 // this block and every date the UI shows follows it.
 export const ONSET_HORIZON_DAYS = 28;
 export const LATER_START_DAY = ONSET_HORIZON_DAYS + 1; // issue + 29
+// The open-ended bin's name: onset beyond the horizon, not late in the season.
+export const LATER_LABEL = `After ${ONSET_HORIZON_DAYS / 7} weeks`;
 const MS_PER_DAY = 86_400_000;
 
 // Whole days since the Unix epoch for a 'YYYY-MM-DD' string (UTC, no tz drift).
@@ -146,8 +156,8 @@ function onsetBins(
 		count: bounded.length + 1,
 		laterIndex: bounded.length,
 		binDays,
-		labels: [...bounded.map(label), 'Later'],
-		shortLabels: [...bounded.map(shortLabel), 'Later'],
+		labels: [...bounded.map(label), LATER_LABEL],
+		shortLabels: [...bounded.map(shortLabel), LATER_LABEL],
 		dayRange(issueIso, idx) {
 			const start = isoToDay(issueIso) + binDays * idx + 1;
 			return { start, end: start + binDays - 1 };
@@ -201,40 +211,61 @@ export function probScaleMax(bins: OnsetBins, rows: number[][], binIdx?: number)
 
 // ---- "Peak onset window passed" --------------------------------------------
 //
-// Every forecast's bins are forward-looking (onset *begins* in bin N after
-// issue), so once a forecast is issued past the bin when onset was most
-// likely, it has no bin left to place real mass in and dumps it into "Later"
-// — a misleading bright dot. We gray those cells out, matching the science
-// team's static figures. This is NOT a claim that onset was observed: we have no
-// observed onset date, so we estimate the most-likely onset per cell from the
-// season's own forecasts and drain the color once the issue date runs past it.
+// The blend only learned from seasons where onset was still ahead (the pipeline
+// drops lead days <= 0), so every forecast answers "if onset hasn't begun, when
+// will it?". Issued after onset, it still answers — often "imminently", because
+// the rains are already under way — and reads as a fresh, confident forecast.
+// We gray those out, matching the science team's static figures. This is NOT a
+// claim that onset was observed: we have no observed onset date, so we estimate
+// the most-likely onset per cell from the season's own forecasts and drain the
+// color once the issue date runs past it.
 
 // Neutral slate for a grayed cell; reads as inactive on the dark basemap.
 export const ONSET_PASSED_COLOR = '#8b929c';
 
-// Probability-weighted consensus onset day for a cell across the whole season,
-// using only the bounded bins ("Later" carries no date). null if no forecast
-// ever dated the onset. Forecasts that dump their mass into "Later" contribute
-// nothing, so the estimate is driven by the forecasts that actually placed onset
-// on the calendar — i.e. where the models agree.
+// Probability-weighted mean onset day over the given forecasts' bounded bins
+// ("Later" carries no date). null if none of them dated the onset.
+function weightedOnsetDay(
+	bins: OnsetBins,
+	issueDates: string[],
+	probs: number[][],
+	rows: number[]
+): number | null {
+	let wsum = 0;
+	let dsum = 0;
+	for (const di of rows) {
+		const row = probs[di] ?? [];
+		for (let b = 0; b < bins.laterIndex; b++) {
+			const p = row[b] ?? 0;
+			if (p <= 0) continue;
+			const r = bins.dayRange(issueDates[di], b);
+			wsum += p;
+			dsum += (p * (r.start + r.end)) / 2;
+		}
+	}
+	return wsum > 0 ? dsum / wsum : null;
+}
+
+// Consensus onset day for a cell across the season, estimated only from the
+// forecasts issued before it. Forecasts issued after onset still place onset
+// just after their own issue date, so counting them drags the estimate later
+// and later. Each pass drops the forecasts issued past the current estimate and
+// re-estimates; dropping them can only move the estimate earlier, so the kept
+// set only shrinks and the loop ends. It never empties: every dated bin falls
+// after its forecast's issue date, so the earliest dating forecast stays kept.
 export function consensusOnsetDay(
 	bins: OnsetBins,
 	issueDates: string[],
 	probs: number[][]
 ): number | null {
-	let wsum = 0;
-	let dsum = 0;
-	issueDates.forEach((iso, di) => {
-		const row = probs[di] ?? [];
-		for (let b = 0; b < bins.laterIndex; b++) {
-			const p = row[b] ?? 0;
-			if (p <= 0) continue;
-			const r = bins.dayRange(iso, b);
-			wsum += p;
-			dsum += (p * (r.start + r.end)) / 2;
-		}
-	});
-	return wsum > 0 ? dsum / wsum : null;
+	let rows = issueDates.map((_, i) => i);
+	for (;;) {
+		const estimate = weightedOnsetDay(bins, issueDates, probs, rows);
+		if (estimate == null) return null;
+		const issuedBefore = rows.filter((i) => !onsetHasPassed(issueDates[i], estimate));
+		if (issuedBefore.length === rows.length) return estimate;
+		rows = issuedBefore;
+	}
 }
 
 // Grace past the estimated onset before a cell counts as post-onset: once a
