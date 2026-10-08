@@ -48,7 +48,8 @@ async def list_blends(user: OptionalCurrentUser):
             .mappings()
             .fetchall()
         )
-    # Unscoped: a shared blend's members may be another user's private sources,
-    # and only their live-model links reach the response.
+    # Unscoped: an example blend's members may be its curator's private sources.
+    # Only their live-model links (public registry ids) reach the response, and
+    # only for blends listing_filter already lets the caller see.
     sources_by_id = {s["id"]: s for s in await data_source_service.list_sources(kind="model")}
     return [blend_row_to_out(dict(r), user.id if user else "", sources_by_id) for r in rows]
