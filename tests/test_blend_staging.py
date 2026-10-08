@@ -209,3 +209,27 @@ def test_year_by_year_partitions_reassemble_in_climatology_row_order(tmp_path: P
     ]
     assert row not in combined.columns
     assert combined.index.tolist() == [0, 1, 2, 3]
+
+
+def test_ensemble_sized_files_are_processed_fewer_at_a_time() -> None:
+    app = _load_blending_app()
+    budget = 48 * 2**30
+    deterministic = [37_442_250] * 3  # one India 0.25° AIFS v2 year: ~0.7 GB to process
+    ensemble = [973_498_500] * 3  # the same grid with 26 members: ~17.5 GB
+
+    assert app._part_workers(deterministic, workers=4, memory_budget_bytes=budget) == 4
+    assert app._part_workers(ensemble, workers=4, memory_budget_bytes=budget) == 2
+    assert app._part_workers([10**11], workers=4, memory_budget_bytes=budget) == 1
+    assert app._part_workers(ensemble, workers=4, memory_budget_bytes=None) == 4
+
+
+def test_forecast_value_count_reads_only_the_variable_shape(tmp_path: Path) -> None:
+    import numpy as np
+    import xarray as xr
+
+    app = _load_blending_app()
+    path = tmp_path / "2012.nc"
+    xr.Dataset({"tp": (("time", "day", "lat", "lon"), np.zeros((2, 3, 4, 5)))}).to_netcdf(path)
+
+    assert app._forecast_value_count(path, "tp") == 120
+    assert app._forecast_value_count(path, "missing") == 0

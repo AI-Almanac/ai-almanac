@@ -60,6 +60,19 @@ DEFAULT_REPO_REF = "2a59cec0680dcfb575104fa03b59ee64dc110f82"
 # run_blend's own container, so size to its cpu request.
 RUN_BLEND_CPU = 4
 RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
+# run_blend's memory limit. Training on a 26-year India 0.25° blend needs
+# ~44 GB (the weekly connector holds ~3.7x the combined table).
+RUN_BLEND_MEMORY_MB = 65536
+# Held back from the per-file worker budget for the main process (obs table,
+# blendable cells, the batch of parts it is writing out).
+RUN_BLEND_MAIN_PROCESS_MB = 16384
+# (request, limit) in MiB for the functions that build intermediates and train.
+RUN_BLEND_MEMORY = (RUN_BLEND_MEMORY_MB // 2, RUN_BLEND_MEMORY_MB)
+RUN_BLEND_FILE_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+# Peak memory per forecast value while one file is processed: the reader
+# expands every value into a wide frame before onset processing. Measured at
+# 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files.
+PART_BYTES_PER_VALUE = 18
 # Forecast archives are one object per year; downloads are I/O-bound.
 STAGE_DOWNLOAD_WORKERS = 8
 # NetCDF and pickles barely shrink past level 1, and level 9 is several times slower.
@@ -468,6 +481,27 @@ def _iter_cached_parts(
         )
 
 
+def _forecast_value_count(path: Path, var_name: str) -> int:
+    """Values in the file's forecast variable, read from the NetCDF header only."""
+    import math
+
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        return math.prod(ds.variables[var_name].shape) if var_name in ds.variables else 0
+
+
+def _part_workers(value_counts: list[int], workers: int, memory_budget_bytes: int | None) -> int:
+    """How many files to process at once so their combined peak fits the budget.
+
+    Sized by the largest file: an ensemble archive (26 members) peaks at ~16 GB
+    per file, where a deterministic one on the same grid needs ~0.6 GB."""
+    if memory_budget_bytes is None or not value_counts:
+        return workers
+    per_file = max(value_counts) * PART_BYTES_PER_VALUE
+    return max(1, min(int(workers), memory_budget_bytes // max(per_file, 1)))
+
+
 def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, compute):
     """Read-through cache for one blend intermediate; returns (obj, was_cached).
 
@@ -517,7 +551,7 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
 @app.function(
     image=blending_image,
     cpu=(RUN_BLEND_CPU, 8),
-    memory=(16384, 32768),
+    memory=RUN_BLEND_MEMORY,
     timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
 )
@@ -589,6 +623,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 cache_dir=cache_dir,
                 file_workers=RUN_BLEND_CPU,
                 climatology_workers=RUN_BLEND_CPU,
+                file_memory_budget_bytes=RUN_BLEND_FILE_BUDGET_BYTES,
                 model_layouts=config.get("model_layouts"),
                 **prep_kwargs,
             )
@@ -1679,11 +1714,15 @@ def build_intermediates_from_dirs(
     file_workers: int = 1,
     climatology_workers: int = 1,
     model_layouts: dict[str, dict] | None = None,
+    file_memory_budget_bytes: int | None = None,
 ) -> dict:
     """Build real blending intermediate pickle files from directories of NetCDFs.
 
     model_layouts maps a forecast_dirs key to that source's registered
     {"forecast_dims", "unit_cvt"}, so archives keep their own dim names and units.
+
+    file_memory_budget_bytes, when set, caps how many forecast files are
+    processed at once (below file_workers) so their combined peak fits it.
 
     cache_dir enables a read-through cache (local path or gs:// URI) of the
     per-file processed parts and the climatology — the expensive,
@@ -1893,6 +1932,17 @@ def build_intermediates_from_dirs(
         part_dir.mkdir(parents=True, exist_ok=True)
         summary = _ForecastSummary()
         model_parts: list[tuple[Path, list[int]]] = []
+        model_workers = _part_workers(
+            [_forecast_value_count(path, forecast_value_col) for path in forecast_paths_in],
+            file_workers,
+            file_memory_budget_bytes,
+        )
+        if model_workers < file_workers:
+            print(
+                f"==> {model_name}: processing {model_workers} file(s) at a time "
+                f"(of {file_workers}) to fit the memory budget",
+                flush=True,
+            )
         parts = _iter_cached_parts(
             cache_dir,
             "fc",
@@ -1900,7 +1950,7 @@ def build_intermediates_from_dirs(
             forecast_paths_in,
             _process_forecast_part,
             model_context,
-            file_workers,
+            model_workers,
         )
         for source_path, (entry, was_cached) in zip(forecast_paths_in, parts, strict=True):
             part_path = part_dir / f"{source_path.stem}.pkl"
@@ -2640,7 +2690,7 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
     return matches[0]
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600)
+@app.function(image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
 def score_live_forecast(
     obs_bundle: bytes,
     forecast_bundles: dict[str, bytes],
@@ -2742,7 +2792,7 @@ def score_live_forecast(
 
 
 @app.function(
-    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret]
+    image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600, secrets=[gcp_secret]
 )
 def score_live_forecast_bundle(
     job_id: str,
