@@ -23,9 +23,9 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import { installTour } from '$lib/tour.svelte';
+	import { takeSetupRequest } from '$lib/setup-request';
 	import { forecastResultsSteps, forecastSetupSteps } from './tours';
 
 	$effect(() => {
@@ -289,7 +289,7 @@
 	$effect(() => {
 		if (newRequestHandled) return;
 		newRequestHandled = true;
-		if ($page.url.searchParams.get('new') === '1') startNew();
+		if (takeSetupRequest('new')) startNew();
 	});
 
 	function startNew() {
