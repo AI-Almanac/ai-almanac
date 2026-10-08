@@ -582,7 +582,9 @@
 
 	// "in Week 2 (Jun 9–Jun 15)", "on Jun 12", or "after Jun 29" for the shown forecast.
 	function binPhrase(idx: number): string {
-		if (!selectedDate) return `in ${bins.labels[idx]}`;
+		if (!selectedDate) {
+			return idx === bins.laterIndex ? 'more than 4 weeks after issue' : `in ${bins.labels[idx]}`;
+		}
 		const dates = binDateLabel(bins, selectedDate, idx);
 		if (idx === bins.laterIndex) return dates;
 		return view.resolution === 'daily' ? `on ${dates}` : `in ${bins.labels[idx]} (${dates})`;
@@ -591,7 +593,8 @@
 	// The day selector's readout: the calendar date, with its lead day for context.
 	function dayBinLabel(idx: number): string {
 		if (!selectedDate) return bins.labels[idx];
-		if (idx === bins.laterIndex) return `Later (${binDateLabel(bins, selectedDate, idx)})`;
+		if (idx === bins.laterIndex)
+			return `${bins.labels[idx]} (${binDateLabel(bins, selectedDate, idx)})`;
 		return `${binDateLabel(bins, selectedDate, idx)} · ${bins.labels[idx]}`;
 	}
 
@@ -894,7 +897,7 @@
 				point={selectedCell}
 				{bins}
 				issueDates={data.issue_dates}
-				regionName={data.region_name}
+				{onsetName}
 				{selectedDate}
 				{soonestColor}
 				onClose={() => (selectedCellKey = null)}

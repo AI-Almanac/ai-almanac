@@ -36,8 +36,8 @@ describe('onset bins', () => {
 	it('puts "Later" last, starting at issue + 29 for both binnings', () => {
 		expect(WEEKLY_BINS.count).toBe(5);
 		expect(DAILY_BINS.count).toBe(29);
-		expect(WEEKLY_BINS.labels[WEEKLY_BINS.laterIndex]).toBe('Later');
-		expect(DAILY_BINS.labels[DAILY_BINS.laterIndex]).toBe('Later');
+		expect(WEEKLY_BINS.labels[WEEKLY_BINS.laterIndex]).toBe('After 4 weeks');
+		expect(DAILY_BINS.labels[DAILY_BINS.laterIndex]).toBe('After 4 weeks');
 		expect(laterStartDay(ISSUE)).toBe(issueDay + 29);
 	});
 

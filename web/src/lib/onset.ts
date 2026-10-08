@@ -113,6 +113,8 @@ export function monthLabel(iso: string): string {
 // this block and every date the UI shows follows it.
 export const ONSET_HORIZON_DAYS = 28;
 export const LATER_START_DAY = ONSET_HORIZON_DAYS + 1; // issue + 29
+// The open-ended bin's name: onset beyond the horizon, not late in the season.
+export const LATER_LABEL = `After ${ONSET_HORIZON_DAYS / 7} weeks`;
 const MS_PER_DAY = 86_400_000;
 
 // Whole days since the Unix epoch for a 'YYYY-MM-DD' string (UTC, no tz drift).
@@ -154,8 +156,8 @@ function onsetBins(
 		count: bounded.length + 1,
 		laterIndex: bounded.length,
 		binDays,
-		labels: [...bounded.map(label), 'Later'],
-		shortLabels: [...bounded.map(shortLabel), 'Later'],
+		labels: [...bounded.map(label), LATER_LABEL],
+		shortLabels: [...bounded.map(shortLabel), LATER_LABEL],
 		dayRange(issueIso, idx) {
 			const start = isoToDay(issueIso) + binDays * idx + 1;
 			return { start, end: start + binDays - 1 };
@@ -209,13 +211,14 @@ export function probScaleMax(bins: OnsetBins, rows: number[][], binIdx?: number)
 
 // ---- "Peak onset window passed" --------------------------------------------
 //
-// Every forecast's bins are forward-looking (onset *begins* in bin N after
-// issue), so once a forecast is issued past the bin when onset was most
-// likely, it has no bin left to place real mass in and dumps it into "Later"
-// — a misleading bright dot. We gray those cells out, matching the science
-// team's static figures. This is NOT a claim that onset was observed: we have no
-// observed onset date, so we estimate the most-likely onset per cell from the
-// season's own forecasts and drain the color once the issue date runs past it.
+// The blend only learned from seasons where onset was still ahead (the pipeline
+// drops lead days <= 0), so every forecast answers "if onset hasn't begun, when
+// will it?". Issued after onset, it still answers — often "imminently", because
+// the rains are already under way — and reads as a fresh, confident forecast.
+// We gray those out, matching the science team's static figures. This is NOT a
+// claim that onset was observed: we have no observed onset date, so we estimate
+// the most-likely onset per cell from the season's own forecasts and drain the
+// color once the issue date runs past it.
 
 // Neutral slate for a grayed cell; reads as inactive on the dark basemap.
 export const ONSET_PASSED_COLOR = '#8b929c';
