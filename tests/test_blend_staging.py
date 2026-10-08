@@ -211,6 +211,122 @@ def test_year_by_year_partitions_reassemble_in_climatology_row_order(tmp_path: P
     assert combined.index.tolist() == [0, 1, 2, 3]
 
 
+def _install_order_keeping_combine_readers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand-ins for onset_blending's combine readers (not installed in CI).
+
+    Like the real read_and_format_climatology_wide / format_forecast_family,
+    they keep each table's rows in file order and the climatology's index, which
+    is what the year-by-year combine relies on to restore the one-shot order.
+    """
+    import sys
+    import types
+
+    import pandas as pd
+
+    def read_and_format_climatology_wide(path, out_prefix="clim_p_onset"):
+        table = pd.read_pickle(path)
+        renames = {"predicted_prob_day_1": f"{out_prefix}_day_1"}
+        return table[["id", "time", "year", "predicted_prob_day_1"]].rename(columns=renames)
+
+    def format_forecast_family(name, conf):
+        start, _, end = conf["sources"][0]["years"].partition(":")
+        table = pd.concat([pd.read_pickle(s["file"]) for s in conf["sources"]], ignore_index=True)
+        table = table[table["year"].between(int(start), int(end))]
+        keys = ["id", "time", "year"]
+        return {
+            "daily": table[[*keys, "predicted_prob_day_1"]].rename(
+                columns={"predicted_prob_day_1": f"{name}_p_onset_day_1"}
+            ),
+            "constants": table[[*keys, "onset_thresh"]].rename(
+                columns={"onset_thresh": f"{name}_onset_thresh"}
+            ),
+        }
+
+    utils = types.ModuleType("python.prepare_data.combine_forecasts_utils")
+    utils.read_and_format_climatology_wide = read_and_format_climatology_wide
+    utils.format_forecast_family = format_forecast_family
+    monkeypatch.setitem(sys.modules, "python", types.ModuleType("python"))
+    monkeypatch.setitem(sys.modules, "python.prepare_data", types.ModuleType("python.prepare_data"))
+    monkeypatch.setitem(sys.modules, "python.prepare_data.combine_forecasts_utils", utils)
+
+
+def test_year_by_year_combine_matches_combining_all_years_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    import pandas as pd
+
+    _install_order_keeping_combine_readers(monkeypatch)
+    app = _load_blending_app()
+    years = [2012, 2013]
+    # Climatology order puts cell "c2" before "c1"; forecasts arrive id-sorted.
+    keys = [
+        (cell, date(year, 5, day), year)
+        for cell in ("c2", "c1")
+        for year in years
+        for day in (1, 5, 9)
+    ]
+    clim = pd.DataFrame(keys, columns=["id", "time", "year"]).assign(
+        predicted_prob_day_1=[n / 100 for n in range(len(keys))]
+    )
+    truth = pd.DataFrame(
+        {
+            "id": ["c1", "c1", "c2", "c2"],
+            "year": [2012, 2013, 2012, 2013],
+            "true_onset_day": [5, None, 9, 1],
+            # Issues after the onset are trimmed: c1's May 9 2012, c2's May 5 and 9 2013.
+            "true_onset_date": [date(2012, 5, 5), pd.NaT, date(2012, 5, 9), date(2013, 5, 1)],
+        }
+    )
+    part_paths = {}
+    for model in ("aifs", "graphcast"):
+        part_paths[model] = []
+        for year in years:
+            part = (
+                clim[clim["year"] == year]
+                .sort_values("id")[["id", "time", "year"]]
+                .assign(predicted_prob_day_1=0.5, onset_thresh=20.0)
+            )
+            path = tmp_path / f"{model}_{year}.pkl"
+            part.to_pickle(path)
+            part_paths[model].append(path)
+    confs = {model: app._forecast_family_conf(45, has_spread=False) for model in part_paths}
+
+    def combine(partitions: list[list[int]], name: str) -> list[Path]:
+        out = tmp_path / name
+        out.mkdir()
+        clim_paths = app._write_year_slices(clim, out, "conditional", partitions)
+        unc_paths = app._write_year_slices(clim, out, "unconditional", partitions)
+        results = []
+        for index, part_years in enumerate(partitions):
+            model_paths = {
+                model: [p for p, year in zip(paths, years, strict=True) if year in part_years]
+                for model, paths in part_paths.items()
+            }
+            frame = app._combine_partition(
+                part_years,
+                clim_paths[index],
+                unc_paths[index],
+                model_paths,
+                confs,
+                truth,
+                "inner",
+                True,
+            )
+            result_path = out / f"combined_{index}.pkl"
+            frame.to_pickle(result_path)
+            results.append(result_path)
+        return results
+
+    one_shot = app._assemble_combined(combine([years], "all"), restore_clim_order=False)
+    by_year = app._assemble_combined(combine([[2012], [2013]], "yearly"), restore_clim_order=True)
+
+    pd.testing.assert_frame_equal(by_year, one_shot, check_exact=True)
+    assert by_year["id"].tolist()[:3] == ["c2", "c2", "c2"]  # climatology order, not id order
+    assert len(by_year) == len(keys) - 3  # the post-onset issues were trimmed
+
+
 def test_ensemble_sized_files_are_processed_fewer_at_a_time() -> None:
     app = _load_blending_app()
     budget = 48 * 2**30

@@ -1737,6 +1737,10 @@ def build_intermediates_from_dirs(
 
     import pandas as pd
 
+    # Fail before any per-file work: the combine joins against the climatology.
+    if build_combined and not build_climatology:
+        raise ValueError("build_combined requires build_climatology=True")
+
     sys.path.insert(0, str(BLENDING_ROOT))
 
     adm3_domain = _should_use_adm3_domain(region_id, use_adm3_domain)
@@ -1963,6 +1967,7 @@ def build_intermediates_from_dirs(
         forecast_parts_by_model[model_name] = model_parts
         manifest["forecasts"][model_name] = summary.manifest()
 
+    clim = clim_unc = None
     if build_climatology:
         from python.prepare_data.climatology_utils import (
             build_issue_grid,
@@ -2093,9 +2098,6 @@ def build_intermediates_from_dirs(
         }
 
     if build_combined:
-        if not build_climatology:
-            raise ValueError("build_combined requires build_climatology=True")
-
         from python.prepare_data.combine_forecasts_utils import read_ground_truth_wide
 
         forecast_years_by_model = {
