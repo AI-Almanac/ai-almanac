@@ -20,6 +20,7 @@ from typing import Literal
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services.forecast_models import live_forecast_compatibility
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
@@ -195,6 +196,9 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
         normalized["missing_years"] = _missing_years(years)
 
     if kind == "model":
+        forecast_model_id = str(normalized.pop("forecast_model_id", None) or "").strip()
+        if forecast_model_id:
+            normalized["forecast_model_id"] = forecast_model_id
         normalized.setdefault("model_type", "AIWP")
         normalized.setdefault("unit_cvt", 1.0)
         # probabilistic is defaulted in _finalize_inspection from the file's
@@ -485,7 +489,23 @@ def _finalize_inspection(
             "Could not infer model coverage years from matching filenames.",
             normalized,
         )
+    if kind == "model" and (link_error := _forecast_model_link_error(normalized)):
+        return "invalid", link_error, normalized
     return "ready", None, normalized
+
+
+def _forecast_model_link_error(metadata: dict) -> str | None:
+    """Why the live forecast model chosen for this archive can't run it, if so.
+
+    Unlinked archives are valid (history only); a link must name a registry
+    model on the archive's grid, or live forecasts would be scored with weights
+    that don't apply to them.
+    """
+    model_id = metadata.get("forecast_model_id")
+    if model_id is None:
+        return None
+    verdict = live_forecast_compatibility(model_id, metadata.get("grid_step_deg"))
+    return None if verdict.status == "ready" else verdict.detail
 
 
 async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:

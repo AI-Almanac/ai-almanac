@@ -759,3 +759,57 @@ async def test_remote_provider_source_registers_ready_without_inspection(
     assert row["metadata"]["provider"] == "era5_arco"
 
     await client.delete(f"/data-sources/{row['id']}")
+
+
+def _fuxi_draft(forecast_model_id: str | None) -> dict:
+    metadata = {"file_pattern": "{}.nc", "model_var": "tp", "model_type": "AIWP"}
+    if forecast_model_id is not None:
+        metadata["forecast_model_id"] = forecast_model_id
+    return {
+        "kind": "model",
+        "name": "Ethiopia hindcasts",
+        "path": str(Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"),
+        "region": "ethiopia",
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_source_links_to_the_live_forecast_model_chosen_at_registration(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post("/data-sources", json=_fuxi_draft("fuxi"))
+
+    assert response.status_code == 201
+    source = response.json()
+    assert source["status"] == "ready"
+    assert source["metadata"]["forecast_model_id"] == "fuxi"
+    assert source["live_forecast"] == {"status": "ready", "detail": None, "model_id": "fuxi"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forecast_model_id", [None, "", "  "])
+async def test_unlinked_model_source_is_valid_for_past_seasons_only(
+    client: httpx.AsyncClient, forecast_model_id: str | None
+) -> None:
+    response = await client.post("/data-sources", json=_fuxi_draft(forecast_model_id))
+
+    source = response.json()
+    assert source["status"] == "ready"
+    assert "forecast_model_id" not in source["metadata"]
+    assert source["live_forecast"]["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("forecast_model_id", "reason"),
+    [("graphcast", "1° grid"), ("no_such_model", "not an available live forecast model")],
+)
+async def test_model_source_rejects_a_live_forecast_model_that_cannot_extend_it(
+    client: httpx.AsyncClient, forecast_model_id: str, reason: str
+) -> None:
+    response = await client.post("/data-sources/validate", json=_fuxi_draft(forecast_model_id))
+
+    draft = response.json()
+    assert draft["status"] == "invalid"
+    assert reason in draft["validation_error"]

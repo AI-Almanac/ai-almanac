@@ -12,8 +12,9 @@ import json
 import math
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
+from typing import NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -27,6 +28,7 @@ from ai_almanac.server.services.execution import ExecutionRequest, ResourceReque
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
+    linked_forecast_model_id,
     live_forecast_compatibility,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
@@ -413,6 +415,8 @@ class BlendOut(BaseModel):
     # never run a live forecast). Frozen with the job so the limitation stays
     # attached to the result it applies to.
     warnings: list[str] = []
+    # Member name → live forecast model id, for members whose archive is linked.
+    forecast_models: dict[str, str] = {}
 
 
 _blend_model_key = blend_model_key
@@ -550,24 +554,54 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     return errors
 
 
-def live_forecast_blockers(members: Iterable[tuple[str, float | None]]) -> list[str]:
+class BlendMember(NamedTuple):
+    """A blend member as the live-forecast checks see it."""
+
+    name: str
+    forecast_model_id: str | None
+    archive_step: float | None
+
+
+def blend_member(name: str, source: dict) -> BlendMember:
+    return BlendMember(name, linked_forecast_model_id(source), archive_grid_step(source))
+
+
+def live_forecast_blockers(members: Iterable[BlendMember]) -> list[str]:
     """Why each blocked member keeps the blend from running as a live forecast.
 
     Live scoring needs a rolled-out season for *every* member of the blend, so a
-    single blocked member (no live model, or one on a different grid than the
-    archive) makes the whole blend history-only. Members are (name, archive grid
-    step) pairs; an unknown grid step falls back to the registry-only check.
+    single blocked member (no linked live model, or one on a different grid than
+    the archive) makes the whole blend history-only. An unknown archive grid
+    step falls back to the registry-only check.
     """
     registry = get_packaged_forecast_models()
     blockers = []
-    for name, archive_step in members:
-        verdict = live_forecast_compatibility(name, archive_step, registry)
+    for member in members:
+        verdict = live_forecast_compatibility(
+            member.forecast_model_id, member.archive_step, registry
+        )
         if verdict.status != "ready":
-            blockers.append(f"{name}: {verdict.detail}")
+            blockers.append(f"{member.name}: {verdict.detail}")
     return sorted(blockers)
 
 
-def historical_only_warning(members: Iterable[tuple[str, float | None]]) -> list[str]:
+def blend_forecast_models(cfg: dict, sources_by_id: Mapping[str, dict]) -> dict[str, str]:
+    """Live forecast model id for each blend member whose archive links to one.
+
+    Read from the member's data source rather than frozen into the blend, so
+    linking an archive after training makes its existing blends forecastable.
+    """
+    linked = {}
+    for name, source_id in zip(
+        cfg.get("model_names") or [], cfg.get("model_source_ids") or [], strict=False
+    ):
+        model_id = linked_forecast_model_id(sources_by_id.get(source_id) or {})
+        if model_id is not None:
+            linked[name] = model_id
+    return linked
+
+
+def historical_only_warning(members: Iterable[BlendMember]) -> list[str]:
     """Warn, at blend submission, that a blend can never run a live forecast.
 
     History-only blends are a legitimate research result, so this does not block
@@ -727,7 +761,9 @@ def blend_years(params: BlendParams) -> guardrails.BlendYears:
     )
 
 
-def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
+def blend_row_to_out(
+    row: dict, current_user_id: str | None, sources_by_id: Mapping[str, dict] | None = None
+) -> BlendOut:
     cfg = json.loads(row.get("config_json") or "{}")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
     return BlendOut(
@@ -743,6 +779,7 @@ def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
         visibility=row.get("visibility") or "private",
         run_id=row.get("run_id"),
         warnings=cfg.get("warnings") or [],
+        forecast_models=blend_forecast_models(cfg, sources_by_id or {}),
     )
 
 
@@ -836,7 +873,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))
 
     warnings = historical_only_warning(
-        (source["name"], archive_grid_step(source)) for source in model_sources
+        blend_member(source["name"], source) for source in model_sources
     ) + guardrails.warning_messages(findings)
 
     job_id = str(uuid.uuid4())
@@ -931,7 +968,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         values["status"] = "running"
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
-    return blend_row_to_out(row, user_id)
+    return blend_row_to_out(row, user_id, {source["id"]: source for source in model_sources})
 
 
 class ForecastParams(BaseModel):
@@ -1044,13 +1081,10 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     blend_config["blend_output_uri"] = get_storage().job_output_uri(body.blend_id)[0]
 
     model_names: list[str] = blend_config.get("model_names") or []
-    # Live inference runs against the forecast_models.yaml registry (earth2studio
-    # model ids), not the archived data-source ids the blend was trained from
-    # (blend_config["model_source_ids"]). Each blend model name must resolve to
-    # a registry entry (by id, display name, or alias — see
-    # resolve_forecast_model), while the name itself stays the key everywhere:
-    # score_live_forecast_bundle joins the live model's output back into the
-    # blend's formula by that name (the `diff_<model>_qx` terms).
+    # Live inference runs the forecast_models.yaml model each member's archive
+    # is linked to at registration, while the member name stays the key
+    # everywhere: score_live_forecast_bundle joins the live model's output back
+    # into the blend's formula by that name (the `diff_<model>_qx` terms).
     registry = get_packaged_forecast_models()
     requested = set(body.forecast_model_ids) if body.forecast_model_ids else set(model_names)
     unknown = sorted(requested - set(model_names))
@@ -1078,7 +1112,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # Without this, a request for only the runnable members is accepted and then
     # fails during scoring, after the rollout has already been paid for.
     blockers = live_forecast_blockers(
-        (name, archive_grid_step(sources_by_name.get(name) or {})) for name in model_names
+        blend_member(name, sources_by_name.get(name) or {}) for name in model_names
     )
     if blockers:
         raise HTTPException(
@@ -1175,6 +1209,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         # retroactively change a forecast job already queued.
         "blend_config_snapshot": blend_config,
         "forecast_model_ids": forecast_model_ids,
+        # Member name → registry id the runners execute for it.
+        "forecast_models": {
+            name: linked_forecast_model_id(sources_by_name[name] or {})
+            for name in forecast_model_ids
+        },
         "season_model_params": season_model_params,
         "season_start_month_day": season_start_month_day,
         "init_source": init_source,

@@ -2273,6 +2273,13 @@ export interface components {
              * @default []
              */
             warnings: string[];
+            /**
+             * Forecast Models
+             * @default {}
+             */
+            forecast_models: {
+                [key: string]: string;
+            };
         };
         /**
          * BlendParams

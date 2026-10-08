@@ -3,7 +3,8 @@
 Static packaged config (server/config/forecast_models.yaml), unlike
 `services.registry`'s DB-backed benchmark/blend model sources — there is
 nothing per-user or per-region to register here, just which earth2studio
-models are available and how to run them.
+models are available and how to run them. A model data source links to one
+of these by id (`metadata.forecast_model_id`), chosen at registration.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
-from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+from ai_almanac.settings import forecast_model_by_id, get_packaged_forecast_models
 
 _INTERNAL_FIELDS = ("earth2studio_class", "gpu", "env", "ensemble", "nensemble")
 
@@ -34,10 +35,20 @@ def archive_grid_step(source: dict) -> float | None:
     return (source.get("metadata") or {}).get("grid_step_deg")
 
 
+def linked_forecast_model_id(source: dict) -> str | None:
+    """The live forecast model chosen for a model archive at registration.
+
+    Remote-provider sources skip inspection and keep metadata verbatim, so a
+    non-string value is treated as no link rather than trusted.
+    """
+    model_id = (source.get("metadata") or {}).get("forecast_model_id")
+    return model_id if isinstance(model_id, str) else None
+
+
 def live_forecast_compatibility(
-    source_name: str, archive_step: float | None, registry: dict | None = None
+    forecast_model_id: str | None, archive_step: float | None, registry: dict | None = None
 ) -> LiveForecastCompatibility:
-    """Match a blend member's archive to a live forecast model, grid included.
+    """Check that an archive's linked live forecast model can extend it, grid included.
 
     A live season is scored with coefficients fit on the archive, so the live
     model must run on the archive's grid. A coarser or finer model would not
@@ -45,10 +56,16 @@ def live_forecast_compatibility(
     Archives registered before the grid step was recorded pass this check until
     they are revalidated.
     """
+    if forecast_model_id is None:
+        return LiveForecastCompatibility(
+            "unavailable", "This data isn't linked to a live forecast model."
+        )
     registry = registry if registry is not None else get_packaged_forecast_models()
-    entry = resolve_forecast_model(registry, source_name)
+    entry = forecast_model_by_id(registry, forecast_model_id)
     if entry is None:
-        return LiveForecastCompatibility("unavailable", "No live forecast model is available.")
+        return LiveForecastCompatibility(
+            "unavailable", f"{forecast_model_id!r} is not an available live forecast model."
+        )
     live_step = entry.get("resolution_deg")
     # A source whose inspection failed keeps its user-supplied metadata verbatim,
     # so the archive step is only trusted when it is actually a number.

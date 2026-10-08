@@ -13,6 +13,7 @@ from fastapi import APIRouter, status
 
 from ai_almanac.server.auth import CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.job_submission import (
     BlendCreate,
@@ -47,4 +48,7 @@ async def list_blends(user: OptionalCurrentUser):
             .mappings()
             .fetchall()
         )
-    return [blend_row_to_out(dict(r), user.id if user else "") for r in rows]
+    # Unscoped: a shared blend's members may be another user's private sources,
+    # and only their live-model links reach the response.
+    sources_by_id = {s["id"]: s for s in await data_source_service.list_sources(kind="model")}
+    return [blend_row_to_out(dict(r), user.id if user else "", sources_by_id) for r in rows]
