@@ -2412,7 +2412,7 @@ def _build_blend_spec(
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
 def train_blending_model_bundle(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     model_names: list[str],
     training_years: list[int],
     cv_holdout_years: list[int],
@@ -2592,7 +2592,7 @@ def train_blending_model_bundle(
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
 def apply_blend_coefs_bundle(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     coef_pkl: bytes,
     model_names: list[str],
     training_years: list[int],
