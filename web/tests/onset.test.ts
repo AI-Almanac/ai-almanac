@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { consensusOnsetDay, onsetHasPassed, isoToDay } from '../src/lib/onset';
+import { consensusOnsetDay, onsetHasPassed, isoToDay, onsetEventName } from '../src/lib/onset';
 
 describe('consensusOnsetDay', () => {
 	it('is null when all mass sits in the undated "Later" bucket', () => {
@@ -31,5 +31,20 @@ describe('onsetHasPassed', () => {
 
 	it('is false when the cell never dated an onset', () => {
 		expect(onsetHasPassed('2025-07-15', null)).toBe(false);
+	});
+});
+
+describe('onsetEventName', () => {
+	it('names the event a monsoon onset over India', () => {
+		expect(onsetEventName('india')).toBe('Monsoon onset');
+	});
+
+	it('names the event a rainy season onset over Ethiopia', () => {
+		expect(onsetEventName('ethiopia')).toBe('Rainy season onset');
+	});
+
+	it('defaults to rainy season onset when the region is unknown', () => {
+		expect(onsetEventName(null)).toBe('Rainy season onset');
+		expect(onsetEventName('custom')).toBe('Rainy season onset');
 	});
 });

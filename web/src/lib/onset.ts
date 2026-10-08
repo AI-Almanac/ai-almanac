@@ -23,6 +23,14 @@ export const WEEK_SHORT: Record<Week, string> = {
 	later: 'Later'
 };
 
+// Only India's season is a monsoon; elsewhere (e.g. Ethiopia's Kiremt) the
+// accurate term is the start of the rainy season.
+const MONSOON_REGIONS = new Set(['india']);
+
+export function onsetEventName(regionId: string | null | undefined): string {
+	return regionId && MONSOON_REGIONS.has(regionId) ? 'Monsoon onset' : 'Rainy season onset';
+}
+
 // The onset palette is matplotlib "plasma" — the ramp the science team uses in
 // their published onset graphics: soonest onset window = purple, latest =
 // yellow. One palette drives the map fill, the legend, the tooltip, and the

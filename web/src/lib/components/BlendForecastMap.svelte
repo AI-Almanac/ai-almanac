@@ -18,6 +18,7 @@
 		fmtProb,
 		fmtDate,
 		monthLabel,
+		onsetEventName,
 		type Week
 	} from '$lib/onset';
 	import CellInspector from './CellInspector.svelte';
@@ -438,6 +439,8 @@
 		});
 	}
 
+	const onsetName = $derived(onsetEventName(data?.region_id ?? regionId));
+
 	// Plain-language statement of what the colors mean, tied to the current
 	// selection so the reader never has to infer the reference frame.
 	const caption = $derived.by(() => {
@@ -445,7 +448,7 @@
 			return 'Most likely onset window per location. Fainter dots mean the timing is less certain.';
 		}
 		const thr = data?.onset_threshold;
-		const onset = thr != null ? `monsoon onset (rainfall ≥ ${thr} mm)` : 'monsoon onset';
+		const onset = `${onsetName.toLowerCase()}${thr != null ? ` (rainfall ≥ ${thr} mm)` : ''}`;
 		return `Chance ${onset} begins in ${WEEK_LABELS[selectedWeek]}.`;
 	});
 
@@ -548,7 +551,7 @@
 	<aside class="control-rail" class:collapsed data-tour="forecast-controls">
 		<div class="rail-top">
 			<div class="rail-header">
-				<span class="rail-title">Monsoon onset</span>
+				<span class="rail-title">{onsetName}</span>
 				<button class="rail-collapse" aria-label="Hide controls" onclick={() => (collapsed = true)}>
 					«
 				</button>
@@ -720,7 +723,7 @@
 		{#if tooltipVisible && !loading}
 			<MapTooltip x={tooltipX} y={tooltipY} coords={formatLatLon(tooltipLat, tooltipLon)}>
 				{#if tooltipProbs}
-					<span class="tt-caption">Monsoon onset timing</span>
+					<span class="tt-caption">{onsetName} timing</span>
 					<div class="tt-spark">
 						{#each WEEKS as w, i (w)}
 							<div class="tt-col" class:active={colorMode === 'window' && w === selectedWeek}>

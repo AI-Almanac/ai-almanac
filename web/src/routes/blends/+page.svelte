@@ -849,12 +849,23 @@
 			>
 				<section class="card detail">
 					<header class="detail-header">
-						<div>
+						<div class="detail-id">
 							<p class="eyebrow">Blend</p>
-							<h1>{selected.name || 'Untitled blend'}</h1>
-							<p class="muted">
-								{selected.model_names.join(', ')}
-								{#if selected.region_id}· {selected.region_id}{/if}
+							<h1 class="detail-title" title={selected.name || 'Untitled blend'}>
+								{selected.name || 'Untitled blend'}
+							</h1>
+							<p class="detail-meta">
+								<span>{selected.model_names.join(', ')}</span>
+								{#if selected.region_id}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>{selected.region_id}</span>
+								{/if}
+								<span class="dot" aria-hidden="true">·</span>
+								<span>Submitted {formatDate(selected.created_at)}</span>
+								{#if selected.completed_at}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>Completed {formatDate(selected.completed_at)}</span>
+								{/if}
 							</p>
 						</div>
 						<div class="detail-actions">
@@ -883,21 +894,6 @@
 					{#if actionError}
 						<p class="error">{actionError}</p>
 					{/if}
-
-					<dl class="facts">
-						<div>
-							<dt>Submitted</dt>
-							<dd>{formatDate(selected.created_at)}</dd>
-						</div>
-						<div>
-							<dt>Completed</dt>
-							<dd>{formatDate(selected.completed_at)}</dd>
-						</div>
-						<div>
-							<dt>Models</dt>
-							<dd>{selected.model_names.length}</dd>
-						</div>
-					</dl>
 
 					{#if ACTIVE_STATUSES.includes(selected.status)}
 						<div class="running-state">
@@ -1266,33 +1262,31 @@
 		gap: 0.6rem;
 	}
 
-	.facts {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-		gap: 0.6rem;
-		margin: 0;
+	.detail-id {
+		min-width: 0;
+		flex: 1;
 	}
 
-	.facts div {
-		padding: 0.65rem 0.7rem;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
+	h1.detail-title {
+		font-size: clamp(1.15rem, 2vw, 1.5rem);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
 	}
 
-	.facts dt {
+	.detail-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.4rem;
+		margin: 0.35rem 0 0;
+		font-size: 0.82rem;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
-		font-weight: 750;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		margin-bottom: 0.2rem;
 	}
 
-	.facts dd {
-		margin: 0;
-		color: var(--color-text);
-		font-weight: 650;
+	.detail-meta .dot {
+		color: var(--color-text-dim);
 	}
 
 	.running-state {

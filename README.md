@@ -4,7 +4,7 @@ Assess AI weather models, blend them, and forecast the weather events people
 plan around — starting with the onset of the rainy season.
 
 Pick a region, compare how well AI and conventional weather models have
-predicted monsoon onset there, combine the best of them into a blended
+predicted the rainy season onset there, combine the best of them into a blended
 forecast, and run that blend live for the current season. A built-in assistant
 can set up each step for you from a plain-language request.
 
