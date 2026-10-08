@@ -1393,6 +1393,26 @@ def _forecast_spec_for(base_spec: dict, forecast_dims: dict | None) -> dict:
     return {**base_spec, "dimensions": dimensions}
 
 
+def _blendable_ids(obs_wide, min_onset_years: int) -> frozenset[str]:
+    """Cells with at least min_onset_years observed onsets, counted over every year.
+
+    The climatology keeps only cells with that many onsets inside its training
+    years, and the combine's inner join drops every forecast cell the
+    climatology lacks, so no forecast cell outside this set reaches the
+    combined table. Trimming to it early changes no results. Onsets are read as
+    climatology_utils.read_gt_onset_from_tbl does: string ids, numeric onset days.
+    """
+    import pandas as pd
+
+    has_onset = pd.to_numeric(obs_wide["onset_day"], errors="coerce").notna()
+    onset_years = obs_wide.loc[has_onset, "id"].astype(str).value_counts()
+    return frozenset(onset_years[onset_years >= int(min_onset_years)].index)
+
+
+def _only_cells(df, ids: frozenset[str] | None):
+    return df if ids is None else df[df["id"].isin(ids)]
+
+
 def _process_forecast_part(path: Path, context: dict) -> dict:
     """Onset processing of one forecast file: its wide frame and ensemble member counts."""
     import sys
@@ -1415,6 +1435,7 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
     )
     df = _in_millimetres(df, context.get("unit_cvt", 1.0))
     df = _add_lat_lon_id(df, precision=context["id_precision"])
+    df = _only_cells(df, context.get("blendable_ids"))
     df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
     member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
     processed = process_rainfall_forecast_id(
@@ -1482,6 +1503,7 @@ def build_intermediates_from_dirs(
     file_workers and climatology_workers size the process pools for per-file
     onset processing and the climatology; results don't depend on them.
     """
+    import hashlib
     import pickle
     import sys
 
@@ -1635,6 +1657,20 @@ def build_intermediates_from_dirs(
         manifest["outputs"][obs_long_path.name] = {"bytes": obs_long_path.stat().st_size}
         manifest["obs"]["long_rows"] = int(len(obs_long))
 
+    # Under the inner join only cells the climatology can keep survive, so drop
+    # the rest as each forecast file is read; a full (outer) join keeps them all.
+    blendable_ids = (
+        _blendable_ids(obs_wide, min_onset_years)
+        if build_combined and combine_join != "full"
+        else None
+    )
+    blendable_ids_digest = (
+        hashlib.sha256("\n".join(sorted(blendable_ids)).encode()).hexdigest()
+        if blendable_ids is not None
+        else None
+    )
+    manifest["obs"]["blendable_cells"] = len(blendable_ids) if blendable_ids is not None else None
+
     for model_name, input_dir in forecast_dirs.items():
         forecast_paths_in = sorted(input_dir.glob("*.nc"))
         layout = (model_layouts or {}).get(model_name) or {}
@@ -1642,15 +1678,17 @@ def build_intermediates_from_dirs(
             **part_context,
             "forecast_spec": _forecast_spec_for(forecast_spec, layout.get("forecast_dims")),
             "unit_cvt": float(layout.get("unit_cvt") or 1.0),
+            "blendable_ids": blendable_ids,
         }
-        # The key carries the layout, not the model name: identical files with
-        # the same layout reuse one entry across models.
+        # The key carries the layout and kept cells, not the model name:
+        # identical files with the same layout reuse one entry across models.
         forecast_keys = [
             {
                 **static_cache_params,
                 "forecast_value_col": forecast_value_col,
                 "forecast_dims": layout.get("forecast_dims"),
                 "unit_cvt": model_context["unit_cvt"],
+                "blendable_ids_sha256": blendable_ids_digest,
                 "file_sha256": _file_sha256(path) if cache_dir else None,
             }
             for path in forecast_paths_in

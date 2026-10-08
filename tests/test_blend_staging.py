@@ -148,3 +148,29 @@ def test_forecast_rainfall_is_scaled_to_millimetres() -> None:
     assert scaled["rain_day_1"].tolist() == pytest.approx([4.0])
     assert scaled["rain_day_2"].tolist() == pytest.approx([20.0])
     assert scaled["lat"].tolist() == [10.0]
+
+
+def test_only_cells_with_enough_observed_onset_years_are_blendable() -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    obs_wide = pd.DataFrame(
+        {
+            "id": ["land", "land", "land", "edge", "edge", "edge", "sea", "sea"],
+            "year": [2010, 2011, 2012, 2010, 2011, 2012, 2010, 2011],
+            "onset_day": [150, 160, 155, 150, None, 158, None, None],
+        }
+    )
+
+    assert app._blendable_ids(obs_wide, min_onset_years=3) == {"land"}
+    assert app._blendable_ids(obs_wide, min_onset_years=2) == {"land", "edge"}
+
+
+def test_forecast_rows_outside_the_blendable_cells_are_dropped() -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    df = pd.DataFrame({"id": ["land", "sea", "land"], "rain_day_1": [1.0, 2.0, 3.0]})
+
+    assert app._only_cells(df, frozenset({"land"}))["rain_day_1"].tolist() == [1.0, 3.0]
+    assert app._only_cells(df, None) is df
