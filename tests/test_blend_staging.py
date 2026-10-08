@@ -176,6 +176,38 @@ def test_forecast_rows_outside_the_blendable_cells_are_dropped() -> None:
     assert app._only_cells(df, None) is df
 
 
+def test_spread_needs_two_members_with_values_at_one_cell_and_start_date() -> None:
+    import numpy as np
+    import pandas as pd
+
+    app = _load_blending_app()
+    deterministic = pd.DataFrame({"id": ["a"], "time": [1], "rain_day_1": [2.0]})
+    one_member_each = pd.DataFrame(
+        {"id": ["a", "a"], "time": [1, 1], "number": [0, 1], "rain_day_1": [2.0, np.nan]}
+    )
+    two_members = one_member_each.assign(rain_day_1=[2.0, 3.0])
+
+    assert not app._has_spread(deterministic)
+    assert not app._has_spread(one_member_each)
+    assert app._has_spread(two_members)
+
+
+def test_spread_found_only_outside_the_kept_cells_still_adds_rain_sd() -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    summary = app._ForecastSummary()
+    # The trimmed part carries no spread values, but the file had spread elsewhere.
+    trimmed = pd.DataFrame({"id": ["land"], "year": [2012], "forecast_rain_sd_day_1": [None]})
+    summary.add({"wide": trimmed, "member_counts": [], "has_spread": True})
+
+    has_spread = summary.manifest()["has_spread"]
+    daily = app._forecast_family_conf(45, has_spread)["daily"]
+
+    assert has_spread
+    assert "forecast_rain_sd" in [column["col"] for column in daily]
+
+
 def test_year_slices_keep_their_rows_positions_in_the_full_table(tmp_path: Path) -> None:
     import pandas as pd
 

@@ -1576,6 +1576,7 @@ class _ForecastSummary:
         self.sample_ids: list = []
         self.nonzero_prob_cells = 0
         self.non_null_sd_cells = 0
+        self.has_spread = False
         self.member_count_min: int | None = None
         self.member_count_max: int | None = None
         self.member_count_sum = 0
@@ -1593,6 +1594,10 @@ class _ForecastSummary:
         sd_cols = [col for col in wide.columns if col.startswith("forecast_rain_sd_day_")]
         self.nonzero_prob_cells += int((wide[prob_cols] > 0).sum().sum()) if prob_cols else 0
         self.non_null_sd_cells += int(wide[sd_cols].notna().sum().sum()) if sd_cols else 0
+        # Parts cached before has_spread existed fall back to their own spread.
+        self.has_spread = self.has_spread or bool(
+            part.get("has_spread", bool(sd_cols) and wide[sd_cols].notna().to_numpy().any())
+        )
         counts = part["member_counts"]
         if counts:
             low, high = min(counts), max(counts)
@@ -1613,6 +1618,7 @@ class _ForecastSummary:
             "sample_ids": self.sample_ids,
             "nonzero_predicted_prob_cells": self.nonzero_prob_cells,
             "non_null_sd_cells": self.non_null_sd_cells,
+            "has_spread": self.has_spread,
             "member_counts_per_id_time": {
                 "min": int(self.member_count_min),
                 "max": int(self.member_count_max),
@@ -1643,6 +1649,22 @@ def _only_cells(df, ids: frozenset[str] | None):
     return df if ids is None else df[df["id"].isin(ids)]
 
 
+def _has_spread(df) -> bool:
+    """Whether onset processing will give this frame any non-null rain spread.
+
+    process_rainfall_forecast_id's spread is the members' std with ddof=1, so
+    it is non-null wherever a cell and start date has two or more non-missing
+    member values. Checked a column at a time, stopping at the first hit, so a
+    26-member file costs one boolean column rather than a copy of the frame."""
+    if "number" not in df.columns:
+        return False
+    keys = [df["id"], df["time"]]
+    for col in (c for c in df.columns if c.startswith("rain_day_")):
+        if (df[col].notna().groupby(keys).sum() >= 2).any():
+            return True
+    return False
+
+
 def _process_forecast_part(path: Path, context: dict) -> dict:
     """Onset processing of one forecast file: its wide frame and ensemble member counts."""
     import sys
@@ -1665,8 +1687,11 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
     )
     df = _in_millimetres(df, context.get("unit_cvt", 1.0))
     df = _add_lat_lon_id(df, precision=context["id_precision"])
-    df = _only_cells(df, context.get("blendable_ids"))
     df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
+    # Before the trim: whether a model gets rain_sd columns depends on spread
+    # anywhere in the focus area, not just in the cells that reach the combine.
+    has_spread = _has_spread(df)
+    df = _only_cells(df, context.get("blendable_ids"))
     member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
     processed = process_rainfall_forecast_id(
         df,
@@ -1674,7 +1699,7 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
         ref_onset_dt=context["ref_onset_dt"],
         thr_dt=context["threshold_mm"],
     )
-    return {"wide": processed["wide"], "member_counts": member_counts}
+    return {"wide": processed["wide"], "member_counts": member_counts, "has_spread": has_spread}
 
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
@@ -2128,7 +2153,7 @@ def build_intermediates_from_dirs(
                 raise ValueError(f"Forecast {model_name!r} has no years")
         family_confs = {
             model_name: _forecast_family_conf(
-                max_day, manifest["forecasts"][model_name]["non_null_sd_cells"] > 0
+                max_day, manifest["forecasts"][model_name]["has_spread"]
             )
             for model_name in forecast_dirs
         }
