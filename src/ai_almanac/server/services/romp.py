@@ -121,8 +121,12 @@ DataPath = Annotated[
 ]
 """A gs:// URI or filesystem path to a NetCDF file or directory."""
 
+ModelDims = dict[Literal["init_time", "step", "member", "lat", "lon"], RompName]
+"""ROMP's forecast dim names mapped to the names used in the model files."""
+
 _INIT_DAYS = TypeAdapter(InitDays)
 _MEMBERS = TypeAdapter(Members)
+_MODEL_DIMS = TypeAdapter(ModelDims | None)
 _DATE = TypeAdapter(date)
 
 
@@ -133,6 +137,11 @@ def _date_tuple(value: object) -> tuple[int, int, int]:
 
 def _members(value: object) -> str | tuple[int, ...]:
     return _MEMBERS.validate_python(value)
+
+
+def parse_model_dims(value: object) -> dict[str, str] | None:
+    """Parse a forecast dims mapping; raises pydantic.ValidationError for unsafe names."""
+    return _MODEL_DIMS.validate_python(value or None)
 
 
 def _init_days(value: object) -> tuple[int, ...]:
@@ -182,6 +191,7 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "model_var_list": (model_var,),
         "unit_cvt_list": (model.get("unit_cvt"),),
         "file_pattern_list": (model_pattern,),
+        "model_dims_list": (parse_model_dims(model.get("forecast_dims")),),
         "region": str(params.get("region") or config.get("romp_region") or "Ethiopia"),
         "lat_min": params.get("lat_min"),
         "lat_max": params.get("lat_max"),

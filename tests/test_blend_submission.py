@@ -40,6 +40,7 @@ async def _seed_source(
     path: str,
     years: tuple[int, int] | None = None,
     grid_step: float | None = None,
+    extra_metadata: dict | None = None,
 ) -> str:
     from ai_almanac.server.db import get_db
 
@@ -48,6 +49,7 @@ async def _seed_source(
     metadata = {"start_year": years[0], "end_year": years[1]} if years else {}
     if grid_step is not None:
         metadata["grid_step_deg"] = grid_step
+    metadata.update(extra_metadata or {})
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -123,6 +125,67 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
+
+
+@pytest.mark.asyncio
+async def test_blend_config_carries_each_models_registered_dims_and_units(
+    client, user_id: str, _stub_runner
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    dims = {"init_time": "time", "step": "prediction_timedelta_daily", "lat": "lat", "lon": "lon"}
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd")
+    aifs_id = await _seed_source(
+        "model",
+        "AIFS v2",
+        "gs://data/models/aifs",
+        extra_metadata={"forecast_dims": dims, "unit_cvt": 1000.0},
+    )
+    legacy_id = await _seed_source("model", "FuXi", "gs://data/models/fuxi")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="india",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id, legacy_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    layouts = json.loads(row["config_json"])["model_layouts"]
+    assert layouts["aifs_v2"] == {"forecast_dims": dims, "unit_cvt": 1000.0}
+    assert layouts["fuxi"] == {"forecast_dims": None, "unit_cvt": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", years=(2000, 2024))
+    model_id = await _seed_source(
+        "model",
+        "Renamed",
+        "gs://data/models/renamed",
+        years=(2000, 2024),
+        extra_metadata={"forecast_dims": {"init_time": "issued", "step": "lead"}},
+    )
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "renamed",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2010:2020", "cv_holdout_years": "2020"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Renamed names it 'issued'" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

@@ -67,6 +67,19 @@ FOREST_REPO_REF = "c3a822306d16c81f4c48ae62d68e464a405bb30c"
 # run_blend's own container, so size to its cpu request.
 RUN_BLEND_CPU = 4
 RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
+# run_blend's memory limit. Training on a 26-year India 0.25° blend needs
+# ~44 GB (the weekly connector holds ~3.7x the combined table).
+RUN_BLEND_MEMORY_MB = 65536
+# Held back from the per-file worker budget for the main process (obs table,
+# blendable cells, the batch of parts it is writing out).
+RUN_BLEND_MAIN_PROCESS_MB = 16384
+# (request, limit) in MiB for the functions that build intermediates and train.
+RUN_BLEND_MEMORY = (RUN_BLEND_MEMORY_MB // 2, RUN_BLEND_MEMORY_MB)
+RUN_BLEND_FILE_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+# Peak memory per forecast value while one file is processed: the reader
+# expands every value into a wide frame before onset processing. Measured at
+# 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files.
+PART_BYTES_PER_VALUE = 18
 # Forecast archives are one object per year; downloads are I/O-bound.
 STAGE_DOWNLOAD_WORKERS = 8
 # NetCDF and pickles barely shrink past level 1, and level 9 is several times slower.
@@ -467,6 +480,46 @@ def _cached_parts(
     ]
 
 
+def _iter_cached_parts(
+    cache_dir: str | None,
+    scope: str,
+    keys: list[dict],
+    paths: list[Path],
+    fn,
+    context: dict,
+    workers: int,
+):
+    """_cached_parts in batches of `workers` files, yielded in file order, so a
+    caller that writes each part to disk holds only one batch at a time."""
+    batch = max(int(workers), 1)
+    for start in range(0, len(paths), batch):
+        stop = start + batch
+        yield from _cached_parts(
+            cache_dir, scope, keys[start:stop], paths[start:stop], fn, context, workers
+        )
+
+
+def _forecast_value_count(path: Path, var_name: str) -> int:
+    """Values in the file's forecast variable, read from the NetCDF header only."""
+    import math
+
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        return math.prod(ds.variables[var_name].shape) if var_name in ds.variables else 0
+
+
+def _part_workers(value_counts: list[int], workers: int, memory_budget_bytes: int | None) -> int:
+    """How many files to process at once so their combined peak fits the budget.
+
+    Sized by the largest file: an ensemble archive (26 members) peaks at ~16 GB
+    per file, where a deterministic one on the same grid needs ~0.6 GB."""
+    if memory_budget_bytes is None or not value_counts:
+        return workers
+    per_file = max(value_counts) * PART_BYTES_PER_VALUE
+    return max(1, min(int(workers), memory_budget_bytes // max(per_file, 1)))
+
+
 def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, compute):
     """Read-through cache for one blend intermediate; returns (obj, was_cached).
 
@@ -516,7 +569,7 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
 @app.function(
     image=blending_image,
     cpu=(RUN_BLEND_CPU, 8),
-    memory=(16384, 32768),
+    memory=RUN_BLEND_MEMORY,
     timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
 )
@@ -584,14 +637,18 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             intermediates = build_intermediates_from_dirs(
                 obs_local,
                 forecast_dirs,
-                return_outputs=True,
+                return_outputs=False,
                 cache_dir=cache_dir,
                 file_workers=RUN_BLEND_CPU,
                 climatology_workers=RUN_BLEND_CPU,
+                file_memory_budget_bytes=RUN_BLEND_FILE_BUDGET_BYTES,
+                model_layouts=config.get("model_layouts"),
                 **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-            combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+            # Read from disk, never held as bytes: on large grids the combined
+            # table is the biggest object the run handles.
+            combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
 
             train_kwargs = {"cores": RUN_BLEND_TRAINING_CORES}
             if params.get("formula_text"):
@@ -599,7 +656,8 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             print("==> Training blend weights")
             t0 = time.perf_counter()
             training = train_blending_model_bundle.local(
-                combined,
+                None,
+                combined_wide_path=str(combined_path),
                 model_names=model_names,
                 training_years=_parse_years(params.get("training_years") or "") or [],
                 cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
@@ -616,7 +674,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
 
             out_local = stage_root / "output"
             out_local.mkdir()
-            (out_local / "combined_wide.pkl").write_bytes(combined)
+            shutil.move(combined_path, out_local / "combined_wide.pkl")
             if training.get("outputs_tar"):
                 with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
                     tar.extractall(out_local)
@@ -1377,6 +1435,254 @@ def _process_obs_wide(path: Path, context: dict):
     return _process_obs_part(path, {**context, "obs_spec": wide_only})["wide"]
 
 
+def _in_millimetres(df, unit_cvt: float):
+    """Scale the lead-day rainfall columns by the source's unit conversion (e.g. m -> mm)."""
+    if unit_cvt == 1.0:
+        return df
+    rain_cols = [col for col in df.columns if col.startswith("rain_day_")]
+    return df.assign(**{col: df[col] * unit_cvt for col in rain_cols})
+
+
+def _forecast_spec_for(base_spec: dict, forecast_dims: dict | None) -> dict:
+    """base_spec with renames from a source's registered dims to the names blending reads.
+
+    forecast_dims is keyed by ROMP's names (init_time/step/member/lat/lon), as
+    stored at registration; blending calls the lead time "day" and members "number".
+    """
+    if not forecast_dims:
+        return base_spec
+    blend_names = {
+        "init_time": "time",
+        "step": "day",
+        "member": "number",
+        "lat": "lat",
+        "lon": "lon",
+    }
+    renames = {
+        forecast_dims[role]: name for role, name in blend_names.items() if role in forecast_dims
+    }
+    dimensions = {
+        **base_spec["dimensions"],
+        "rename": {**base_spec["dimensions"]["rename"], **renames},
+    }
+    return {**base_spec, "dimensions": dimensions}
+
+
+_COMBINE_KEYS = ["id", "time", "year"]
+# Row position in the full conditional climatology table, carried through a
+# year's merges so the year-by-year combine can restore the one-shot row order.
+_CLIM_ROW = "__clim_row__"
+
+
+def _forecast_family_conf(max_day: int, has_spread: bool) -> dict:
+    """The combine's per-model columns, less the per-partition sources."""
+    daily = [
+        {"col": "predicted_prob", "out": "p_onset", "add_plus": True},
+        {
+            "col": f"predicted_prob_{BLEND_CUTOFF_MODE}",
+            "out": f"p_onset_{BLEND_CUTOFF_MODE}",
+            "add_plus": True,
+        },
+        {"col": "predicted_prob_ref", "out": "p_onset_ref", "add_plus": True},
+        {"col": "forecast_rain", "out": "rain_mean", "add_plus": False},
+        {"col": "frac_raining", "out": "frac_raining", "add_plus": False},
+    ]
+    if has_spread:
+        daily.append({"col": "forecast_rain_sd", "out": "rain_sd", "add_plus": False})
+    return {
+        "max_day": int(max_day),
+        "constants": [
+            {"col": "onset_thresh", "out": "onset_thresh"},
+            {"col": "ref_onset_date", "out": "ref_onset_date"},
+        ],
+        "daily": daily,
+    }
+
+
+def _write_year_slices(table, out_dir: Path, name: str, partitions: list[list[int]]) -> list[Path]:
+    """One pickle per partition of `table`'s rows, each keeping its row positions as index."""
+    paths = []
+    for index, years in enumerate(partitions):
+        path = out_dir / f"{name}_{index}.pkl"
+        table[table["year"].isin(years)].to_pickle(path)
+        paths.append(path)
+    return paths
+
+
+def _combine_partition(
+    years: list[int],
+    clim_path: Path,
+    clim_unc_path: Path,
+    model_part_paths: dict[str, list[Path]],
+    family_confs: dict[str, dict],
+    truth,
+    join_how: str,
+    trim_forecasts_after_true_onset: bool,
+):
+    """The combined table's rows for `years`: climatologies joined to each
+    model's daily table, then truth and the per-model constants."""
+    from functools import reduce
+
+    import pandas as pd
+    from python.prepare_data.combine_forecasts_utils import (
+        format_forecast_family,
+        read_and_format_climatology_wide,
+    )
+
+    years_spec = f"{years[0]}:{years[-1]}"
+    clim = read_and_format_climatology_wide(str(clim_path), out_prefix="clim_p_onset")
+    clim[_CLIM_ROW] = clim.index
+    forecast_parts = {
+        model_name: format_forecast_family(
+            model_name,
+            {
+                **family_confs[model_name],
+                "sources": [{"file": str(path), "years": years_spec} for path in paths],
+            },
+        )
+        for model_name, paths in model_part_paths.items()
+    }
+    daily_tables = [
+        clim,
+        read_and_format_climatology_wide(str(clim_unc_path), out_prefix="clim_unc_p_onset"),
+        *(part["daily"] for part in forecast_parts.values()),
+    ]
+    daily_wide = reduce(
+        lambda left, right: left.merge(right, on=_COMBINE_KEYS, how=join_how), daily_tables
+    )
+    daily_wide["year"] = daily_wide["year"].astype(int)
+    combined = daily_wide.merge(truth, on=["id", "year"], how="left")
+    if trim_forecasts_after_true_onset:
+        mask = combined["true_onset_date"].isna() | (
+            pd.to_datetime(combined["time"]) <= pd.to_datetime(combined["true_onset_date"])
+        )
+        combined = combined.loc[mask].copy()
+    constant_tables = [part["constants"] for part in forecast_parts.values()]
+    if constant_tables:
+        constants = reduce(
+            lambda left, right: left.merge(right, on=_COMBINE_KEYS, how="outer"),
+            constant_tables,
+        )
+        combined = combined.merge(constants, on=_COMBINE_KEYS, how="left")
+    return combined
+
+
+def _assemble_combined(part_paths: list[Path], restore_clim_order: bool):
+    """Concatenate the partitions; an inner join kept each partition in
+    climatology order, so sorting on that position reproduces a one-shot combine.
+
+    External contract: this relies on onset_blending's
+    read_and_format_climatology_wide keeping the index of the slice it reads
+    (it does as of the pinned ref). CI checks the logic against order-keeping
+    stand-ins only; after bumping the onset_blending pin, re-check that a blend's
+    combined_wide.pkl is unchanged, row order included."""
+    import pandas as pd
+
+    combined = pd.concat([pd.read_pickle(path) for path in part_paths], ignore_index=True)
+    if restore_clim_order:
+        combined = combined.sort_values(_CLIM_ROW, kind="stable", ignore_index=True)
+    return combined.drop(columns=_CLIM_ROW)
+
+
+class _ForecastSummary:
+    """A model's manifest entry, accumulated part by part rather than from one
+    concatenated table; the values match what the concatenated table gave."""
+
+    def __init__(self) -> None:
+        self.rows = 0
+        self.years: set[int] = set()
+        self.sample_ids: list = []
+        self.nonzero_prob_cells = 0
+        self.non_null_sd_cells = 0
+        self.has_spread = False
+        self.member_count_min: int | None = None
+        self.member_count_max: int | None = None
+        self.member_count_sum = 0
+        self.member_count_n = 0
+
+    def add(self, part: dict) -> list[int]:
+        """Fold one processed part in; returns the years it covers."""
+        wide = part["wide"]
+        self.rows += len(wide)
+        years = sorted(int(year) for year in wide["year"].dropna().unique())
+        self.years.update(years)
+        if len(self.sample_ids) < 5:
+            self.sample_ids += wide["id"].head(5 - len(self.sample_ids)).tolist()
+        prob_cols = [col for col in wide.columns if col.startswith("predicted_prob_day_")]
+        sd_cols = [col for col in wide.columns if col.startswith("forecast_rain_sd_day_")]
+        self.nonzero_prob_cells += int((wide[prob_cols] > 0).sum().sum()) if prob_cols else 0
+        self.non_null_sd_cells += int(wide[sd_cols].notna().sum().sum()) if sd_cols else 0
+        # Parts cached before has_spread existed fall back to their own spread.
+        self.has_spread = self.has_spread or bool(
+            part.get("has_spread", bool(sd_cols) and wide[sd_cols].notna().to_numpy().any())
+        )
+        counts = part["member_counts"]
+        if counts:
+            low, high = min(counts), max(counts)
+            self.member_count_min = (
+                low if self.member_count_min is None else min(self.member_count_min, low)
+            )
+            self.member_count_max = (
+                high if self.member_count_max is None else max(self.member_count_max, high)
+            )
+            self.member_count_sum += sum(counts)
+            self.member_count_n += len(counts)
+        return years
+
+    def manifest(self) -> dict:
+        return {
+            "wide_rows": self.rows,
+            "years": sorted(self.years),
+            "sample_ids": self.sample_ids,
+            "nonzero_predicted_prob_cells": self.nonzero_prob_cells,
+            "non_null_sd_cells": self.non_null_sd_cells,
+            "has_spread": self.has_spread,
+            "member_counts_per_id_time": {
+                "min": int(self.member_count_min),
+                "max": int(self.member_count_max),
+                "mean": float(self.member_count_sum / self.member_count_n),
+            }
+            if self.member_count_n
+            else None,
+        }
+
+
+def _blendable_ids(obs_wide, min_onset_years: int) -> frozenset[str]:
+    """Cells with at least min_onset_years observed onsets, counted over every year.
+
+    The climatology keeps only cells with that many onsets inside its training
+    years, and the combine's inner join drops every forecast cell the
+    climatology lacks, so no forecast cell outside this set reaches the
+    combined table. Trimming to it early changes no results. Onsets are read as
+    climatology_utils.read_gt_onset_from_tbl does: string ids, numeric onset days.
+    """
+    import pandas as pd
+
+    has_onset = pd.to_numeric(obs_wide["onset_day"], errors="coerce").notna()
+    onset_years = obs_wide.loc[has_onset, "id"].astype(str).value_counts()
+    return frozenset(onset_years[onset_years >= int(min_onset_years)].index)
+
+
+def _only_cells(df, ids: frozenset[str] | None):
+    return df if ids is None else df[df["id"].isin(ids)]
+
+
+def _has_spread(df) -> bool:
+    """Whether onset processing will give this frame any non-null rain spread.
+
+    process_rainfall_forecast_id's spread is the members' std with ddof=1, so
+    it is non-null wherever a cell and start date has two or more non-missing
+    member values. Checked a column at a time, stopping at the first hit, so a
+    26-member file costs one boolean column rather than a copy of the frame."""
+    if "number" not in df.columns:
+        return False
+    keys = [df["id"], df["time"]]
+    for col in (c for c in df.columns if c.startswith("rain_day_")):
+        if (df[col].notna().groupby(keys).sum() >= 2).any():
+            return True
+    return False
+
+
 def _process_forecast_part(path: Path, context: dict) -> dict:
     """Onset processing of one forecast file: its wide frame and ensemble member counts."""
     import sys
@@ -1397,8 +1703,13 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
         day_dim="day",
         prefix="rain",
     )
+    df = _in_millimetres(df, context.get("unit_cvt", 1.0))
     df = _add_lat_lon_id(df, precision=context["id_precision"])
     df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
+    # Before the trim: whether a model gets rain_sd columns depends on spread
+    # anywhere in the focus area, not just in the cells that reach the combine.
+    has_spread = _has_spread(df)
+    df = _only_cells(df, context.get("blendable_ids"))
     member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
     processed = process_rainfall_forecast_id(
         df,
@@ -1406,7 +1717,7 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
         ref_onset_dt=context["ref_onset_dt"],
         thr_dt=context["threshold_mm"],
     )
-    return {"wide": processed["wide"], "member_counts": member_counts}
+    return {"wide": processed["wide"], "member_counts": member_counts, "has_spread": has_spread}
 
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
@@ -1451,8 +1762,16 @@ def build_intermediates_from_dirs(
     cache_dir: str | None = None,
     file_workers: int = 1,
     climatology_workers: int = 1,
+    model_layouts: dict[str, dict] | None = None,
+    file_memory_budget_bytes: int | None = None,
 ) -> dict:
     """Build real blending intermediate pickle files from directories of NetCDFs.
+
+    model_layouts maps a forecast_dirs key to that source's registered
+    {"forecast_dims", "unit_cvt"}, so archives keep their own dim names and units.
+
+    file_memory_budget_bytes, when set, caps how many forecast files are
+    processed at once (below file_workers) so their combined peak fits it.
 
     cache_dir enables a read-through cache (local path or gs:// URI) of the
     per-file processed parts and the climatology — the expensive,
@@ -1461,10 +1780,18 @@ def build_intermediates_from_dirs(
     file_workers and climatology_workers size the process pools for per-file
     onset processing and the climatology; results don't depend on them.
     """
+    import hashlib
     import pickle
     import sys
 
     import pandas as pd
+
+    # Fail before any per-file work: the combine joins the climatology to at
+    # least one model's forecasts.
+    if build_combined and not build_climatology:
+        raise ValueError("build_combined requires build_climatology=True")
+    if build_combined and not forecast_dirs:
+        raise ValueError("build_combined requires at least one forecast model")
 
     sys.path.insert(0, str(BLENDING_ROOT))
 
@@ -1614,62 +1941,85 @@ def build_intermediates_from_dirs(
         manifest["outputs"][obs_long_path.name] = {"bytes": obs_long_path.stat().st_size}
         manifest["obs"]["long_rows"] = int(len(obs_long))
 
+    # Under the inner join only cells the climatology can keep survive, so drop
+    # the rest as each forecast file is read; a full (outer) join keeps them all.
+    blendable_ids = (
+        _blendable_ids(obs_wide, min_onset_years)
+        if build_combined and combine_join != "full"
+        else None
+    )
+    blendable_ids_digest = (
+        hashlib.sha256("\n".join(sorted(blendable_ids)).encode()).hexdigest()
+        if blendable_ids is not None
+        else None
+    )
+    manifest["obs"]["blendable_cells"] = len(blendable_ids) if blendable_ids is not None else None
+
+    # Working files for the per-file parts and the year-by-year combine; only
+    # the files listed in manifest["outputs"] are returned.
+    parts_root = output_dir / "_parts"
+    # (part pickle, years it covers) per forecast file, per model.
+    forecast_parts_by_model: dict[str, list[tuple[Path, list[int]]]] = {}
     for model_name, input_dir in forecast_dirs.items():
         forecast_paths_in = sorted(input_dir.glob("*.nc"))
-        # The forecast spec is model-agnostic, so the key needs no model
-        # name: identical files reuse one entry across models.
+        layout = (model_layouts or {}).get(model_name) or {}
+        model_context = {
+            **part_context,
+            "forecast_spec": _forecast_spec_for(forecast_spec, layout.get("forecast_dims")),
+            "unit_cvt": float(layout.get("unit_cvt") or 1.0),
+            "blendable_ids": blendable_ids,
+        }
+        # The key carries the layout and kept cells, not the model name:
+        # identical files with the same layout reuse one entry across models.
         forecast_keys = [
             {
                 **static_cache_params,
                 "forecast_value_col": forecast_value_col,
+                "forecast_dims": layout.get("forecast_dims"),
+                "unit_cvt": model_context["unit_cvt"],
+                "blendable_ids_sha256": blendable_ids_digest,
                 "file_sha256": _file_sha256(path) if cache_dir else None,
             }
             for path in forecast_paths_in
         ]
-        forecast_results = _cached_parts(
+        # Each processed part goes to disk as soon as it exists: holding every
+        # year of every model at once is what outgrew memory on large grids.
+        part_dir = parts_root / "forecast" / model_name
+        part_dir.mkdir(parents=True, exist_ok=True)
+        summary = _ForecastSummary()
+        model_parts: list[tuple[Path, list[int]]] = []
+        model_workers = _part_workers(
+            [_forecast_value_count(path, forecast_value_col) for path in forecast_paths_in],
+            file_workers,
+            file_memory_budget_bytes,
+        )
+        if model_workers < file_workers:
+            print(
+                f"==> {model_name}: processing {model_workers} file(s) at a time "
+                f"(of {file_workers}) to fit the memory budget",
+                flush=True,
+            )
+        parts = _iter_cached_parts(
             cache_dir,
             "fc",
             forecast_keys,
             forecast_paths_in,
             _process_forecast_part,
-            part_context,
-            file_workers,
+            model_context,
+            model_workers,
         )
-        forecast_wide_parts = [entry["wide"] for entry, _ in forecast_results]
-        member_counts_all = [
-            count for entry, _ in forecast_results for count in entry["member_counts"]
-        ]
-        cache_hits += sum(was_cached for _, was_cached in forecast_results)
-        cache_misses += sum(not was_cached for _, was_cached in forecast_results)
+        for source_path, (entry, was_cached) in zip(forecast_paths_in, parts, strict=True):
+            part_path = part_dir / f"{source_path.stem}.pkl"
+            with part_path.open("wb") as f:
+                pickle.dump(entry["wide"], f)
+            model_parts.append((part_path, summary.add(entry)))
+            cache_hits += was_cached
+            cache_misses += not was_cached
+            del entry
+        forecast_parts_by_model[model_name] = model_parts
+        manifest["forecasts"][model_name] = summary.manifest()
 
-        forecast_wide = pd.concat(forecast_wide_parts, ignore_index=True)
-        forecast_path = output_dir / f"{model_name}_wide.pkl"
-        with forecast_path.open("wb") as f:
-            pickle.dump(forecast_wide, f)
-        manifest["outputs"][forecast_path.name] = {"bytes": forecast_path.stat().st_size}
-        prob_cols = [col for col in forecast_wide.columns if col.startswith("predicted_prob_day_")]
-        sd_cols = [col for col in forecast_wide.columns if col.startswith("forecast_rain_sd_day_")]
-        manifest["forecasts"][model_name] = {
-            "wide_rows": int(len(forecast_wide)),
-            "years": sorted(int(year) for year in forecast_wide["year"].dropna().unique()),
-            "sample_ids": forecast_wide["id"].head(5).tolist(),
-            "nonzero_predicted_prob_cells": int((forecast_wide[prob_cols] > 0).sum().sum())
-            if prob_cols
-            else 0,
-            "non_null_sd_cells": int(forecast_wide[sd_cols].notna().sum().sum()) if sd_cols else 0,
-            "member_counts_per_id_time": {
-                "min": int(min(member_counts_all)),
-                "max": int(max(member_counts_all)),
-                "mean": float(sum(member_counts_all) / len(member_counts_all)),
-            }
-            if member_counts_all
-            else None,
-        }
-
-    forecast_paths = {
-        model_name: output_dir / f"{model_name}_wide.pkl" for model_name in forecast_dirs
-    }
-
+    clim = clim_unc = None
     if build_climatology:
         from python.prepare_data.climatology_utils import (
             build_issue_grid,
@@ -1778,17 +2128,8 @@ def build_intermediates_from_dirs(
         )
         cache_hits += was_cached
         cache_misses += not was_cached
-        clim = climatology["clim"]
-        clim_unc = climatology["clim_unc"]
-
-        clim_path = output_dir / "climatology_issue.pkl"
-        clim_unc_path = output_dir / "climatology_issue_unc.pkl"
-        with clim_path.open("wb") as f:
-            pickle.dump(clim, f)
-        with clim_unc_path.open("wb") as f:
-            pickle.dump(clim_unc, f)
-        manifest["outputs"][clim_path.name] = {"bytes": clim_path.stat().st_size}
-        manifest["outputs"][clim_unc_path.name] = {"bytes": clim_unc_path.stat().st_size}
+        clim = climatology.pop("clim")
+        clim_unc = climatology.pop("clim_unc")
         manifest["climatology"] = {
             "train_year_min": train_year_min,
             "train_year_max": train_year_max,
@@ -1807,112 +2148,77 @@ def build_intermediates_from_dirs(
                 clim_unc.filter(regex=r"^predicted_prob_day_").notna().sum().sum()
             ),
         }
+        # With a combine, the climatology lives on only as per-year slices
+        # feeding it; without one, return the tables themselves.
+        if not build_combined:
+            for name, table in (
+                ("climatology_issue.pkl", clim),
+                ("climatology_issue_unc.pkl", clim_unc),
+            ):
+                table_path = output_dir / name
+                with table_path.open("wb") as f:
+                    pickle.dump(table, f)
+                manifest["outputs"][name] = {"bytes": table_path.stat().st_size}
 
     if build_combined:
-        if not build_climatology:
-            raise ValueError("build_combined requires build_climatology=True")
-
-        from functools import reduce
-
-        from python.prepare_data.combine_forecasts_utils import (
-            format_forecast_family,
-            read_and_format_climatology_wide,
-            read_ground_truth_wide,
-        )
+        from python.prepare_data.combine_forecasts_utils import read_ground_truth_wide
 
         forecast_years_by_model = {
             model_name: manifest["forecasts"][model_name]["years"] for model_name in forecast_dirs
         }
-        forecast_parts = {}
-        for model_name, forecast_path in forecast_paths.items():
-            years = forecast_years_by_model[model_name]
+        for model_name, years in forecast_years_by_model.items():
             if not years:
                 raise ValueError(f"Forecast {model_name!r} has no years")
-            years_spec = f"{min(years)}:{max(years)}"
-            daily = [
-                {
-                    "col": "predicted_prob",
-                    "out": "p_onset",
-                    "add_plus": True,
-                },
-                {
-                    "col": f"predicted_prob_{BLEND_CUTOFF_MODE}",
-                    "out": f"p_onset_{BLEND_CUTOFF_MODE}",
-                    "add_plus": True,
-                },
-                {
-                    "col": "predicted_prob_ref",
-                    "out": "p_onset_ref",
-                    "add_plus": True,
-                },
-                {"col": "forecast_rain", "out": "rain_mean", "add_plus": False},
-                {"col": "frac_raining", "out": "frac_raining", "add_plus": False},
-            ]
-            if manifest["forecasts"][model_name]["non_null_sd_cells"] > 0:
-                daily.append(
-                    {
-                        "col": "forecast_rain_sd",
-                        "out": "rain_sd",
-                        "add_plus": False,
-                    }
-                )
-            forecast_parts[model_name] = format_forecast_family(
-                model_name,
-                {
-                    "max_day": int(max_day),
-                    "sources": [{"file": str(forecast_path), "years": years_spec}],
-                    "constants": [
-                        {"col": "onset_thresh", "out": "onset_thresh"},
-                        {"col": "ref_onset_date", "out": "ref_onset_date"},
-                    ],
-                    "daily": daily,
-                },
+        family_confs = {
+            model_name: _forecast_family_conf(
+                max_day, manifest["forecasts"][model_name]["has_spread"]
             )
-
-        daily_tables = [
-            read_and_format_climatology_wide(
-                str(output_dir / "climatology_issue.pkl"),
-                out_prefix="clim_p_onset",
-            ),
-            read_and_format_climatology_wide(
-                str(output_dir / "climatology_issue_unc.pkl"),
-                out_prefix="clim_unc_p_onset",
-            ),
-        ]
-        daily_tables.extend(part["daily"] for part in forecast_parts.values())
+            for model_name in forecast_dirs
+        }
         join_how = "outer" if combine_join == "full" else "inner"
-        daily_wide = reduce(
-            lambda left, right: left.merge(
-                right,
-                on=["id", "time", "year"],
-                how=join_how,
-            ),
-            daily_tables,
+        # Merging every year of every model at once outgrows memory on large
+        # grids. An inner join keeps the climatology's row order and splits
+        # cleanly by year, so it runs one year at a time; an outer join reorders
+        # its keys, so it keeps a single partition of all years.
+        all_years = sorted(set().union(*forecast_years_by_model.values()))
+        partitions = [[year] for year in all_years] if join_how == "inner" else [all_years]
+        clim_dir = parts_root / "climatology"
+        clim_dir.mkdir(parents=True)
+        clim_paths = _write_year_slices(
+            clim.reset_index(drop=True), clim_dir, "conditional", partitions
         )
-        daily_wide["year"] = daily_wide["year"].astype(int)
+        clim_unc_paths = _write_year_slices(
+            clim_unc.reset_index(drop=True), clim_dir, "unconditional", partitions
+        )
+        del clim, clim_unc
         truth = read_ground_truth_wide(str(obs_wide_path))
-        combined = daily_wide.merge(truth, on=["id", "year"], how="left")
-        if trim_forecasts_after_true_onset:
-            mask = combined["true_onset_date"].isna() | (
-                pd.to_datetime(combined["time"]) <= pd.to_datetime(combined["true_onset_date"])
-            )
-            combined = combined.loc[mask].copy()
 
-        constant_tables = [part["constants"] for part in forecast_parts.values()]
-        if constant_tables:
-            constants = reduce(
-                lambda left, right: left.merge(
-                    right,
-                    on=["id", "time", "year"],
-                    how="outer",
-                ),
-                constant_tables,
+        combined_dir = parts_root / "combined"
+        combined_dir.mkdir()
+        combined_part_paths = []
+        for index, years in enumerate(partitions):
+            model_part_paths = {
+                model_name: [path for path, part_years in parts if set(part_years) & set(years)]
+                for model_name, parts in forecast_parts_by_model.items()
+            }
+            # The inner join keeps no row for a year some model lacks.
+            if join_how == "inner" and not all(model_part_paths.values()):
+                continue
+            part = _combine_partition(
+                years,
+                clim_paths[index],
+                clim_unc_paths[index],
+                model_part_paths,
+                family_confs,
+                truth,
+                join_how,
+                trim_forecasts_after_true_onset,
             )
-            combined = combined.merge(
-                constants,
-                on=["id", "time", "year"],
-                how="left",
-            )
+            part_path = combined_dir / f"{index}.pkl"
+            part.to_pickle(part_path)
+            combined_part_paths.append(part_path)
+            del part
+        combined = _assemble_combined(combined_part_paths, restore_clim_order=join_how == "inner")
 
         combined_path = output_dir / "combined_wide.pkl"
         with combined_path.open("wb") as f:
@@ -1928,6 +2234,7 @@ def build_intermediates_from_dirs(
             "first_columns": list(combined.columns[:60]),
         }
 
+    shutil.rmtree(parts_root, ignore_errors=True)
     if cache_dir:
         manifest["cache"] = {"hits": cache_hits, "misses": cache_misses}
 
@@ -1940,23 +2247,71 @@ def build_intermediates_from_dirs(
         include_names = set(manifest["outputs"])
         outputs_tar = _tar_directory(output_dir, include_names=include_names)
 
-    return {"manifest": manifest, "outputs_tar": outputs_tar}
+    # In-process callers read combined_wide.pkl straight from output_dir rather
+    # than unpacking a copy from outputs_tar.
+    return {"manifest": manifest, "outputs_tar": outputs_tar, "output_dir": str(output_dir)}
+
+
+def _combined_input_path(
+    work_dir: Path, combined_wide_pkl: bytes | None, combined_wide_path: str | None
+) -> Path:
+    """The combined table on disk: the caller's file when given, else the bytes written out."""
+    if combined_wide_path:
+        path = Path(combined_wide_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Combined wide file not found: {path}")
+        return path
+    if not combined_wide_pkl:
+        raise ValueError("A combined wide table is required (bytes or a file path)")
+    path = work_dir / "combined_wide.pkl"
+    path.write_bytes(combined_wide_pkl)
+    return path
+
+
+def _combined_summary(combined_path: Path, model_names: list[str]) -> dict:
+    """Check the combined table has every model's columns and summarize it.
+
+    The table is released on return, before the weekly connector reads it,
+    so the two never hold a copy at the same time."""
+    import pickle
+
+    import pandas as pd
+
+    with combined_path.open("rb") as f:
+        combined = pickle.load(f)
+    if not isinstance(combined, pd.DataFrame):
+        combined = pd.DataFrame(combined)
+    missing_model_cols = [
+        f"{name}_onset_thresh"
+        for name in model_names
+        if f"{name}_onset_thresh" not in combined.columns
+    ]
+    if missing_model_cols:
+        raise ValueError(
+            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
+        )
+    return {
+        "rows": int(len(combined)),
+        "columns": int(len(combined.columns)),
+        "years": sorted(int(year) for year in combined["year"].dropna().unique()),
+    }
 
 
 def _prepare_blend_workspace(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     model_names: list[str],
     cutoff_mode: str,
     day_max: int,
     days_per_week: int,
     n_weeks: int,
     rain_window: int,
+    combined_wide_path: str | None = None,
 ):
     """Materialize the workspace both training and coef-apply need: the
     combined wide pickle on disk, the weekly connect output (the pipeline
     input every blending script reads), and the dissemination cells CSV.
-    Returns (work_dir, combined, weekly, pipeline_input_path, dissemination_path)."""
-    import pickle
+    Returns (work_dir, combined_summary, weekly, pipeline_input_path,
+    dissemination_path, combined_path)."""
     import sys
 
     import pandas as pd
@@ -1969,24 +2324,9 @@ def _prepare_blend_workspace(
         raise ValueError("model_names must not be empty")
 
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
-    combined_path = work_dir / "combined_wide.pkl"
     pipeline_input_path = work_dir / input_rds_from_cutoff(cutoff_mode)
-    combined_path.write_bytes(combined_wide_pkl)
-
-    with combined_path.open("rb") as f:
-        combined = pickle.load(f)
-    if not isinstance(combined, pd.DataFrame):
-        combined = pd.DataFrame(combined)
-
-    missing_model_cols = [
-        f"{name}_onset_thresh"
-        for name in model_names
-        if f"{name}_onset_thresh" not in combined.columns
-    ]
-    if missing_model_cols:
-        raise ValueError(
-            "Combined wide file is missing model constant columns: " + ", ".join(missing_model_cols)
-        )
+    combined_path = _combined_input_path(work_dir, combined_wide_pkl, combined_wide_path)
+    combined_summary = _combined_summary(combined_path, model_names)
 
     connect_spec = {
         "mode": cutoff_mode,
@@ -2019,7 +2359,14 @@ def _prepare_blend_workspace(
         dissemination_path,
         index=False,
     )
-    return work_dir, combined, weekly, pipeline_input_path, dissemination_path
+    return (
+        work_dir,
+        combined_summary,
+        weekly,
+        pipeline_input_path,
+        dissemination_path,
+        combined_path,
+    )
 
 
 def _default_formula_text(model_names: list[str]) -> str:
@@ -2095,6 +2442,19 @@ def _issue_keyed(frame):
         id=frame["id"].astype(str).str.strip(),
         time=pd.to_datetime(frame["time"]).dt.normalize(),
     )
+
+
+def _forest_inputs(combined_path: Path):
+    """Only the combined table's columns the day-level blend reads; the rest of
+    the table is released as soon as they are selected."""
+    import pickle
+
+    import pandas as pd
+
+    with combined_path.open("rb") as f:
+        combined = pd.DataFrame(pickle.load(f))
+    daily_cols = [column for column in combined.columns if _FOREST_INPUT_COLUMN.match(column)]
+    return combined[["id", "time", "true_onset_date", *daily_cols]].copy()
 
 
 def _forest_frame(weekly, combined):
@@ -2269,7 +2629,7 @@ def _build_blend_spec(
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
 def train_blending_model_bundle(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     model_names: list[str],
     training_years: list[int],
     cv_holdout_years: list[int],
@@ -2284,11 +2644,15 @@ def train_blending_model_bundle(
     include_calibrated_forecasts: bool = True,
     cores: int | None = None,
     return_outputs: bool = True,
+    combined_wide_path: str | None = None,
     train_forest: bool = True,
 ) -> dict:
     """Train/evaluate the weekly blend and, with train_forest, the day-level
     blend from a combined wide pickle. Both are cross-validated and scored by
-    1_blend_evaluation.py, and both final fits ship in the outputs."""
+    1_blend_evaluation.py, and both final fits ship in the outputs.
+
+    In-process callers pass combined_wide_path (and None for the bytes) so the
+    table is read from disk instead of held in memory as a second copy."""
     import pickle
     import subprocess
     import sys
@@ -2305,14 +2669,17 @@ def train_blending_model_bundle(
     if not cv_holdout_years:
         raise ValueError("cv_holdout_years must not be empty")
 
-    work_dir, combined, weekly, pipeline_input_path, dissemination_path = _prepare_blend_workspace(
-        combined_wide_pkl,
-        model_names,
-        cutoff_mode,
-        day_max,
-        days_per_week,
-        n_weeks,
-        rain_window,
+    work_dir, combined_summary, weekly, pipeline_input_path, dissemination_path, combined_path = (
+        _prepare_blend_workspace(
+            combined_wide_pkl,
+            model_names,
+            cutoff_mode,
+            day_max,
+            days_per_week,
+            n_weeks,
+            rain_window,
+            combined_wide_path=combined_wide_path,
+        )
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-training-results-"))
     output_tag = _blend_output_tag(
@@ -2326,7 +2693,7 @@ def train_blending_model_bundle(
         cv_preds_filename = _forest_cv_preds_filename(output_tag)
 
         def cross_validate_forest():
-            frame = _forest_frame(weekly, combined)
+            frame = _forest_frame(weekly, _forest_inputs(combined_path))
             # 1_blend_evaluation.py scores these alongside the weekly model's CV.
             _cross_validate_forest(
                 frame,
@@ -2436,11 +2803,7 @@ def train_blending_model_bundle(
         "true_holdout_years": sorted(int(year) for year in (true_holdout_years or [])),
         "formula_text": formula_text,
         "day_level_blend_error": day_level_error,
-        "combined": {
-            "rows": int(len(combined)),
-            "columns": int(len(combined.columns)),
-            "years": sorted(int(year) for year in combined["year"].dropna().unique()),
-        },
+        "combined": combined_summary,
         "weekly": {
             "rows": int(len(weekly)),
             "columns": int(len(weekly.columns)),
@@ -2483,7 +2846,7 @@ def train_blending_model_bundle(
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
 def apply_blend_coefs_bundle(
-    combined_wide_pkl: bytes,
+    combined_wide_pkl: bytes | None,
     coef_pkl: bytes,
     model_names: list[str],
     training_years: list[int],
@@ -2495,13 +2858,15 @@ def apply_blend_coefs_bundle(
     n_weeks: int = 4,
     rain_window: int = 3,
     formula_text: str | None = None,
+    combined_wide_path: str | None = None,
     forest_pkl: bytes | None = None,
 ) -> LiveScores:
     """Score one live season by applying a trained blend's saved coef bundle
     (the FINAL_COEF_FILENAME pickle written by train_blending_model_bundle's
     final fit) via predict/apply_blend_model.py — the fast path that skips CV
     retraining entirely. With forest_pkl (FOREST_MODEL_FILENAME) the season is
-    also scored day by day."""
+    also scored day by day. In-process callers pass combined_wide_path instead
+    of the bytes."""
     import subprocess
     import sys
     import uuid
@@ -2513,7 +2878,7 @@ def apply_blend_coefs_bundle(
     if not cv_holdout_years:
         raise ValueError("cv_holdout_years must not be empty")
 
-    work_dir, combined, weekly, _, dissemination_path = _prepare_blend_workspace(
+    work_dir, _, weekly, _, dissemination_path, combined_path = _prepare_blend_workspace(
         combined_wide_pkl,
         model_names,
         cutoff_mode,
@@ -2521,6 +2886,7 @@ def apply_blend_coefs_bundle(
         days_per_week,
         n_weeks,
         rain_window,
+        combined_wide_path=combined_wide_path,
     )
     results_dir = Path(tempfile.mkdtemp(prefix="blend-apply-results-"))
 
@@ -2592,7 +2958,9 @@ def apply_blend_coefs_bundle(
     if forest_pkl is not None:
         daily_csv, _ = _try_day_level(
             "scoring",
-            lambda: _daily_onset_csv(forest_pkl, _forest_frame(weekly, combined), live_year),
+            lambda: _daily_onset_csv(
+                forest_pkl, _forest_frame(weekly, _forest_inputs(combined_path)), live_year
+            ),
         )
     return LiveScores(weekly_csv=preds_csv.read_bytes(), daily_csv=daily_csv)
 
@@ -2634,7 +3002,7 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
     return matches[0]
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600)
+@app.function(image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
 def score_live_forecast(
     obs_bundle: bytes,
     forecast_bundles: dict[str, bytes],
@@ -2680,18 +3048,19 @@ def score_live_forecast(
     if blend_params.get("region_id"):
         prep_kwargs["region_id"] = blend_params["region_id"]
     intermediates = build_lat_lon_intermediates_bundle.local(
-        obs_bundle, forecast_bundles, return_outputs=True, cache_dir=cache_dir, **prep_kwargs
+        obs_bundle, forecast_bundles, return_outputs=False, cache_dir=cache_dir, **prep_kwargs
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-    combined = _read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+    combined_path = str(Path(intermediates["output_dir"]) / "combined_wide.pkl")
 
     if coef_pkl is not None:
         print(f"==> Applying trained blend coefficients to live season {live_year}")
         t0 = time.perf_counter()
         scores = apply_blend_coefs_bundle.local(
-            combined,
+            None,
             coef_pkl,
             model_names,
+            combined_wide_path=combined_path,
             training_years=_parse_years(blend_params.get("training_years") or "") or [],
             cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
             live_year=live_year,
@@ -2710,7 +3079,8 @@ def score_live_forecast(
     print(f"==> Scoring live season {live_year} against trained blend")
     t0 = time.perf_counter()
     training = train_blending_model_bundle.local(
-        combined,
+        None,
+        combined_wide_path=combined_path,
         model_names=model_names,
         training_years=_parse_years(blend_params.get("training_years") or "") or [],
         cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
@@ -2755,7 +3125,7 @@ def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | Non
 
 
 @app.function(
-    image=blending_image, cpu=(4, 8), memory=(16384, 32768), timeout=21600, secrets=[gcp_secret]
+    image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600, secrets=[gcp_secret]
 )
 def score_live_forecast_bundle(
     job_id: str,

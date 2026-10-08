@@ -306,6 +306,182 @@ async def test_deterministic_source_stays_non_probabilistic(
     assert response.json()["metadata"]["probabilistic"] is False
 
 
+def _write_fuxi_variant(directory: Path, transform) -> Path:
+    """Copy the first fuxi fixture into `directory` after applying `transform`."""
+    import xarray as xr
+
+    source = sorted((Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi").glob("*.nc"))[0]
+    with xr.open_dataset(source) as ds:
+        directory.mkdir(parents=True, exist_ok=True)
+        transform(ds.load()).to_netcdf(directory / "2001.nc")
+    return directory
+
+
+async def _validate_model(client: httpx.AsyncClient, root: Path) -> dict:
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "model",
+            "name": "Model draft",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_forecast_dims_are_recorded_under_romps_names(client: httpx.AsyncClient) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+
+    draft = await _validate_model(client, root)
+
+    assert draft["metadata"]["forecast_dims"] == {
+        "lat": "lat",
+        "lon": "lon",
+        "init_time": "time",
+        "step": "day",
+    }
+
+
+@pytest.mark.asyncio
+async def test_timedelta_lead_time_is_found_whatever_it_is_called(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    # The 0.25° archives name their lead time "prediction_timedelta_daily",
+    # which also contains "time"; the dtype, not the name, identifies it.
+    import pandas as pd
+
+    def archive_layout(ds):
+        lead = pd.to_timedelta(ds["day"].values + 1, unit="D")
+        ds = ds.assign_coords(day=lead)
+        return ds.rename({"day": "prediction_timedelta_daily", "time": "issued"})
+
+    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "e2s", archive_layout))
+
+    assert draft["status"] == "ready"
+    assert draft["metadata"]["forecast_dims"]["init_time"] == "issued"
+    assert draft["metadata"]["forecast_dims"]["step"] == "prediction_timedelta_daily"
+
+
+@pytest.mark.asyncio
+async def test_start_date_under_any_name_sets_the_initialization_schedule(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    renamed = _write_fuxi_variant(tmp_path / "issued", lambda ds: ds.rename({"time": "issued"}))
+    original = _write_fuxi_variant(tmp_path / "time", lambda ds: ds)
+
+    renamed_draft = await _validate_model(client, renamed)
+    original_draft = await _validate_model(client, original)
+
+    schedule = ("init_days", "init_days_source", "init_month_days", "start_date", "end_date")
+    assert {key: renamed_draft["metadata"][key] for key in schedule} == {
+        key: original_draft["metadata"][key] for key in schedule
+    }
+    assert renamed_draft["metadata"]["init_days_source"] == "inferred"
+
+
+@pytest.mark.asyncio
+async def test_dim_names_romp_cannot_carry_are_rejected_at_registration(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "spaced", lambda ds: ds.rename({"day": "lead day"}))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "lead day" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
+async def test_leftover_dim_is_recorded_as_the_ensemble_member(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = tmp_path / "ens"
+    _write_ensemble_model_source(root)
+
+    draft = await _validate_model(client, root)
+
+    assert draft["metadata"]["forecast_dims"]["member"] == "number"
+
+
+@pytest.mark.asyncio
+async def test_unidentifiable_lead_time_is_rejected(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "no-lead", lambda ds: ds.rename({"day": "horizon"}))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "lead time" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
+async def test_more_than_one_leftover_dim_is_rejected(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "extra", lambda ds: ds.expand_dims(number=2, height=2))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "ensemble member" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
+async def test_single_valued_leftover_dim_is_not_taken_for_an_ensemble(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    root = _write_fuxi_variant(tmp_path / "height", lambda ds: ds.expand_dims(height=1))
+
+    draft = await _validate_model(client, root)
+
+    assert draft["status"] == "invalid"
+    assert "'height'" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
+async def test_precipitation_in_metres_converts_to_millimetres(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    def in_metres(ds):
+        ds["tp"].attrs["units"] = "m"
+        return ds
+
+    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "metres", in_metres))
+
+    assert draft["status"] == "ready"
+    assert draft["metadata"]["unit_cvt"] == 1000.0
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_precipitation_units_are_rejected(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    def per_second(ds):
+        ds["tp"].attrs["units"] = "kg m-2 s-1"
+        return ds
+
+    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "rate", per_second))
+
+    assert draft["status"] == "invalid"
+    assert "'kg m-2 s-1'" in draft["validation_error"]
+
+
+@pytest.mark.asyncio
+async def test_precipitation_without_units_keeps_the_default_conversion(
+    client: httpx.AsyncClient,
+) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+
+    draft = await _validate_model(client, root)
+
+    assert draft["metadata"]["unit_cvt"] == 1.0
+
+
 @pytest.mark.asyncio
 async def test_invalid_initialization_days_are_rejected_during_validation(
     client: httpx.AsyncClient,
