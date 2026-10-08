@@ -663,6 +663,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
                 true_holdout_years=_parse_years(params.get("true_holdout_years") or ""),
                 return_outputs=True,
+                train_forest=bool(config.get("train_day_level_blend")),
                 **train_kwargs,
             )
             print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")

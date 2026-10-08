@@ -164,6 +164,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         cv_holdout_years=workflow._parse_years(params.get("cv_holdout_years") or "") or [],
         true_holdout_years=workflow._parse_years(params.get("true_holdout_years") or ""),
         return_outputs=True,
+        train_forest=bool(config.get("train_day_level_blend")),
         **train_kwargs,
     )
     if not training["manifest"].get("ok"):

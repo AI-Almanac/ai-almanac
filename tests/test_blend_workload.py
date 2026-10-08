@@ -114,6 +114,8 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
     assert train_kwargs["training_years"] == [2020, 2021]
     assert train_kwargs["cv_holdout_years"] == [2022]
     assert train_kwargs["cores"] == (os.cpu_count() or 1)
+    # Jobs submitted without the day-level blend switched on train only the weekly blend.
+    assert train_kwargs["train_forest"] is False
     assert (output_dir / "combined_wide.pkl").read_bytes() == combined
     assert (output_dir / "weights.pkl").read_bytes() == b"weights"
 

@@ -221,6 +221,11 @@ class Settings(BaseSettings):
     # still turn it off from the Settings page (e.g. an install with no
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
+    # The day-level blend: every blend also trains a model of onset by day, and
+    # forecasts offer daily onset chances. Off by default, unlike the convention
+    # above: it adds cross-validation time to every blend that has not yet been
+    # measured against the blend timeout on a managed deployment.
+    enable_day_level_blend: bool = False
     # Side-by-side ruleset comparisons: the admin playground and the blind A/B
     # users run from the chat. "off" hides the whole surface — every comparison
     # is two LLM turns, so an install that cannot afford that, or is not

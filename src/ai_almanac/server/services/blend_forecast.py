@@ -72,10 +72,22 @@ def parse_forecast_view(model: ForecastModel, resolution: ForecastResolution) ->
     return view
 
 
-def available_views(filenames: Iterable[str]) -> list[dict[str, str]]:
-    """Views whose source CSV is among the job's output files, in display order."""
+def is_offered(view: ForecastView, *, day_level_enabled: bool) -> bool:
+    """Whether the deployment offers this view at all; the day-level blend's
+    views sit behind its feature flag."""
+    return day_level_enabled or view.model != "daily_model"
+
+
+def available_views(
+    filenames: Iterable[str], *, day_level_enabled: bool = True
+) -> list[dict[str, str]]:
+    """Offered views whose source CSV is among the job's output files, in display order."""
     present = set(filenames)
-    return [view.as_dict() for view in SUPPORTED_VIEWS if view.source_filename in present]
+    return [
+        view.as_dict()
+        for view in SUPPORTED_VIEWS
+        if view.source_filename in present and is_offered(view, day_level_enabled=day_level_enabled)
+    ]
 
 
 def _probs(row: dict[str, str], columns: Sequence[str]) -> list[float]:

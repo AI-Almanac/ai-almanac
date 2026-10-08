@@ -28,6 +28,7 @@ from ai_almanac.server.services.blend_forecast import (
     ForecastView,
     UnsupportedForecastView,
     available_views,
+    is_offered,
     parse_blend_forecast,
     parse_forecast_view,
 )
@@ -44,6 +45,7 @@ from ai_almanac.server.services.job_submission import (
 )
 from ai_almanac.server.services.registry import load_catalog, load_model_registry
 from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
+from ai_almanac.settings import settings
 
 from ..services.metrics import (
     JobCellResponse,
@@ -249,8 +251,17 @@ async def get_blend_forecast(
     artifacts = await list_job_artifacts(job_id)
     # Per request, not stored: tells the viewer which views this forecast can offer
     # (forecasts from blends trained before the day-level blend have only one).
-    views = {"available_views": available_views(a["filename"] for a in artifacts)}
-    artifact = next((a for a in artifacts if a["filename"] == view.source_filename), None)
+    day_level_enabled = settings.enable_day_level_blend
+    views = {
+        "available_views": available_views(
+            (a["filename"] for a in artifacts), day_level_enabled=day_level_enabled
+        )
+    }
+    artifact = (
+        next((a for a in artifacts if a["filename"] == view.source_filename), None)
+        if is_offered(view, day_level_enabled=day_level_enabled)
+        else None
+    )
     payload = (
         await derived_outputs.load_or_build(
             job_id, view.payload_name, lambda: _build_blend_forecast(job_id, artifact, view)
