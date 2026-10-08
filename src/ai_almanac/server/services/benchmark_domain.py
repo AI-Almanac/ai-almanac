@@ -190,6 +190,7 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
             "obs_file_pattern": source["metadata"].get("obs_file_pattern"),
             "obs_year_start": source["metadata"].get("start_year"),
             "obs_year_end": source["metadata"].get("end_year"),
+            "grid_step_deg": source["metadata"].get("grid_step_deg"),
         }
         for source in sources
         if source.get("status") == "ready"

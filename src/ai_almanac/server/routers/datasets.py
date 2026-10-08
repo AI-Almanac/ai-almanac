@@ -27,6 +27,7 @@ class DatasetOut(BaseModel):
     obs_file_pattern: str | None = None
     obs_year_start: int | None = None
     obs_year_end: int | None = None
+    grid_step_deg: float | None = None
 
 
 @router.get("", response_model=list[DatasetOut])
@@ -48,6 +49,7 @@ async def list_datasets(user: CurrentUser):
             obs_file_pattern=source["metadata"].get("obs_file_pattern"),
             obs_year_start=source["metadata"].get("start_year"),
             obs_year_end=source["metadata"].get("end_year"),
+            grid_step_deg=source["metadata"].get("grid_step_deg"),
         )
         for source in sources
         if source.get("status") == "ready"

@@ -20,14 +20,20 @@ from __future__ import annotations
 import math
 import re
 from itertools import pairwise
+from typing import Literal, get_args
 
 from pydantic import BaseModel
 
 # Grid ids look like "10.00_33.25". Latitudes are signed; longitudes may be too.
 _CELL_ID = re.compile(r"^(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)$")
 _POOLED_ROW_ID = "ALL"
-_BLEND_MODEL = "blended_model"
 _BASELINE_MODEL = "unc_clim_raw"
+
+# The blends a job trains: the week-level blend, and the day-level blend added
+# later. Jobs trained before the day-level blend existed score only the first.
+BlendModel = Literal["blended_model", "blended_forest"]
+BLEND_MODELS: tuple[BlendModel, ...] = get_args(BlendModel)
+DEFAULT_BLEND_MODEL: BlendModel = "blended_model"
 
 # Metric id -> the CSV column it comes from. Both are lower-is-better scores, so
 # both become skill in the standard ``1 - value / reference`` form.
@@ -97,7 +103,10 @@ class BlendAreaMetric(SkillScale):
 
 class BlendCellMetrics(BaseModel):
     job_id: str
+    blend_model: BlendModel
     baseline_model: str
+    # Blends with per-point rows in the summary, so the map offers only real choices.
+    available_models: list[BlendModel]
     cell_size_deg: float | None
     min_observations: int
     # Exactly one of these is populated: grids for a lat/lon domain, areas for an
@@ -275,19 +284,22 @@ def build_cell_metrics(
     csv_text: str,
     min_observations: int = DEFAULT_MIN_OBSERVATIONS,
     region_id: str | None = None,
+    model: BlendModel = DEFAULT_BLEND_MODEL,
 ) -> BlendCellMetrics:
     """Reshape a per-cell summary CSV into per-metric skill for the map.
 
-    Skill is the blend against ``unc_clim_raw``, matching the pooled table, so a
+    Skill is ``model`` against ``unc_clim_raw``, matching the pooled table, so a
     point reads on the same scale in both places: zero is climatology, positive
     beats it.
     """
     by_model = _cells_by_model(csv_text)
-    blend = by_model.get(_BLEND_MODEL, {})
+    blend = by_model.get(model, {})
     baseline = by_model.get(_BASELINE_MODEL, {})
     result = BlendCellMetrics(
         job_id=job_id,
+        blend_model=model,
         baseline_model=_BASELINE_MODEL,
+        available_models=[name for name in BLEND_MODELS if by_model.get(name)],
         cell_size_deg=None,
         min_observations=min_observations,
         grids=[],

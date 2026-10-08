@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { account } from '$lib/account.svelte';
 	import { installTour, queueTour } from '$lib/tour.svelte';
 
 	const features = [
@@ -86,8 +87,27 @@
 			title: 'Benchmark models',
 			description: 'Compare forecast models against ground truth observations.',
 			href: '/benchmarks?manual=1'
+		},
+		{
+			id: 'blend',
+			title: 'Blend models',
+			description: 'Combine models into a single, more accurate forecast.',
+			href: '/blends?new=1'
+		},
+		{
+			id: 'forecast',
+			title: 'Run a forecast',
+			description: 'Issue a probabilistic onset forecast from a trained blend.',
+			href: '/forecasts?new=1',
+			requiresForecasting: true
 		}
 	];
+	// Called from the template so it tracks account access as it loads.
+	function availableWorkflows() {
+		return workflows.filter(
+			(workflow) => !workflow.requiresForecasting || account.canUseForecasting
+		);
+	}
 
 	let prompt = '';
 	let workflowLauncherOpen = false;
@@ -158,7 +178,7 @@
 			</header>
 
 			<div class="workflow-list">
-				{#each workflows as workflow}
+				{#each availableWorkflows() as workflow (workflow.id)}
 					<button class="workflow-card" type="button" onclick={() => startWorkflow(workflow.href)}>
 						<span>{workflow.title}</span>
 						<small>{workflow.description}</small>

@@ -13,6 +13,7 @@ import {
 	type RompDefaults
 } from '$lib/api';
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
+import { gridsMatch } from '$lib/source-coverage';
 
 type SharedParamValue = string | number | FocusAreaValue | null;
 type ModelOverrideValue = string | boolean | number;
@@ -69,6 +70,11 @@ export class BenchmarkSetupForm {
 	);
 	readonly selectedDataset = $derived(
 		this.datasets.find((dataset) => dataset.id === this.selectedDatasetId) ?? null
+	);
+	readonly availableModels = $derived(
+		this.models.filter((model) =>
+			gridsMatch(this.selectedDataset?.grid_step_deg, model.grid_step_deg)
+		)
 	);
 	readonly selectedModels = $derived(
 		this.models.filter((model) => this.selectedModelIds.includes(model.id))
@@ -210,8 +216,17 @@ export class BenchmarkSetupForm {
 			this.setRegionId(dataset.region);
 			return;
 		}
+		this.dropUnavailableModels();
 		this.markManualConfigDirty();
 	};
+
+	private dropUnavailableModels() {
+		const available = new Set(this.availableModels.map((model) => model.id));
+		this.selectedModelIds = this.selectedModelIds.filter((id) => available.has(id));
+		this.perModelOverrides = Object.fromEntries(
+			Object.entries(this.perModelOverrides).filter(([id]) => available.has(id))
+		);
+	}
 
 	setForecastWindowDays = (days: number | null) => {
 		this.forecastWindowDays = days;

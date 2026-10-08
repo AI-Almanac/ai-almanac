@@ -19,7 +19,8 @@
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
-	import { describeSourceCoverage, missingYears } from '$lib/source-coverage';
+	import { describeSourceCoverage, formatDegrees, missingYears } from '$lib/source-coverage';
+	import { groupSources } from './source-groups';
 	import { account } from '$lib/account.svelte';
 
 	$effect(() => {
@@ -601,11 +602,7 @@
 				No obs datasets registered. Add one above to make it available to the benchmark UI.
 			</p>
 		{:else}
-			<ul class="sources">
-				{#each obsSources as src (src.id)}
-					{@render sourceRow(src)}
-				{/each}
-			</ul>
+			{@render sourceGroups(obsSources)}
 		{/if}
 	</section>
 
@@ -618,11 +615,7 @@
 				No model directories registered. Add one above to enable it in benchmark submissions.
 			</p>
 		{:else}
-			<ul class="sources">
-				{#each modelSources as src (src.id)}
-					{@render sourceRow(src)}
-				{/each}
-			</ul>
+			{@render sourceGroups(modelSources)}
 		{/if}
 	</section>
 </main>
@@ -636,12 +629,37 @@
 	onselect={(p) => (formPath = p)}
 />
 
+{#snippet sourceGroups(list: DataSource[])}
+	{#each groupSources(list, (id) => regionName(id) ?? id) as group (group.region)}
+		<details class="region-group" open>
+			<summary>
+				{group.region ? regionName(group.region) : 'No region'}
+				<span class="count">({group.size})</span>
+			</summary>
+			<div class="grid-groups">
+				{#each group.grids as grid (grid.step)}
+					<div class="grid-group">
+						<h3>
+							{grid.step == null ? 'Grid not detected' : `${formatDegrees(grid.step)} grid`}
+							<span class="count">({grid.sources.length})</span>
+						</h3>
+						<ul class="sources">
+							{#each grid.sources as src (src.id)}
+								{@render sourceRow(src)}
+							{/each}
+						</ul>
+					</div>
+				{/each}
+			</div>
+		</details>
+	{/each}
+{/snippet}
+
 {#snippet sourceRow(src: DataSource)}
 	<li class="source" class:missing={src.status === 'invalid'}>
 		<div class="meta">
 			<div class="name">
 				{src.name}
-				{#if regionName(src.region)}<span class="tag">{regionName(src.region)}</span>{/if}
 				<span class:warn={src.status === 'invalid'} class="tag">{src.status}</span>
 				<span class="tag">{src.visibility === 'shared' ? 'shared' : 'private'}</span>
 			</div>
@@ -782,6 +800,31 @@
 	button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+	.region-group summary {
+		cursor: pointer;
+		font-weight: 650;
+		padding: 0.35rem 0;
+	}
+	.grid-groups {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 0.5rem 0 1rem 1rem;
+		border-left: 2px solid var(--color-border-subtle);
+	}
+	.grid-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.grid-group h3 {
+		margin: 0;
+		font-size: 0.78rem;
+		font-weight: 750;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
 	}
 	.sources {
 		list-style: none;

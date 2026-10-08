@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
+from ai_almanac.server.services.blend_cells import BLEND_MODELS
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.tables import jobs as _jobs
@@ -31,7 +32,6 @@ _BRIER_LEAD_COLUMNS = [
     "brier_week4",
     "brier_later",
 ]
-_BLEND_MODEL = "blended_model"
 
 # The blend package scores every skill column against this baseline
 # (``summarize_models_pooled``, baseline_model). ``unc`` is *unconditional*, not
@@ -502,7 +502,7 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
         rows.append(
             {
                 "model": model,
-                "is_blend": model == _BLEND_MODEL,
+                "is_blend": model in BLEND_MODELS,
                 "is_baseline": model == _BASELINE_MODEL,
                 "auc": cell(cells, "auc"),
                 "brier": cell(cells, "brier"),
@@ -527,9 +527,15 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
                 for value, base in zip(row["brier_by_lead"], baseline["brier_by_lead"], strict=True)
             ]
 
-    # Blend first so the model's own row leads any rendered comparison.
-    rows.sort(key=lambda row: not row["is_blend"])
+    # Blends first, week-level then day-level, so the job's own rows lead any
+    # rendered comparison.
+    rows.sort(key=lambda row: _blend_rank(row["model"]))
     return rows
+
+
+def _blend_rank(model: str) -> int:
+    """Position of a blend in BLEND_MODELS; every other model sorts after them."""
+    return BLEND_MODELS.index(model) if model in BLEND_MODELS else len(BLEND_MODELS)
 
 
 async def _blend_job_status(job_id: str, user_id: str, scope: BenchmarkScope):
