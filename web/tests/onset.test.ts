@@ -76,6 +76,14 @@ describe('consensusOnsetDay', () => {
 		// issue+1 at weight 1, (issue+7)+1 at weight 3.
 		expect(day).toBe(issueDay + 1 + (3 * 7) / 4);
 	});
+
+	it('ignores forecasts issued after the onset the earlier ones agree on', () => {
+		// Both early forecasts date onset to Jun 2; each later one rings its own Week 1,
+		// as a blend does once the rains are under way.
+		const dates = ['2025-05-15', '2025-05-29', '2025-06-12', '2025-06-26', '2025-07-10'];
+		const probs = [[0, 0, 1, 0, 0], ...Array(4).fill([1, 0, 0, 0, 0])];
+		expect(consensusOnsetDay(WEEKLY_BINS, dates, probs)).toBe(isoToDay('2025-06-02'));
+	});
 });
 
 describe('onsetHasPassed', () => {

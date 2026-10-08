@@ -223,29 +223,49 @@ export function probScaleMax(bins: OnsetBins, rows: number[][], binIdx?: number)
 // Neutral slate for a grayed cell; reads as inactive on the dark basemap.
 export const ONSET_PASSED_COLOR = '#8b929c';
 
-// Probability-weighted consensus onset day for a cell across the whole season,
-// using only the bounded bins ("Later" carries no date). null if no forecast
-// ever dated the onset. Forecasts that dump their mass into "Later" contribute
-// nothing, so the estimate is driven by the forecasts that actually placed onset
-// on the calendar — i.e. where the models agree.
+// Probability-weighted mean onset day over the given forecasts' bounded bins
+// ("Later" carries no date). null if none of them dated the onset.
+function weightedOnsetDay(
+	bins: OnsetBins,
+	issueDates: string[],
+	probs: number[][],
+	rows: number[]
+): number | null {
+	let wsum = 0;
+	let dsum = 0;
+	for (const di of rows) {
+		const row = probs[di] ?? [];
+		for (let b = 0; b < bins.laterIndex; b++) {
+			const p = row[b] ?? 0;
+			if (p <= 0) continue;
+			const r = bins.dayRange(issueDates[di], b);
+			wsum += p;
+			dsum += (p * (r.start + r.end)) / 2;
+		}
+	}
+	return wsum > 0 ? dsum / wsum : null;
+}
+
+// Consensus onset day for a cell across the season, estimated only from the
+// forecasts issued before it. Forecasts issued after onset still place onset
+// just after their own issue date, so counting them drags the estimate later
+// and later. Each pass drops the forecasts issued past the current estimate and
+// re-estimates; dropping them can only move the estimate earlier, so the kept
+// set only shrinks and the loop ends. It never empties: every dated bin falls
+// after its forecast's issue date, so the earliest dating forecast stays kept.
 export function consensusOnsetDay(
 	bins: OnsetBins,
 	issueDates: string[],
 	probs: number[][]
 ): number | null {
-	let wsum = 0;
-	let dsum = 0;
-	issueDates.forEach((iso, di) => {
-		const row = probs[di] ?? [];
-		for (let b = 0; b < bins.laterIndex; b++) {
-			const p = row[b] ?? 0;
-			if (p <= 0) continue;
-			const r = bins.dayRange(iso, b);
-			wsum += p;
-			dsum += (p * (r.start + r.end)) / 2;
-		}
-	});
-	return wsum > 0 ? dsum / wsum : null;
+	let rows = issueDates.map((_, i) => i);
+	for (;;) {
+		const estimate = weightedOnsetDay(bins, issueDates, probs, rows);
+		if (estimate == null) return null;
+		const issuedBefore = rows.filter((i) => !onsetHasPassed(issueDates[i], estimate));
+		if (issuedBefore.length === rows.length) return estimate;
+		rows = issuedBefore;
+	}
 }
 
 // Grace past the estimated onset before a cell counts as post-onset: once a
