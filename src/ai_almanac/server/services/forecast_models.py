@@ -13,12 +13,56 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import BaseModel, model_validator
+
 from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
 from ai_almanac.settings import forecast_model_by_id, get_packaged_forecast_models
 
 _INTERNAL_FIELDS = ("earth2studio_class", "gpu", "env", "ensemble", "nensemble")
 
 LiveForecastStatus = Literal["ready", "grid_mismatch", "unavailable"]
+
+
+class TrainingPeriod(BaseModel):
+    """Years of one dataset a model's weights were fitted on."""
+
+    stage: Literal["pretraining", "fine-tuning"]
+    dataset: str
+    start_year: int
+    end_year: int
+
+    @model_validator(mode="after")
+    def _ordered(self) -> TrainingPeriod:
+        if self.start_year > self.end_year:
+            raise ValueError("Training period needs start_year <= end_year")
+        return self
+
+
+class TrainingHistory(BaseModel):
+    """Published training periods for a model, with where they were published."""
+
+    source: str
+    periods: list[TrainingPeriod]
+
+
+def model_training(
+    forecast_model_id: str | None, registry: dict | None = None
+) -> TrainingHistory | None:
+    """The training history of the model that produced an archive, when it is known.
+
+    Archives not linked to a registry model, and models whose training years
+    were never published, have none — callers must not fill the gap with a guess.
+    """
+    registry = registry if registry is not None else get_packaged_forecast_models()
+    entry = forecast_model_by_id(registry, forecast_model_id)
+    training = (entry or {}).get("training")
+    return TrainingHistory.model_validate(training) if training else None
+
+
+def training_summary(forecast_model_id: str | None) -> dict | None:
+    """The training history as plain data for tool payloads, or None when unknown."""
+    training = model_training(forecast_model_id)
+    return training.model_dump() if training else None
 
 
 @dataclass(frozen=True)

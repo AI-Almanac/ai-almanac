@@ -209,7 +209,11 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def list_models(ctx: RunContext[ChatDeps], region: str | None = None) -> dict:
-        """List available forecast models, optionally filtered by region id."""
+        """List available forecast models, optionally filtered by region id.
+
+        Each model carries `training`: the years and datasets its weights were
+        pretrained and fine-tuned on, with the source they were published in, or
+        null when they are unknown."""
         return await chat_tools.list_models(region, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
@@ -278,7 +282,11 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def list_blend_models(ctx: RunContext[ChatDeps], region: str | None = None) -> dict:
-        """List forecast model data sources available to blend, optionally filtered by region id."""
+        """List forecast model data sources available to blend, optionally filtered by region id.
+
+        Each model carries `training`: the years and datasets its weights were
+        pretrained and fine-tuned on, with the source they were published in, or
+        null when they are unknown."""
         return await chat_tools.list_blend_models(region, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool

@@ -417,6 +417,8 @@ class BlendOut(BaseModel):
     warnings: list[str] = []
     # Member name → live forecast model id, for members whose archive is linked.
     forecast_models: dict[str, str] = {}
+    # Years kept out of every fit, so results can show their scores apart.
+    true_holdout_years: list[int] = []
 
 
 _blend_model_key = blend_model_key
@@ -780,6 +782,9 @@ def blend_row_to_out(
         run_id=row.get("run_id"),
         warnings=cfg.get("warnings") or [],
         forecast_models=blend_forecast_models(cfg, sources_by_id or {}),
+        true_holdout_years=_parse_year_spec(
+            (cfg.get("blend_params") or {}).get("true_holdout_years") or ""
+        ),
     )
 
 

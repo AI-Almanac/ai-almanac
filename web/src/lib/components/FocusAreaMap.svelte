@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
 	import type { FeatureCollection, Position } from 'geojson';
 	import { BASEMAP_STYLES } from '$lib/basemaps';
-	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
+	import {
+		isFocusUnits,
+		type BboxExtent,
+		type FocusAreaValue,
+		type FocusUnitLevel
+	} from '$lib/api/jobs';
 	import { getRegionBoundary } from '$lib/api/regions';
 
 	interface Props {
@@ -25,8 +30,11 @@
 		{ id: 'box', label: 'Draw a box' },
 		{ id: 'units', label: 'Pick areas' }
 	];
-	// ponytail: ADM2 only for now; a level picker slots in here once the flow is proven.
-	const UNIT_LEVEL = 'adm2';
+	// Larger units first: a broad area is a handful of states, not hundreds of districts.
+	const UNIT_LEVELS: { id: FocusUnitLevel; label: string }[] = [
+		{ id: 'adm1', label: 'States & regions' },
+		{ id: 'adm2', label: 'Districts & zones' }
+	];
 
 	const SOURCE = 'focus-area';
 	const REGION = 'focus-region';
@@ -41,6 +49,7 @@
 	let zones = $state<FeatureCollection | null>(null);
 	let zonesFailed = $state(false);
 	let mode = $state<Mode>('region');
+	let unitLevel = $state<FocusUnitLevel>('adm1');
 
 	const box = $derived(value && !isFocusUnits(value) ? value : null);
 	const picked = $derived(isFocusUnits(value) ? value.units : []);
@@ -133,6 +142,21 @@
 		}
 	}
 
+	// Each level has its own areas to load, so switching drops the loaded ones.
+	function showLevel(next: FocusUnitLevel) {
+		if (next === unitLevel) return;
+		unitLevel = next;
+		zones = null;
+		zonesFailed = false;
+	}
+
+	// A selection is one level's areas, so changing level starts it over.
+	function setUnitLevel(next: FocusUnitLevel) {
+		if (next === unitLevel) return;
+		showLevel(next);
+		if (isFocusUnits(value)) onchange(null);
+	}
+
 	function zoneName(feature: maplibregl.MapGeoJSONFeature): string | null {
 		const name = feature.id ?? feature.properties?.shapeName;
 		return typeof name === 'string' && name ? name : null;
@@ -140,7 +164,7 @@
 
 	function togglePicked(name: string) {
 		const next = picked.includes(name) ? picked.filter((n) => n !== name) : [...picked, name];
-		onchange(next.length ? { level: UNIT_LEVEL, units: next } : null);
+		onchange(next.length ? { level: unitLevel, units: next } : null);
 	}
 
 	function clearSelection() {
@@ -254,8 +278,11 @@
 
 	// A value set from outside (chat, a reloaded config) decides the mode.
 	$effect(() => {
-		if (isFocusUnits(value)) mode = 'units';
-		else if (value) mode = 'box';
+		if (isFocusUnits(value)) {
+			mode = 'units';
+			const level = value.level;
+			untrack(() => showLevel(level));
+		} else if (value) mode = 'box';
 	});
 
 	// The region's border, when the boundary service knows it. A miss just leaves
@@ -279,10 +306,11 @@
 
 	// Pickable areas load on demand, the first time the mode calls for them.
 	$effect(() => {
+		const level = unitLevel;
 		const id = regionId;
 		if (mode !== 'units' || !id || zones || zonesFailed) return;
 		let stale = false;
-		getRegionBoundary(id, UNIT_LEVEL)
+		getRegionBoundary(id, level)
 			.then(({ geojson }) => {
 				if (!stale && isFeatureCollection(geojson)) zones = geojson;
 			})
@@ -346,6 +374,20 @@
 				</button>
 			{/each}
 		</div>
+		{#if mode === 'units'}
+			<div class="modes" role="group" aria-label="Kind of area to pick">
+				{#each UNIT_LEVELS as option (option.id)}
+					<button
+						type="button"
+						class:active={unitLevel === option.id}
+						aria-pressed={unitLevel === option.id}
+						onclick={() => setUnitLevel(option.id)}
+					>
+						{option.label}
+					</button>
+				{/each}
+			</div>
+		{/if}
 		<button
 			type="button"
 			class="expand"
@@ -423,6 +465,7 @@
 
 	.toolbar {
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: space-between;
 		align-items: center;
 		gap: 0.5rem;

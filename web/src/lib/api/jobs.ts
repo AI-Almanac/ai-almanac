@@ -265,8 +265,11 @@ export type BboxExtent = {
 };
 
 /** Named administrative units picked on the map; outlines are attached at submission. */
+/** States or regions, and the districts or zones inside them. */
+export type FocusUnitLevel = 'adm1' | 'adm2';
+
 export type FocusUnits = {
-	level: 'adm2';
+	level: FocusUnitLevel;
 	units: string[];
 };
 

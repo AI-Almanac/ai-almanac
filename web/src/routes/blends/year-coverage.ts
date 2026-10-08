@@ -82,16 +82,40 @@ export function coverageLimits(
 	};
 }
 
-// Default split: train on every valid forecast year and cross-validate within
-// that same span (each year is scored while held out of its own fit) rather than
-// reserving a short tail. null when no valid forecast year exists (not enough
-// observation runway).
-export function defaultSplit(cov: Coverage): { training: string; cv: string } | null {
+// Below this many training years the blend weights do not generalize. Mirrors
+// the default `min_training_years` guardrail in services/guardrails.py.
+export const MIN_TRAINING_YEARS = 10;
+
+// Share of the valid forecast years reserved as a true holdout by default.
+export const TRUE_HOLDOUT_SHARE = 0.2;
+
+export type YearSplit = { training: string; cv: string; trueHoldout: string };
+
+function yearSpan(lo: number, hi: number): string {
+	return lo === hi ? `${lo}` : `${lo}:${hi}`;
+}
+
+// How many of the most recent years to hold out: about a fifth of them, but
+// never so many that training drops below MIN_TRAINING_YEARS.
+export function trueHoldoutCount(validYears: number): number {
+	return Math.max(
+		0,
+		Math.min(Math.floor(validYears * TRUE_HOLDOUT_SHARE), validYears - MIN_TRAINING_YEARS)
+	);
+}
+
+// Default split: hold out the most recent years entirely, so they score the blend
+// the way a new season would, then train on the rest and cross-validate within
+// that same span (each year is scored while left out of its own fit). null when
+// no valid forecast year exists (not enough observation runway). Mirrored by
+// default_year_split in services/blend_domain.py.
+export function defaultSplit(cov: Coverage): YearSplit | null {
 	const lo = cov.earliestForecast;
 	const hi = cov.end;
 	if (lo > hi) return null;
-	const years = lo === hi ? `${lo}` : `${lo}:${hi}`;
-	return { training: years, cv: years };
+	const held = trueHoldoutCount(hi - lo + 1);
+	const training = yearSpan(lo, hi - held);
+	return { training, cv: training, trueHoldout: held ? yearSpan(hi - held + 1, hi) : '' };
 }
 
 // Blends with this many members start fitting noise: the weights have more
@@ -120,6 +144,9 @@ export function yearSpecError(
 	const specs = [training, cvHoldout, forecast, trueHoldout].map((s) => parseYearSpec(s.trim()));
 	if (specs.some((s) => s === null)) return 'Years must look like "2005:2010" or "2011,2012".';
 	const [train, cv, explicit, trueHold] = specs as number[][];
+	const leaked = trueHold.filter((y) => train.includes(y) || cv.includes(y));
+	if (leaked.length)
+		return `True holdout years must stay out of training and cross-validation — remove ${leaked.join(', ')} from one or the other.`;
 	const forecastYears = explicit.length ? explicit : [...train, ...cv, ...trueHold];
 	if (forecastYears.length === 0) return null;
 	const min = Math.min(...forecastYears);

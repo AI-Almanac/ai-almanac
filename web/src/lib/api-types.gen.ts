@@ -2291,6 +2291,11 @@ export interface components {
             forecast_models: {
                 [key: string]: string;
             };
+            /**
+             * True Holdout Years
+             * @default []
+             */
+            true_holdout_years: number[];
         };
         /**
          * BlendParams
@@ -2446,6 +2451,7 @@ export interface components {
             warnings?: string[];
             /** Finding Keys */
             finding_keys?: string[];
+            suggested_years?: components["schemas"]["SuggestedYears"] | null;
         };
         /**
          * BlindCompareRequest
@@ -2986,9 +2992,9 @@ export interface components {
         FocusUnits: {
             /**
              * Level
-             * @constant
+             * @enum {string}
              */
-            level: "adm2";
+            level: "adm1" | "adm2";
             /** Units */
             units: string[];
             /** Geometry */
@@ -4476,6 +4482,19 @@ export interface components {
             /** Tool Call Id */
             tool_call_id: string;
             approved_config?: components["schemas"]["BlendRunSpec"] | null;
+        };
+        /**
+         * SuggestedYears
+         * @description A working year split for the chosen sources: a recent true holdout, the
+         *     rest trained on and cross-validated. See ``blend_domain.default_year_split``.
+         */
+        SuggestedYears: {
+            /** Training Years */
+            training_years: string;
+            /** Cv Holdout Years */
+            cv_holdout_years: string;
+            /** True Holdout Years */
+            true_holdout_years: string;
         };
         /**
          * TileJSON

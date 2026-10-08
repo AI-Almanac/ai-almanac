@@ -332,3 +332,25 @@ async def test_validate_blend_config_flags_bad_onset_params(client, user_id: str
     )
     assert patched["blend_validation"]["can_run"] is False
     assert any("must be positive" in e for e in patched["blend_validation"]["errors"])
+
+
+def test_default_year_split_holds_out_the_most_recent_fifth() -> None:
+    coverage = {"start": 1990, "end": 2023, "earliest_forecast": 2000, "missing": []}
+
+    split = blend_domain.default_year_split(coverage, min_training_years=10)
+
+    assert split is not None
+    assert (split.training_years, split.cv_holdout_years, split.true_holdout_years) == (
+        "2000:2019",
+        "2000:2019",
+        "2020:2023",
+    )
+
+
+def test_default_year_split_keeps_the_minimum_training_years() -> None:
+    short = {"start": 1990, "end": 2010, "earliest_forecast": 2000, "missing": []}
+    tiny = {"start": 1990, "end": 2005, "earliest_forecast": 2000, "missing": []}
+
+    assert blend_domain.default_year_split(short, 10).true_holdout_years == "2010"
+    assert blend_domain.default_year_split(tiny, 10).true_holdout_years == ""
+    assert blend_domain.default_year_split(None, 10) is None

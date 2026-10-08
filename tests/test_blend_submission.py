@@ -643,3 +643,18 @@ def test_malformed_link_on_uninspected_source_counts_as_unlinked(link) -> None:
     cfg = {"model_names": ["remote"], "model_source_ids": ["s1"]}
     sources = {"s1": {"metadata": {"forecast_model_id": link}}}
     assert job_submission.blend_forecast_models(cfg, sources) == {}
+
+
+def test_blend_out_reports_true_holdout_years() -> None:
+    from ai_almanac.server.services.job_submission import blend_row_to_out
+
+    row = {
+        "id": "b1",
+        "status": "complete",
+        "created_at": "2026-10-08T00:00:00Z",
+        "config_json": json.dumps(
+            {"blend_params": {"training_years": "2000:2019", "true_holdout_years": "2020:2022"}}
+        ),
+    }
+
+    assert blend_row_to_out(row, None).true_holdout_years == [2020, 2021, 2022]

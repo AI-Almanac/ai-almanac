@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.focus_area import parse_focus_area
+from ai_almanac.server.services.forecast_models import training_summary
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
@@ -479,6 +480,7 @@ async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> 
                     "end_year_clim",
                 ]
             }
+            | {"training": training_summary(model.get("forecast_model_id"))}
             for model in models
         ]
     )

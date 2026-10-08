@@ -47,13 +47,15 @@ describe('defaultSplit', () => {
 	it('cross-validates within the full training span', () => {
 		expect(defaultSplit({ start: 2000, end: 2012, earliestForecast: 2008, missing: [] })).toEqual({
 			training: '2008:2012',
-			cv: '2008:2012'
+			cv: '2008:2012',
+			trueHoldout: ''
 		});
 	});
 	it('handles a single valid forecast year', () => {
 		expect(defaultSplit({ start: 2000, end: 2008, earliestForecast: 2008, missing: [] })).toEqual({
 			training: '2008',
-			cv: '2008'
+			cv: '2008',
+			trueHoldout: ''
 		});
 	});
 	it('is null when no forecast year has enough runway', () => {
@@ -62,9 +64,23 @@ describe('defaultSplit', () => {
 		).toBeNull();
 	});
 	it('produces a split that passes validation', () => {
-		const cov = { start: 2000, end: 2012, earliestForecast: 2008, missing: [] };
+		const cov = { start: 1990, end: 2023, earliestForecast: 2000, missing: [] };
 		const split = defaultSplit(cov)!;
-		expect(yearSpecError(cov, split.training, split.cv, '', '')).toBeNull();
+		expect(yearSpecError(cov, split.training, split.cv, '', split.trueHoldout)).toBeNull();
+	});
+	it('holds out the most recent fifth of the years', () => {
+		expect(defaultSplit({ start: 1990, end: 2023, earliestForecast: 2000, missing: [] })).toEqual({
+			training: '2000:2019',
+			cv: '2000:2019',
+			trueHoldout: '2020:2023'
+		});
+	});
+	it('never holds out so much that training drops below the minimum', () => {
+		expect(defaultSplit({ start: 1990, end: 2010, earliestForecast: 2000, missing: [] })).toEqual({
+			training: '2000:2009',
+			cv: '2000:2009',
+			trueHoldout: '2010'
+		});
 	});
 });
 
@@ -80,6 +96,10 @@ describe('memberCountWarning', () => {
 });
 
 describe('yearSpecError', () => {
+	it('rejects a true holdout year that is also trained on', () => {
+		const cov = { start: 1990, end: 2023, earliestForecast: 2000, missing: [] };
+		expect(yearSpecError(cov, '2000:2020', '2000:2020', '', '2020:2023')).toMatch(/remove 2020/);
+	});
 	const cov = { start: 2000, end: 2012, earliestForecast: 2008, missing: [] };
 	it('rejects a forecast start without enough climatology runway', () => {
 		// This is the config that failed the real run.
