@@ -42,9 +42,13 @@ export function gridsMatch(
 	return Math.abs(obsStep - modelStep) <= 1e-9 * Math.max(Math.abs(obsStep), Math.abs(modelStep));
 }
 
+export function formatDegrees(step: number): string {
+	return `${Number(step.toFixed(3))}°`;
+}
+
 export function formatGridStep(source: HasMetadata | undefined): string | null {
 	const step = gridStep(source);
-	return step == null ? null : `${Number(step.toFixed(3))}°`;
+	return step == null ? null : formatDegrees(step);
 }
 
 // One-line summary, e.g. "2001–2020 · missing 2012 · 0.25° grid".
