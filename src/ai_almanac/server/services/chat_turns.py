@@ -25,6 +25,7 @@ from sqlalchemy import text
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.chat_artifacts import hydrate_turn_artifact_urls
+from ai_almanac.server.services.chat_job_events import platform_note, scope_job_activity
 from ai_almanac.server.services.chat_state import ChatScope, ChatTurn
 from ai_almanac.server.services.chat_tools import (
     SubmitBenchmarkApproval,
@@ -77,6 +78,20 @@ def parse_llm_event(event: str) -> dict | None:
     if not isinstance(parsed, dict):
         raise RuntimeError("LLM stream emitted a non-object event")
     return parsed
+
+
+def _previous_user_turn_at(transcript: list[dict]) -> str | None:
+    return next(
+        (turn.get("created_at") for turn in reversed(transcript) if turn.get("role") == "user"),
+        None,
+    )
+
+
+async def _job_update_note(user_id: str, scope: ChatScope, since: str | None) -> str | None:
+    """Runs that finished since the user last wrote, for the assistant to hear about."""
+    if since is None:
+        return None
+    return platform_note((await scope_job_activity(user_id, scope, since)).events)
 
 
 def _replace_turn(transcript: list[dict], turn: ChatTurn) -> list[dict]:
@@ -407,6 +422,7 @@ async def stream_chat_turn(
             scope=scope,
         )
     # --- Transaction 1 committed, lock released ---
+    job_update_note = await _job_update_note(user_id, scope, _previous_user_turn_at(transcript))
 
     # --- Stream without holding a DB connection ---
     terminal_event: str | None = None
@@ -424,6 +440,7 @@ async def stream_chat_turn(
                 session_id,
                 scope,
                 latest_user_message=content,
+                platform_note=job_update_note,
                 active_ruleset=active_ruleset,
                 comparison_id=comparison_id,
                 turn_id=assistant_turn.id,

@@ -405,6 +405,26 @@ export interface paths {
         patch: operations["update_session_chat_sessions__session_id__patch"];
         trace?: never;
     };
+    "/chat/sessions/{session_id}/job-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Job Events
+         * @description Runs in the session's scope that finished since the conversation began.
+         */
+        get: operations["get_session_job_events_chat_sessions__session_id__job_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/sessions/{session_id}/benchmark/submit": {
         parameters: {
             query?: never;
@@ -2587,6 +2607,30 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** ChatJobActivity */
+        ChatJobActivity: {
+            /** Events */
+            events: components["schemas"]["ChatJobEvent"][];
+            /** Active */
+            active: number;
+        };
+        /** ChatJobEvent */
+        ChatJobEvent: {
+            /** Job Id */
+            job_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "canceled" | "complete" | "failed";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
         };
         /** ChatScope */
         ChatScope: {
@@ -5642,6 +5686,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_job_events_chat_sessions__session_id__job_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatJobActivity"];
                 };
             };
             /** @description Validation Error */

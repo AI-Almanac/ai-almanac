@@ -2,6 +2,9 @@
 	import { tick } from 'svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import ChatActivity from '$lib/components/ChatActivity.svelte';
+	import ChatJobNotice from '$lib/components/ChatJobNotice.svelte';
+	import ChatRunConfirmation from '$lib/components/ChatRunConfirmation.svelte';
+	import { conversationItems } from '$lib/chat/conversation';
 	import { renderMarkdown } from '$lib/chat/format';
 	import { turnTimeline } from '$lib/chat/timeline';
 	import { rateChatTurn } from '$lib/api';
@@ -26,6 +29,10 @@
 	}: Props = $props();
 
 	let messagesEl = $state<HTMLElement | null>(null);
+
+	const conversation = $derived(
+		conversationItems(chat.visibleTurns, chat.jobActivity.events, !chat.sending)
+	);
 	let ratings = $state<Record<string, 1 | -1>>({});
 
 	async function rate(turnId: string, value: 1 | -1) {
@@ -46,6 +53,7 @@
 	$effect(() => {
 		void chat.messages;
 		void chat.streamingTurn;
+		void chat.jobActivity;
 		tick().then(() => {
 			if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
 		});
@@ -71,110 +79,87 @@
 		</div>
 	{/if}
 
-	{#each chat.visibleTurns as msg}
-		{#if msg.role === 'user'}
-			<div class="message user">
-				<div class="message-content">{msg.content}</div>
-			</div>
+	{#each conversation as entry (entry.key)}
+		{#if entry.kind === 'job_event'}
+			<ChatJobNotice event={entry.event} followUp={entry.followUp} onFollowUp={onSuggestion} />
 		{:else}
-			{@const timeline = turnTimeline(msg)}
-			{@const streaming = msg.id === chat.streamingTurn?.id}
-			{#each timeline as item, ii (item.key)}
-				{#if item.kind === 'text'}
-					<div class="message assistant">
-						<div class="message-content prose">{@html renderMarkdown(item.text)}</div>
-					</div>
-				{:else}
-					<ChatActivity
-						group={item}
-						live={streaming && ii === timeline.length - 1}
-						{onOpenArtifact}
-					/>
-				{/if}
-			{/each}
-
-			{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
-				<div class="rating">
-					<span class="rating-label">Was this useful?</span>
-					<button
-						class="rating-btn"
-						class:chosen={ratings[msg.id] === 1}
-						aria-label="Helpful"
-						onclick={() => void rate(msg.id, 1)}>&#128077;</button
-					>
-					<button
-						class="rating-btn"
-						class:chosen={ratings[msg.id] === -1}
-						aria-label="Not helpful"
-						onclick={() => void rate(msg.id, -1)}>&#128078;</button
-					>
+			{@const msg = entry.turn}
+			{#if msg.role === 'user'}
+				<div class="message user">
+					<div class="message-content">{msg.content}</div>
 				</div>
-			{/if}
+			{:else}
+				{@const timeline = turnTimeline(msg)}
+				{@const streaming = msg.id === chat.streamingTurn?.id}
+				{#each timeline as item, ii (item.key)}
+					{#if item.kind === 'text'}
+						<div class="message assistant">
+							<div class="message-content prose">{@html renderMarkdown(item.text)}</div>
+						</div>
+					{:else}
+						<ChatActivity
+							group={item}
+							live={streaming && ii === timeline.length - 1}
+							{onOpenArtifact}
+						/>
+					{/if}
+				{/each}
 
-			<!--
+				{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
+					<div class="rating">
+						<span class="rating-label">Was this useful?</span>
+						<button
+							class="rating-btn"
+							class:chosen={ratings[msg.id] === 1}
+							aria-label="Helpful"
+							onclick={() => void rate(msg.id, 1)}>&#128077;</button
+						>
+						<button
+							class="rating-btn"
+							class:chosen={ratings[msg.id] === -1}
+							aria-label="Not helpful"
+							onclick={() => void rate(msg.id, -1)}>&#128078;</button
+						>
+					</div>
+				{/if}
+
+				<!--
 				Rendered from the backend's guardrail events, not from the assistant's
 				prose. The reply above may explain these well, badly, or not at all;
 				the user is told either way.
 			-->
-			{#each msg.guardrails ?? [] as notice}
-				{#if notice.errors.length}
-					<div class="guardrail guardrail-error">
-						<p class="guardrail-title">This configuration cannot run</p>
-						<ul>
-							{#each notice.errors as item (item)}
-								<li>{item}</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
-				{#if notice.warnings.length}
-					<div class="guardrail guardrail-warning">
-						<p class="guardrail-title">Read these results with care</p>
-						<ul>
-							{#each notice.warnings as item (item)}
-								<li>{item}</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
-			{/each}
+				{#each msg.guardrails ?? [] as notice}
+					{#if notice.errors.length}
+						<div class="guardrail guardrail-error">
+							<p class="guardrail-title">This configuration cannot run</p>
+							<ul>
+								{#each notice.errors as item (item)}
+									<li>{item}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					{#if notice.warnings.length}
+						<div class="guardrail guardrail-warning">
+							<p class="guardrail-title">Read these results with care</p>
+							<ul>
+								{#each notice.warnings as item (item)}
+									<li>{item}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				{/each}
+			{/if}
 		{/if}
 	{/each}
 
 	{#if chat.pendingApproval && !chat.sending}
-		{@const approval = chat.pendingApproval}
-		<div class="approval-card">
-			{#if approval.kind === 'benchmark'}
-				<p class="approval-title">Ready to run benchmark</p>
-				<p class="approval-subtitle">
-					{approval.config.model_names?.join(', ') ?? 'Selected models'} ·
-					{approval.config.region_name ?? 'Selected region'} · Days 1–{approval.config
-						.forecast_window_days ?? 30}
-				</p>
-				<div class="approval-actions">
-					<button class="approval-run" onclick={chat.approveSubmit}>Run benchmark</button>
-					<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
-				</div>
-			{:else}
-				<p class="approval-title">Ready to train blend</p>
-				<p class="approval-subtitle">
-					{approval.config.model_names?.join(', ') ?? 'Selected models'} ·
-					{approval.config.obs_dataset_name ?? 'Selected observations'} · Train {approval.config
-						.training_years || '—'}
-				</p>
-				<div class="approval-actions">
-					<button class="approval-run" onclick={chat.approveSubmit}>Train blend</button>
-					<button class="approval-cancel" onclick={chat.declineSubmit}>Not yet</button>
-				</div>
-			{/if}
-			{#if approval.validation?.warnings?.length}
-				<ul class="approval-warnings">
-					{#each approval.validation.warnings as warning (warning)}
-						<li>{warning}</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
+		<ChatRunConfirmation
+			approval={chat.pendingApproval}
+			onApprove={chat.approveSubmit}
+			onDecline={chat.declineSubmit}
+		/>
 	{/if}
 
 	{#if chat.sending && !chat.streamingTurn}
@@ -370,43 +355,6 @@
 		background: var(--color-surface-raised);
 	}
 
-	.approval-card {
-		border: 1px solid var(--color-accent-border);
-		border-radius: 0.5rem;
-		background: var(--color-accent-light);
-		padding: 0.85rem 1rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-	}
-	.approval-title {
-		margin: 0;
-		font-size: 0.88rem;
-		font-weight: 700;
-		color: var(--color-accent);
-	}
-	.approval-subtitle {
-		margin: 0;
-		font-size: 0.8rem;
-		color: var(--color-text-muted);
-	}
-	.approval-actions {
-		display: flex;
-		gap: 0.5rem;
-		margin-top: 0.25rem;
-	}
-	.approval-warnings {
-		color: var(--color-status-running);
-		background: var(--color-status-running-bg);
-		border: 1px solid var(--color-status-running);
-		border-radius: 0.45rem;
-		margin: 0;
-		padding: 0.6rem 0.75rem 0.6rem 1.5rem;
-		font-size: 0.8rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
 	.rating {
 		display: flex;
 		align-items: center;
@@ -457,31 +405,6 @@
 		color: var(--color-status-failed);
 		background: var(--color-status-failed-bg);
 		border-color: var(--color-status-failed);
-	}
-	.approval-run {
-		border: 0;
-		border-radius: 0.35rem;
-		background: var(--color-accent);
-		color: white;
-		padding: 0.45rem 0.9rem;
-		font: inherit;
-		font-size: 0.82rem;
-		font-weight: 700;
-		cursor: pointer;
-	}
-	.approval-cancel {
-		border: 1px solid var(--color-border);
-		border-radius: 0.35rem;
-		background: var(--color-surface);
-		color: var(--color-text-muted);
-		padding: 0.45rem 0.9rem;
-		font: inherit;
-		font-size: 0.82rem;
-		font-weight: 700;
-		cursor: pointer;
-	}
-	.approval-cancel:hover {
-		color: var(--color-text);
 	}
 
 	.thinking {

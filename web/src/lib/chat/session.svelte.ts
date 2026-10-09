@@ -4,6 +4,7 @@ import {
 	getChatSession,
 	updateChatSession,
 	deleteChatSession,
+	getChatJobActivity,
 	sendChatMessage,
 	submitChatBenchmark,
 	denyChatBenchmarkApproval,
@@ -15,6 +16,7 @@ import {
 	type BlendRunSpec,
 	type BlendValidation,
 	type ChatEvent,
+	type ChatJobActivity,
 	type ChatMessage,
 	type ChatScope,
 	type ChatSession,
@@ -73,6 +75,7 @@ export class ChatSessionState {
 	sessionId = $state<string | null>(null);
 	messages = $state<ChatMessage[]>([]);
 	streamingTurn = $state<ChatMessage | null>(null);
+	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
 	loadingSession = $state(false);
@@ -162,6 +165,7 @@ export class ChatSessionState {
 			this.sessionId = id;
 			this.callbacks.onSessionReady?.(id);
 			this.messages = detail.transcript;
+			void this.refreshJobActivity();
 			if (detail.benchmark_config) {
 				this.callbacks.onBenchmarkConfig?.(
 					detail.benchmark_config,
@@ -204,6 +208,7 @@ export class ChatSessionState {
 			this.sessionId = session.id;
 			this.callbacks.onSessionReady?.(session.id);
 			this.messages = [];
+			this.jobActivity = { events: [], active: 0 };
 			this.loadedScopeToken = scopeToken(scope);
 			return session.id;
 		} catch {
@@ -293,8 +298,22 @@ export class ChatSessionState {
 		} finally {
 			this.sending = false;
 			this.sendLocked = false;
+			// A turn can start or rerun a job, or move the chat onto a new run.
+			void this.refreshJobActivity();
 		}
 	}
+
+	/** Re-read which runs in scope have finished; failures keep the last known state. */
+	refreshJobActivity = async () => {
+		const sessionId = this.sessionId;
+		if (!sessionId) return;
+		try {
+			const activity = await getChatJobActivity(sessionId);
+			if (this.sessionId === sessionId) this.jobActivity = activity;
+		} catch {
+			// Job notices are a convenience; the conversation works without them.
+		}
+	};
 
 	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
 		if (startsTurn(event) && this.streamingTurn?.id !== event.turn_id) {
@@ -385,6 +404,7 @@ export class ChatSessionState {
 					response.benchmark_validation
 				);
 				this.callbacks.onBenchmarkSubmitted?.(response.run_id, response.jobs, this.sessionId);
+				void this.refreshJobActivity();
 			} else {
 				const response = await submitChatBlend(this.sessionId, {
 					tool_call_id: approval.toolCallId,
@@ -392,6 +412,7 @@ export class ChatSessionState {
 				});
 				this.callbacks.onBlendConfig?.(response.blend_config, response.blend_validation);
 				this.callbacks.onBlendSubmitted?.(response.run_id, response.jobs, this.sessionId);
+				void this.refreshJobActivity();
 			}
 		} catch (e) {
 			this.error = (e as Error).message ?? 'Submit failed.';

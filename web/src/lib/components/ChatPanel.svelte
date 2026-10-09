@@ -9,6 +9,7 @@
 	import { ComparisonState, compareBlocker } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
 	import { blindCompare, getRulesetOptions } from '$lib/api';
+	import { pollWhileActive } from '$lib/poll';
 	import type {
 		BenchmarkRunSpec,
 		BenchmarkValidation,
@@ -142,6 +143,10 @@
 		void jobs;
 		chat.syncScope(preferredSessionId);
 	});
+
+	// Keep asking while a run in scope is still going, so its notice appears when it
+	// finishes. No reactive reads in the body: the interval is created once.
+	$effect(() => pollWhileActive(() => chat.jobActivity.active > 0, chat.refreshJobActivity, 5000));
 
 	$effect(() => {
 		if (!chat.sessionId || chat.sending || initialMessageHandled || !initialMessage.trim()) return;

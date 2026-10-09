@@ -149,6 +149,20 @@ export type ChatToolCall = {
 	artifacts: ChatArtifact[];
 };
 
+/** A run in the chat's scope that finished, failed, or was canceled during the conversation. */
+export type ChatJobEvent = {
+	job_id: string;
+	label: string;
+	status: 'complete' | 'failed' | 'canceled';
+	at: string;
+};
+
+export type ChatJobActivity = {
+	events: ChatJobEvent[];
+	/** Runs in scope still queued or running. */
+	active: number;
+};
+
 export type ChatSessionDetail = ChatSession & {
 	scope: ChatScope;
 	transcript: ChatMessage[];
@@ -397,6 +411,10 @@ export async function* sendChatMessage(
 	}
 
 	throw new Error('Chat stream ended before a terminal event was received.');
+}
+
+export async function getChatJobActivity(sessionId: string): Promise<ChatJobActivity> {
+	return request<ChatJobActivity>(`/chat/sessions/${encodeURIComponent(sessionId)}/job-events`);
 }
 
 /**
