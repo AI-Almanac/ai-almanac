@@ -67,6 +67,17 @@ def test_a_run_name_cannot_break_out_of_its_line() -> None:
     assert note.count("\n") == 1
 
 
+def test_the_reported_states_are_the_job_runner_terminal_states() -> None:
+    """The event schema's enum is written out for the API; it must not drift from
+    the runner, or a newly added terminal state would never produce a notice."""
+    from typing import get_args
+
+    from ai_almanac.server.services.chat_job_events import FinishedStatus
+    from ai_almanac.server.services.job_manager import TERMINAL_STATUSES
+
+    assert set(get_args(FinishedStatus)) == set(TERMINAL_STATUSES)
+
+
 # --- through the API -----------------------------------------------------
 
 

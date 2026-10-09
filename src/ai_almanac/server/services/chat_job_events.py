@@ -16,10 +16,10 @@ from typing import Literal
 from pydantic import BaseModel
 
 from .benchmark_state import BenchmarkScope
+from .job_manager import ACTIVE_STATUSES, TERMINAL_STATUSES
 
+# The API's enum of terminal states; a test keeps it equal to TERMINAL_STATUSES.
 FinishedStatus = Literal["complete", "failed", "canceled"]
-_FINISHED: frozenset[str] = frozenset(FinishedStatus.__args__)
-_ACTIVE = frozenset({"queued", "starting", "running", "canceling"})
 
 _STATUS_PHRASES: dict[str, str] = {
     "complete": "finished",
@@ -53,10 +53,10 @@ def job_activity(statuses: Iterable[dict], since: datetime | str) -> ChatJobActi
     events: list[ChatJobEvent] = []
     active = 0
     for job in statuses:
-        if job["status"] in _ACTIVE:
+        if job["status"] in ACTIVE_STATUSES:
             active += 1
         elif (
-            job["status"] in _FINISHED
+            job["status"] in TERMINAL_STATUSES
             and job["completed_at"]
             and _utc(job["completed_at"]) >= start
         ):
