@@ -82,6 +82,18 @@ def test_thinking_is_kept_out_of_the_turn_text() -> None:
     assert turn.content == "Answer."
 
 
+def test_a_plan_patch_rejects_an_event_type_the_benchmark_cannot_score() -> None:
+    """The assistant once stored an invented `rainy_season_onset`; the tool schema
+    now enumerates the event types, so such a patch fails instead of saving."""
+    from pydantic import ValidationError
+
+    from ai_almanac.server.services.chat_tools import BenchmarkConfigPatch
+
+    with pytest.raises(ValidationError):
+        BenchmarkConfigPatch(event_type="rainy_season_onset")
+    assert BenchmarkConfigPatch(event_type="monsoon_onset").event_type == "monsoon_onset"
+
+
 @pytest.mark.parametrize(
     ("base_url", "expected"),
     [

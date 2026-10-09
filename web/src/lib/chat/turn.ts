@@ -29,6 +29,14 @@ function appendText(
 	return [...blocks, { kind, text }];
 }
 
+/** Text resuming after a tool call or note starts a new paragraph in `content`. */
+function withParagraphBreak(turn: ChatMessage): string {
+	const lastKind = turn.blocks?.at(-1)?.kind;
+	const resumesAfterOtherBlock = lastKind !== undefined && lastKind !== 'text';
+	const needsBreak = resumesAfterOtherBlock && turn.content !== '' && !/\s$/.test(turn.content);
+	return needsBreak ? `${turn.content}\n\n` : turn.content;
+}
+
 function upsertToolCall(turn: ChatMessage, incoming: ChatToolCall): ChatMessage {
 	const toolCalls = turn.tool_calls ?? [];
 	const existing = toolCalls.find((tc) => tc.id === incoming.id);
@@ -66,7 +74,7 @@ export function foldTurnEvent(turn: ChatMessage, event: ChatEvent): ChatMessage 
 		case 'text_delta':
 			return {
 				...turn,
-				content: turn.content + event.content,
+				content: withParagraphBreak(turn) + event.content,
 				blocks: appendText(turn.blocks ?? [], 'text', event.content)
 			};
 		case 'thinking_delta':

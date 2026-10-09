@@ -51,6 +51,16 @@ describe('chat turn timeline', () => {
 		expect(turnTimeline(turn).map((item) => item.kind)).toEqual(['text', 'activity', 'text']);
 	});
 
+	it('starts a new paragraph in the turn text when the reply resumes after tool work', () => {
+		const turn = stream([
+			{ type: 'text_delta', turn_id: T, content: 'Let me look.' },
+			toolCall('c1', 'get_job_metrics', 'running'),
+			{ type: 'text_delta', turn_id: T, content: 'FuXi leads.' }
+		]);
+
+		expect(turn.content).toBe('Let me look.\n\nFuXi leads.');
+	});
+
 	it('collapses back-to-back analyses and their progress notes into one group', () => {
 		const turn = stream([
 			toolCall('c1', 'run_code', 'running'),
