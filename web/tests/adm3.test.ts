@@ -27,7 +27,8 @@ describe('ADM3 forecast geometry', () => {
 			onset_threshold: 20,
 			region_id: 'ethiopia',
 			region_name: 'Ethiopia',
-			onset_definition: null
+			onset_definition: null,
+			available_views: [{ model: 'weekly_model', resolution: 'weekly' }]
 		};
 		const boundaries: GeoJSON.FeatureCollection = {
 			type: 'FeatureCollection',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DataSource } from '../src/lib/api';
-import { describeSourceCoverage, missingYears } from '../src/lib/source-coverage';
+import { describeSourceCoverage, gridsMatch, missingYears } from '../src/lib/source-coverage';
 
 function source(metadata: Record<string, unknown>): DataSource {
 	return { metadata } as unknown as DataSource;
@@ -25,5 +25,20 @@ describe('describeSourceCoverage', () => {
 
 	it('returns null when nothing was detected', () => {
 		expect(describeSourceCoverage(source({}))).toBeNull();
+	});
+});
+
+describe('gridsMatch', () => {
+	it('matches equal grid steps', () => {
+		expect(gridsMatch(0.25, 0.25)).toBe(true);
+	});
+
+	it('rejects a model on a different grid than the observations', () => {
+		expect(gridsMatch(0.25, 2)).toBe(false);
+	});
+
+	it('does not rule out a source whose grid step was never recorded', () => {
+		expect(gridsMatch(null, 2)).toBe(true);
+		expect(gridsMatch(0.25, undefined)).toBe(true);
 	});
 });

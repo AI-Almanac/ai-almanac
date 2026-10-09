@@ -91,7 +91,7 @@ export function benchmarkSetupSteps(openManualConfig: () => void): DriveStep[] {
 			popover: {
 				title: 'Let the LLM assistant set it up',
 				description:
-					'Describe the benchmark you want in plain language, for example “Compare monsoon onset skill over Ethiopia”. The assistant fills in the plan and can explain any option. Iterate with the assistant to refine the plan.',
+					'Describe the benchmark you want in plain language, for example “Compare rainy season onset skill over Ethiopia”. The assistant fills in the plan and can explain any option. Iterate with the assistant to refine the plan.',
 				side: 'right'
 			}
 		},

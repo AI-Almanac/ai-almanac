@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.auth import AdminUser, CurrentUser, require_assistant_comparisons
-from ai_almanac.server.services import assistant_compare, guardrails, rulesets, turn_log
+from ai_almanac.server.services import assistant_compare, rulesets, turn_log
 from ai_almanac.server.services.chat_state import ChatScope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
@@ -60,21 +60,6 @@ class RulesetDetail(BaseModel):
     tool_policy: ToolPolicy
     model: str | None
     model_settings: dict | None
-
-
-class GuardrailThresholds(BaseModel):
-    """The enforced thresholds, read-only here.
-
-    Surfaced so an admin editing prose can see the numbers the {{placeholders}}
-    will resolve to. Editing them is a platform setting (PATCH /settings), not a
-    ruleset edit, because the submission chokepoint reads the same value.
-    """
-
-    min_onset_years: int
-    min_training_years: int
-    blend_member_warn: int
-    small_sample_years: int
-    presatellite_end_year: int
 
 
 class RulesetSave(BaseModel):
@@ -236,11 +221,6 @@ async def list_rulesets(user: AdminUser) -> list[RulesetSummary]:
     # Before the first seed, report what chat would actually use.
     active = await rulesets.active_ruleset()
     return [_summary(active, True)]
-
-
-@router.get("/guardrails", response_model=GuardrailThresholds)
-async def read_guardrails(user: AdminUser) -> GuardrailThresholds:
-    return GuardrailThresholds(**vars(guardrails.current()))
 
 
 @router.get("/rulesets/{ruleset_id}", response_model=RulesetDetail)

@@ -7,6 +7,8 @@ const HEADER =
 	'id,brier,rps,auc,n,lat,lon,pietra,brier_week1,brier_week2,brier_week3,brier_week4,brier_later,auc_week1,auc_week2,auc_week3,auc_week4,auc_later,model,cv_method,brier_skill,rps_skill,AUC diff';
 const BLEND =
 	'ALL,0.576,0.479,0.835,26622,,,0.487,0.088,0.113,0.118,0.119,0.137,0.890,0.787,0.737,0.716,0.881,blended_model,global,0.036,0.129,0.62';
+const FOREST =
+	'ALL,0.560,0.460,0.840,26622,,,0.495,0.085,0.110,0.116,0.118,0.131,0.893,0.790,0.740,0.718,0.884,blended_forest,global,0.064,0.165,0.81';
 const AIFS =
 	'ALL,1.036,0.993,0.676,26622,,,0.352,0.140,0.166,0.187,0.210,0.331,0.665,0.570,0.536,0.555,0.700,aifs_clim_mok_date_raw,raw,-0.73,-0.80,-15.3';
 // The reference every skill score in the file is measured against. Its
@@ -20,10 +22,26 @@ describe('parsePooledSummary', () => {
 		expect(rows).toHaveLength(2);
 		// Blend is sorted first.
 		expect(rows[0].isBlend).toBe(true);
-		expect(rows[0].label).toBe('Blend');
+		expect(rows[0].label).toBe('Week-level blend');
 		expect(rows[0].auc).toBeCloseTo(0.835);
 		expect(rows[0].aucByLead).toEqual([0.89, 0.787, 0.737, 0.716, 0.881]);
 		expect(rows[0].brierSkill).toBeCloseTo(0.036);
+	});
+
+	it('leads with both blends, week-level first, when the job trained both', () => {
+		const rows = parsePooledSummary([HEADER, AIFS, FOREST, BLEND].join('\n'));
+		expect(rows.map((r) => [r.model, r.label, r.isBlend])).toEqual([
+			['blended_model', 'Week-level blend', true],
+			['blended_forest', 'Day-level blend', true],
+			['aifs_clim_mok_date_raw', 'AIFS (raw)', false]
+		]);
+	});
+
+	it("derives the day-level blend's per-lead skill like any other row", () => {
+		const rows = parsePooledSummary([HEADER, BLEND, FOREST, BASELINE].join('\n'));
+		const forest = rows.find((r) => r.model === 'blended_forest');
+		expect(forest?.brierSkillByLead[0]).toBeCloseTo(1 - 0.085 / 0.091, 6);
+		expect(forest?.rpsSkill).toBeCloseTo(0.165);
 	});
 
 	it('prettifies component model names without abbreviating', () => {
@@ -49,6 +67,7 @@ describe('parsePooledSummary', () => {
 		// Raw forecast series score an order of magnitude below these three, so
 		// they stay hidden until the reader asks for them.
 		expect(isDefaultVisibleSeries('blended_model')).toBe(true);
+		expect(isDefaultVisibleSeries('blended_forest')).toBe(true);
 		expect(isDefaultVisibleSeries('unc_clim_raw')).toBe(true);
 		expect(isDefaultVisibleSeries('clim_raw')).toBe(true);
 		expect(isDefaultVisibleSeries('aifs_clim_mok_date_raw')).toBe(false);

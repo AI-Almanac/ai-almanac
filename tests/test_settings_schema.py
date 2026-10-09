@@ -78,26 +78,33 @@ def test_enum_fields_declare_their_choices() -> None:
     assert fields["llm_model"]["choices"] is None
 
 
-def test_legacy_comparisons_flag_maps_to_audience_off(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("legacy_flag", "audience"),
+    [
+        ("enable_assistant_comparisons", "assistant_comparisons_audience"),
+        ("enable_data_management", "data_management_audience"),
+    ],
+)
+def test_legacy_feature_flag_maps_to_audience_off(
+    legacy_flag: str, audience: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
     try:
         monkeypatch.setattr(
             "ai_almanac.settings._load_config_yaml",
-            lambda: {"enable_assistant_comparisons": False},
+            lambda: {legacy_flag: False},
         )
         monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
         reload_settings()
-        assert settings.assistant_comparisons_audience == "off"
+        assert getattr(settings, audience) == "off"
 
         # An explicit audience wins over the deprecated flag.
         monkeypatch.setattr(
             "ai_almanac.settings._load_db_overlay",
-            lambda: {"assistant_comparisons_audience": "everyone"},
+            lambda: {audience: "everyone"},
         )
         reload_settings()
-        assert settings.assistant_comparisons_audience == "everyone"
+        assert getattr(settings, audience) == "everyone"
     finally:
         for name, value in snapshot.items():
             setattr(settings, name, value)

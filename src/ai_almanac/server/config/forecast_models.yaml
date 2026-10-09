@@ -12,14 +12,18 @@
 # true` models are rolled out with earth2studio's ensemble workflow and reduced
 # to the ensemble mean; `nensemble` is the member count (a cost/accuracy knob).
 #
+# `training` lists the years and datasets a checkpoint was pretrained and
+# fine-tuned on, with the publication they come from. The benchmark assistant
+# checks evaluation years against it, so only record published values; leave
+# it out when unknown rather than estimating.
+#
 # `variables`/`default_lead_hours` are shared across all models (all are run
 # against the same GFS initial conditions) and are the single source of truth
 # for both the API's model list and the runners' inference defaults.
 #
-# A blend model can run live forecasts when its normalized data-source name
-# (settings.blend_model_key) matches an entry's id, normalized display_name,
-# or an `aliases` entry. Aliases are normalized keys; add one when a common
-# data-source name for a model doesn't reduce to its id.
+# A model data source names the entry that produced it by `id` at registration
+# (metadata.forecast_model_id), so ids are a stored contract: add entries
+# freely, but never rename or remove an id that data sources link to.
 
 variables: ["t2m", "wind10m", "tcwv", "msl", "wind850m", "u850", "v850", "q850", "z500"]
 default_lead_hours: [0, 6, 12, 24, 48, 72, 120]
@@ -32,6 +36,11 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF Artificial Intelligence Forecasting System (AIFS-Single v1)."
+    training:
+      source: "https://huggingface.co/ecmwf/aifs-single-1.1"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2022}
+      - {stage: fine-tuning, dataset: IFS operational analysis, start_year: 2016, end_year: 2022}
 
   - id: aifsens
     display_name: "AIFS ENS"
@@ -42,6 +51,11 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS Ensemble v1 (reported as the ensemble mean)."
+    training:
+      source: "https://www.ecmwf.int/en/newsletter/185/earth-system-science/aifs-ens-becomes-operational"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2017}
+      - {stage: fine-tuning, dataset: IFS operational analysis, start_year: 2016, end_year: 2023}
 
   - id: aifs2
     display_name: "AIFS2"
@@ -50,7 +64,11 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS-Single v2."
-    aliases: ["aifs_single_v2"]
+    training:
+      source: "https://huggingface.co/ecmwf/aifs-single-2.0"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2022}
+      - {stage: fine-tuning, dataset: IFS operational analysis, start_year: 2018, end_year: 2024}
 
   - id: aifs2ens
     display_name: "AIFS2 ENS"
@@ -61,7 +79,11 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS Ensemble v2 (reported as the ensemble mean)."
-    aliases: ["aifs_ensemble_v2"]
+    training:
+      source: "https://huggingface.co/ecmwf/aifs-ens-2.0"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2022}
+      - {stage: fine-tuning, dataset: IFS operational analysis, start_year: 2018, end_year: 2024}
 
   - id: graphcast
     display_name: "GraphCast Small"
@@ -70,6 +92,10 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 1.0
     description: "Lower-resolution GraphCast variant."
+    training:
+      source: "https://github.com/google-deepmind/graphcast/blob/main/docs/weathernext1_graph/README.md"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2015}
 
   - id: graphcast_operational
     display_name: "GraphCast Operational"
@@ -78,6 +104,11 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "Operational-resolution GraphCast global forecast model."
+    training:
+      source: "https://github.com/google-deepmind/graphcast/blob/main/docs/weathernext1_graph/README.md"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2017}
+      - {stage: fine-tuning, dataset: ECMWF HRES, start_year: 2016, end_year: 2021}
 
   - id: gencast
     display_name: "GenCast Mini"
@@ -86,6 +117,10 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 1.0
     description: "Mini stochastic GenCast variant."
+    training:
+      source: "https://github.com/google-deepmind/graphcast/blob/main/docs/weathernext1_gen/README.md"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2018}
 
   - id: fuxi
     display_name: "FuXi"
@@ -94,3 +129,7 @@ models:
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "FuXi medium-range global forecast model."
+    training:
+      source: "https://arxiv.org/abs/2306.12873"
+      periods:
+      - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2015}

@@ -12,10 +12,11 @@ from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services.metrics import (
+    build_job_grids,
     compute_job_cell,
-    compute_job_grid,
     compute_job_metrics,
 )
+from ai_almanac.server.services.storage import get_storage
 
 
 class FakeStorage:
@@ -86,8 +87,19 @@ def test_compute_job_metrics_includes_e2s_all_window_units(tmp_path: Path) -> No
     assert window.metrics["acc"].unit == "dimensionless"
 
 
-def test_compute_job_grid_returns_e2s_metric_for_all_window(tmp_path: Path) -> None:
+def test_build_job_grids_collects_map_metrics_from_every_file(tmp_path: Path) -> None:
     job_id = "job-1"
+    write_metrics_file(
+        tmp_path,
+        job_id,
+        "spatial_metrics_aifs_1,15.nc",
+        "aifs",
+        "1,15",
+        {
+            "miss_rate": np.array([[0.123456789, np.nan], [0.5, 1.0]]),
+            "mae_2001": np.array([[1.0, 2.0], [3.0, 4.0]]),
+        },
+    )
     write_metrics_file(
         tmp_path,
         job_id,
@@ -97,18 +109,37 @@ def test_compute_job_grid_returns_e2s_metric_for_all_window(tmp_path: Path) -> N
         {"rmse": np.array([[1.0, 2.0], [3.0, 4.0]])},
     )
 
-    result = compute_job_grid(job_id, FakeStorage(tmp_path), "aifs", "all", "rmse")
+    result = build_job_grids(job_id, FakeStorage(tmp_path))
 
-    assert result.window == "all"
-    assert result.metric == "rmse"
-    assert result.unit == "mm"
-    assert result.values == [[1.0, 2.0], [3.0, 4.0]]
+    by_key = {(g.window, g.metric): g for g in result.grids}
+    assert set(by_key) == {("1-15", "miss_rate"), ("all", "rmse")}
+    miss_rate = by_key[("1-15", "miss_rate")]
+    assert miss_rate.values == [[0.1235, None], [0.5, 1.0]]
+    assert (miss_rate.min, miss_rate.unit) == (0.123456789, "fraction")
+    assert by_key[("all", "rmse")].unit == "mm"
 
 
-def test_compute_job_grid_raises_for_unknown_metric(tmp_path: Path) -> None:
-    job_id = "job-1"
+@pytest.mark.asyncio
+async def test_grids_endpoint_serves_stored_payload_without_rebuilding(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await client.get("/jobs")
+    job_id = "stored-grids-job"
+    async with get_db() as conn:
+        user_id = (
+            await conn.execute(text("SELECT id FROM users WHERE external_id = 'local'"))
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at) "
+                "VALUES (:id, :uid, 'dataset-1', 'complete', '{}', :created_at)"
+            ),
+            {"id": job_id, "uid": user_id, "created_at": datetime.now(UTC).isoformat()},
+        )
+    output_dir = Path(get_storage().job_output_uri(job_id)[0])
     write_metrics_file(
-        tmp_path,
+        output_dir.parent.parent,
         job_id,
         "e2s_spatial_metrics_aifs_all.nc",
         "aifs",
@@ -116,8 +147,17 @@ def test_compute_job_grid_raises_for_unknown_metric(tmp_path: Path) -> None:
         {"rmse": np.array([[1.0, 2.0], [3.0, 4.0]])},
     )
 
-    with pytest.raises(KeyError):
-        compute_job_grid(job_id, FakeStorage(tmp_path), "aifs", "all", "missing")
+    first = await client.get(f"/jobs/{job_id}/grids")
+
+    def fail_if_rebuilt(*args, **kwargs):
+        raise AssertionError("stored grids should be served without reading the NetCDFs")
+
+    monkeypatch.setattr("ai_almanac.server.routers.jobs.build_job_grids", fail_if_rebuilt)
+    second = await client.get(f"/jobs/{job_id}/grids")
+
+    assert first.status_code == second.status_code == 200
+    assert second.json() == first.json()
+    assert [g["metric"] for g in second.json()["grids"]] == ["rmse"]
 
 
 def test_compute_job_cell_compares_shared_dynamic_metrics(tmp_path: Path) -> None:

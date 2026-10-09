@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai_almanac.server.services.forecast_models import live_forecast_compatibility
 from ai_almanac.server.services.job_submission import forecast_generation_gpus
+from ai_almanac.settings import member_forecast_model_id
 
 
 def test_all_ready_scores_gpu_free():
@@ -18,8 +19,8 @@ def test_stale_set_needs_a_gpu():
 
 
 class TestLiveForecastCompatibility:
-    """A blend member can be extended live only by a registry model that runs
-    on the archive's grid; the verdict feeds the blend-setup badges, the
+    """A blend member can be extended live only by its linked registry model,
+    and only if that model runs on the archive's grid; the verdict feeds the blend-setup badges, the
     submit-time warning, and the forecast gate alike."""
 
     def test_matching_grid_is_ready(self):
@@ -36,35 +37,19 @@ class TestLiveForecastCompatibility:
     def test_archive_without_recorded_grid_passes(self):
         assert live_forecast_compatibility("graphcast", None).status == "ready"
 
+    def test_unlinked_archive_is_unavailable(self):
+        assert live_forecast_compatibility(None, 0.25).status == "unavailable"
+
     def test_unregistered_model_is_unavailable(self):
         assert live_forecast_compatibility("neuralgcm", None).status == "unavailable"
 
 
-class TestResolveForecastModel:
-    """A blend model name reaches its registry entry by id, normalized display
-    name, or alias — the live-forecast gate, both runners, and the web badges
-    all match this way."""
+class TestMemberForecastModelId:
+    """Runners execute the registry model the server linked each blend member to."""
 
-    def _resolve(self, name: str):
-        from ai_almanac.settings import (
-            get_packaged_forecast_models,
-            resolve_forecast_model,
-        )
+    def test_member_runs_its_linked_model(self):
+        config = {"forecast_models": {"aifs_v2_india_0_25": "aifs2"}}
+        assert member_forecast_model_id(config, "aifs_v2_india_0_25") == "aifs2"
 
-        return resolve_forecast_model(get_packaged_forecast_models(), name)
-
-    def test_matches_by_id(self):
-        assert self._resolve("aifs")["id"] == "aifs"
-
-    def test_matches_source_names_via_alias(self):
-        # The registered data sources are named "AIFS Single v2" /
-        # "AIFS Ensemble v2"; their blend keys must reach the aifs2 family.
-        assert self._resolve("aifs_single_v2")["id"] == "aifs2"
-        assert self._resolve("aifs_ensemble_v2")["id"] == "aifs2ens"
-
-    def test_matches_by_normalized_display_name(self):
-        assert self._resolve("aifs2_ens")["id"] == "aifs2ens"
-        assert self._resolve("graphcast_small")["id"] == "graphcast"
-
-    def test_unknown_name_resolves_to_none(self):
-        assert self._resolve("no_such_model") is None
+    def test_job_queued_before_links_uses_member_name(self):
+        assert member_forecast_model_id({}, "fuxi") == "fuxi"

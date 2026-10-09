@@ -27,6 +27,9 @@ export const BASELINE_COLOR = '#8a6f3d';
 /** The blended model, drawn heavier than its constituents. */
 export const BLEND_COLOR = '#1f2937';
 
+/** The day-level blend, when a job trains one alongside the week-level blend. */
+export const DAY_BLEND_COLOR = '#be185d';
+
 /** Axis strokes, gridlines, and other chart chrome. */
 export const AXIS_STROKE = '#6a7779';
 export const GRID_STROKE = 'rgba(31, 43, 52, 0.1)';

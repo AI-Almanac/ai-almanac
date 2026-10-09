@@ -79,6 +79,7 @@ class Turn:
 
     text: str = ""
     tool_names: list[str] = field(default_factory=list)
+    offered_tools: list[str] = field(default_factory=list)
     finding_keys: list[str] = field(default_factory=list)
     blocking: bool = False
     jobs_created: int = 0
@@ -153,12 +154,29 @@ class NumbersAreSourced(Evaluator[Inputs, Turn]):
         return not compute_flags(record)["numbers_without_tool_call"]
 
 
+@dataclass
+class SpeaksInUserTerms(Evaluator[Inputs, Turn]):
+    """No tool names or configuration paths shown to the user."""
+
+    def evaluate(self, ctx: EvaluatorContext[Inputs, Turn]) -> bool:
+        from ai_almanac.server.services.turn_log import TurnRecord, compute_flags
+
+        record = TurnRecord(
+            session_id="eval",
+            user_id="eval",
+            text=ctx.output.text,
+            offered_tools=list(ctx.output.offered_tools),
+        )
+        return not compute_flags(record)["names_internal_terms"]
+
+
 EVALUATORS = [
     GuardrailFired(),
     Acknowledged(),
     SeverityAsExpected(),
     NoUnapprovedJob(),
     NumbersAreSourced(),
+    SpeaksInUserTerms(),
 ]
 
 
@@ -289,7 +307,7 @@ def _task(fx: Fixtures, ruleset: rulesets.Ruleset):
     async def run_case(inputs: Inputs) -> Turn:
         session_id, scope = await _scratch_session(fx, inputs.blend)
         before = await _job_count(fx.user_id)
-        turn = Turn()
+        turn = Turn(offered_tools=llm.offered_tool_names(ruleset))
 
         try:
             async for raw in llm.stream_response(
@@ -304,7 +322,8 @@ def _task(fx: Fixtures, ruleset: rulesets.Ruleset):
                 match event.get("type"):
                     case "text_delta":
                         turn.text += event["content"]
-                    case "tool_call":
+                    # A call is announced twice: while its arguments stream, then when it runs.
+                    case "tool_call" if event["tool_call"]["status"] != "pending":
                         turn.tool_names.append(event["tool_call"]["name"])
                     case "guardrail":
                         turn.finding_keys.extend(event["finding_keys"])

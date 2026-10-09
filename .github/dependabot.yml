@@ -2,7 +2,8 @@
 #
 # Note: Dependabot does not understand pixi.lock. Python PRs update
 # pyproject.toml constraints; refresh the lockfile with `pixi update`
-# before merging.
+# before merging. Alerts come from the snapshot dependency-snapshot.yml
+# submits for the production environment in pixi.lock.
 version: 2
 updates:
   - package-ecosystem: pip

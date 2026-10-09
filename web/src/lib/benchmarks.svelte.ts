@@ -3,7 +3,7 @@ import {
 	getJobs,
 	getJob,
 	getJobMetrics,
-	getJobGrid,
+	getJobGrids,
 	getJobCell,
 	getJobSkillScores,
 	deleteJob,
@@ -26,10 +26,8 @@ const _metricsCache = new Map<string, JobMetrics>();
 export function invalidateJobCaches(jobId: string): void {
 	_metricsCache.delete(jobId);
 	_skillCache.delete(jobId);
+	_gridsCache.delete(jobId);
 	const prefix = `${jobId}||`;
-	for (const key of _gridCache.keys()) {
-		if (key.startsWith(prefix)) _gridCache.delete(key);
-	}
 	for (const key of _cellCache.keys()) {
 		if (key.startsWith(prefix)) _cellCache.delete(key);
 	}
@@ -46,7 +44,23 @@ export async function getCachedJobMetrics(jobId: string, bbox?: BboxFilter): Pro
 	return getJobMetrics(jobId, bbox);
 }
 
-const _gridCache = new Map<string, JobGridResponse>();
+// One request fetches every grid for a job; the map's concurrent per-layer
+// lookups share the same in-flight promise.
+const _gridsCache = new Map<string, Promise<Map<string, JobGridResponse>>>();
+
+const gridKey = (model: string, window: string, metric: string) => `${model}||${window}||${metric}`;
+
+function getJobGridsByKey(jobId: string): Promise<Map<string, JobGridResponse>> {
+	let pending = _gridsCache.get(jobId);
+	if (!pending) {
+		pending = getJobGrids(jobId).then(
+			({ grids }) => new Map(grids.map((g) => [gridKey(g.model, g.window, g.metric), g]))
+		);
+		pending.catch(() => _gridsCache.delete(jobId));
+		_gridsCache.set(jobId, pending);
+	}
+	return pending;
+}
 
 export async function getCachedJobGrid(
 	jobId: string,
@@ -54,12 +68,9 @@ export async function getCachedJobGrid(
 	window: string,
 	metric: string
 ): Promise<JobGridResponse> {
-	const key = `${jobId}||${model}||${window}||${metric}`;
-	const hit = _gridCache.get(key);
-	if (hit) return hit;
-	const data = await getJobGrid(jobId, model, window, metric);
-	_gridCache.set(key, data);
-	return data;
+	const grid = (await getJobGridsByKey(jobId)).get(gridKey(model, window, metric));
+	if (!grid) throw new Error(`No ${metric} grid for ${model} (${window})`);
+	return grid;
 }
 
 // Probabilistic skill scores. The endpoint returns an empty `windows` array for

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -26,7 +26,9 @@ class ChatArtifact(BaseModel):
 class ChatToolCall(BaseModel):
     id: str
     name: str
-    status: Literal["running", "completed", "failed"] = "completed"
+    # "pending" while the model is still writing the call's arguments, which for
+    # a code tool can take longer than running it.
+    status: Literal["pending", "running", "completed", "failed"] = "completed"
     input: dict = Field(default_factory=dict)
     result: Any = None
     artifacts: list[ChatArtifact] = Field(default_factory=list)
@@ -48,9 +50,31 @@ class GuardrailNotice(BaseModel):
     finding_keys: list[str] = Field(default_factory=list)
 
 
+class TextBlock(BaseModel):
+    kind: Literal["text"] = "text"
+    text: str = ""
+
+
+class ThinkingBlock(BaseModel):
+    """Reasoning summary or between-tool progress note the model wrote."""
+
+    kind: Literal["thinking"] = "thinking"
+    text: str = ""
+
+
+class ToolBlock(BaseModel):
+    kind: Literal["tool"] = "tool"
+    tool_call_id: str
+
+
+TurnBlock = Annotated[TextBlock | ThinkingBlock | ToolBlock, Field(discriminator="kind")]
+
+
 class ChatTurn(BaseModel):
     id: str
     role: Literal["user", "assistant"]
+    # All of the turn's text, concatenated: what history, ratings, and the turn
+    # log read. `blocks` is the same turn in the order it happened, for display.
     content: str = ""
     created_at: datetime
     status: Literal["streaming", "completed", "failed"] = "completed"
@@ -58,6 +82,7 @@ class ChatTurn(BaseModel):
     tool_calls: list[ChatToolCall] = Field(default_factory=list)
     artifacts: list[ChatArtifact] = Field(default_factory=list)
     guardrails: list[GuardrailNotice] = Field(default_factory=list)
+    blocks: list[TurnBlock] = Field(default_factory=list)
 
 
 def utc_now() -> datetime:

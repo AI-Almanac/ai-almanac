@@ -4,7 +4,7 @@
 
 type Named = { filename: string };
 
-export type OutputGroupKey = 'cv' | 'final' | 'spec' | 'other';
+export type OutputGroupKey = 'cv' | 'final' | 'final_day' | 'spec' | 'other';
 
 export type OutputGroup<T extends Named> = {
 	key: OutputGroupKey;
@@ -18,7 +18,16 @@ const GROUPS: { key: Exclude<OutputGroupKey, 'other'>; label: string; matches: R
 		label: 'Cross-validation scores',
 		matches: /^(summary_models_pooled|summary_models|yearly_metrics_global).*\.csv$/
 	},
-	{ key: 'final', label: 'Final blend weights', matches: /^coefs_blended_model_global_final\./ },
+	{
+		key: 'final',
+		label: 'Week-level blend weights',
+		matches: /^coefs_blended_model_global_final\./
+	},
+	{
+		key: 'final_day',
+		label: 'Day-level blend model',
+		matches: /^forest_blended_forest_global_final\./
+	},
 	{ key: 'spec', label: 'Training settings', matches: /^training_spec\.ya?ml$/ }
 ];
 

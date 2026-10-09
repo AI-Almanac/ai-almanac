@@ -49,6 +49,7 @@ from ..services.chat_artifacts import (
     hydrate_turn_artifact_urls,
     verify_chat_figure_signature,
 )
+from ..services.chat_job_events import ChatJobActivity, scope_job_activity
 from ..services.chat_state import (
     ChatScope,
     ChatTurn,
@@ -395,6 +396,29 @@ async def get_session(session_id: str, user: CurrentUser):
         raise HTTPException(status_code=404, detail="Session not found")
 
     return _session_detail(row, user.id)
+
+
+@router.get("/sessions/{session_id}/job-events", response_model=ChatJobActivity)
+async def get_session_job_events(session_id: str, user: CurrentUser) -> ChatJobActivity:
+    """Runs in the session's scope that finished since the conversation began."""
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT scope, created_at FROM chat_sessions"
+                        " WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user.id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    return await scope_job_activity(user.id, scope, row["created_at"])
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionOut)

@@ -1,4 +1,5 @@
 // ---- Forecasts ---------------------------------------------------------------
+import type { operations } from '../api-types.gen';
 import { request } from './core';
 import { type JobStatus } from './jobs';
 
@@ -37,10 +38,8 @@ export type ForecastCreate = {
 export type ForecastModel = {
 	id: string;
 	display_name: string;
-	resolution: string;
+	resolution_deg: number;
 	description: string;
-	// Extra normalized keys this model matches (see forecastModelFor).
-	aliases?: string[];
 };
 
 export async function listForecasts(): Promise<Forecast[]> {
@@ -59,26 +58,6 @@ export async function refreshForecast(forecastId: string): Promise<Forecast> {
 
 export async function getForecastModels(): Promise<ForecastModel[]> {
 	return request<ForecastModel[]>('/forecasts/models');
-}
-
-// Mirror of the server's blend_model_key (settings.py): the live-scoring
-// gate matches a data source's normalized name against forecast-registry ids,
-// so any "can this model run a live forecast?" badge must normalize the same way.
-export function blendModelKey(name: string): string {
-	return name
-		.toLowerCase()
-		.replace(/[^0-9a-z]+/g, '_')
-		.replace(/^_+|_+$/g, '');
-}
-
-// Mirror of the server's resolve_forecast_model (settings.py): the registry
-// model a blend model name can run live forecasts with, matched by id,
-// normalized display name, or alias. Undefined means historical-only.
-export function forecastModelFor(models: ForecastModel[], name: string): ForecastModel | undefined {
-	const key = blendModelKey(name);
-	return models.find(
-		(m) => key === m.id || key === blendModelKey(m.display_name) || (m.aliases ?? []).includes(key)
-	);
 }
 
 // Initialization data source a live rollout starts from (e.g. GFS, ERA5).
@@ -112,7 +91,22 @@ export async function getTrajectorySets(): Promise<TrajectorySet[]> {
 	return request<TrajectorySet[]>('/forecasts/trajectories');
 }
 
-// probs[date_idx] = [cv_week1, cv_week2, cv_week3, cv_week4, cv_later]
+// Which blend's probabilities a forecast view shows, and how they are binned.
+// Bound to the generated query parameters so a backend rename is a TS error.
+type BlendForecastQuery = NonNullable<
+	operations['get_blend_forecast_jobs__job_id__blend_forecast_get']['parameters']['query']
+>;
+export type BlendForecastModel = NonNullable<BlendForecastQuery['model']>;
+export type BlendForecastResolution = NonNullable<BlendForecastQuery['resolution']>;
+export type BlendForecastView = { model: BlendForecastModel; resolution: BlendForecastResolution };
+
+export const DEFAULT_BLEND_FORECAST_VIEW: BlendForecastView = {
+	model: 'weekly_model',
+	resolution: 'weekly'
+};
+
+// probs[date_idx] holds one probability per onset bin: Week 1..4 + Later for the
+// weekly resolution, Day 1..28 + Later for daily (see OnsetBins in $lib/onset).
 export type BlendForecastPoint = { id?: string; lat: number; lon: number; probs: number[][] };
 
 export type BlendForecastData = {
@@ -125,8 +119,14 @@ export type BlendForecastData = {
 	// Moron–Robertson), so the UI can name what "onset" means here.
 	region_name: string | null;
 	onset_definition: string | null;
+	// Views this forecast's outputs can serve; older forecasts offer only the default.
+	available_views: BlendForecastView[];
 };
 
-export async function getBlendForecast(jobId: string): Promise<BlendForecastData> {
-	return request<BlendForecastData>(`/jobs/${jobId}/blend-forecast`);
+export async function getBlendForecast(
+	jobId: string,
+	view: BlendForecastView = DEFAULT_BLEND_FORECAST_VIEW
+): Promise<BlendForecastData> {
+	const q = new URLSearchParams(view);
+	return request<BlendForecastData>(`/jobs/${jobId}/blend-forecast?${q}`);
 }

@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
 
 from ai_almanac.server.services.focus_area import FocusArea
+from ai_almanac.server.services.romp import (
+    DataPath,
+    FilePattern,
+    InitDays,
+    Members,
+    RompName,
+    Year,
+)
 
 from . import benchmark_domain, blend_domain
-from .benchmark_state import BenchmarkRunSpec
+from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
 from .chat_state import ChatScope
@@ -20,32 +29,32 @@ from .chat_state import ChatScope
 class PerModelRompParams(BaseModel):
     model_config = ConfigDict(title="PerModelRunParams")
 
-    start_date: str | None = None
-    end_date: str | None = None
-    start_year_clim: int | None = None
-    end_year_clim: int | None = None
-    init_days: str | None = None
-    date_filter_year: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    start_year_clim: Year | None = None
+    end_year_clim: Year | None = None
+    init_days: InitDays | None = None
+    date_filter_year: Year | None = None
     parallel: bool | None = None
     probabilistic: bool | None = None
-    members: str | None = None
-    model_var: str | None = None
-    file_pattern: str | None = None
+    members: Members | None = None
+    model_var: RompName | None = None
+    file_pattern: FilePattern | None = None
 
 
 class BenchmarkAdvancedParams(BaseModel):
-    obs: str | None = None
-    obs_file_pattern: str | None = None
-    obs_var: str | None = None
+    obs: RompName | None = None
+    obs_file_pattern: FilePattern | None = None
+    obs_var: RompName | None = None
     wet_threshold: float | None = None
     wet_init: float | None = None
     wet_spell: int | None = None
     dry_spell: int | None = None
     dry_extent: int | None = None
-    nc_mask: str | None = None
-    thresh_file: str | None = None
-    ref_model: str | None = None
-    ref_model_dir: str | None = None
+    nc_mask: DataPath | None = None
+    thresh_file: DataPath | None = None
+    ref_model: RompName | None = None
+    ref_model_dir: DataPath | None = None
     focus_area: FocusArea | None = None
     per_model_params: dict[str, PerModelRompParams] | None = None
 
@@ -55,7 +64,7 @@ class BenchmarkConfigPatch(BaseModel):
     region_id: str | None = None
     dataset_id: str | None = None
     model_ids: list[str] | None = None
-    event_type: str | None = None
+    event_type: BenchmarkEventType | None = None
     forecast_window_days: Annotated[int, PydanticField(ge=30)] | None = None
     advanced_params: BenchmarkAdvancedParams | None = PydanticField(default=None)
 

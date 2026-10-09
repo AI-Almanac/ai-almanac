@@ -1,0 +1,36 @@
+name: dependency-snapshot
+
+# Dependabot cannot read pixi.lock, so submit the production environment's
+# resolved packages to the dependency graph; Dependabot alerts then cover what
+# the image actually ships.
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "pixi.lock"
+      - "scripts/dependency_snapshot.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+        with:
+          # pixi list reads the lockfile; nothing needs installing.
+          run-install: false
+
+      - name: Submit prod dependency snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pixi list -e prod --platform linux-64 --json --frozen \
+            | python3 scripts/dependency_snapshot.py \
+            | gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/snapshots" --input -

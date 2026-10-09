@@ -90,7 +90,8 @@ job_artifacts = sa.Table(
     sa.Column("kind", sa.Text(), nullable=False),
     sa.Column("filename", sa.Text(), nullable=False),
     sa.Column("media_type", sa.Text(), nullable=False),
-    sa.Column("size_bytes", sa.Integer(), nullable=False),
+    # BIGINT: blend outputs pass 2^31 bytes (a 26-year combined table is ~12 GB).
+    sa.Column("size_bytes", sa.BigInteger(), nullable=False),
     sa.Column("checksum", sa.Text(), nullable=False),
     sa.Column("storage_key", sa.Text(), nullable=False),
     sa.Column("created_at", sa.Text(), nullable=False),

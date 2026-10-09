@@ -56,15 +56,6 @@ export type RulesetDetail = {
 	model_settings: Record<string, unknown> | null;
 };
 
-/** The enforced thresholds. Read-only here: they are a platform setting. */
-export type GuardrailThresholds = {
-	min_onset_years: number;
-	min_training_years: number;
-	blend_member_warn: number;
-	small_sample_years: number;
-	presatellite_end_year: number;
-};
-
 export type PromptPreview = {
 	scope_kind: string;
 	instructions: string;
@@ -84,10 +75,6 @@ export async function listRulesets(): Promise<RulesetSummary[]> {
 
 export async function getRuleset(id: string): Promise<RulesetDetail> {
 	return request<RulesetDetail>(`/assistant/rulesets/${encodeURIComponent(id)}`);
-}
-
-export async function getGuardrailThresholds(): Promise<GuardrailThresholds> {
-	return request<GuardrailThresholds>('/assistant/guardrails');
 }
 
 export async function saveRuleset(detail: RulesetDetail): Promise<RulesetDetail> {

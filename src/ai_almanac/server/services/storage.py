@@ -16,6 +16,19 @@ from ai_almanac.paths import uploads_dir
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
 
+# `open_nc_dataset` holds a whole file in memory, which suits job-output grids
+# (a few MB) but would take the server down on a forecast archive.
+_MAX_EAGER_NC_BYTES = 256 * 2**20
+
+
+def _ensure_small_enough_to_load(path, size: int) -> None:
+    if size > _MAX_EAGER_NC_BYTES:
+        raise ValueError(
+            f"{path} is {size / 2**20:.0f} MiB, over the "
+            f"{_MAX_EAGER_NC_BYTES / 2**20:.0f} MiB limit for loading a NetCDF file whole."
+        )
+
+
 _CHAT_FIGURE_FORMATS: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
     (b"RIFF", ".webp", "image/webp"),
@@ -103,6 +116,19 @@ class LocalStorage:
             return None
         return path.read_text()
 
+    def read_derived(self, job_id: str, name: str) -> bytes | None:
+        """Read a payload the server derived from a job's outputs, or None if not built yet."""
+        path = self._contained(self._outputs_dir, f"{job_id}/derived/{name}")
+        return path.read_bytes() if path.is_file() else None
+
+    def write_derived(self, job_id: str, name: str, data: bytes) -> None:
+        path = self._contained(self._outputs_dir, f"{job_id}/derived/{name}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Write-then-rename so a crash never leaves a truncated payload to be served forever.
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+
     def result_file_uri(self, job_id: str, kind: str, filename: str) -> str:
         """Raw local path for range-read consumers (TiTiler/rio-tiler), as
         opposed to result_file_path (single-level names only) / open_result_stream
@@ -156,6 +182,7 @@ class LocalStorage:
     def open_nc_dataset(self, path):
         import xarray as xr
 
+        _ensure_small_enough_to_load(path, Path(path).stat().st_size)
         with _nc_lock:
             return xr.load_dataset(path)
 

@@ -53,3 +53,14 @@ export const EVENT_TYPES: EventType[] = [
 		definition: ''
 	}
 ];
+
+/** The name to show for an event id; one the catalog does not know is spelled out, never shown raw. */
+export function eventTypeName(id: string): string {
+	const known = EVENT_TYPES.find((event) => event.id === id);
+	if (known) return known.name;
+	return id
+		.split('_')
+		.filter(Boolean)
+		.map((word) => word[0].toUpperCase() + word.slice(1))
+		.join(' ');
+}

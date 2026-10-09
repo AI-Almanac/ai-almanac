@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -70,6 +71,11 @@ class PromptSection(BaseModel):
     enabled: bool = True
     # Scope kinds this section applies to; empty means every scope.
     scope_kinds: list[str] = Field(default_factory=list)
+    # Tools this section explains; it is left out unless at least one of them is
+    # registered. A prompt that describes a tool the deployment cannot run (code
+    # execution in a local build) has the assistant believe in it, then tell the
+    # user its own instructions are wrong. Empty means the section always applies.
+    requires_tools: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _required_sections_stay_enabled(self) -> PromptSection:
@@ -120,17 +126,31 @@ def render_section(body: str, guardrails: Guardrails) -> str:
     return _PLACEHOLDER.sub(substitute, body)
 
 
-def sections_for_scope(ruleset: Ruleset, scope_kind: str) -> list[PromptSection]:
+def _tools_registered(section: PromptSection, available_tools: Collection[str] | None) -> bool:
+    if available_tools is None or not section.requires_tools:
+        return True
+    return any(tool in available_tools for tool in section.requires_tools)
+
+
+def sections_for_scope(
+    ruleset: Ruleset, scope_kind: str, available_tools: Collection[str] | None = None
+) -> list[PromptSection]:
+    """Sections that apply here. ``available_tools`` of None keeps every section,
+    which is what an admin previewing a ruleset wants to read."""
     return [
         section
         for section in ruleset.prompt_sections
         if (section.enabled or section.required)
         and (not section.scope_kinds or scope_kind in section.scope_kinds)
+        and _tools_registered(section, available_tools)
     ]
 
 
 def build_instructions(
-    ruleset: Ruleset, scope_kind: str, guardrails: Guardrails | None = None
+    ruleset: Ruleset,
+    scope_kind: str,
+    guardrails: Guardrails | None = None,
+    available_tools: Collection[str] | None = None,
 ) -> str:
     """The system prompt for one ruleset and scope kind.
 
@@ -142,7 +162,7 @@ def build_instructions(
     guardrails = guardrails or guardrails_module.current()
     bodies = [
         render_section(section.body, guardrails).strip()
-        for section in sections_for_scope(ruleset, scope_kind)
+        for section in sections_for_scope(ruleset, scope_kind, available_tools)
     ]
     return "\n\n".join(body for body in bodies if body)
 

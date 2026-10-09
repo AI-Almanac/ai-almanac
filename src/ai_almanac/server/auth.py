@@ -329,13 +329,15 @@ async def require_admin(
     return user
 
 
-async def require_data_management() -> None:
-    """Gate routes behind the data-management feature flag.
+async def require_data_management(
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+) -> None:
+    """Gate routes on the data-management audience.
 
-    Used as a route-level dependency so disabled mutations 404 (hiding the
-    in-development feature) while their read counterparts stay available.
+    Used as a route-level dependency so mutations 404 for anyone outside the
+    audience (hiding the feature) while their read counterparts stay available.
     """
-    if not settings.enable_data_management:
+    if not settings.data_management_allowed(user.is_admin):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
@@ -361,6 +363,10 @@ async def require_assistant_comparisons(
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 OptionalCurrentUser = Annotated[AuthenticatedUser | None, Depends(optional_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
+
+
+def globus_client_configured() -> bool:
+    return bool(settings.globus_client_id and settings.globus_client_secret)
 
 
 def enforce_deployment_invariants() -> None:
@@ -399,8 +405,11 @@ def enforce_deployment_invariants() -> None:
         raise RuntimeError("shared proxy deployment requires ALLOWED_GROUPS")
     # Without a client id the introspection stub treats the bearer token as its
     # own subject, so any caller could present an admin subject as their token.
-    if settings.auth_mode == "globus" and not settings.globus_client_id:
-        raise RuntimeError("shared globus deployment requires GLOBUS_CLIENT_ID")
+    # Without the secret, introspection fails and no one can sign in.
+    if settings.auth_mode == "globus" and not globus_client_configured():
+        raise RuntimeError(
+            "shared globus deployment requires GLOBUS_CLIENT_ID and GLOBUS_CLIENT_SECRET"
+        )
     if not settings.credential_encryption_key:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":

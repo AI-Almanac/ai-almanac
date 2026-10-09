@@ -59,6 +59,21 @@ def test_parse_pooled_summary_orders_blend_first() -> None:
     assert blend["auc_by_lead"] == [0.90, 0.85, 0.80, 0.78, 0.70]
 
 
+def test_parse_pooled_summary_leads_with_both_blends_in_order() -> None:
+    csv_text = (
+        "model,auc,brier_skill,auc_week1,auc_week2,auc_week3,auc_week4,auc_later\n"
+        "blended_forest,0.84,0.18,0.91,0.86,0.81,0.79,0.71\n"
+        "aifs_raw,0.78,0.10,0.88,0.82,0.76,0.72,0.65\n"
+        "blended_model,0.82,0.15,0.90,0.85,0.80,0.78,0.70\n"
+    )
+    rows = blend_domain._parse_pooled_summary(csv_text)
+    assert [(r["model"], r["is_blend"]) for r in rows] == [
+        ("blended_model", True),
+        ("blended_forest", True),
+        ("aifs_raw", False),
+    ]
+
+
 def test_parse_pooled_summary_handles_empty() -> None:
     assert blend_domain._parse_pooled_summary("") == []
     assert blend_domain._parse_pooled_summary("model,auc\n") == []
@@ -273,3 +288,54 @@ async def test_job_tools_describe_blend_configuration(client, user_id: str) -> N
     listed = next(job for job in listing if job["job_id"] == job_id)
     assert listed["blend_name"] == "Ethiopia AIFS + FuXi"
     assert listed["region"] == "ethiopia"
+
+
+_CELLS_CSV = (
+    "id,brier,rps,auc,n,lat,lon,model\n"
+    "10.00_33.00,0.50,0.40,0.70,24,,,blended_model\n"
+    "10.00_33.00,0.40,0.20,0.72,24,,,blended_forest\n"
+    "10.00_33.00,1.00,0.80,0.65,24,,,unc_clim_raw\n"
+)
+
+
+async def _cell_metrics(client, auth_headers: dict[str, str], job_id: str, **params: str):
+    return await client.get(
+        f"/jobs/{job_id}/blend-cell-metrics", params=params, headers=auth_headers
+    )
+
+
+@pytest.mark.asyncio
+async def test_blend_cell_metrics_serves_the_requested_blend(
+    client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    job_id = str(uuid.uuid4())
+    await _insert_blend_job(user_id, job_id)
+    _write_artifact(job_id, "summary_models_fixed_cutoff.csv", _CELLS_CSV)
+    await _index_artifact(job_id, "output", "summary_models_fixed_cutoff.csv", len(_CELLS_CSV))
+
+    default = (await _cell_metrics(client, auth_headers, job_id)).json()
+    forest = (await _cell_metrics(client, auth_headers, job_id, model="blended_forest")).json()
+    unknown = await _cell_metrics(client, auth_headers, job_id, model="aifs_raw")
+
+    def rps(body: dict) -> float:
+        grid = next(g for g in body["grids"] if g["metric"] == "ranked_probability_skill_score")
+        return grid["values"][0][0]
+
+    assert default["blend_model"] == "blended_model"
+    assert rps(default) == pytest.approx(0.5)
+    assert forest["blend_model"] == "blended_forest"
+    assert rps(forest) == pytest.approx(0.75)
+    assert default["available_models"] == ["blended_model", "blended_forest"]
+    assert unknown.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_blend_cell_metrics_without_a_summary_offers_no_blend(
+    client, user_id: str, auth_headers: dict[str, str]
+) -> None:
+    job_id = str(uuid.uuid4())
+    await _insert_blend_job(user_id, job_id)
+
+    body = (await _cell_metrics(client, auth_headers, job_id, model="blended_forest")).json()
+
+    assert body["grids"] == [] and body["available_models"] == []

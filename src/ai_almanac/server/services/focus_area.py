@@ -30,8 +30,12 @@ class FocusBox(BaseModel):
         return self
 
 
+# States or regions, and the districts or zones inside them.
+FocusUnitLevel = Literal["adm1", "adm2"]
+
+
 class FocusUnits(BaseModel):
-    level: Literal["adm2"]
+    level: FocusUnitLevel
     units: list[str]
     # GeoJSON FeatureCollection of the units' outlines, filled in at submission.
     geometry: dict | None = None

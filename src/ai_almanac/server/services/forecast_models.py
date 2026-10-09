@@ -3,21 +3,77 @@
 Static packaged config (server/config/forecast_models.yaml), unlike
 `services.registry`'s DB-backed benchmark/blend model sources — there is
 nothing per-user or per-region to register here, just which earth2studio
-models are available and how to run them.
+models are available and how to run them. A model data source links to one
+of these by id (`metadata.forecast_model_id`), chosen at registration.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import BaseModel, ValidationError, model_validator
+
 from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
-from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+from ai_almanac.settings import forecast_model_by_id, get_packaged_forecast_models
+
+logger = logging.getLogger(__name__)
 
 _INTERNAL_FIELDS = ("earth2studio_class", "gpu", "env", "ensemble", "nensemble")
 
 LiveForecastStatus = Literal["ready", "grid_mismatch", "unavailable"]
+
+
+class TrainingPeriod(BaseModel):
+    """Years of one dataset a model's weights were fitted on."""
+
+    stage: Literal["pretraining", "fine-tuning"]
+    dataset: str
+    start_year: int
+    end_year: int
+
+    @model_validator(mode="after")
+    def _ordered(self) -> TrainingPeriod:
+        if self.start_year > self.end_year:
+            raise ValueError("Training period needs start_year <= end_year")
+        return self
+
+
+class TrainingHistory(BaseModel):
+    """Published training periods for a model, with where they were published."""
+
+    source: str
+    periods: list[TrainingPeriod]
+
+
+def model_training(
+    forecast_model_id: str | None, registry: dict | None = None
+) -> TrainingHistory | None:
+    """The training history of the model that produced an archive, when it is known.
+
+    Archives not linked to a registry model, and models whose training years
+    were never published, have none — callers must not fill the gap with a guess.
+    A malformed entry counts as unknown too, so one bad edit to the registry
+    leaves that model's years blank rather than breaking every model list.
+    """
+    registry = registry if registry is not None else get_packaged_forecast_models()
+    entry = forecast_model_by_id(registry, forecast_model_id)
+    training = (entry or {}).get("training")
+    if not training:
+        return None
+    try:
+        return TrainingHistory.model_validate(training)
+    except ValidationError:
+        logger.warning("Ignoring malformed training block for %s", forecast_model_id, exc_info=True)
+        return None
+
+
+def training_summary(forecast_model_id: str | None) -> dict | None:
+    """The training history as plain data for tool payloads, or None when unknown."""
+    training = model_training(forecast_model_id)
+    return training.model_dump() if training else None
 
 
 @dataclass(frozen=True)
@@ -34,10 +90,22 @@ def archive_grid_step(source: dict) -> float | None:
     return (source.get("metadata") or {}).get("grid_step_deg")
 
 
+def linked_forecast_model_id(source: dict) -> str | None:
+    """The live forecast model chosen for a model archive at registration.
+
+    Remote-provider sources skip inspection and keep metadata verbatim, so a
+    non-string or blank value is treated as no link rather than trusted.
+    """
+    model_id = (source.get("metadata") or {}).get("forecast_model_id")
+    if not isinstance(model_id, str):
+        return None
+    return model_id.strip() or None
+
+
 def live_forecast_compatibility(
-    source_name: str, archive_step: float | None, registry: dict | None = None
+    forecast_model_id: str | None, archive_step: float | None, registry: dict | None = None
 ) -> LiveForecastCompatibility:
-    """Match a blend member's archive to a live forecast model, grid included.
+    """Check that an archive's linked live forecast model can extend it, grid included.
 
     A live season is scored with coefficients fit on the archive, so the live
     model must run on the archive's grid. A coarser or finer model would not
@@ -45,10 +113,16 @@ def live_forecast_compatibility(
     Archives registered before the grid step was recorded pass this check until
     they are revalidated.
     """
+    if forecast_model_id is None:
+        return LiveForecastCompatibility(
+            "unavailable", "This data isn't linked to a live forecast model."
+        )
     registry = registry if registry is not None else get_packaged_forecast_models()
-    entry = resolve_forecast_model(registry, source_name)
+    entry = forecast_model_by_id(registry, forecast_model_id)
     if entry is None:
-        return LiveForecastCompatibility("unavailable", "No live forecast model is available.")
+        return LiveForecastCompatibility(
+            "unavailable", f"{forecast_model_id!r} is not an available live forecast model."
+        )
     live_step = entry.get("resolution_deg")
     # A source whose inspection failed keeps its user-supplied metadata verbatim,
     # so the archive step is only trusted when it is actually a number.

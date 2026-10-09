@@ -52,6 +52,10 @@ class ArtifactStore(Protocol):
 
     def open(self, artifact: JobArtifact) -> BinaryIO: ...
 
+    def retain(self, job_id: str, keep: bool) -> None:
+        """Exempt (or stop exempting) a job's outputs from storage retention."""
+        ...
+
     def delete_job(self, job_id: str) -> None: ...
 
 
@@ -113,6 +117,9 @@ class FilesystemArtifactStore:
         if path is None or not path.is_file():
             raise FileNotFoundError(artifact.storage_key)
         return path.open("rb")
+
+    def retain(self, job_id: str, keep: bool) -> None:
+        pass  # ponytail: local outputs have no retention rule to exempt from
 
     def delete_job(self, job_id: str) -> None:
         job_dir = self._storage.job_dir(job_id)

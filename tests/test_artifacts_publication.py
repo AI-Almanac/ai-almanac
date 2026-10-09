@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import uuid
 from pathlib import Path
@@ -10,7 +11,11 @@ import httpx
 import pytest
 
 from ai_almanac.paths import database_path
-from ai_almanac.server.services.artifacts import list_job_artifacts, publish_pending
+from ai_almanac.server.services.artifacts import (
+    index_job_artifacts,
+    list_job_artifacts,
+    publish_pending,
+)
 from ai_almanac.server.services.storage import get_storage
 
 
@@ -83,6 +88,20 @@ async def test_publish_pending_is_idempotent(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_publication_indexes_each_file_once(
+    client: httpx.AsyncClient,
+) -> None:
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    _write_outputs(job_id)
+
+    counts = await asyncio.gather(index_job_artifacts(job_id), index_job_artifacts(job_id))
+
+    assert sorted(counts) == [0, 2]
+    assert len(await list_job_artifacts(job_id)) == 2
+
+
+@pytest.mark.asyncio
 async def test_artifacts_endpoint_lists_indexed_outputs(
     client: httpx.AsyncClient,
 ) -> None:
@@ -112,3 +131,37 @@ async def test_delete_job_removes_artifacts_and_files(
     assert resp.status_code == 204
     assert await list_job_artifacts(job_id) == []
     assert not get_storage().job_dir(job_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_artifacts_larger_than_two_gigabytes_are_indexed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import artifacts as artifacts_service
+    from ai_almanac.server.services.artifact_store import JobArtifact
+
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    combined_size = 12 * 2**30  # a 26-year India 0.25° blend's combined_wide.pkl
+
+    class _BigOutputStore:
+        def publish(self, job_id: str) -> list[JobArtifact]:
+            return [
+                JobArtifact(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    kind="output",
+                    filename="combined_wide.pkl",
+                    media_type="application/octet-stream",
+                    size_bytes=combined_size,
+                    checksum="md5",
+                    storage_key=f"{job_id}/output/combined_wide.pkl",
+                    created_at="2026-10-08T00:00:00",
+                )
+            ]
+
+    monkeypatch.setattr(artifacts_service, "get_artifact_store", lambda: _BigOutputStore())
+
+    assert await index_job_artifacts(job_id) == 1
+    assert [a["size_bytes"] for a in await list_job_artifacts(job_id)] == [combined_size]
+    assert _published_at(job_id) is not None

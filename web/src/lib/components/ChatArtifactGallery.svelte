@@ -1,6 +1,6 @@
 <script lang="ts">
 	import FigureCard from '$lib/components/FigureCard.svelte';
-	import { copyCode, formatToolName, type GalleryFigure } from '$lib/chat/format';
+	import { copyCode, toolLabel, type GalleryFigure } from '$lib/chat/format';
 
 	interface Props {
 		figures: GalleryFigure[];
@@ -33,7 +33,9 @@
 					<div class="artifact-meta">
 						<div class="artifact-meta-row">
 							<span class="artifact-source">
-								{item.toolName ? formatToolName(item.toolName) : 'generated artifact'}
+								{item.toolName
+									? toolLabel({ name: item.toolName, status: 'completed' })
+									: 'Generated figure'}
 							</span>
 							<span class="artifact-time"
 								>{new Date(item.createdAt).toLocaleTimeString([], {

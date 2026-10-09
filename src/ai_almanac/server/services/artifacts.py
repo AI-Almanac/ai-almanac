@@ -29,12 +29,23 @@ async def index_job_artifacts(job_id: str) -> int:
     """Index a completed job's outputs into job_artifacts and mark it published.
 
     Atomic: artifact rows and the publication marker commit in one transaction.
-    Returns the number of artifacts indexed.
+    Returns the number of artifacts indexed (0 if another instance already did).
     """
     store = get_artifact_store()
     artifacts = await asyncio.to_thread(store.publish, job_id)
 
     async with get_db() as conn:
+        # Every instance's reconciler loop publishes pending jobs; claiming the
+        # job first means exactly one of them inserts its rows.
+        claimed = await conn.execute(
+            text(
+                "UPDATE jobs SET artifacts_published_at = :now "
+                "WHERE id = :id AND artifacts_published_at IS NULL"
+            ),
+            {"now": _now(), "id": job_id},
+        )
+        if not claimed.rowcount:
+            return 0
         for artifact in artifacts:
             await conn.execute(
                 text(
@@ -56,10 +67,6 @@ async def index_job_artifacts(job_id: str) -> int:
                     "created_at": artifact.created_at,
                 },
             )
-        await conn.execute(
-            text("UPDATE jobs SET artifacts_published_at = :now WHERE id = :id"),
-            {"now": _now(), "id": job_id},
-        )
     return len(artifacts)
 
 

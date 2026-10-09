@@ -55,3 +55,16 @@ export async function getRompDefaults() {
 export async function getCapabilities(): Promise<AppCapabilities> {
 	return request<AppCapabilities>('/config/capabilities');
 }
+
+/** The thresholds the platform enforces. Read-only: they are a platform setting. */
+export type GuardrailThresholds = {
+	min_onset_years: number;
+	min_training_years: number;
+	blend_member_warn: number;
+	small_sample_years: number;
+	presatellite_end_year: number;
+};
+
+export async function getGuardrailThresholds(): Promise<GuardrailThresholds> {
+	return request<GuardrailThresholds>('/config/guardrails');
+}

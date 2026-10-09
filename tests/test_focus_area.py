@@ -129,3 +129,15 @@ async def test_an_area_of_interest_and_a_custom_mask_cannot_both_be_set() -> Non
     with pytest.raises(HTTPException) as caught:
         await _with_unit_outlines({"focus_area": BOX, "nc_mask": "/data/mask.nc"}, None)
     assert caught.value.status_code == 400
+
+
+def test_states_can_be_picked_as_well_as_districts() -> None:
+    states = parse_focus_area({"level": "adm1", "units": ["Kerala", "Tamil Nādu"]})
+
+    assert isinstance(states, FocusUnits)
+    assert states.level == "adm1"
+
+
+def test_subdistricts_are_not_pickable() -> None:
+    with pytest.raises(ValidationError):
+        parse_focus_area({"level": "adm3", "units": ["Kozhikode"]})

@@ -10,6 +10,8 @@
 
 	let { figures, index = $bindable(), onclose }: Props = $props();
 
+	let dialog = $state<HTMLDialogElement>();
+
 	function prev() {
 		if (index > 0) index--;
 	}
@@ -28,11 +30,19 @@
 		a.click();
 	}
 
+	// Escape is the dialog's own `cancel`, which closes it and fires `close`.
 	function onkeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onclose();
 		if (e.key === 'ArrowLeft') prev();
 		if (e.key === 'ArrowRight') next();
 	}
+
+	// A modal dialog renders in the browser's top layer, above every stacking
+	// context. Rendered in place, the viewer could only out-rank siblings inside
+	// its own column: a sticky aside traps it, and the split resizer, map
+	// controls, and site header all painted over it.
+	$effect(() => {
+		dialog?.showModal();
+	});
 
 	$effect(() => {
 		const fullscreenMaps = [...document.querySelectorAll('.map-root.fullscreen')];
@@ -51,9 +61,9 @@
 	});
 </script>
 
-<div class="overlay">
+<dialog class="overlay" bind:this={dialog} {onclose} aria-label="Figure preview">
 	<button class="backdrop" onclick={onclose} aria-label="Close figure lightbox"></button>
-	<div class="box" role="dialog" aria-modal="true" aria-label="Figure preview">
+	<div class="box">
 		<button class="close" onclick={onclose} aria-label="Close">&times;</button>
 		<button class="download" onclick={download} aria-label="Download" title="Download figure"
 			>&#x2B07;</button
@@ -79,17 +89,28 @@
 			<button onclick={next} disabled={index === figures.length - 1}>Next &#8594;</button>
 		</div>
 	</div>
-</div>
+</dialog>
 
 <style>
 	.overlay {
 		position: fixed;
 		inset: 0;
-		z-index: 2000;
-		display: flex;
+		width: 100%;
+		height: 100%;
+		max-width: none;
+		max-height: none;
+		margin: 0;
+		border: 0;
+		background: transparent;
 		align-items: center;
 		justify-content: center;
 		padding: 1.5rem;
+	}
+	.overlay[open] {
+		display: flex;
+	}
+	.overlay::backdrop {
+		background: transparent;
 	}
 
 	.backdrop {

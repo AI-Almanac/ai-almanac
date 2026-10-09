@@ -44,6 +44,13 @@ DEFAULT_LOCAL_LLM_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
 # Settings.
 # ---------------------------------------------------------------------------
 
+# Who can reach a feature that admins may want to try before everyone does.
+Audience = Literal["off", "admins", "everyone"]
+
+
+def audience_allows(audience: Audience, is_admin: bool) -> bool:
+    return audience == "everyone" or (audience == "admins" and is_admin)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -239,18 +246,31 @@ class Settings(BaseSettings):
     # for zero-setup local installs; managed deployments set them False in
     # config.yaml/env until the feature is ready, then flip them at runtime from
     # the admin Settings page. Name new flags `enable_<feature>` and surface them
-    # in the "Features" group of routers/settings.py.
+    # in the "Features" group of routers/settings.py. A feature admins should be
+    # able to keep to themselves uses an `<feature>_audience` instead.
+    #
+    # Custom regions and user-registered datasets. "admins" keeps the Data page
+    # to admins, e.g. to curate the shared built-in datasets before every user
+    # can register their own.
+    data_management_audience: Audience = "everyone"
+    # Deprecated in favor of data_management_audience; mapped in
+    # reload_settings() like enable_assistant_comparisons. Remove next release.
     enable_data_management: bool = True
     # On by default now that the live-forecast workflow is finalized. Admins can
     # still turn it off from the Settings page (e.g. an install with no
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
+    # The day-level blend: every blend also trains a model of onset by day, and
+    # forecasts offer daily onset chances. Off by default, unlike the convention
+    # above: it adds cross-validation time to every blend that has not yet been
+    # measured against the blend timeout on a managed deployment.
+    enable_day_level_blend: bool = False
     # Side-by-side ruleset comparisons: the admin playground and the blind A/B
     # users run from the chat. "off" hides the whole surface — every comparison
     # is two LLM turns, so an install that cannot afford that, or is not
     # collecting feedback yet, should not offer it. "admins" lets admins test
     # comparisons before exposing them to everyone.
-    assistant_comparisons_audience: Literal["off", "admins", "everyone"] = "everyone"
+    assistant_comparisons_audience: Audience = "everyone"
     # Deprecated in favor of assistant_comparisons_audience; read once in
     # reload_settings() to map a stored False to audience "off". Remove next
     # release, once no overlay row or env still sets it.
@@ -276,9 +296,10 @@ class Settings(BaseSettings):
     max_llm_requests_per_minute: int = 30
 
     def comparisons_allowed(self, is_admin: bool) -> bool:
-        if self.assistant_comparisons_audience == "everyone":
-            return True
-        return self.assistant_comparisons_audience == "admins" and is_admin
+        return audience_allows(self.assistant_comparisons_audience, is_admin)
+
+    def data_management_allowed(self, is_admin: bool) -> bool:
+        return audience_allows(self.data_management_audience, is_admin)
 
     def resolve_database_url(self) -> str:
         # Local import: settings is also imported inside the forecast envs
@@ -558,6 +579,24 @@ def _resolve_llm_engine(target: Settings) -> None:
         target.llm_model = DEFAULT_LOCAL_LLM_MODEL
 
 
+# Deprecated boolean flag -> the audience field that replaced it.
+_LEGACY_AUDIENCE_FLAGS: dict[str, str] = {
+    "enable_assistant_comparisons": "assistant_comparisons_audience",
+    "enable_data_management": "data_management_audience",
+}
+
+
+def _apply_legacy_audience_flags(target: Settings, yaml_overlay: dict, db_overlay: dict) -> None:
+    """A deployment that switched a feature off via its old boolean stays off
+    until it sets the replacement audience explicitly."""
+    for flag, audience in _LEGACY_AUDIENCE_FLAGS.items():
+        audience_set = (
+            audience.upper() in os.environ or audience in yaml_overlay or audience in db_overlay
+        )
+        if not getattr(target, flag) and not audience_set:
+            setattr(target, audience, "off")
+
+
 def reload_settings() -> Settings:
     """Re-resolve defaults + env + config.yaml + DB overlay; mutate the
     singleton in place.
@@ -577,15 +616,7 @@ def reload_settings() -> Settings:
     _apply_overlay(fresh, secrets_overlay)  # secrets.env (lowest user-writable layer)
     _apply_overlay(fresh, yaml_overlay)  # config.yaml seed (beats secrets.env); env beats it
     _apply_overlay(fresh, db_overlay, env_wins=False)  # admin UI edits beat env
-    # Deprecated-flag shim: a deployment that had switched comparisons off via
-    # the old boolean stays off until it sets the audience explicitly.
-    audience_set = (
-        "ASSISTANT_COMPARISONS_AUDIENCE" in os.environ
-        or "assistant_comparisons_audience" in yaml_overlay
-        or "assistant_comparisons_audience" in db_overlay
-    )
-    if not fresh.enable_assistant_comparisons and not audience_set:
-        fresh.assistant_comparisons_audience = "off"
+    _apply_legacy_audience_flags(fresh, yaml_overlay, db_overlay)
     _resolve_llm_engine(fresh)
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
@@ -676,26 +707,28 @@ def blend_model_key(name: str) -> str:
     """Filesystem/column-safe key used for a forecast model inside a blend.
 
     The blend pipeline keys everything on this (formula terms, file names,
-    trajectory sets), and the web client mirrors it (blendModelKey in
-    web/src/lib/api/forecasts.ts) — keep the two in sync.
+    trajectory sets).
     """
     return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
 
 
-def resolve_forecast_model(registry: dict, name: str) -> dict | None:
-    """Registry entry a blend model name can run live forecasts with, or None.
+def forecast_model_by_id(registry: dict, model_id: str | None) -> dict | None:
+    """Registry entry with exactly this id, or None.
 
-    A name matches by registry id, by normalized display name, or by an
-    explicit `aliases` entry — so a data source named "AIFS Single v2" or
-    "AIFS2" both reach the `aifs2` model. Mirrored by the Modal runner
-    (modal/forecasts_app.py) and the web client's forecastModelFor.
+    Model data sources name the live model that produced them at registration
+    (`metadata.forecast_model_id`), so lookups are exact rather than guessed
+    from the data source's name.
     """
-    key = blend_model_key(name)
-    for entry in registry.get("models") or []:
-        if (
-            key == entry["id"]
-            or key == blend_model_key(entry.get("display_name") or "")
-            or key in (entry.get("aliases") or [])
-        ):
-            return entry
-    return None
+    return next(
+        (entry for entry in registry.get("models") or [] if entry["id"] == model_id),
+        None,
+    )
+
+
+def member_forecast_model_id(config: dict, member: str) -> str:
+    """Registry id a forecast job runs for one blend member.
+
+    Mirrored by modal/forecasts_app.py. Jobs queued before the explicit link
+    carry no `forecast_models` map, so their member name is tried as the id.
+    """
+    return (config.get("forecast_models") or {}).get(member, member)

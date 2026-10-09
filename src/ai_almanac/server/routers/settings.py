@@ -173,14 +173,19 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         "Features",
         [
             (
-                "enable_data_management",
+                "data_management_audience",
                 "Data management",
-                "Let users create custom regions and register their own datasets",
+                "Who can create custom regions and register datasets. 'admins' keeps the Data page to admins",
             ),
             (
                 "enable_forecasting",
                 "Live forecasting",
                 "Let users generate live AI weather forecasts and score them against a trained blend",
+            ),
+            (
+                "enable_day_level_blend",
+                "Day-level blend",
+                "Train a day-by-day onset model alongside every new blend, so forecasts can show onset chances by day",
             ),
             (
                 "assistant_comparisons_audience",

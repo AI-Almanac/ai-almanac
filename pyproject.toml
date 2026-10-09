@@ -1,11 +1,25 @@
 [project]
 name = "ai-almanac"
-version = "0.1.0"
+version = "0.1.0a2"
 description = "Local-first benchmarking platform for AI weather and climate models."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "AI Almanac contributors" }]
+keywords = ["weather", "climate", "forecasting", "benchmarking", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
 dependencies = [
     "fastapi>=0.135.3",
     "uvicorn[standard]>=0.44.0",
@@ -30,18 +44,27 @@ dependencies = [
     "cryptography>=48.0.1,<51",
     "titiler-core>=2.0.5,<3",
     "certifi",
+    # Floor for a transitive dep: anyio < 4.14.2 is vulnerable.
+    "anyio>=4.14.2",
 ]
 
 [project.optional-dependencies]
 # Cloud deployment extras — modal runner, PostgreSQL, Globus auth. Installed
-# in Cloud Run images (pip install ".[cloud]") and the dev pixi environment.
+# in Cloud Run images (the pixi prod env) and the dev pixi environments.
 # Personal installs (uv tool install ai-almanac) get the bare wheel without
 # these heavy cloud SDK deps.
 cloud = [
     "modal>=1.5.0,<2",
     "psycopg[binary]>=3.3.4,<4",
     "globus-sdk>=4.8.0,<5",
+    # Floor for a transitive dep (via globus-sdk): PyJWT <= 2.13.0 is vulnerable.
+    "pyjwt>=2.14.0",
 ]
+
+[project.urls]
+Homepage = "https://ai-almanac.org"
+Source = "https://github.com/AI-Almanac/ai-almanac"
+Issues = "https://github.com/AI-Almanac/ai-almanac/issues"
 
 [project.scripts]
 ai-almanac = "ai_almanac.cli:app"
@@ -68,8 +91,10 @@ packages = ["src/ai_almanac"]
 "modal/blending_app.py" = "ai_almanac/envs/blending_app.py"
 
 [tool.hatch.build.targets.sdist]
-# The wheel is built from the sdist by standard Python build frontends.
+# The wheel is built from the sdist by standard Python build frontends, so the
+# sdist carries exactly what the wheel needs — not infra, CI, or agent config.
 # Include the generated SPA even though web/build is ignored by Git.
+only-include = ["src", "web/build", "modal/blending_app.py", "README.md", "LICENSE"]
 artifacts = ["web/build", "modal/blending_app.py"]
 
 [tool.ruff]
@@ -91,18 +116,16 @@ pythonpath = "."
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 
-[tool.pixi.pypi-dependencies]
-ai-almanac = { path = ".", editable = true, extras = ["cloud"] }
-
 [tool.pixi.environments]
-default = { solve-group = "default" }
+default = { features = ["devtools"], solve-group = "default" }
+dev = { features = ["devtools", "dev"], solve-group = "default" }
+# What the production image ships: runtime dependencies only, solved with the
+# others so it runs exactly the versions the tests run against.
+prod = { features = ["prod"], solve-group = "default" }
 
-[tool.pixi.environments.dev]
-features = ["dev"]
-solve-group = "default"
-
-[tool.pixi.environments.dev.dependencies]
-ipython = ">=9.17.1,<10"
+[tool.pixi.feature.prod.pypi-dependencies]
+# A wheel install, so the bundled SPA lands in the package's static dir.
+ai-almanac = { path = ".", editable = false, extras = ["cloud"] }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
@@ -119,7 +142,6 @@ test-web = { cmd = "npm test -- --run", depends-on = ["install-web"], cwd = "web
 backend = { cmd = "ai-almanac serve --reload --no-open", description = "Run the FastAPI development server" }
 test-python = { cmd = "pytest", default-environment = "dev", description = "Run Python tests" }
 generate-api-types = { cmd = "bash scripts/generate-api-types.sh", default-environment = "dev", description = "Regenerate web/src/lib/api-types.gen.ts from the FastAPI OpenAPI schema" }
-test-compose-e2e = { cmd = "./scripts/e2e-compose.sh", description = "Run the containerized PostgreSQL benchmark smoke flow" }
 eval-assistant = { cmd = "python evals/assistant/run.py", default-environment = "dev", description = "Score the assistant's guardrails against adversarial prompts (calls a real model; --offline to check the harness for free)" }
 self-host-local = { cmd = "./scripts/self-host-local.sh", description = "Start the local shared-mode development stack" }
 self-host-local-gpu = { cmd = "./scripts/self-host-local.sh gpu", description = "Start local shared mode with the real Pixi GPU runner" }
@@ -138,9 +160,19 @@ format = { depends-on = [{ task = "format-python" }, { task = "format-web" }], d
 build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
 frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_API_URL = "http://localhost:8765" }, description = "Run the Vite development server" }
 
-[tool.pixi.dependencies]
+[tool.pixi.feature.devtools.dependencies]
 nodejs = ">=26.3.0,<26.4"
 process-compose = ">=1.103.0,<2"
+
+# Editable only where devtools is used: a workspace-wide declaration would
+# override prod's wheel install and leave the image pointing at a missing src/.
+[tool.pixi.feature.devtools.pypi-dependencies]
+ai-almanac = { path = ".", editable = true, extras = ["cloud"] }
+
+[tool.pixi.feature.dev.dependencies]
+ipython = ">=9.17.1,<10"
+
+[tool.pixi.dependencies]
 rasterio = ">=1.5.0,<2"
 gdal = ">=3.12.3,<4"
 proj = ">=9.7.1,<10"

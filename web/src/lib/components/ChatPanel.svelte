@@ -9,6 +9,7 @@
 	import { ComparisonState, compareBlocker } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
 	import { blindCompare, getRulesetOptions } from '$lib/api';
+	import { pollWhileActive } from '$lib/poll';
 	import type {
 		BenchmarkRunSpec,
 		BenchmarkValidation,
@@ -32,7 +33,6 @@
 		initialMessage?: string;
 		externalPrompt?: string | null;
 		externalPromptNonce?: number;
-		showArtifacts?: boolean;
 		onSessionReady?: (sessionId: string) => void;
 		onJobsCreated?: (jobs: Job[]) => void;
 		onBenchmarkConfig?: (config: BenchmarkRunSpec, validation?: BenchmarkValidation | null) => void;
@@ -60,7 +60,6 @@
 		initialMessage = '',
 		externalPrompt = null,
 		externalPromptNonce = 0,
-		showArtifacts = true,
 		onSessionReady,
 		onJobsCreated,
 		onBenchmarkConfig,
@@ -130,8 +129,12 @@
 
 	const galleryFigures = $derived(sessionFigures(chat.visibleTurns));
 
+	// Any chat that has produced figures gets the tab; one that has not (a setup
+	// chat, a fresh session) has nothing to put in it.
+	const hasArtifacts = $derived(galleryFigures.length > 0);
+
 	$effect(() => {
-		if (!showArtifacts && activeTab === 'artifacts') activeTab = 'chat';
+		if (!hasArtifacts && activeTab === 'artifacts') activeTab = 'chat';
 	});
 
 	$effect(() => {
@@ -140,6 +143,10 @@
 		void jobs;
 		chat.syncScope(preferredSessionId);
 	});
+
+	// Keep asking while a run in scope is still going, so its notice appears when it
+	// finishes. No reactive reads in the body: the interval is created once.
+	$effect(() => pollWhileActive(() => chat.jobActivity.active > 0, chat.refreshJobActivity, 5000));
 
 	$effect(() => {
 		if (!chat.sessionId || chat.sending || initialMessageHandled || !initialMessage.trim()) return;
@@ -306,7 +313,7 @@
 		>
 			Chat
 		</button>
-		{#if showArtifacts}
+		{#if hasArtifacts}
 			<button
 				class="panel-tab"
 				class:active={activeTab === 'artifacts'}
@@ -315,9 +322,7 @@
 				}}
 			>
 				Artifacts
-				{#if galleryFigures.length > 0}
-					<span class="panel-tab-count">{galleryFigures.length}</span>
-				{/if}
+				<span class="panel-tab-count">{galleryFigures.length}</span>
 			</button>
 		{/if}
 	</div>

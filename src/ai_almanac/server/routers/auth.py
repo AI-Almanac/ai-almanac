@@ -53,7 +53,7 @@ async def me(user: OptionalCurrentUser) -> dict:
         "capabilities": {
             "can_admin": user.is_admin,
             "can_browse_fs": settings.enable_fs_browser and user.is_admin,
-            "can_manage_data": settings.enable_data_management,
+            "can_manage_data": settings.data_management_allowed(user.is_admin),
             "can_use_forecasting": settings.enable_forecasting,
             "can_run_code": settings.enable_run_code,
             "max_active_jobs": settings.max_active_jobs_per_user,

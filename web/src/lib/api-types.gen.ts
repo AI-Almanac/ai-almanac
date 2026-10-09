@@ -123,23 +123,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/assistant/guardrails": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Guardrails */
-        get: operations["read_guardrails_assistant_guardrails_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/assistant/rulesets/{ruleset_id}": {
         parameters: {
             query?: never;
@@ -524,6 +507,26 @@ export interface paths {
         patch: operations["update_session_chat_sessions__session_id__patch"];
         trace?: never;
     };
+    "/chat/sessions/{session_id}/job-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Job Events
+         * @description Runs in the session's scope that finished since the conversation began.
+         */
+        get: operations["get_session_job_events_chat_sessions__session_id__job_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/sessions/{session_id}/benchmark/submit": {
         parameters: {
             query?: never;
@@ -728,6 +731,23 @@ export interface paths {
         };
         /** Romp Defaults */
         get: operations["romp_defaults_config_romp_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Guardrail Thresholds */
+        get: operations["guardrail_thresholds_config_guardrails_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1121,8 +1141,10 @@ export interface paths {
          * Get Blend Forecast
          * @description Return blended onset probabilities for all issue dates and grid points.
          *
-         *     Parses blended_forecast_probabilities.csv server-side and returns a
-         *     compact structure suitable for client-side choropleth rendering.
+         *     `model` picks the week-level or day-level blend; `resolution` bins its
+         *     probabilities by week or by day (only the day-level blend has days). The
+         *     probabilities CSV is reshaped into per-point series once per view, stored
+         *     beside the job's outputs, and served from there on later reads.
          */
         get: operations["get_blend_forecast_jobs__job_id__blend_forecast_get"];
         put?: never;
@@ -1166,12 +1188,14 @@ export interface paths {
         };
         /**
          * Get Blend Cell Metrics
-         * @description Return per-grid-point blend skill, reshaped into grids for the map.
+         * @description Return one blend's per-grid-point skill, reshaped into grids for the map.
          *
          *     Returns empty ``grids`` rather than 404 when the per-cell summary is absent or
-         *     lacks the blend and baseline rows: the frontend's request wrapper throws on
-         *     any non-OK status, so a 404 would paint an error state over a run that simply
-         *     has nothing to map.
+         *     lacks the requested blend and baseline rows: the frontend's request wrapper
+         *     throws on any non-OK status, so a 404 would paint an error state over a run
+         *     that simply has nothing to map. ``available_models`` names the blends the
+         *     summary does score, so a blend trained before the day-level blend existed
+         *     offers no choice.
          */
         get: operations["get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get"];
         put?: never;
@@ -1243,15 +1267,18 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{job_id}/grid": {
+    "/jobs/{job_id}/grids": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Grid */
-        get: operations["get_grid_jobs__job_id__grid_get"];
+        /**
+         * Get Grids
+         * @description Every map grid for the job in one response, built once and then served as stored bytes.
+         */
+        get: operations["get_grids_jobs__job_id__grids_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2273,8 +2300,15 @@ export interface components {
         BlendCellMetrics: {
             /** Job Id */
             job_id: string;
+            /**
+             * Blend Model
+             * @enum {string}
+             */
+            blend_model: "blended_forest" | "blended_model";
             /** Baseline Model */
             baseline_model: string;
+            /** Available Models */
+            available_models: ("blended_forest" | "blended_model")[];
             /** Cell Size Deg */
             cell_size_deg: number | null;
             /** Min Observations */
@@ -2372,6 +2406,18 @@ export interface components {
              * @default []
              */
             warnings: string[];
+            /**
+             * Forecast Models
+             * @default {}
+             */
+            forecast_models: {
+                [key: string]: string;
+            };
+            /**
+             * True Holdout Years
+             * @default []
+             */
+            true_holdout_years: number[];
         };
         /**
          * BlendParams
@@ -2527,6 +2573,7 @@ export interface components {
             warnings?: string[];
             /** Finding Keys */
             finding_keys?: string[];
+            suggested_years?: components["schemas"]["SuggestedYears"] | null;
         };
         /**
          * BlindCompareRequest
@@ -2663,6 +2710,30 @@ export interface components {
              */
             created_at: string;
         };
+        /** ChatJobActivity */
+        ChatJobActivity: {
+            /** Events */
+            events: components["schemas"]["ChatJobEvent"][];
+            /** Active */
+            active: number;
+        };
+        /** ChatJobEvent */
+        ChatJobEvent: {
+            /** Job Id */
+            job_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "canceled" | "complete" | "failed";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+        };
         /** ChatScope */
         ChatScope: {
             /**
@@ -2689,7 +2760,7 @@ export interface components {
              * @default completed
              * @enum {string}
              */
-            status: "completed" | "failed" | "running";
+            status: "completed" | "failed" | "pending" | "running";
             /** Input */
             input?: {
                 [key: string]: unknown;
@@ -2732,6 +2803,8 @@ export interface components {
             artifacts?: components["schemas"]["ChatArtifact"][];
             /** Guardrails */
             guardrails?: components["schemas"]["GuardrailNotice"][];
+            /** Blocks */
+            blocks?: (components["schemas"]["TextBlock"] | components["schemas"]["ThinkingBlock"] | components["schemas"]["ToolBlock"])[];
         };
         /** CompareRequest */
         CompareRequest: {
@@ -2882,6 +2955,8 @@ export interface components {
             obs_year_start?: number | null;
             /** Obs Year End */
             obs_year_end?: number | null;
+            /** Grid Step Deg */
+            grid_step_deg?: number | null;
         };
         /**
          * Feature
@@ -3070,9 +3145,9 @@ export interface components {
         FocusUnits: {
             /**
              * Level
-             * @constant
+             * @enum {string}
              */
-            level: "adm2";
+            level: "adm1" | "adm2";
             /** Units */
             units: string[];
             /** Geometry */
@@ -3380,11 +3455,12 @@ export interface components {
         };
         /**
          * GuardrailThresholds
-         * @description The enforced thresholds, read-only here.
+         * @description The thresholds the platform enforces, read-only.
          *
-         *     Surfaced so an admin editing prose can see the numbers the {{placeholders}}
-         *     will resolve to. Editing them is a platform setting (PATCH /settings), not a
-         *     ruleset edit, because the submission chokepoint reads the same value.
+         *     Shown to admins editing assistant prose, so they see what its {{placeholders}}
+         *     resolve to, and read by forms so they prefill values the server will accept.
+         *     Editing them is a platform setting (PATCH /settings), because the submission
+         *     chokepoint reads the same value.
          */
         GuardrailThresholds: {
             /** Min Onset Years */
@@ -3489,8 +3565,6 @@ export interface components {
             dataset_id: string;
             /** Model Name */
             model_name: string;
-            /** Obs Dir */
-            obs_dir?: string | null;
             /** @default {} */
             params: components["schemas"]["RompParams"];
             /** Run Id */
@@ -3518,6 +3592,16 @@ export interface components {
             min: number;
             /** Max */
             max: number;
+        };
+        /**
+         * JobGrids
+         * @description Every map-ready grid for one job, built once from its metrics NetCDFs and stored.
+         */
+        JobGrids: {
+            /** Job Id */
+            job_id: string;
+            /** Grids */
+            grids: components["schemas"]["JobGridResponse"][];
         };
         /** JobMetrics */
         JobMetrics: {
@@ -4011,6 +4095,8 @@ export interface components {
             enabled: boolean;
             /** Scope Kinds */
             scope_kinds?: string[];
+            /** Requires Tools */
+            requires_tools?: string[];
         };
         /**
          * Properties
@@ -4247,6 +4333,8 @@ export interface components {
             start_year_clim?: number | null;
             /** End Year Clim */
             end_year_clim?: number | null;
+            /** Date Filter Year */
+            date_filter_year?: number | null;
             /** Max Forecast Day */
             max_forecast_day?: number | null;
             /** Probabilistic */
@@ -4641,6 +4729,48 @@ export interface components {
             approved_config?: components["schemas"]["BlendRunSpec"] | null;
         };
         /**
+         * SuggestedYears
+         * @description A working year split for the chosen sources: a recent true holdout, the
+         *     rest trained on and cross-validated. See ``blend_domain.default_year_split``.
+         */
+        SuggestedYears: {
+            /** Training Years */
+            training_years: string;
+            /** Cv Holdout Years */
+            cv_holdout_years: string;
+            /** True Holdout Years */
+            true_holdout_years: string;
+        };
+        /** TextBlock */
+        TextBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
+        /**
+         * ThinkingBlock
+         * @description Reasoning summary or between-tool progress note the model wrote.
+         */
+        ThinkingBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "thinking";
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
+        /**
          * TileJSON
          * @description TileJSON model.
          *
@@ -4864,6 +4994,16 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /** ToolBlock */
+        ToolBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "tool";
+            /** Tool Call Id */
+            tool_call_id: string;
+        };
         /**
          * ToolPolicy
          * @description Tools withheld from the assistant.
@@ -5193,26 +5333,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RulesetSummary"][];
-                };
-            };
-        };
-    };
-    read_guardrails_assistant_guardrails_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GuardrailThresholds"];
                 };
             };
         };
@@ -5943,6 +6063,37 @@ export interface operations {
             };
         };
     };
+    get_session_job_events_chat_sessions__session_id__job_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatJobActivity"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     submit_session_benchmark_chat_sessions__session_id__benchmark_submit_post: {
         parameters: {
             query?: never;
@@ -6323,6 +6474,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    guardrail_thresholds_config_guardrails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailThresholds"];
                 };
             };
         };
@@ -7062,7 +7233,10 @@ export interface operations {
     };
     get_blend_forecast_jobs__job_id__blend_forecast_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: "daily_model" | "weekly_model";
+                resolution?: "daily" | "weekly";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -7130,7 +7304,9 @@ export interface operations {
     };
     get_blend_cell_metrics_jobs__job_id__blend_cell_metrics_get: {
         parameters: {
-            query?: never;
+            query?: {
+                model?: "blended_forest" | "blended_model";
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -7259,13 +7435,9 @@ export interface operations {
             };
         };
     };
-    get_grid_jobs__job_id__grid_get: {
+    get_grids_jobs__job_id__grids_get: {
         parameters: {
-            query: {
-                model: string;
-                window: string;
-                metric: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -7280,7 +7452,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobGridResponse"];
+                    "application/json": components["schemas"]["JobGrids"];
                 };
             };
             /** @description Validation Error */

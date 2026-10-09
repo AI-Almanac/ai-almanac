@@ -6,9 +6,11 @@ import json
 
 from fastapi import APIRouter
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.routers.feedback import feedback_enabled
+from ai_almanac.server.services import guardrails
 from ai_almanac.settings import get_metric_definitions, get_romp_defaults, settings
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -33,6 +35,27 @@ def list_metrics() -> list[dict]:
 @router.get("/romp-defaults")
 def romp_defaults() -> dict:
     return get_romp_defaults()
+
+
+class GuardrailThresholds(BaseModel):
+    """The thresholds the platform enforces, read-only.
+
+    Shown to admins editing assistant prose, so they see what its {{placeholders}}
+    resolve to, and read by forms so they prefill values the server will accept.
+    Editing them is a platform setting (PATCH /settings), because the submission
+    chokepoint reads the same value.
+    """
+
+    min_onset_years: int
+    min_training_years: int
+    blend_member_warn: int
+    small_sample_years: int
+    presatellite_end_year: int
+
+
+@router.get("/guardrails", response_model=GuardrailThresholds)
+async def guardrail_thresholds(user: CurrentUser) -> GuardrailThresholds:
+    return GuardrailThresholds(**vars(guardrails.current()))
 
 
 @router.get("/capabilities")

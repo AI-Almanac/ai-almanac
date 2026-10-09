@@ -7,7 +7,7 @@
  * construction to the element appearing, which is the only thing that made the
  * failure visible.
  */
-import { render, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import BlendSkillMap from '../src/routes/blends/BlendSkillMap.svelte';
@@ -87,7 +87,9 @@ vi.mock('../src/lib/api', async () => {
 function metrics(overrides: Partial<BlendCellMetrics> = {}): BlendCellMetrics {
 	return {
 		job_id: 'job-1',
+		blend_model: 'blended_model',
 		baseline_model: 'unc_clim_raw',
+		available_models: ['blended_model'],
 		cell_size_deg: 0.25,
 		min_observations: 10,
 		areas: [],
@@ -173,10 +175,40 @@ describe('BlendSkillMap', () => {
 	it('refetches when the selected blend changes', async () => {
 		api.getBlendCellMetrics.mockResolvedValue(metrics());
 		const { rerender } = render(BlendSkillMap, { jobId: 'job-1' });
-		await waitFor(() => expect(api.getBlendCellMetrics).toHaveBeenCalledWith('job-1'));
+		await waitFor(() =>
+			expect(api.getBlendCellMetrics).toHaveBeenCalledWith('job-1', 'blended_model')
+		);
 
 		api.getBlendCellMetrics.mockResolvedValue(metrics({ job_id: 'job-2' }));
 		await rerender({ jobId: 'job-2' });
-		await waitFor(() => expect(api.getBlendCellMetrics).toHaveBeenCalledWith('job-2'));
+		await waitFor(() =>
+			expect(api.getBlendCellMetrics).toHaveBeenCalledWith('job-2', 'blended_model')
+		);
+	});
+
+	it('offers no blend choice when the job trained only the week-level blend', async () => {
+		api.getBlendCellMetrics.mockResolvedValue(metrics());
+		const { findByText, queryByRole } = render(BlendSkillMap, { jobId: 'job-1' });
+		await findByText(/week-level blend beats it/i);
+		expect(queryByRole('tablist', { name: 'Blend shown on the map' })).toBeNull();
+	});
+
+	it('switches to the day-level blend without rebuilding the map', async () => {
+		const both = ['blended_model', 'blended_forest'] as BlendCellMetrics['available_models'];
+		api.getBlendCellMetrics.mockResolvedValue(metrics({ available_models: both }));
+		const { findByRole, findByText } = render(BlendSkillMap, { jobId: 'job-1' });
+		const dayLevel = await findByRole('tab', { name: 'Day-level blend' });
+		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
+
+		api.getBlendCellMetrics.mockResolvedValue(
+			metrics({ blend_model: 'blended_forest', available_models: both })
+		);
+		await fireEvent.click(dayLevel);
+
+		await waitFor(() =>
+			expect(api.getBlendCellMetrics).toHaveBeenLastCalledWith('job-1', 'blended_forest')
+		);
+		await findByText(/day-level blend beats it/i);
+		expect(maplibre.instances).toHaveLength(1);
 	});
 });

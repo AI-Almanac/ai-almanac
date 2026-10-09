@@ -257,7 +257,7 @@
 				<span class="g-term">Mean absolute error</span>
 				<span class="g-def"
 					><strong>Mean Absolute Error</strong> — average absolute difference in days between the
-					model's predicted monsoon onset and the ground-truth observed onset, averaged across all
+					model's predicted onset date and the ground-truth observed onset, averaged across all
 					model initializations for a year. <em>Lower is better.</em></span
 				>
 			</div>

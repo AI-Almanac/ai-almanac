@@ -206,6 +206,50 @@ async def test_promote_covers_completed_run_group_siblings(
     assert {first, sibling} <= audited
 
 
+class _RecordingStore:
+    def __init__(self, fail: bool = False) -> None:
+        self.retained: dict[str, bool] = {}
+        self._fail = fail
+
+    def retain(self, job_id: str, keep: bool) -> None:
+        if self._fail:
+            raise RuntimeError("storage unavailable")
+        self.retained[job_id] = keep
+
+
+@pytest.mark.asyncio
+async def test_example_outputs_exempt_from_retention_until_demoted(
+    client: httpx.AsyncClient, proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _RecordingStore()
+    monkeypatch.setattr("ai_almanac.server.routers.jobs.get_artifact_store", lambda: store)
+    owner_uid, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+    first, sibling = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert("keeper", owner_uid, first, run_id=run_id)
+    _insert("keeper", owner_uid, sibling, run_id=run_id)
+    boss = {"X-Forwarded-User": "boss"}
+
+    assert (await client.post(f"/jobs/{first}/example", headers=boss)).status_code == 200
+    assert store.retained == {first: True, sibling: True}
+
+    assert (await client.post(f"/jobs/{first}/unshare", headers=boss)).status_code == 200
+    assert store.retained[first] is False
+
+
+@pytest.mark.asyncio
+async def test_promotion_rolls_back_when_outputs_cannot_be_retained(
+    client: httpx.AsyncClient, proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _RecordingStore(fail=True)
+    monkeypatch.setattr("ai_almanac.server.routers.jobs.get_artifact_store", lambda: store)
+    job_id = str(uuid.uuid4())
+    _insert("fragile", str(uuid.uuid4()), job_id, job_type="blend")
+
+    with pytest.raises(RuntimeError):
+        await client.post(f"/jobs/{job_id}/example", headers={"X-Forwarded-User": "boss"})
+    assert _job_row(job_id)[1] == "private"
+
+
 @pytest.mark.asyncio
 async def test_example_readable_by_non_owner(client: httpx.AsyncClient, proxy) -> None:
     job_id, _ = _example_job("benchmark")
