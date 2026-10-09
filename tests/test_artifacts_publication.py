@@ -131,3 +131,37 @@ async def test_delete_job_removes_artifacts_and_files(
     assert resp.status_code == 204
     assert await list_job_artifacts(job_id) == []
     assert not get_storage().job_dir(job_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_artifacts_larger_than_two_gigabytes_are_indexed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import artifacts as artifacts_service
+    from ai_almanac.server.services.artifact_store import JobArtifact
+
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    combined_size = 12 * 2**30  # a 26-year India 0.25° blend's combined_wide.pkl
+
+    class _BigOutputStore:
+        def publish(self, job_id: str) -> list[JobArtifact]:
+            return [
+                JobArtifact(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    kind="output",
+                    filename="combined_wide.pkl",
+                    media_type="application/octet-stream",
+                    size_bytes=combined_size,
+                    checksum="md5",
+                    storage_key=f"{job_id}/output/combined_wide.pkl",
+                    created_at="2026-10-08T00:00:00",
+                )
+            ]
+
+    monkeypatch.setattr(artifacts_service, "get_artifact_store", lambda: _BigOutputStore())
+
+    assert await index_job_artifacts(job_id) == 1
+    assert [a["size_bytes"] for a in await list_job_artifacts(job_id)] == [combined_size]
+    assert _published_at(job_id) is not None

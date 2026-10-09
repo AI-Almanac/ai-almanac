@@ -10,13 +10,14 @@ AI Almanac runs in one of two modes, selected by `DEPLOYMENT_MODE`:
 | ---------------------------- | ------------------------------------------- | ----------------------------------------- |
 | Use case                     | One operator on their own machine / GPU box | Multi-user, behind a reverse proxy        |
 | Database                     | SQLite (zero config)                        | PostgreSQL (required)                     |
-| Authentication               | None — local operator is admin              | Proxy OIDC (e.g. Globus via oauth2-proxy) |
+| Authentication               | None — local operator is admin              | Proxy OIDC (e.g. oauth2-proxy) or Globus sign-in |
 | Filesystem browser           | Enabled                                     | Disabled                                  |
 | LLM host-side code execution | Enabled                                     | Disabled                                  |
-| Storage / runner             | Local filesystem, local process             | Local filesystem, local process           |
+| Storage / runner             | Local filesystem, local process             | Local filesystem or GCS; local process or Modal |
 
-See [Current limitations](#current-limitations) before standing up a shared
-deployment.
+Shared mode is an early version, and we are working to make multi-user setup
+simpler. See [Current limitations](#current-limitations) before standing up a
+shared deployment.
 
 ---
 
@@ -195,10 +196,20 @@ internal Compose network, and Caddy only listens on loopback.
 
 ## Shared / hosted
 
-Shared mode adds authentication and per-user ownership. AI Almanac itself does
-**not** authenticate users; it trusts identity headers set by a reverse proxy
-that has already done OIDC. The reference Compose stack is **Caddy →
-oauth2-proxy → AI Almanac**.
+> **Early version.** This is a first pass at multi-user hosting. We are working
+> to streamline it, so expect setup steps and settings to change between
+> releases.
+
+Shared mode adds authentication and per-user ownership, in one of two ways
+selected by `AUTH_MODE`:
+
+- `proxy` (default) — AI Almanac does **not** authenticate users itself; it
+  trusts identity headers set by a reverse proxy that has already done OIDC.
+  The reference Compose stack is **Caddy → oauth2-proxy → AI Almanac**, and the
+  rest of this section describes it.
+- `globus` — the browser signs in with Globus and sends a bearer token on every
+  request, which AI Almanac validates itself. No authenticating proxy is
+  needed; see [Globus sign-in](#globus-sign-in).
 
 ```
             ┌─────────┐   HTTPS    ┌────────┐   auth    ┌─────────────┐
@@ -278,9 +289,16 @@ volume.
 Shared mode **fails fast** unless the configuration is safe. It:
 
 - refuses to start on SQLite (PostgreSQL is mandatory);
-- forces `AUTH_MODE=proxy`;
-- requires group admission and at least one administrator group or subject;
-- requires non-default credential encryption and signing secrets;
+- accepts `AUTH_MODE=proxy` or `AUTH_MODE=globus`, and treats any other value
+  as `proxy`;
+- requires at least one administrator (`ADMIN_SUBJECTS`, `ADMIN_EMAILS`, or
+  `ADMIN_GROUPS`);
+- in `proxy` mode, requires group admission (`ALLOWED_GROUPS`); in `globus`
+  mode, requires `GLOBUS_CLIENT_ID` and `GLOBUS_CLIENT_SECRET`;
+- requires `CREDENTIAL_ENCRYPTION_KEY` and a non-default
+  `CHAT_FIGURE_SIGNING_SECRET`;
+- with local storage, requires `DATASET_MOUNT_ROOTS` so data sources cannot be
+  registered from arbitrary host paths;
 - forces `ENABLE_FS_BROWSER=false` and `ENABLE_RUN_CODE=false`.
 
 `DATABASE_URL` accepts a bare `postgresql://...` (bound to psycopg) or an
@@ -290,9 +308,9 @@ reserved for personal mode.
 
 ### What admins vs users can do
 
-- **Users** can run benchmarks, see their own private jobs, upload private
+- **Users** can run benchmarks, see their own private jobs, register private
   datasets, and read anything shared with them.
-- Jobs and uploads are **private by default**; an owner can share a job
+- Jobs and user-registered datasets are **private by default**; an owner can share a job
   read-only (the "Share results" control), which never grants others the
   ability to cancel, delete, or rerun it.
 - **Admins** manage the global catalog (mounted data sources, regions),
@@ -314,6 +332,34 @@ typically only overwrite a request header when the auth service returns it, so
 an unstripped client-supplied header (e.g. `X-Auth-Request-Groups` for a user
 whose token has no groups claim) would otherwise pass through and escalate
 privileges.
+
+### Globus sign-in
+
+With `AUTH_MODE=globus`, the browser signs in with Globus and sends the
+resulting access token as `Authorization: Bearer <token>`. AI Almanac
+introspects each token with Globus (results are cached for a minute), so the
+application can be exposed directly or behind a plain TLS proxy with no
+oauth2-proxy in front. Set:
+
+- `GLOBUS_CLIENT_ID` and `GLOBUS_CLIENT_SECRET` — a Globus confidential client
+  allowed to introspect tokens for the AI Almanac API scope. Startup fails
+  unless both are set.
+- `ADMIN_SUBJECTS` / `ADMIN_EMAILS` — Globus identity IDs or emails to make
+  administrators. Any valid Globus identity is admitted as a user;
+  `ALLOWED_GROUPS` is not used in this mode.
+- `ADMIN_GROUPS` (optional) — Globus group IDs whose active members are
+  administrators. Memberships are looked up through the Globus Groups API, which
+  requires the Groups scope to be registered as a dependent scope of the API
+  scope.
+
+The SPA learns the mode at load time from `/config.js`
+(`window.__ALMANAC_CONFIG__.authMode`, which mirrors `AUTH_MODE`). When it
+reports `globus`, the app shows a Globus sign-in prompt on private pages,
+attaches the bearer token to API requests, and sends the user back through
+Globus sign-in when a token can no longer be refreshed. In any other mode it
+sends no token and leaves sign-in to the proxy. The Globus client the browser
+signs in with is fixed when the frontend is built, via `VITE_GLOBUS_CLIENT_ID`
+and `VITE_GLOBUS_REDIRECT_URL` (default `<origin>/callback`).
 
 ### Operations
 
@@ -341,10 +387,9 @@ privileges.
   before the upgrade (migrations are additive; a forward-only schema may not
   match an older binary).
 - **Rate limiting**: the expensive paths enforce per-user limits in the
-  application — upload size and stored bytes (`MAX_UPLOAD_BYTES`,
-  `MAX_STORED_UPLOAD_BYTES_PER_USER`), chat requests
-  (`MAX_LLM_REQUESTS_PER_MINUTE`, `MAX_CONCURRENT_LLM_REQUESTS_PER_USER`), and
-  active jobs (`MAX_ACTIVE_JOBS_PER_USER`). Generic request flooding is the
+  application — chat requests (`MAX_LLM_REQUESTS_PER_MINUTE`,
+  `MAX_CONCURRENT_LLM_REQUESTS_PER_USER`) and active jobs
+  (`MAX_ACTIVE_JOBS_PER_USER`). Generic request flooding is the
   reverse proxy's job; apply connection and request limits at Caddy (or
   whatever fronts the stack) if your deployment is exposed to untrusted
   networks.
@@ -357,35 +402,50 @@ privileges.
 
 ## Current limitations
 
-- **Single execution host.** Benchmarks run as local processes on the host
-  running AI Almanac, and job concurrency is gated per host by
-  `MAX_LOCAL_JOBS`. A shared deployment is one application host with a locally
-  mounted GPU and storage; there is no remote/worker fan-out yet. Job state and
-  the capacity gate use the configured database (SQLite or PostgreSQL), so the
-  supervisor works correctly on both backends.
-- **Artifacts on local disk.** Job outputs, uploads, and logs live on the
-  application host's filesystem (the data volume), not in object storage.
-- **Deferred backends.** Object storage and remote runners (Modal, Slurm, batch
-  services) are not implemented; the storage and runner interfaces are designed
-  to accept them later without changing the public product concepts.
+- **Local runner is single-host.** With the default `JOB_RUNNER=local`,
+  benchmarks run as local processes on the host running AI Almanac, and job
+  concurrency is gated per host by `MAX_LOCAL_JOBS`. Job state and the capacity
+  gate use the configured database (SQLite or PostgreSQL), so the supervisor
+  works correctly on both backends. To run jobs remotely, use
+  `JOB_RUNNER=modal`.
+- **Two storage and runner backends.** Artifacts live on the local data volume
+  (`STORAGE_BACKEND=local`) or in Google Cloud Storage (`STORAGE_BACKEND=gcs`),
+  and jobs run locally or on Modal. Modal requires GCS storage, because a
+  remote worker cannot reach the local data volume (see
+  [Local shared development](#local-shared-development) for the supported
+  combinations). Other object stores and schedulers (S3, Slurm, batch services)
+  are not implemented.
+- **Local-storage backups only.** The backup and restore scripts archive the
+  local data volume; with GCS storage, back up the buckets separately.
 
 ## Configuration reference
 
 | Variable                | Mode   | Default                          | Notes                                                  |
 | ----------------------- | ------ | -------------------------------- | ------------------------------------------------------ |
 | `DEPLOYMENT_MODE`       | both   | `personal`                       | `personal` \| `shared`                                 |
-| `AUTH_MODE`             | both   | `none`                           | `none` \| `proxy`; forced `proxy` in shared            |
+| `AUTH_MODE`             | both   | `none`                           | `none` \| `proxy` \| `globus`; shared accepts `proxy` or `globus` and treats anything else as `proxy` |
+| `GLOBUS_CLIENT_ID` / `GLOBUS_CLIENT_SECRET` | shared | — | Confidential client for Globus token checks; both required when `AUTH_MODE=globus` |
 | `DATABASE_URL`          | both   | SQLite                           | PostgreSQL required in shared; the reference stack derives it from `POSTGRES_PASSWORD` |
 | `AI_ALMANAC_DATA_DIR`   | both   | per-user dir                     | DB (personal) + all artifacts                          |
 | `ADMIN_SUBJECTS`        | shared | —                                | Comma-separated OIDC subjects                          |
 | `ADMIN_EMAILS`          | shared | —                                | Comma-separated emails                                 |
+| `ADMIN_GROUPS`          | shared | —                                | Comma-separated groups whose members are admins (Globus group IDs in `globus` mode) |
+| `ALLOWED_GROUPS`        | shared | —                                | Comma-separated groups admitted as users; required in `proxy` mode, unused in `globus` mode |
 | `SUBMITTED_BY_HEADER`   | both   | `X-Forwarded-User`               | Subject header                                         |
 | `IDENTITY_EMAIL_HEADER` | shared | `X-Forwarded-Email`              |                                                        |
 | `IDENTITY_NAME_HEADER`  | shared | `X-Forwarded-Preferred-Username` |                                                        |
-| `DATASET_MOUNT_ROOTS`   | shared | —                                | Allow-list for mounted source paths                    |
+| `CREDENTIAL_ENCRYPTION_KEY` | both | —                              | URL-safe base64 32-byte key that encrypts stored secrets; required in shared |
+| `CHAT_FIGURE_SIGNING_SECRET` | both | development value             | Must be changed in shared                              |
+| `DATASET_MOUNT_ROOTS`   | shared | —                                | Comma-separated allow-list for local data-source paths; required in shared with local storage |
 | `ENABLE_FS_BROWSER`     | both   | `true`                           | Forced `false` in shared                               |
 | `ENABLE_RUN_CODE`       | both   | `true`                           | Forced `false` in shared                               |
+| `DATA_MANAGEMENT_AUDIENCE` | both | `everyone`                      | Who can create custom regions and register datasets: `off` \| `admins` \| `everyone` |
+| `ENABLE_FORECASTING`    | both   | `true`                           | Live AI weather forecasts; also toggled from the Settings page |
 | `RUNNER_MODE`           | both   | `pixi`                           | `pixi` \| `stub`                                       |
+| `JOB_RUNNER`            | both   | `local`                          | `local` \| `modal`; Modal requires `STORAGE_BACKEND=gcs` |
+| `MODAL_APP_NAME` / `MODAL_FUNCTION_NAME` / `MODAL_BLENDING_APP_NAME` | both | `almanac-romp` / `run_benchmark` / `almanac-blending` | Deployed Modal apps used when `JOB_RUNNER=modal` |
+| `STORAGE_BACKEND`       | both   | `local`                          | `local` \| `gcs`                                       |
+| `GCS_DATA_BUCKET` / `GCS_UPLOADS_BUCKET` / `GCS_OUTPUTS_BUCKET` | both | — | All three required when `STORAGE_BACKEND=gcs`          |
 | `MAX_LOCAL_JOBS`        | both   | `1`                              | Concurrent benchmark jobs                              |
 | `APP_MEM_LIMIT`         | shared | `16g`                            | Memory ceiling for the app container (Compose)         |
 | `APP_PIDS_LIMIT`        | shared | `4096`                           | Process ceiling for the app container (Compose)        |

@@ -223,10 +223,10 @@ def test_job_output_uses_display_name_for_legacy_uuid_model() -> None:
     assert job.model_source_id == "db956a33-e511-4ac7-8484-ac6b7fc3e877"
 
 
-@pytest.mark.asyncio
-async def test_submit_benchmark_passes_region_id_to_job_creation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def _submit_from_chat(
+    monkeypatch: pytest.MonkeyPatch, **spec_fields: object
+) -> tuple[dict, list[dict]]:
+    """Run the chat submit tool against a stubbed catalog; return its payload and created jobs."""
     from ai_almanac.server.services import benchmark_domain
     from ai_almanac.server.services.benchmark_state import (
         BenchmarkRunSpec,
@@ -261,6 +261,7 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
             model_ids=["e2s-test"],
             model_names=["E2S (Test)"],
             forecast_window_days=30,
+            **spec_fields,
         )
 
     async def save_state(*args) -> None:
@@ -304,14 +305,32 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
         create_job_for_user,
     )
 
-    await benchmark_domain._exec_submit_benchmark(
+    payload = await benchmark_domain._exec_submit_benchmark(
         {},
         "user-1",
         BenchmarkScope(kind="benchmark_setup", key="setup-1", title="Setup"),
         "session-1",
     )
+    return payload, captured_params
+
+
+@pytest.mark.asyncio
+async def test_submit_benchmark_passes_region_id_to_job_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, captured_params = await _submit_from_chat(monkeypatch)
 
     assert captured_params[0]["region"] == "bangladesh"
+
+
+@pytest.mark.asyncio
+async def test_chat_submit_reports_invalid_settings_without_creating_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, captured_params = await _submit_from_chat(monkeypatch, event_type="monsoon onset")
+
+    assert "event_type" in payload["error"]
+    assert captured_params == []
 
 
 @pytest.mark.asyncio
@@ -511,10 +530,10 @@ def test_guardrail_event_is_omitted_when_a_config_is_clean() -> None:
 def test_guardrail_events_are_recorded_on_the_turn() -> None:
     """Persisted rather than stream-only, so the caution survives a reload."""
     from ai_almanac.server.services.chat_state import ChatTurn, utc_now
-    from ai_almanac.server.services.chat_turns import _apply_stream_event
+    from ai_almanac.server.services.turn_events import apply_stream_event
 
     turn = ChatTurn(id="turn-1", role="assistant", created_at=utc_now())
-    _apply_stream_event(
+    apply_stream_event(
         turn,
         {
             "type": "guardrail",
@@ -1261,3 +1280,17 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     assert kept.json()["benchmark_config"]["region_id"] == "india"
     cleared = await client.patch(url, headers=auth_headers, json={"region_id": None})
     assert cleared.json()["benchmark_config"]["region_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_chat_submit_on_shared_deployment_reports_host_paths_without_creating_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
+
+    payload, captured_params = await _submit_from_chat(
+        monkeypatch, advanced_params={"nc_mask": "/etc/passwd"}
+    )
+
+    assert "nc_mask must be gs:// URLs" in payload["error"]
+    assert captured_params == []

@@ -85,10 +85,12 @@ class DataSourceValidationOut(BaseModel):
     validation_error: str | None
 
 
-def _live_forecast_out(kind: str, name: str, metadata: dict) -> LiveForecastOut | None:
+def _live_forecast_out(kind: str, metadata: dict) -> LiveForecastOut | None:
     if kind != "model":
         return None
-    verdict = live_forecast_compatibility(name, metadata.get("grid_step_deg"))
+    verdict = live_forecast_compatibility(
+        metadata.get("forecast_model_id"), metadata.get("grid_step_deg")
+    )
     return LiveForecastOut(status=verdict.status, detail=verdict.detail, model_id=verdict.model_id)
 
 
@@ -112,7 +114,7 @@ def _to_out(row: dict, user) -> DataSourceOut:
         status=row.get("status") or "invalid",
         validation_error=row.get("validation_error"),
         visibility=row.get("visibility") or "shared",
-        live_forecast=_live_forecast_out(row["kind"], row["name"], raw),
+        live_forecast=_live_forecast_out(row["kind"], raw),
         is_owner=row.get("owner_id") == user.id,
         created_at=row["created_at"],
         updated_at=row.get("updated_at"),

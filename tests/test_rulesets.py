@@ -38,6 +38,8 @@ def test_builtin_has_the_expected_sections_in_order() -> None:
         "caveats",
         "approach",
         "code_execution",
+        "code_execution_job_data",
+        "code_execution_sandbox",
         "output_style",
         "blend_guidance",
     ]
@@ -308,3 +310,32 @@ async def test_the_active_ruleset_falls_back_to_the_packaged_builtin() -> None:
     assert fallback.source == "packaged"
 
     await rulesets.seed_packaged_rulesets()
+
+
+# --- sections that explain a tool ----------------------------------------
+
+
+def _code_tool_mentions(available_tools: set[str] | None) -> tuple[bool, bool]:
+    text = rulesets.build_instructions(
+        builtin(), "benchmark_run_group", available_tools=available_tools
+    )
+    return "run_code(" in text, "run_code_sandbox(" in text
+
+
+def test_a_deployment_without_code_tools_is_not_told_about_them() -> None:
+    """A local build drops the code tools; the prompt describing them anyway is
+    how the assistant ended up telling a user its own instructions were wrong."""
+    assert _code_tool_mentions({"list_jobs", "get_job_metrics"}) == (False, False)
+
+
+def test_only_the_code_tool_that_is_registered_is_explained() -> None:
+    assert _code_tool_mentions({"run_code_sandbox"}) == (False, True)
+    assert _code_tool_mentions({"run_code", "run_code_sandbox"}) == (True, True)
+
+
+def test_an_admin_preview_shows_every_section() -> None:
+    assert _code_tool_mentions(None) == (True, True)
+
+
+def test_the_prompt_asks_for_plain_words_instead_of_tool_names() -> None:
+    assert "never by tool name" in instructions()

@@ -221,6 +221,11 @@ class Settings(BaseSettings):
     # still turn it off from the Settings page (e.g. an install with no
     # GPU/Modal infra configured).
     enable_forecasting: bool = True
+    # The day-level blend: every blend also trains a model of onset by day, and
+    # forecasts offer daily onset chances. Off by default, unlike the convention
+    # above: it adds cross-validation time to every blend that has not yet been
+    # measured against the blend timeout on a managed deployment.
+    enable_day_level_blend: bool = False
     # Side-by-side ruleset comparisons: the admin playground and the blind A/B
     # users run from the chat. "off" hides the whole surface — every comparison
     # is two LLM turns, so an install that cannot afford that, or is not
@@ -576,26 +581,28 @@ def blend_model_key(name: str) -> str:
     """Filesystem/column-safe key used for a forecast model inside a blend.
 
     The blend pipeline keys everything on this (formula terms, file names,
-    trajectory sets), and the web client mirrors it (blendModelKey in
-    web/src/lib/api/forecasts.ts) — keep the two in sync.
+    trajectory sets).
     """
     return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
 
 
-def resolve_forecast_model(registry: dict, name: str) -> dict | None:
-    """Registry entry a blend model name can run live forecasts with, or None.
+def forecast_model_by_id(registry: dict, model_id: str | None) -> dict | None:
+    """Registry entry with exactly this id, or None.
 
-    A name matches by registry id, by normalized display name, or by an
-    explicit `aliases` entry — so a data source named "AIFS Single v2" or
-    "AIFS2" both reach the `aifs2` model. Mirrored by the Modal runner
-    (modal/forecasts_app.py) and the web client's forecastModelFor.
+    Model data sources name the live model that produced them at registration
+    (`metadata.forecast_model_id`), so lookups are exact rather than guessed
+    from the data source's name.
     """
-    key = blend_model_key(name)
-    for entry in registry.get("models") or []:
-        if (
-            key == entry["id"]
-            or key == blend_model_key(entry.get("display_name") or "")
-            or key in (entry.get("aliases") or [])
-        ):
-            return entry
-    return None
+    return next(
+        (entry for entry in registry.get("models") or [] if entry["id"] == model_id),
+        None,
+    )
+
+
+def member_forecast_model_id(config: dict, member: str) -> str:
+    """Registry id a forecast job runs for one blend member.
+
+    Mirrored by modal/forecasts_app.py. Jobs queued before the explicit link
+    carry no `forecast_models` map, so their member name is tried as the id.
+    """
+    return (config.get("forecast_models") or {}).get(member, member)

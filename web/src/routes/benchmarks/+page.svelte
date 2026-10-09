@@ -19,8 +19,9 @@
 		type Region,
 		type RompDefaults
 	} from '$lib/api';
-	import { EVENT_TYPES } from '$lib/data/event-types';
+	import { eventTypeName } from '$lib/data/event-types';
 	import { modelDisplayName } from '$lib/model-names';
+	import { takeSetupRequest } from '$lib/setup-request';
 	import BenchmarkForm from './BenchmarkForm.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 	import { installTour } from '$lib/tour.svelte';
@@ -40,10 +41,10 @@
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
 	let initialized = $state(false);
+	const manualSetupRequested = takeSetupRequest('manual');
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
-	const manualSetupRequested = $derived($page.url.searchParams.get('manual') === '1');
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
-	const inSetupMode = $derived(store.showForm || promptSetupActive || manualSetupRequested);
+	const inSetupMode = $derived(store.showForm || promptSetupActive);
 	const resultsTourActive = $derived(
 		!inSetupMode && (store.selectedGroup?.jobs.some((job) => job.status === 'complete') ?? false)
 	);
@@ -113,10 +114,6 @@
 		const runId = jobs[0]?.run_id ?? store.selectedGroupKey;
 		if (!runId) return;
 		store.acceptSubmittedJobs(runId, jobs);
-	}
-
-	function eventTypeName(eventType: string): string {
-		return EVENT_TYPES.find((event) => event.id === eventType)?.name ?? eventType;
 	}
 
 	function formatRunDate(value: string): string {

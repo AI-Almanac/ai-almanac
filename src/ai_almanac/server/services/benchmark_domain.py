@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.focus_area import parse_focus_area
+from ai_almanac.server.services.forecast_models import training_summary
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
@@ -190,6 +191,7 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
             "obs_file_pattern": source["metadata"].get("obs_file_pattern"),
             "obs_year_start": source["metadata"].get("start_year"),
             "obs_year_end": source["metadata"].get("end_year"),
+            "grid_step_deg": source["metadata"].get("grid_step_deg"),
         }
         for source in sources
         if source.get("status") == "ready"
@@ -478,6 +480,7 @@ async def _exec_list_models(args: dict, user_id: str, scope: BenchmarkScope) -> 
                     "end_year_clim",
                 ]
             }
+            | {"training": training_summary(model.get("forecast_model_id"))}
             for model in models
         ]
     )
@@ -622,13 +625,24 @@ async def _exec_submit_benchmark(
         "region": spec.region_id,
         "max_forecast_day": spec.forecast_window_days,
     }
-    for model in models:
-        params = {**shared_params, **_clamp_model_params(model, spec)}
+    try:
+        params_by_model = [
+            (
+                model,
+                job_submission.parse_romp_params(
+                    {**shared_params, **_clamp_model_params(model, spec)}
+                ),
+            )
+            for model in models
+        ]
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return benchmark_payload(spec, validation, error=str(exc))
+    for model, romp_params in params_by_model:
         job = await job_submission.create_job_for_user(
             job_submission.JobCreate(
                 dataset_id=spec.dataset_id or "",
                 model_name=model["id"],
-                params=job_submission.RompParams(**params),
+                params=romp_params,
                 run_id=run_id,
             ),
             user_id,
@@ -778,6 +792,41 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> st
     return json.dumps(jobs)
 
 
+def scope_names_jobs(scope: BenchmarkScope) -> bool:
+    """Whether the scope identifies particular jobs. A setup scope carries none,
+    and `_scope_conditions` reads that as every job the user owns."""
+    return scope.kind == "benchmark_run_group" or bool(scope.job_ids)
+
+
+async def scope_job_statuses(user_id: str, scope: BenchmarkScope) -> list[dict]:
+    """Id, label, status and completion time of each job in the scope."""
+    from ai_almanac.server.db import get_db
+
+    if not scope_names_jobs(scope):
+        return []
+    query = sa.select(
+        _jobs.c.id, _jobs.c.job_type, _jobs.c.config_json, _jobs.c.status, _jobs.c.completed_at
+    ).where(_jobs.c.user_id == sa.bindparam("uid"), *_scope_conditions(scope, _jobs))
+    async with get_db() as conn:
+        rows = (
+            (await conn.execute(query, {"uid": user_id, **_scope_params(scope)}))
+            .mappings()
+            .fetchall()
+        )
+    statuses = []
+    for row in rows:
+        fields = _job_listing_fields(row["job_type"], json.loads(row["config_json"] or "{}"))
+        statuses.append(
+            {
+                "job_id": row["id"],
+                "label": fields.get("blend_name") or fields.get("model_name") or "",
+                "status": row["status"],
+                "completed_at": row["completed_at"],
+            }
+        )
+    return statuses
+
+
 async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
 
@@ -893,14 +942,19 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
     if not row:
         return {"error": f"Job {job_id} not found"}
     cfg = json.loads(row["config_json"] or "{}")
-    params = {**(cfg.get("romp_params") or {}), **params_override}
+    try:
+        romp_params = job_submission.parse_romp_params(
+            {**(cfg.get("romp_params") or {}), **params_override}
+        )
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return {"error": str(exc)}
     rerun = await job_submission.create_job_for_user(
         job_submission.JobCreate(
             dataset_id=row["dataset_id"],
             model_name=cfg.get("model_source_id")
             or (cfg.get("model_config") or {}).get("id")
             or cfg.get("model_name", ""),
-            params=job_submission.RompParams(**params),
+            params=romp_params,
             run_id=row["run_id"],
         ),
         user_id,

@@ -20,17 +20,12 @@ from typing import Literal
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services.forecast_models import live_forecast_compatibility
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
 _LATITUDE_NAMES = ("lat", "latitude")
 _LONGITUDE_NAMES = ("lon", "longitude")
-_INITIALIZATION_TIME_NAMES = (
-    "time",
-    "init_time",
-    "initialization_time",
-    "forecast_reference_time",
-)
 
 
 def _now() -> str:
@@ -116,11 +111,7 @@ def _grid_step_deg(dataset) -> float | None:
     return step
 
 
-def _initialization_days(dataset) -> tuple[str, str, int] | None:
-    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
-    if coordinate is None or dataset[coordinate].ndim != 1:
-        return None
-
+def _initialization_days(dataset, coordinate: str) -> tuple[str, str, int] | None:
     values = dataset[coordinate]
     if values.size < 2:
         return None
@@ -133,7 +124,7 @@ def _initialization_days(dataset) -> tuple[str, str, int] | None:
     return ",".join(str(day) for day in weekdays), coordinate, int(values.size)
 
 
-def _initialization_schedule(dataset) -> list[str] | None:
+def _initialization_schedule(dataset, coordinate: str) -> list[str] | None:
     """The archive's fixed-calendar issue-date schedule as sorted ``MM-DD``.
 
     Archives pin issue dates to fixed calendar dates (e.g. Apr 1, 4, 8), not
@@ -143,9 +134,6 @@ def _initialization_schedule(dataset) -> list[str] | None:
     calendar cadence (see forecast_pipeline.season_issue_dates). The month-days
     are stable across years, so the first file is representative.
     """
-    coordinate = _coordinate_name(dataset, _INITIALIZATION_TIME_NAMES)
-    if coordinate is None or dataset[coordinate].ndim != 1:
-        return None
     values = dataset[coordinate]
     if values.size < 2:
         return None
@@ -208,6 +196,9 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
         normalized["missing_years"] = _missing_years(years)
 
     if kind == "model":
+        forecast_model_id = str(normalized.pop("forecast_model_id", None) or "").strip()
+        if forecast_model_id:
+            normalized["forecast_model_id"] = forecast_model_id
         normalized.setdefault("model_type", "AIWP")
         normalized.setdefault("unit_cvt", 1.0)
         # probabilistic is defaulted in _finalize_inspection from the file's
@@ -267,18 +258,126 @@ def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, 
 
     files = [Path(identifier) for identifier in identifiers]
     return _finalize_inspection(
-        kind, metadata, files, lambda: storage.open_nc_dataset(identifiers[0])
+        kind, metadata, files, lambda: storage.open_nc_metadata(identifiers[0])
     )
 
 
-# Ensemble member dim names ROMP recognises (see momp dim_fmt_model_ensemble).
-_ENSEMBLE_DIM_KEYWORDS = ("number", "sample", "member")
+# Integer lead-time dims carry no timedelta dtype, so they are known by name.
+_INTEGER_LEAD_TIME_KEYWORDS = ("day", "step", "lead")
 
 
-def _has_ensemble_dim(dataset) -> bool:
-    return any(
-        keyword in str(name).lower() for name in dataset.dims for keyword in _ENSEMBLE_DIM_KEYWORDS
+def _dims_where(dataset, dims: list[str], predicate) -> list[str]:
+    return [dim for dim in dims if dim in dataset.coords and predicate(dataset[dim])]
+
+
+def _only(candidates: list[str], label: str) -> str:
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ValueError(f"No {label} dimension was found.")
+    raise ValueError(f"Found several possible {label} dimensions: {', '.join(candidates)}.")
+
+
+def _lead_time_dim(dataset, dims: list[str]) -> str:
+    import numpy as np
+
+    timedeltas = _dims_where(dataset, dims, lambda c: np.issubdtype(c.dtype, np.timedelta64))
+    if timedeltas:
+        return _only(timedeltas, "lead time")
+    named_integers = _dims_where(
+        dataset,
+        dims,
+        lambda c: (
+            np.issubdtype(c.dtype, np.integer)
+            and any(word in str(c.name).lower() for word in _INTEGER_LEAD_TIME_KEYWORDS)
+        ),
     )
+    return _only(named_integers, "lead time")
+
+
+def _forecast_dims(dataset, variable: str) -> dict[str, str]:
+    """Which of `variable`'s dims plays each role ROMP needs, keyed by ROMP's name.
+
+    Roles come from the coordinates' types, not their names: the datetime dim
+    is the start date and the timedelta dim the lead time, whatever they are
+    called, and a dim left over with more than one value is the ensemble member.
+    """
+    import numpy as np
+
+    dims = [str(dim) for dim in dataset[variable].dims]
+    roles = {
+        "lat": _coordinate_name(dataset, _LATITUDE_NAMES),
+        "lon": _coordinate_name(dataset, _LONGITUDE_NAMES),
+        "init_time": _only(
+            _dims_where(dataset, dims, lambda c: np.issubdtype(c.dtype, np.datetime64)),
+            "forecast start date",
+        ),
+    }
+    roles["step"] = _lead_time_dim(dataset, [dim for dim in dims if dim not in roles.values()])
+    member = _ensemble_member_dim(dataset, [dim for dim in dims if dim not in roles.values()])
+    if member:
+        roles["member"] = member
+    return _romp_safe_dims(roles)
+
+
+def _ensemble_member_dim(dataset, remaining: list[str]) -> str | None:
+    """The one dim left after the other roles, which must span several members."""
+    if len(remaining) > 1:
+        raise ValueError(f"Expected at most one ensemble member dimension, found {remaining}.")
+    if not remaining:
+        return None
+    member = remaining[0]
+    # A single-valued extra axis (e.g. a size-1 height) is not an ensemble; taking
+    # it as one would silently make the source probabilistic.
+    if dataset.sizes[member] < 2:
+        raise ValueError(
+            f"Dimension {member!r} has a single value, so it is not an ensemble member. "
+            "Remove it, or give the forecast start date, lead time, lat and lon only."
+        )
+    return member
+
+
+def _romp_safe_dims(roles: dict[str, str]) -> dict[str, str]:
+    """Reject dim names ROMP's config cannot carry now, not when a job is submitted."""
+    from pydantic import ValidationError
+
+    from ai_almanac.server.services.romp import parse_model_dims
+
+    try:
+        return parse_model_dims(roles)
+    except ValidationError:
+        names = ", ".join(sorted(set(roles.values())))
+        raise ValueError(
+            "Dimension names may only use letters, digits, '_', '.' and '-' "
+            f"(and must not start with '.' or '-'). Found: {names}."
+        ) from None
+
+
+# Multipliers from a precipitation total's CF `units` to the millimetres ROMP
+# thresholds assume.
+_MILLIMETRES_PER_UNIT = {
+    "m": 1000.0,
+    "metres": 1000.0,
+    "meters": 1000.0,
+    "m/day": 1000.0,
+    "mm": 1.0,
+    "mm/day": 1.0,
+    "mm day-1": 1.0,
+    "mm d-1": 1.0,
+    "kg m-2": 1.0,
+    "kg m**-2": 1.0,
+    "kg/m2": 1.0,
+}
+
+
+def _precipitation_unit_cvt(units: object) -> float:
+    try:
+        return _MILLIMETRES_PER_UNIT[str(units).strip().lower()]
+    except KeyError:
+        supported = ", ".join(repr(name) for name in _MILLIMETRES_PER_UNIT)
+        raise ValueError(
+            f"Unrecognized precipitation units {units!r}. Supported units: {supported}."
+        ) from None
 
 
 def _finalize_inspection(
@@ -298,9 +397,20 @@ def _finalize_inspection(
             available = sorted(dataset.data_vars)
             spatial_bounds = _spatial_bounds(dataset)
             grid_step_deg = _grid_step_deg(dataset)
-            has_ensemble = _has_ensemble_dim(dataset) if kind == "model" else False
-            initialization_days = _initialization_days(dataset) if kind == "model" else None
-            initialization_schedule = _initialization_schedule(dataset) if kind == "model" else None
+            units = dataset[variable].attrs.get("units") if variable in dataset.data_vars else None
+            forecast_dims, layout_error = None, None
+            if kind == "model" and variable in dataset.data_vars:
+                try:
+                    forecast_dims = _forecast_dims(dataset, variable)
+                except ValueError as exc:
+                    layout_error = str(exc)
+            init_coordinate = (forecast_dims or {}).get("init_time")
+            initialization_days = (
+                _initialization_days(dataset, init_coordinate) if init_coordinate else None
+            )
+            initialization_schedule = (
+                _initialization_schedule(dataset, init_coordinate) if init_coordinate else None
+            )
     except Exception as exc:
         return (
             "invalid",
@@ -313,7 +423,12 @@ def _finalize_inspection(
         # An ensemble member dim can only be evaluated by ROMP's probabilistic
         # path; the deterministic path crashes on the extra dim. The file's
         # shape decides the mode, so this overrides any stored flag.
-        normalized["probabilistic"] = has_ensemble or bool(normalized.get("probabilistic"))
+        normalized["probabilistic"] = "member" in (forecast_dims or {}) or bool(
+            normalized.get("probabilistic")
+        )
+        # ROMP renames these to its own names before scoring, so model files
+        # keep whatever dim names their producer chose.
+        normalized["forecast_dims"] = forecast_dims
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {
@@ -359,13 +474,38 @@ def _finalize_inspection(
             f"Variable {variable!r} was not found in {files[0].name}. Available variables: {names}.",
             normalized,
         )
+    if kind == "model" and layout_error:
+        return "invalid", f"{files[0].name}: {layout_error}", normalized
+    if kind == "model" and units is not None:
+        # Declared units decide the conversion, like the ensemble dim decides
+        # probabilistic; files without a units attribute keep the stored value.
+        try:
+            normalized["unit_cvt"] = _precipitation_unit_cvt(units)
+        except ValueError as exc:
+            return "invalid", f"{variable!r} in {files[0].name}: {exc}", normalized
     if kind == "model" and normalized.get("start_year") is None:
         return (
             "invalid",
             "Could not infer model coverage years from matching filenames.",
             normalized,
         )
+    if kind == "model" and (link_error := _forecast_model_link_error(normalized)):
+        return "invalid", link_error, normalized
     return "ready", None, normalized
+
+
+def _forecast_model_link_error(metadata: dict) -> str | None:
+    """Why the live forecast model chosen for this archive can't run it, if so.
+
+    Unlinked archives are valid (history only); a link must name a registry
+    model on the archive's grid, or live forecasts would be scored with weights
+    that don't apply to them.
+    """
+    model_id = metadata.get("forecast_model_id")
+    if model_id is None:
+        return None
+    verdict = live_forecast_compatibility(model_id, metadata.get("grid_step_deg"))
+    return None if verdict.status == "ready" else verdict.detail
 
 
 async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:

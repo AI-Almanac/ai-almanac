@@ -110,6 +110,13 @@ export type GuardrailNotice = {
 	finding_keys?: string[];
 };
 
+/** One step of an assistant turn, in the order it happened. */
+export type ChatTurnBlock =
+	| { kind: 'text'; text: string }
+	/** A reasoning summary or a progress note the model wrote between tool calls. */
+	| { kind: 'thinking'; text: string }
+	| { kind: 'tool'; tool_call_id: string };
+
 export type ChatMessage = {
 	id: string;
 	role: 'user' | 'assistant';
@@ -118,6 +125,8 @@ export type ChatMessage = {
 	tool_calls?: ChatToolCall[];
 	artifacts?: ChatArtifact[];
 	guardrails?: GuardrailNotice[];
+	/** Absent on turns saved before blocks were recorded. */
+	blocks?: ChatTurnBlock[];
 };
 
 export type ChatArtifact = {
@@ -133,10 +142,25 @@ export type ChatArtifact = {
 export type ChatToolCall = {
 	id: string;
 	name: string;
-	status: 'running' | 'completed' | 'failed';
+	/** `pending` while the model is still writing the call's arguments. */
+	status: 'pending' | 'running' | 'completed' | 'failed';
 	input: Record<string, unknown>;
 	result?: unknown;
 	artifacts: ChatArtifact[];
+};
+
+/** A run in the chat's scope that finished, failed, or was canceled during the conversation. */
+export type ChatJobEvent = {
+	job_id: string;
+	label: string;
+	status: 'complete' | 'failed' | 'canceled';
+	at: string;
+};
+
+export type ChatJobActivity = {
+	events: ChatJobEvent[];
+	/** Runs in scope still queued or running. */
+	active: number;
 };
 
 export type ChatSessionDetail = ChatSession & {
@@ -146,6 +170,7 @@ export type ChatSessionDetail = ChatSession & {
 
 export type ChatEvent =
 	| { type: 'text_delta'; turn_id: string; content: string }
+	| { type: 'thinking_delta'; turn_id: string; content: string }
 	| { type: 'tool_call'; turn_id: string; tool_call: ChatToolCall }
 	| {
 			type: 'tool_result';
@@ -386,6 +411,10 @@ export async function* sendChatMessage(
 	}
 
 	throw new Error('Chat stream ended before a terminal event was received.');
+}
+
+export async function getChatJobActivity(sessionId: string): Promise<ChatJobActivity> {
+	return request<ChatJobActivity>(`/chat/sessions/${encodeURIComponent(sessionId)}/job-events`);
 }
 
 /**

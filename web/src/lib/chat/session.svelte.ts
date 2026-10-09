@@ -4,6 +4,7 @@ import {
 	getChatSession,
 	updateChatSession,
 	deleteChatSession,
+	getChatJobActivity,
 	sendChatMessage,
 	submitChatBenchmark,
 	denyChatBenchmarkApproval,
@@ -15,11 +16,13 @@ import {
 	type BlendRunSpec,
 	type BlendValidation,
 	type ChatEvent,
+	type ChatJobActivity,
 	type ChatMessage,
 	type ChatScope,
 	type ChatSession,
 	type Job
 } from '$lib/api';
+import { emptyAssistantTurn, foldTurnEvent, startsTurn } from '$lib/chat/turn';
 
 export interface ChatSessionCallbacks {
 	onSessionReady?: (sessionId: string) => void;
@@ -72,6 +75,7 @@ export class ChatSessionState {
 	sessionId = $state<string | null>(null);
 	messages = $state<ChatMessage[]>([]);
 	streamingTurn = $state<ChatMessage | null>(null);
+	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
 	loadingSession = $state(false);
@@ -161,6 +165,7 @@ export class ChatSessionState {
 			this.sessionId = id;
 			this.callbacks.onSessionReady?.(id);
 			this.messages = detail.transcript;
+			void this.refreshJobActivity();
 			if (detail.benchmark_config) {
 				this.callbacks.onBenchmarkConfig?.(
 					detail.benchmark_config,
@@ -203,6 +208,7 @@ export class ChatSessionState {
 			this.sessionId = session.id;
 			this.callbacks.onSessionReady?.(session.id);
 			this.messages = [];
+			this.jobActivity = { events: [], active: 0 };
 			this.loadedScopeToken = scopeToken(scope);
 			return session.id;
 		} catch {
@@ -292,76 +298,36 @@ export class ChatSessionState {
 		} finally {
 			this.sending = false;
 			this.sendLocked = false;
+			// A turn can start or rerun a job, or move the chat onto a new run.
+			void this.refreshJobActivity();
 		}
 	}
 
-	private startTurn(turnId: string): ChatMessage {
-		return {
-			id: turnId,
-			role: 'assistant',
-			content: '',
-			created_at: new Date().toISOString(),
-			tool_calls: [],
-			artifacts: [],
-			guardrails: []
-		};
-	}
+	/** Re-read which runs in scope have finished; failures keep the last known state. */
+	refreshJobActivity = async () => {
+		const sessionId = this.sessionId;
+		if (!sessionId) return;
+		try {
+			const activity = await getChatJobActivity(sessionId);
+			if (this.sessionId === sessionId) this.jobActivity = activity;
+		} catch {
+			// Job notices are a convenience; the conversation works without them.
+		}
+	};
 
 	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
-		if (event.type === 'text_delta') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) {
-				this.streamingTurn = this.startTurn(event.turn_id);
-			}
-			this.streamingTurn = {
-				...this.streamingTurn,
-				content: this.streamingTurn.content + event.content
-			};
-		} else if (event.type === 'tool_call') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) {
-				this.streamingTurn = this.startTurn(event.turn_id);
-			}
-			this.streamingTurn = {
-				...this.streamingTurn,
-				tool_calls: [...(this.streamingTurn.tool_calls ?? []), event.tool_call]
-			};
-		} else if (event.type === 'tool_result') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
+		if (startsTurn(event) && this.streamingTurn?.id !== event.turn_id) {
+			this.streamingTurn = emptyAssistantTurn(event.turn_id);
+		}
+		if ('turn_id' in event && this.streamingTurn?.id === event.turn_id) {
+			this.streamingTurn = foldTurnEvent(this.streamingTurn, event);
+		}
+		if (event.type === 'tool_result') {
 			const createdJob = jobFromToolResult(event.result);
 			if (createdJob) this.callbacks.onJobsCreated?.([createdJob]);
-			this.streamingTurn = {
-				...this.streamingTurn,
-				tool_calls: (this.streamingTurn.tool_calls ?? []).map((tc) =>
-					tc.id === event.tool_call_id ? { ...tc, status: event.status, result: event.result } : tc
-				)
-			};
-		} else if (event.type === 'artifact') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
-			this.streamingTurn = {
-				...this.streamingTurn,
-				artifacts: [...(this.streamingTurn.artifacts ?? []), event.artifact],
-				tool_calls: (this.streamingTurn.tool_calls ?? []).map((tc) =>
-					tc.id === event.tool_call_id
-						? { ...tc, artifacts: [...(tc.artifacts ?? []), event.artifact] }
-						: tc
-				)
-			};
-		} else if (event.type === 'guardrail') {
-			// Attached to the turn from the backend's validation payload, so the
-			// caution renders even when the assistant's prose omits it.
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
-			this.streamingTurn = {
-				...this.streamingTurn,
-				guardrails: [
-					...(this.streamingTurn.guardrails ?? []),
-					{
-						tool_call_id: event.tool_call_id,
-						errors: event.errors,
-						warnings: event.warnings,
-						finding_keys: event.finding_keys
-					}
-				]
-			};
-		} else if (event.type === 'error') {
+		}
+
+		if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));
 		} else if (event.type === 'benchmark_approval_request') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
@@ -438,6 +404,7 @@ export class ChatSessionState {
 					response.benchmark_validation
 				);
 				this.callbacks.onBenchmarkSubmitted?.(response.run_id, response.jobs, this.sessionId);
+				void this.refreshJobActivity();
 			} else {
 				const response = await submitChatBlend(this.sessionId, {
 					tool_call_id: approval.toolCallId,
@@ -445,6 +412,7 @@ export class ChatSessionState {
 				});
 				this.callbacks.onBlendConfig?.(response.blend_config, response.blend_validation);
 				this.callbacks.onBlendSubmitted?.(response.run_id, response.jobs, this.sessionId);
+				void this.refreshJobActivity();
 			}
 		} catch (e) {
 			this.error = (e as Error).message ?? 'Submit failed.';

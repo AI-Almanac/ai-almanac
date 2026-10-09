@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 from pathlib import Path
@@ -142,23 +143,28 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     intermediates = workflow.build_lat_lon_intermediates_bundle.local(
         obs_bundle,
         forecast_bundles,
-        return_outputs=True,
+        return_outputs=False,
         cache_dir=config.get("cache_dir"),
+        model_layouts=config.get("model_layouts"),
         **prep_kwargs,
     )
-    combined = workflow._read_tar_member_bytes(intermediates["outputs_tar"], "combined_wide.pkl")
+    # Read from disk, never held as bytes: on large grids the combined table
+    # is the biggest object the run handles.
+    combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
 
     train_kwargs = {"cores": os.cpu_count() or 1}
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
     print("==> Training blend weights", flush=True)
     training = workflow.train_blending_model_bundle.local(
-        combined,
+        None,
+        combined_wide_path=str(combined_path),
         model_names=model_names,
         training_years=workflow._parse_years(params.get("training_years") or "") or [],
         cv_holdout_years=workflow._parse_years(params.get("cv_holdout_years") or "") or [],
         true_holdout_years=workflow._parse_years(params.get("true_holdout_years") or ""),
         return_outputs=True,
+        train_forest=bool(config.get("train_day_level_blend")),
         **train_kwargs,
     )
     if not training["manifest"].get("ok"):
@@ -166,7 +172,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         raise RuntimeError(f"Blend training pipeline failed:\n{tail}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "combined_wide.pkl").write_bytes(combined)
+    shutil.move(combined_path, output_dir / "combined_wide.pkl")
     if training.get("outputs_tar"):
         _extract_tar(training["outputs_tar"], output_dir)
     print("==> Model blending complete", flush=True)

@@ -1,26 +1,151 @@
+"""ROMP integration: the value types ROMP accepts and the config file it reads.
+
+ROMP reads its config by exec()ing Python source, and the Modal runner hands
+these values to ROMP through environment variables. Every value that reaches
+ROMP is therefore parsed into one of the types below first, and serialized
+back in one canonical form, so no free-form text can reach that source.
+"""
+
 from __future__ import annotations
 
+import re
+from datetime import date
 from pathlib import Path
+from typing import Annotated, Literal
+
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    TypeAdapter,
+    WithJsonSchema,
+)
+
+_NAME_CHARS = r"A-Za-z0-9_.\-"
+_MODEL_NAME_PART = re.compile(f"[{_NAME_CHARS}]+")
 
 
 def romp_safe_model_name(name: str) -> str:
-    """ROMP rejects model names containing whitespace; collapse runs to underscores."""
-    return "_".join(str(name).split())
+    """ROMP model names allow only name characters; collapse anything else to underscores."""
+    return "_".join(_MODEL_NAME_PART.findall(str(name))) or "model"
 
 
-def _date_tuple(value: str) -> tuple[int, int, int]:
-    year, month, day = value.split("-")
-    return int(year), int(month), int(day)
+def _comma_separated(value: object) -> object:
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    if isinstance(value, int) and not isinstance(value, bool):
+        return (value,)
+    return value
+
+
+def _joined(values: tuple[int, ...]) -> str:
+    return ",".join(str(value) for value in values)
+
+
+def _all_members_or_indices(value: object) -> object:
+    if value is None or (isinstance(value, str) and value.strip().lower() == "all"):
+        return "All"
+    return _comma_separated(value)
+
+
+def _members_text(value: str | tuple[int, ...]) -> str:
+    return value if isinstance(value, str) else _joined(value)
+
+
+def _without_parent_segments(value: str) -> str:
+    if ".." in value.split("/"):
+        raise ValueError("must not contain '..' path segments")
+    return value
+
+
+Weekday = Annotated[int, Field(ge=0, le=6)]
+EnsembleMember = Annotated[int, Field(ge=0, le=9999)]
+Year = Annotated[int, Field(ge=1800, le=2300)]
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=360)]
+
+InitDays = Annotated[
+    tuple[Weekday, ...],
+    BeforeValidator(_comma_separated),
+    Field(min_length=1, max_length=7),
+    PlainSerializer(_joined),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "pattern": r"^\s*[0-6](\s*,\s*[0-6])*\s*$",
+            "description": "Comma-separated weekday numbers, Monday = 0 (e.g. '0,3').",
+        }
+    ),
+]
+"""Forecast initialization weekdays; accepts '0,3' or [0, 3], serializes as '0,3'."""
+
+Members = Annotated[
+    Literal["All"] | Annotated[tuple[EnsembleMember, ...], Field(min_length=1)],
+    BeforeValidator(_all_members_or_indices),
+    PlainSerializer(_members_text),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "pattern": r"^\s*(All|all|\d{1,4}(\s*,\s*\d{1,4})*)\s*$",
+            "description": "'All' or comma-separated ensemble member indices (e.g. '0,1,2').",
+        }
+    ),
+]
+"""Ensemble members to score; accepts 'All', '0,1' or [0, 1], serializes as 'All' or '0,1'."""
+
+RompName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=f"^[A-Za-z0-9_][{_NAME_CHARS}]*$", max_length=128
+    ),
+]
+"""Variable, dataset, model, region, or event names: letters, digits, '_', '.', '-'."""
+
+FilePattern = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=r"^[A-Za-z0-9_.\-{}*?]+(/[A-Za-z0-9_.\-{}*?]+)*$"
+    ),
+    Field(max_length=256),
+    AfterValidator(_without_parent_segments),
+]
+"""Relative file-name pattern where '{}' stands for the year, e.g. 'chirps_{}.nc'."""
+
+DataPath = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=r"^(gs://)?[A-Za-z0-9_.\-/ ]+$"),
+    Field(max_length=1024),
+    AfterValidator(_without_parent_segments),
+]
+"""A gs:// URI or filesystem path to a NetCDF file or directory."""
+
+ModelDims = dict[Literal["init_time", "step", "member", "lat", "lon"], RompName]
+"""ROMP's forecast dim names mapped to the names used in the model files."""
+
+_INIT_DAYS = TypeAdapter(InitDays)
+_MEMBERS = TypeAdapter(Members)
+_MODEL_DIMS = TypeAdapter(ModelDims | None)
+_DATE = TypeAdapter(date)
+
+
+def _date_tuple(value: object) -> tuple[int, int, int]:
+    parsed = _DATE.validate_python(value)
+    return parsed.year, parsed.month, parsed.day
 
 
 def _members(value: object) -> str | tuple[int, ...]:
-    if value is None or str(value).strip().lower() == "all":
-        return "All"
-    return tuple(int(member.strip()) for member in str(value).split(",") if member.strip())
+    return _MEMBERS.validate_python(value)
+
+
+def parse_model_dims(value: object) -> dict[str, str] | None:
+    """Parse a forecast dims mapping; raises pydantic.ValidationError for unsafe names."""
+    return _MODEL_DIMS.validate_python(value or None)
 
 
 def _init_days(value: object) -> tuple[int, ...]:
-    return tuple(int(day.strip()) for day in str(value or "0,3").split(",") if day.strip())
+    return _INIT_DAYS.validate_python(value or "0,3")
 
 
 def _year_list(value: object) -> tuple[int, ...] | None:
@@ -42,8 +167,8 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
     obs_var = str(params.get("obs_var") or dataset.get("obs_var") or "RAINFALL")
     model_pattern = str(params.get("file_pattern") or model.get("file_pattern") or "{}.nc")
     model_var = str(params.get("model_var") or model.get("model_var") or "tp")
-    start_date = _date_tuple(str(params.get("start_date") or model.get("start_date")))
-    end_date = _date_tuple(str(params.get("end_date") or model.get("end_date")))
+    start_date = _date_tuple(params.get("start_date") or model.get("start_date"))
+    end_date = _date_tuple(params.get("end_date") or model.get("end_date"))
     ref_model_dir = str(params.get("ref_model_dir") or obs_dir)
 
     values = {
@@ -66,6 +191,7 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "model_var_list": (model_var,),
         "unit_cvt_list": (model.get("unit_cvt"),),
         "file_pattern_list": (model_pattern,),
+        "model_dims_list": (parse_model_dims(model.get("forecast_dims")),),
         "region": str(params.get("region") or config.get("romp_region") or "Ethiopia"),
         "lat_min": params.get("lat_min"),
         "lat_max": params.get("lat_max"),

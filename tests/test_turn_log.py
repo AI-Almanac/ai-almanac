@@ -21,6 +21,28 @@ def record(**kwargs) -> TurnRecord:
     return TurnRecord(session_id="s1", user_id="u1", turn_id="t1", **kwargs)
 
 
+# --- names_internal_terms ------------------------------------------------
+
+OFFERED = ["get_job_metrics", "get_spatial_summary", "rerun_job"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use `get_job_metrics` / `get_spatial_summary` once the jobs finish.",
+        "I can call rerun_job with parallel off.",
+        "Set per_model_params → parallel: false for FuXi.",
+    ],
+)
+def test_a_tool_name_or_config_path_shown_to_the_user_is_flagged(text: str) -> None:
+    assert compute_flags(record(text=text, offered_tools=OFFERED))["names_internal_terms"]
+
+
+def test_describing_the_same_work_in_plain_words_is_not_flagged() -> None:
+    text = "Once the runs finish I can map mean absolute error and rerun FuXi one year at a time."
+    assert not compute_flags(record(text=text, offered_tools=OFFERED))["names_internal_terms"]
+
+
 # --- numbers_without_tool_call -------------------------------------------
 
 

@@ -7,6 +7,10 @@ export type Blend = {
 	name: string;
 	status: JobStatus;
 	model_names: string[];
+	// Member name → live forecast model id, for members whose data is linked to one.
+	forecast_models?: Record<string, string>;
+	// Years kept out of every fit, scored apart from the cross-validation years.
+	true_holdout_years?: number[];
 	region_id?: string | null;
 	created_at: string;
 	completed_at?: string | null;

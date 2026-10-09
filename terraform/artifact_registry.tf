@@ -74,6 +74,25 @@ output "ci_service_account_email" {
   value = google_service_account.ci.email
 }
 
+# hholb/ROMP publishes the romp image Modal runs. It gets its own account that
+# can only push images, rather than almanac-ci, which also deploys both
+# environments.
+resource "google_service_account" "romp_publisher" {
+  account_id   = "romp-publisher"
+  display_name = "ROMP image publisher (hholb/ROMP GitHub Actions)"
+}
+
+resource "google_artifact_registry_repository_iam_member" "romp_publisher_push" {
+  location   = var.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.romp_publisher.email}"
+}
+
+output "romp_publisher_service_account_email" {
+  value = google_service_account.romp_publisher.email
+}
+
 data "google_project" "project" {
   project_id = var.project_id
 }

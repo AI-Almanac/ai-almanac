@@ -18,6 +18,7 @@ For GCS-free dev deployment, set:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tarfile
@@ -39,9 +40,13 @@ ENABLE_GCS_FUNCTIONS = os.environ.get("ALMANAC_MODAL_ENABLE_GCS", "1").lower() n
     "false",
     "no",
 }
+# Pinned by digest: Modal caches from_registry builds by the image string, so a
+# mutable tag like :latest keeps serving whatever it resolved to first. Bump this
+# (and the momp rev in src/ai_almanac/envs/benchmark.pixi.toml) when ROMP changes.
+# This digest is romp:sha-af44762, hholb/ROMP main at af44762.
 ROMP_IMAGE_URI = os.environ.get(
     "ALMANAC_MODAL_ROMP_IMAGE_URI",
-    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp:latest",
+    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:5bc9422333408d2ed28dc96e336772f2a522da15b25e7ebf6df7d186cc72df65",
 )
 GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentials")
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
@@ -204,12 +209,14 @@ e2s_secret = modal.Secret.from_name(E2S_SECRET_NAME) if E2S_SECRET_NAME else Non
 _SERVICES_DIR = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/services"
 E2S_METRICS_RUNNER = _SERVICES_DIR / "e2s.py"
 FOCUS_AREA_MODULE = _SERVICES_DIR / "focus_area.py"
+ROMP_SETTINGS_MODULE = _SERVICES_DIR / "romp.py"
 
 # Extends the ROMP image with earth2studio for metrics and public data readers.
 benchmark_image = (
     romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr", "pydantic")
     .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
     .add_local_file(FOCUS_AREA_MODULE, "/almanac/focus_area.py")
+    .add_local_file(ROMP_SETTINGS_MODULE, "/almanac/almanac_romp.py")
 )
 
 
@@ -881,6 +888,33 @@ def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
     return local_obs, local_model, local_out, local_fig
 
 
+# focus_area reaches ROMP as the nc_mask _with_focus_mask writes from it.
+_SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area"})
+
+
+def _almanac_module(name: str):
+    """A server module copied into the image under /almanac (see benchmark_image)."""
+    import importlib
+    import sys
+
+    if "/almanac" not in sys.path:
+        sys.path.insert(0, "/almanac")
+    return importlib.import_module(name)
+
+
+def _model_file_env(model_config: dict) -> dict:
+    """The model files' units and dim names, as found when the source was registered."""
+    env = {}
+    if model_config.get("unit_cvt") is not None:
+        env["ROMP_UNIT_CVT"] = repr(float(model_config["unit_cvt"]))
+    # Parsed with the same restricted type the local runner renders, so both
+    # runners hand ROMP only plain dim names.
+    dims = _almanac_module("almanac_romp").parse_model_dims(model_config.get("forecast_dims"))
+    if dims:
+        env["ROMP_MODEL_DIMS"] = json.dumps(dims)
+    return env
+
+
 def _romp_env(
     config: dict,
     local_obs: Path,
@@ -891,12 +925,17 @@ def _romp_env(
     romp_params = config.get("romp_params", {})
     return {
         **os.environ,
+        **_model_file_env(config.get("model_config") or {}),
         "ROMP_OBS_DIR": str(local_obs),
         "ROMP_MODEL_DIR": str(local_model),
         "ROMP_MODEL_NAME": config["model_name"],
         "ROMP_DIR_OUT": str(local_out),
         "ROMP_DIR_FIG": str(local_fig),
-        **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
+        **{
+            f"ROMP_{k.upper()}": str(v)
+            for k, v in romp_params.items()
+            if v is not None and k not in _SETTINGS_NOT_FOR_ROMP
+        },
     }
 
 
@@ -936,7 +975,7 @@ def _patch_romp_config(config_path: str, env: dict) -> None:
     ):
         val = env.get(env_key)
         if val is not None:
-            extra.append(f"{cfg_key} = {val}")
+            extra.append(f"{cfg_key} = {float(val)!r}")
 
     with open(config_path, "a") as f:
         f.write("\n# Almanac runner overrides\n")
@@ -984,11 +1023,7 @@ def _with_focus_mask(config: dict, local_obs: Path, mask_dir: Path) -> dict:
     """Write the area-of-interest mask on the staged obs grid and point nc_mask at it."""
     if not (config.get("romp_params") or {}).get("focus_area"):
         return config
-    import sys
-
-    sys.path.insert(0, "/almanac")
-    from focus_area import materialize_focus_mask
-
+    materialize_focus_mask = _almanac_module("focus_area").materialize_focus_mask
     return materialize_focus_mask({**config, "obs_dir": str(local_obs)}, mask_dir)
 
 

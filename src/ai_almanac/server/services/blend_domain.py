@@ -17,8 +17,10 @@ import sqlalchemy as sa
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
-from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation
+from ai_almanac.server.services.blend_cells import BLEND_MODELS
+from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation, SuggestedYears
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
+from ai_almanac.server.services.forecast_models import linked_forecast_model_id, training_summary
 from ai_almanac.server.tables import jobs as _jobs
 
 # Per-lead columns in the blend's pooled summary CSV, ordered week 1 → later.
@@ -31,7 +33,6 @@ _BRIER_LEAD_COLUMNS = [
     "brier_week4",
     "brier_later",
 ]
-_BLEND_MODEL = "blended_model"
 
 # The blend package scores every skill column against this baseline
 # (``summarize_models_pooled``, baseline_model). ``unc`` is *unconditional*, not
@@ -59,6 +60,14 @@ def _source_candidate(source: dict) -> dict:
         "end_year": meta.get("end_year"),
         "missing_years": meta.get("missing_years"),
         "grid_step_deg": meta.get("grid_step_deg"),
+        "forecast_model_id": meta.get("forecast_model_id"),
+    }
+
+
+def _model_candidate(source: dict) -> dict:
+    return {
+        **_source_candidate(source),
+        "training": training_summary(linked_forecast_model_id(source)),
     }
 
 
@@ -71,7 +80,7 @@ async def _ready_model_candidates(
     region: str | None = None, user_id: str | None = None
 ) -> list[dict]:
     sources = await data_source_service.get_model_sources(region, user_id=user_id)
-    return [_source_candidate(s) for s in sources if s.get("status") == "ready"]
+    return [_model_candidate(s) for s in sources if s.get("status") == "ready"]
 
 
 # --------------------------------------------------------------------------
@@ -96,6 +105,38 @@ def _coverage(obs: dict | None, models: list[dict]) -> dict | None:
         (obs.get("start_year"), obs.get("end_year")),
         [(m.get("start_year"), m.get("end_year")) for m in models],
         set().union(*(job_submission.source_missing_years(s) for s in [obs, *models])),
+    )
+
+
+# Share of the valid forecast years reserved as a true holdout by default.
+TRUE_HOLDOUT_SHARE = 0.2
+
+
+def _year_span(lo: int, hi: int) -> str:
+    return str(lo) if lo == hi else f"{lo}:{hi}"
+
+
+def true_holdout_count(valid_years: int, min_training_years: int) -> int:
+    """About a fifth of the years, never leaving fewer than ``min_training_years``."""
+    return max(0, min(int(valid_years * TRUE_HOLDOUT_SHARE), valid_years - min_training_years))
+
+
+def default_year_split(coverage: dict | None, min_training_years: int) -> SuggestedYears | None:
+    """Hold out the most recent years, train and cross-validate on the rest.
+
+    Recent years stand in for the seasons the blend will actually forecast, and
+    overlap least with the member models' own training periods. Mirrored by
+    defaultSplit in web/src/routes/blends/year-coverage.ts.
+    """
+    if coverage is None or coverage["earliest_forecast"] > coverage["end"]:
+        return None
+    lo, hi = coverage["earliest_forecast"], coverage["end"]
+    held = true_holdout_count(hi - lo + 1, min_training_years)
+    training = _year_span(lo, hi - held)
+    return SuggestedYears(
+        training_years=training,
+        cv_holdout_years=training,
+        true_holdout_years=_year_span(hi - held + 1, hi) if held else "",
     )
 
 
@@ -168,7 +209,8 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
 
     warnings.extend(
         job_submission.historical_only_warning(
-            (m["name"], m.get("grid_step_deg")) for m in selected_models
+            job_submission.BlendMember(m["name"], m["forecast_model_id"], m["grid_step_deg"])
+            for m in selected_models
         )
     )
 
@@ -192,6 +234,7 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     # (``job_submission.create_blend_for_user``), surfaced here so the assistant
     # and the setup form see the verdict before submitting rather than as a 400
     # afterwards. This path only reports; it is not what makes the rules hold.
+    thresholds = guardrails.current()
     findings = guardrails.check_blend(
         guardrails.BlendYears(
             training=_parse_year_spec(spec.training_years) or [],
@@ -199,7 +242,7 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
             true_holdout=_parse_year_spec(spec.true_holdout_years) or [],
         ),
         len(selected_models),
-        guardrails.current(),
+        thresholds,
     )
     errors.extend(guardrails.error_messages(findings))
     warnings.extend(guardrails.warning_messages(findings))
@@ -212,6 +255,7 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
         errors=errors,
         warnings=warnings,
         finding_keys=guardrails.finding_keys(findings),
+        suggested_years=default_year_split(coverage, thresholds.min_training_years),
     )
 
 
@@ -500,7 +544,7 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
         rows.append(
             {
                 "model": model,
-                "is_blend": model == _BLEND_MODEL,
+                "is_blend": model in BLEND_MODELS,
                 "is_baseline": model == _BASELINE_MODEL,
                 "auc": cell(cells, "auc"),
                 "brier": cell(cells, "brier"),
@@ -525,9 +569,15 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
                 for value, base in zip(row["brier_by_lead"], baseline["brier_by_lead"], strict=True)
             ]
 
-    # Blend first so the model's own row leads any rendered comparison.
-    rows.sort(key=lambda row: not row["is_blend"])
+    # Blends first, week-level then day-level, so the job's own rows lead any
+    # rendered comparison.
+    rows.sort(key=lambda row: _blend_rank(row["model"]))
     return rows
+
+
+def _blend_rank(model: str) -> int:
+    """Position of a blend in BLEND_MODELS; every other model sorts after them."""
+    return BLEND_MODELS.index(model) if model in BLEND_MODELS else len(BLEND_MODELS)
 
 
 async def _blend_job_status(job_id: str, user_id: str, scope: BenchmarkScope):

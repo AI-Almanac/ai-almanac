@@ -22,7 +22,16 @@ from ai_almanac.server.services import blend_cells, derived_outputs, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.blend_cells import BlendCellMetrics
-from ai_almanac.server.services.blend_forecast import parse_blend_forecast
+from ai_almanac.server.services.blend_forecast import (
+    ForecastModel,
+    ForecastResolution,
+    ForecastView,
+    UnsupportedForecastView,
+    available_views,
+    is_offered,
+    parse_blend_forecast,
+    parse_forecast_view,
+)
 from ai_almanac.server.services.events import audit
 from ai_almanac.server.services.job_manager import (
     ACTIVE_STATUSES,
@@ -36,6 +45,7 @@ from ai_almanac.server.services.job_submission import (
 )
 from ai_almanac.server.services.registry import load_catalog, load_model_registry
 from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
+from ai_almanac.settings import settings
 
 from ..services.metrics import (
     JobCellResponse,
@@ -202,19 +212,29 @@ async def list_artifacts(job_id: str, job: ReadableJob):
     ]
 
 
-_BLEND_FORECAST_PAYLOAD = "blend_forecast.v1.json"
 _EMPTY_BLEND_FORECAST = {"issue_dates": [], "points": [], "onset_threshold": None}
 
 
 @router.get("/{job_id}/blend-forecast", response_model=dict)
-async def get_blend_forecast(job_id: str, job: ReadableJob) -> Response:
+async def get_blend_forecast(
+    job_id: str,
+    job: ReadableJob,
+    model: ForecastModel = "weekly_model",
+    resolution: ForecastResolution = "weekly",
+) -> Response:
     """Return blended onset probabilities for all issue dates and grid points.
 
-    The probabilities CSV is reshaped into per-point series once, stored beside
-    the job's outputs, and served from there on later reads.
+    `model` picks the week-level or day-level blend; `resolution` bins its
+    probabilities by week or by day (only the day-level blend has days). The
+    probabilities CSV is reshaped into per-point series once per view, stored
+    beside the job's outputs, and served from there on later reads.
     """
     from ai_almanac.server.services.region_catalog import get_region
 
+    try:
+        view = parse_forecast_view(model, resolution)
+    except UnsupportedForecastView as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     _require_complete(job)
 
     # The region defines what "onset" means (e.g. India → Modified Moron–Robertson,
@@ -228,29 +248,37 @@ async def get_blend_forecast(job_id: str, job: ReadableJob) -> Response:
         "onset_definition": (region or {}).get("description"),
     }
 
-    artifact = next(
-        (
-            a
-            for a in await list_job_artifacts(job_id)
-            if a["filename"] == "blended_forecast_probabilities.csv"
-        ),
-        None,
+    artifacts = await list_job_artifacts(job_id)
+    # Per request, not stored: tells the viewer which views this forecast can offer
+    # (forecasts from blends trained before the day-level blend have only one).
+    day_level_enabled = settings.enable_day_level_blend
+    views = {
+        "available_views": available_views(
+            (a["filename"] for a in artifacts), day_level_enabled=day_level_enabled
+        )
+    }
+    artifact = (
+        next((a for a in artifacts if a["filename"] == view.source_filename), None)
+        if is_offered(view, day_level_enabled=day_level_enabled)
+        else None
     )
     payload = (
         await derived_outputs.load_or_build(
-            job_id, _BLEND_FORECAST_PAYLOAD, lambda: _build_blend_forecast(job_id, artifact)
+            job_id, view.payload_name, lambda: _build_blend_forecast(job_id, artifact, view)
         )
         if artifact
         else None
     )
     forecast = json.loads(payload) if payload else _EMPTY_BLEND_FORECAST
     # Serialized directly: FastAPI's encoder is slow on ~100k nested probabilities.
-    return Response(json.dumps({**forecast, **region_context}), media_type="application/json")
+    return Response(
+        json.dumps({**forecast, **region_context, **views}), media_type="application/json"
+    )
 
 
-def _build_blend_forecast(job_id: str, artifact: dict) -> bytes | None:
+def _build_blend_forecast(job_id: str, artifact: dict, view: ForecastView) -> bytes | None:
     text = get_storage().read_result_text(job_id, artifact["kind"], artifact["filename"])
-    return json.dumps(parse_blend_forecast(text)).encode() if text else None
+    return json.dumps(parse_blend_forecast(text, view.columns)).encode() if text else None
 
 
 _BLEND_SUMMARY_PREFIXES = {"pooled": "summary_models_pooled", "yearly": "yearly_metrics_global"}
@@ -285,13 +313,19 @@ async def get_blend_summary(
 
 
 @router.get("/{job_id}/blend-cell-metrics")
-async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetrics:
-    """Return per-grid-point blend skill, reshaped into grids for the map.
+async def get_blend_cell_metrics(
+    job_id: str,
+    job: ReadableJob,
+    model: blend_cells.BlendModel = blend_cells.DEFAULT_BLEND_MODEL,
+) -> BlendCellMetrics:
+    """Return one blend's per-grid-point skill, reshaped into grids for the map.
 
     Returns empty ``grids`` rather than 404 when the per-cell summary is absent or
-    lacks the blend and baseline rows: the frontend's request wrapper throws on
-    any non-OK status, so a 404 would paint an error state over a run that simply
-    has nothing to map.
+    lacks the requested blend and baseline rows: the frontend's request wrapper
+    throws on any non-OK status, so a 404 would paint an error state over a run
+    that simply has nothing to map. ``available_models`` names the blends the
+    summary does score, so a blend trained before the day-level blend existed
+    offers no choice.
     """
     _require_complete(job)
     summary = next(
@@ -303,12 +337,18 @@ async def get_blend_cell_metrics(job_id: str, job: ReadableJob) -> BlendCellMetr
         None,
     )
     if summary is None:
-        return blend_cells.build_cell_metrics(job_id, "", region_id=_job_region_id(job))
+        return blend_cells.build_cell_metrics(
+            job_id, "", region_id=_job_region_id(job), model=model
+        )
     text = await asyncio.to_thread(
         get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
     )
     return await asyncio.to_thread(
-        blend_cells.build_cell_metrics, job_id, text or "", region_id=_job_region_id(job)
+        blend_cells.build_cell_metrics,
+        job_id,
+        text or "",
+        region_id=_job_region_id(job),
+        model=model,
     )
 
 

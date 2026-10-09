@@ -12,12 +12,13 @@ import json
 import math
 import re
 import uuid
-from collections.abc import Iterable
-from datetime import UTC, datetime
+from collections.abc import Iterable, Mapping
+from datetime import UTC, date, datetime
+from typing import NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -27,11 +28,23 @@ from ai_almanac.server.services.execution import ExecutionRequest, ResourceReque
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
+    linked_forecast_model_id,
     live_forecast_compatibility,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
-from ai_almanac.server.services.romp import romp_safe_model_name
+from ai_almanac.server.services.romp import (
+    DataPath,
+    FilePattern,
+    InitDays,
+    Latitude,
+    Longitude,
+    Members,
+    RompName,
+    Year,
+    parse_model_dims,
+    romp_safe_model_name,
+)
 from ai_almanac.server.services.runner_registry import get_job_runner
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
@@ -42,45 +55,55 @@ from ai_almanac.settings import (
 )
 
 
+# Benchmark settings, parsed into the only value shapes ROMP accepts.
+# model_dump(mode="json") gives the canonical form stored with the job and
+# handed to the ROMP runners.
 class RompParams(BaseModel):
-    obs: str | None = None
-    obs_file_pattern: str | None = None
-    obs_var: str | None = None
-    model_var: str | None = None
-    file_pattern: str | None = None
-    region: str | None = None
-    event_type: str | None = None
-    wet_threshold: float | None = None
-    wet_init: float | None = None
+    obs: RompName | None = None
+    obs_file_pattern: FilePattern | None = None
+    obs_var: RompName | None = None
+    model_var: RompName | None = None
+    file_pattern: FilePattern | None = None
+    region: RompName | None = None
+    event_type: RompName | None = None
+    wet_threshold: FiniteFloat | None = None
+    wet_init: FiniteFloat | None = None
     wet_spell: int | None = None
     dry_spell: int | None = None
     dry_extent: int | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-    start_year_clim: int | None = None
-    end_year_clim: int | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    start_year_clim: Year | None = None
+    end_year_clim: Year | None = None
+    date_filter_year: Year | None = None
     max_forecast_day: int | None = None
     probabilistic: bool | None = None
-    members: str | None = None
+    members: Members | None = None
     parallel: bool | None = None
-    ref_model: str | None = None
-    init_days: str | None = None
-    lat_min: float | None = None
-    lat_max: float | None = None
-    lon_min: float | None = None
-    lon_max: float | None = None
+    ref_model: RompName | None = None
+    init_days: InitDays | None = None
+    lat_min: Latitude | None = None
+    lat_max: Latitude | None = None
+    lon_min: Longitude | None = None
+    lon_max: Longitude | None = None
     land_only: bool | None = None
     shp_only: bool | None = None
-    nc_mask: str | None = None
+    nc_mask: DataPath | None = None
     focus_area: FocusArea | None = None
-    ref_model_dir: str | None = None
-    thresh_file: str | None = None
+    ref_model_dir: DataPath | None = None
+    thresh_file: DataPath | None = None
+
+
+class ResolvedRompParams(RompParams):
+    """Settings after submission resolves them, including the years ROMP evaluates."""
+
+    years: tuple[Year, ...] | None = None
+    years_clim: tuple[Year, ...] | None = None
 
 
 class JobCreate(BaseModel):
     dataset_id: str
     model_name: str
-    obs_dir: str | None = None
     params: RompParams = RompParams()
     run_id: str | None = None
 
@@ -242,12 +265,8 @@ def _not_ready_detail(source: dict, user_id: str, fallback: str) -> str:
     return fallback
 
 
-async def _resolve_obs_dir(
-    dataset_id: str, obs_dir_override: str | None, user_id: str
-) -> str | None:
+async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
     """Resolve an observation source to the path a runner reads."""
-    if obs_dir_override:
-        return obs_dir_override
     source = await data_source_service.get_source(dataset_id)
     if not source:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -396,6 +415,10 @@ class BlendOut(BaseModel):
     # never run a live forecast). Frozen with the job so the limitation stays
     # attached to the result it applies to.
     warnings: list[str] = []
+    # Member name → live forecast model id, for members whose archive is linked.
+    forecast_models: dict[str, str] = {}
+    # Years kept out of every fit, so results can show their scores apart.
+    true_holdout_years: list[int] = []
 
 
 _blend_model_key = blend_model_key
@@ -533,24 +556,54 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     return errors
 
 
-def live_forecast_blockers(members: Iterable[tuple[str, float | None]]) -> list[str]:
+class BlendMember(NamedTuple):
+    """A blend member as the live-forecast checks see it."""
+
+    name: str
+    forecast_model_id: str | None
+    archive_step: float | None
+
+
+def blend_member(name: str, source: dict) -> BlendMember:
+    return BlendMember(name, linked_forecast_model_id(source), archive_grid_step(source))
+
+
+def live_forecast_blockers(members: Iterable[BlendMember]) -> list[str]:
     """Why each blocked member keeps the blend from running as a live forecast.
 
     Live scoring needs a rolled-out season for *every* member of the blend, so a
-    single blocked member (no live model, or one on a different grid than the
-    archive) makes the whole blend history-only. Members are (name, archive grid
-    step) pairs; an unknown grid step falls back to the registry-only check.
+    single blocked member (no linked live model, or one on a different grid than
+    the archive) makes the whole blend history-only. An unknown archive grid
+    step falls back to the registry-only check.
     """
     registry = get_packaged_forecast_models()
     blockers = []
-    for name, archive_step in members:
-        verdict = live_forecast_compatibility(name, archive_step, registry)
+    for member in members:
+        verdict = live_forecast_compatibility(
+            member.forecast_model_id, member.archive_step, registry
+        )
         if verdict.status != "ready":
-            blockers.append(f"{name}: {verdict.detail}")
+            blockers.append(f"{member.name}: {verdict.detail}")
     return sorted(blockers)
 
 
-def historical_only_warning(members: Iterable[tuple[str, float | None]]) -> list[str]:
+def blend_forecast_models(cfg: dict, sources_by_id: Mapping[str, dict]) -> dict[str, str]:
+    """Live forecast model id for each blend member whose archive links to one.
+
+    Read from the member's data source rather than frozen into the blend, so
+    linking an archive after training makes its existing blends forecastable.
+    """
+    linked = {}
+    for name, source_id in zip(
+        cfg.get("model_names") or [], cfg.get("model_source_ids") or [], strict=False
+    ):
+        model_id = linked_forecast_model_id(sources_by_id.get(source_id) or {})
+        if model_id is not None:
+            linked[name] = model_id
+    return linked
+
+
+def historical_only_warning(members: Iterable[BlendMember]) -> list[str]:
     """Warn, at blend submission, that a blend can never run a live forecast.
 
     History-only blends are a legitimate research result, so this does not block
@@ -590,6 +643,34 @@ def grid_mismatch_errors(
         f"The observations are on a {obs_step:g}° grid, but "
         + "; ".join(sorted(mismatched))
         + ". Choose observations and models on the same grid."
+    ]
+
+
+def blend_model_layout(metadata: dict) -> dict:
+    """A source's registered dim names and unit conversion, for the blend runner."""
+    return {
+        "forecast_dims": parse_model_dims(metadata.get("forecast_dims")),
+        "unit_cvt": float(metadata.get("unit_cvt") or 1.0),
+    }
+
+
+def blend_layout_errors(layouts: Iterable[tuple[str, dict]]) -> list[str]:
+    """Reject sources whose start-date dim blending cannot decode.
+
+    The blending reader decodes forecast start dates only from a dim literally
+    named "time"; any other name would be read as raw numbers, not dates.
+    """
+    renamed = [
+        f"{name} names it {dims['init_time']!r}"
+        for name, layout in layouts
+        if (dims := layout["forecast_dims"]) and dims.get("init_time", "time") != "time"
+    ]
+    if not renamed:
+        return []
+    return [
+        "Blending reads the forecast start date from a dimension named 'time', but "
+        + "; ".join(sorted(renamed))
+        + "."
     ]
 
 
@@ -660,6 +741,14 @@ def _blend_forecast_years(params: BlendParams) -> list[int]:
     )
 
 
+def _years_or_empty(value: str | None) -> list[int]:
+    """A stored or submitted year spec, with a malformed one read as no years."""
+    try:
+        return _parse_year_spec(value)
+    except ValueError:
+        return []
+
+
 def blend_years(params: BlendParams) -> guardrails.BlendYears:
     """A blend's three year sets parsed for the guardrail predicates.
 
@@ -669,20 +758,16 @@ def blend_years(params: BlendParams) -> guardrails.BlendYears:
     from turning one syntax error into a second, more confusing complaint.
     """
 
-    def years(value: str | None) -> list[int]:
-        try:
-            return _parse_year_spec(value)
-        except ValueError:
-            return []
-
     return guardrails.BlendYears(
-        training=years(params.training_years),
-        cv_holdout=years(params.cv_holdout_years),
-        true_holdout=years(params.true_holdout_years),
+        training=_years_or_empty(params.training_years),
+        cv_holdout=_years_or_empty(params.cv_holdout_years),
+        true_holdout=_years_or_empty(params.true_holdout_years),
     )
 
 
-def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
+def blend_row_to_out(
+    row: dict, current_user_id: str | None, sources_by_id: Mapping[str, dict] | None = None
+) -> BlendOut:
     cfg = json.loads(row.get("config_json") or "{}")
     is_owner = (current_user_id is None) or (row.get("user_id") == current_user_id)
     return BlendOut(
@@ -698,6 +783,10 @@ def blend_row_to_out(row: dict, current_user_id: str | None) -> BlendOut:
         visibility=row.get("visibility") or "private",
         run_id=row.get("run_id"),
         warnings=cfg.get("warnings") or [],
+        forecast_models=blend_forecast_models(cfg, sources_by_id or {}),
+        true_holdout_years=_years_or_empty(
+            (cfg.get("blend_params") or {}).get("true_holdout_years")
+        ),
     )
 
 
@@ -722,7 +811,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
 
-    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, None, user_id)
+    obs_dir = await _resolve_obs_dir(body.obs_dataset_id, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
 
     try:
@@ -740,6 +829,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     # year filter and backend resolution live on the server, and run_blend just
     # downloads the files it is given.
     model_files: dict[str, list[str]] = {}
+    # Per-model dim names and unit conversion from registration, so the blend
+    # reads each archive as uploaded.
+    model_layouts: dict[str, dict] = {}
     model_years: list[YearRange] = []
     # The blend keys everything on the slug; warnings read better with the name
     # the user picked the source by.
@@ -754,15 +846,23 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         model_names.append(key)
         model_sources.append(source)
         model_files[key] = year_uris(source["path"], forecast_years)
+        model_layouts[key] = blend_model_layout(source.get("metadata") or {})
         model_years.append(source_year_range(source))
 
     missing = set().union(
         *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
     )
     coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
-    source_errors = blend_coverage_errors(forecast_years, coverage) + grid_mismatch_errors(
-        archive_grid_step(obs_source),
-        ((source["name"], archive_grid_step(source)) for source in model_sources),
+    source_errors = (
+        blend_coverage_errors(forecast_years, coverage)
+        + grid_mismatch_errors(
+            archive_grid_step(obs_source),
+            ((source["name"], archive_grid_step(source)) for source in model_sources),
+        )
+        + blend_layout_errors(
+            (source["name"], model_layouts[key])
+            for key, source in zip(model_names, model_sources, strict=True)
+        )
     )
     if source_errors:
         raise HTTPException(status_code=400, detail=" ".join(source_errors))
@@ -780,7 +880,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         raise HTTPException(status_code=400, detail=" ".join(guardrail_errors))
 
     warnings = historical_only_warning(
-        (source["name"], archive_grid_step(source)) for source in model_sources
+        blend_member(source["name"], source) for source in model_sources
     ) + guardrails.warning_messages(findings)
 
     job_id = str(uuid.uuid4())
@@ -796,12 +896,14 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "blend_name": body.name,
         "obs_dir": obs_dir,
         "model_files": model_files,
+        "model_layouts": model_layouts,
         "model_names": model_names,
         "model_source_ids": list(body.model_ids),
         "forecast_years": forecast_years,
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
+        "train_day_level_blend": settings.enable_day_level_blend,
         "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }
@@ -874,7 +976,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         values["status"] = "running"
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
-    return blend_row_to_out(row, user_id)
+    return blend_row_to_out(row, user_id, {source["id"]: source for source in model_sources})
 
 
 class ForecastParams(BaseModel):
@@ -987,13 +1089,10 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     blend_config["blend_output_uri"] = get_storage().job_output_uri(body.blend_id)[0]
 
     model_names: list[str] = blend_config.get("model_names") or []
-    # Live inference runs against the forecast_models.yaml registry (earth2studio
-    # model ids), not the archived data-source ids the blend was trained from
-    # (blend_config["model_source_ids"]). Each blend model name must resolve to
-    # a registry entry (by id, display name, or alias — see
-    # resolve_forecast_model), while the name itself stays the key everywhere:
-    # score_live_forecast_bundle joins the live model's output back into the
-    # blend's formula by that name (the `diff_<model>_qx` terms).
+    # Live inference runs the forecast_models.yaml model each member's archive
+    # is linked to at registration, while the member name stays the key
+    # everywhere: score_live_forecast_bundle joins the live model's output back
+    # into the blend's formula by that name (the `diff_<model>_qx` terms).
     registry = get_packaged_forecast_models()
     requested = set(body.forecast_model_ids) if body.forecast_model_ids else set(model_names)
     unknown = sorted(requested - set(model_names))
@@ -1021,7 +1120,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # Without this, a request for only the runnable members is accepted and then
     # fails during scoring, after the rollout has already been paid for.
     blockers = live_forecast_blockers(
-        (name, archive_grid_step(sources_by_name.get(name) or {})) for name in model_names
+        blend_member(name, sources_by_name.get(name) or {}) for name in model_names
     )
     if blockers:
         raise HTTPException(
@@ -1118,6 +1217,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         # retroactively change a forecast job already queued.
         "blend_config_snapshot": blend_config,
         "forecast_model_ids": forecast_model_ids,
+        # Member name → registry id the runners execute for it.
+        "forecast_models": {
+            name: linked_forecast_model_id(sources_by_name[name] or {})
+            for name in forecast_model_ids
+        },
         "season_model_params": season_model_params,
         "season_start_month_day": season_start_month_day,
         "init_source": init_source,
@@ -1258,6 +1362,56 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     return await create_forecast_for_user(body, user_id)
 
 
+class InvalidBenchmarkSettings(ValueError):
+    """Benchmark settings that do not parse; the message names each invalid field."""
+
+
+_FILE_SETTINGS = ("nc_mask", "thresh_file", "ref_model_dir")
+
+
+def _require_cloud_paths(paths: dict[str, str | None]) -> None:
+    """Shared deployments only take gs:// URLs for job files.
+
+    The runner opens these files itself, so a host or container path would
+    let a job read files there rather than its data.
+    """
+    if settings.deployment_mode != "shared":
+        return
+    local = [name for name, path in paths.items() if path and not path.startswith("gs://")]
+    if local:
+        raise InvalidBenchmarkSettings(
+            f"Invalid benchmark settings: {', '.join(local)} must be gs:// URLs on this deployment"
+        )
+
+
+def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> RompParams:
+    try:
+        parsed = model.model_validate(params)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
+    _require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
+    return parsed
+
+
+def parse_benchmark_settings(params: dict) -> dict:
+    """Parse settings assembled from the request, model, region, and source metadata.
+
+    Raises a 422 naming each invalid field. Returns the canonical JSON form
+    stored with the job and handed to ROMP.
+    """
+    try:
+        parsed = parse_romp_params(params, ResolvedRompParams)
+    except InvalidBenchmarkSettings as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        key: value for key, value in parsed.model_dump(mode="json").items() if value is not None
+    }
+
+
 async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     """Picked administrative units need their outlines frozen into the job."""
     if not params.get("focus_area"):
@@ -1328,12 +1482,12 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     )
     if grid_errors:
         raise HTTPException(status_code=400, detail=" ".join(grid_errors))
-    obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir, user_id)
+    obs_dir = await _resolve_obs_dir(body.dataset_id, user_id)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
 
-    romp_params = body.params.model_dump(exclude_none=True)
+    romp_params = body.params.model_dump(mode="json", exclude_none=True)
     for key in (
         "date_filter_year",
         "probabilistic",
@@ -1374,6 +1528,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         romp_params["obs_file_pattern"] = source_metadata["obs_file_pattern"]
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):
         romp_params["obs_var"] = source_metadata["obs_var"]
+    romp_params = parse_benchmark_settings(romp_params)
     dataset_config = {
         "provider": "local",
         "source_id": body.dataset_id,

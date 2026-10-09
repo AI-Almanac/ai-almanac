@@ -7,6 +7,7 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
+		getGuardrailThresholds,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -29,18 +30,20 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
+		DEFAULT_MIN_TRAINING_YEARS,
 		computeCoverage,
 		coverageLimits,
 		defaultSplit,
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
-	import { describeSourceCoverage } from '$lib/source-coverage';
+	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
 	import { installTour } from '$lib/tour.svelte';
+	import { takeSetupRequest } from '$lib/setup-request';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
 
 	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
@@ -89,6 +92,7 @@
 		const scopeKind = asScopeKind(params.get('scopeKind'));
 		const scopeKey = params.get('scopeKey');
 		if (blendId) selectedId = blendId;
+		else if (takeSetupRequest('new')) startNew();
 		if (chatId && scopeKind && scopeKey) {
 			continuedSessionId = chatId;
 			continuedScope = { kind: scopeKind, key: scopeKey };
@@ -134,6 +138,8 @@
 	let cvHoldoutYears = $state('');
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
+	// The enforced minimum, so the prefilled split is one the server accepts.
+	let minTrainingYears = $state(DEFAULT_MIN_TRAINING_YEARS);
 	let formulaText = $state('');
 	let focusArea = $state<FocusAreaValue | null>(null);
 	// Onset definition overrides; blank means the workflow default.
@@ -153,13 +159,17 @@
 
 	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
 
-	// Models are region-specific: only offer ones matching the chosen observation
-	// dataset's region, mirroring the benchmark setup flow.
+	// Only offer models on the chosen observations' region and grid,
+	// mirroring the benchmark setup flow.
 	const availableModels = $derived(
-		selectedObs ? modelSources.filter((s) => s.region === selectedObs.region) : []
+		selectedObs
+			? modelSources.filter(
+					(s) => s.region === selectedObs.region && gridsMatch(gridStep(selectedObs), gridStep(s))
+				)
+			: []
 	);
 
-	// Drop any selected model that no longer matches the chosen region.
+	// Drop any selected model that no longer matches the chosen observations.
 	$effect(() => {
 		const ids = new Set(availableModels.map((s) => s.id));
 		if (modelIds.some((id) => !ids.has(id))) {
@@ -203,10 +213,11 @@
 	// the user edits the year fields themselves.
 	$effect(() => {
 		if (!coverage || yearsDirty) return;
-		const split = defaultSplit(coverage);
+		const split = defaultSplit(coverage, minTrainingYears);
 		if (!split) return;
 		trainingYears = split.training;
 		cvHoldoutYears = split.cv;
+		trueHoldoutYears = split.trueHoldout;
 	});
 
 	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
@@ -236,11 +247,12 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps] = await Promise.allSettled([
+		const [b, obs, models, caps, thresholds] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities()
+			getCapabilities(),
+			getGuardrailThresholds()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
@@ -248,6 +260,7 @@
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		if (thresholds.status === 'fulfilled') minTrainingYears = thresholds.value.min_training_years;
 		loaded = true;
 	}
 
@@ -581,11 +594,10 @@
 							emptyMessage="Describe the blend you want, or ask which models to combine based on your benchmark results."
 							placeholder="Ask for the blend you want, or a question…"
 							suggestions={[
-								'Blend the best monsoon-onset models for India',
+								'Set up a blend for Kiremt onset in Ethiopia',
 								'Which models should I combine based on my benchmarks?',
-								'What do the training and CV holdout years mean?'
+								'What do the training and cross-validation years mean?'
 							]}
-							showArtifacts={false}
 							onBlendConfig={applyBlendConfig}
 							onBlendSubmitted={handleBlendSubmitted}
 						/>
@@ -632,7 +644,8 @@
 							<p class="muted">Select an observation source first to see matching models.</p>
 						{:else if availableModels.length === 0}
 							<p class="muted">
-								No ready forecast models for this region. Add some under Data first.
+								No ready forecast models match these observations' region and grid. Add some under
+								Data first.
 							</p>
 						{:else}
 							<div class="model-grid">
@@ -709,14 +722,26 @@
 						</label>
 						<label class="field">
 							{@render fieldLabel(
-								'CV holdout years',
-								'Years scored with the weights fitted without them, to check the blend on data it did not learn from. Defaults to the training years, so every training year gets checked in turn.'
+								'Cross-validation years',
+								'Cross-validation checks the blend on years it did not learn from: each year listed here is left out of training, the weights are fitted on the remaining years, and the left-out year is scored. Defaults to the training years, so every training year gets a turn being left out.'
 							)}
 							<input
 								type="text"
 								bind:value={cvHoldoutYears}
 								oninput={() => (yearsDirty = true)}
 								placeholder="2015:2020"
+							/>
+						</label>
+						<label class="field">
+							{@render fieldLabel(
+								'True holdout years',
+								`Years kept out of training and cross-validation entirely, so their scores show how the blend does on seasons it has never seen — the closest stand-in for a new season. Defaults to the most recent fifth of the shared years, as long as at least ${minTrainingYears} training years remain. Leave empty to train on every year.`
+							)}
+							<input
+								type="text"
+								bind:value={trueHoldoutYears}
+								oninput={() => (yearsDirty = true)}
+								placeholder="optional"
 							/>
 						</label>
 					</div>
@@ -755,13 +780,6 @@
 									bind:value={forecastYears}
 									placeholder="defaults to training + holdout"
 								/>
-							</label>
-							<label class="field">
-								{@render fieldLabel(
-									'True holdout years',
-									'Years never shown during training or cross-validation, reserved for a final unbiased evaluation. Optional.'
-								)}
-								<input type="text" bind:value={trueHoldoutYears} placeholder="optional" />
 							</label>
 						</div>
 						<label class="field">
@@ -849,12 +867,23 @@
 			>
 				<section class="card detail">
 					<header class="detail-header">
-						<div>
+						<div class="detail-id">
 							<p class="eyebrow">Blend</p>
-							<h1>{selected.name || 'Untitled blend'}</h1>
-							<p class="muted">
-								{selected.model_names.join(', ')}
-								{#if selected.region_id}· {selected.region_id}{/if}
+							<h1 class="detail-title" title={selected.name || 'Untitled blend'}>
+								{selected.name || 'Untitled blend'}
+							</h1>
+							<p class="detail-meta">
+								<span>{selected.model_names.join(', ')}</span>
+								{#if selected.region_id}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>{selected.region_id}</span>
+								{/if}
+								<span class="dot" aria-hidden="true">·</span>
+								<span>Submitted {formatDate(selected.created_at)}</span>
+								{#if selected.completed_at}
+									<span class="dot" aria-hidden="true">·</span>
+									<span>Completed {formatDate(selected.completed_at)}</span>
+								{/if}
 							</p>
 						</div>
 						<div class="detail-actions">
@@ -884,21 +913,6 @@
 						<p class="error">{actionError}</p>
 					{/if}
 
-					<dl class="facts">
-						<div>
-							<dt>Submitted</dt>
-							<dd>{formatDate(selected.created_at)}</dd>
-						</div>
-						<div>
-							<dt>Completed</dt>
-							<dd>{formatDate(selected.completed_at)}</dd>
-						</div>
-						<div>
-							<dt>Models</dt>
-							<dd>{selected.model_names.length}</dd>
-						</div>
-					</dl>
-
 					{#if ACTIVE_STATUSES.includes(selected.status)}
 						<div class="running-state">
 							<div class="spinner"></div>
@@ -926,7 +940,12 @@
 							{#if artifacts.length === 0}
 								<p class="muted">No files found.</p>
 							{:else}
-								<BlendOutputs jobId={selected.id} {artifacts} ondownload={downloadArtifact} />
+								<BlendOutputs
+									jobId={selected.id}
+									{artifacts}
+									trueHoldoutYears={selected.true_holdout_years ?? []}
+									ondownload={downloadArtifact}
+								/>
 							{/if}
 						</div>
 					{/if}
@@ -947,7 +966,6 @@
 									'How does the blend compare to the individual models?',
 									'Summarise the forecast skill of this blend.'
 								]}
-								showArtifacts={false}
 								onComparingChange={(value) => (chatComparing = value)}
 								onBlendConfig={applyBlendConfig}
 								onBlendSubmitted={handleBlendSubmitted}
@@ -1266,33 +1284,31 @@
 		gap: 0.6rem;
 	}
 
-	.facts {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-		gap: 0.6rem;
-		margin: 0;
+	.detail-id {
+		min-width: 0;
+		flex: 1;
 	}
 
-	.facts div {
-		padding: 0.65rem 0.7rem;
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		background: var(--color-bg);
+	h1.detail-title {
+		font-size: clamp(1.15rem, 2vw, 1.5rem);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
 	}
 
-	.facts dt {
+	.detail-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.4rem;
+		margin: 0.35rem 0 0;
+		font-size: 0.82rem;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
-		font-weight: 750;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		margin-bottom: 0.2rem;
 	}
 
-	.facts dd {
-		margin: 0;
-		color: var(--color-text);
-		font-weight: 650;
+	.detail-meta .dot {
+		color: var(--color-text-dim);
 	}
 
 	.running-state {

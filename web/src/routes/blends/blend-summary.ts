@@ -6,10 +6,36 @@
 // Mirrored server-side by blend_domain._parse_pooled_summary, which feeds the
 // same fields to the chat tool. Keep the two in sync.
 
+import type { BlendModel } from '$lib/api';
+
 export const SKILL_AXES = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Later'];
 const AUC_COLUMNS = ['auc_week1', 'auc_week2', 'auc_week3', 'auc_week4', 'auc_later'];
 const BRIER_COLUMNS = ['brier_week1', 'brier_week2', 'brier_week3', 'brier_week4', 'brier_later'];
-const BLEND_MODEL = 'blended_model';
+
+/**
+ * The blends a job trains, in the order they lead the table and legend. Jobs
+ * trained before the day-level blend existed have only the week-level one.
+ */
+export const BLEND_MODELS: readonly BlendModel[] = ['blended_model', 'blended_forest'];
+export const DEFAULT_BLEND_MODEL: BlendModel = 'blended_model';
+
+const BLEND_LABELS: Record<BlendModel, string> = {
+	blended_model: 'Week-level blend',
+	blended_forest: 'Day-level blend'
+};
+
+export function isBlendModel(model: string): model is BlendModel {
+	return (BLEND_MODELS as readonly string[]).includes(model);
+}
+
+export function blendLabel(model: BlendModel): string {
+	return BLEND_LABELS[model];
+}
+
+/** Position among the blends; every other model sorts after them. */
+function blendRank(model: string): number {
+	return isBlendModel(model) ? BLEND_MODELS.indexOf(model) : BLEND_MODELS.length;
+}
 
 /**
  * The blend package scores every skill column against this model
@@ -56,6 +82,8 @@ export type LeadMetric = {
 	/** The value at which the metric indicates no skill. */
 	reference: number;
 	referenceLabel: string;
+	/** What the numbers are measured against, shown beside the chart. */
+	scale: string;
 	caption: string;
 };
 
@@ -71,16 +99,18 @@ export const LEAD_METRICS: LeadMetric[] = [
 		label: 'Brier Skill Score',
 		reference: 0,
 		referenceLabel: 'No skill (Traditional Climatology)',
+		scale: 'Relative to Traditional Climatology',
 		caption:
-			'Probability accuracy by forecast lead, measured against Traditional Climatology. 0 matches it, 1 is perfect, below 0 is worse — higher is better. Click a model to toggle it; hover for exact values.'
+			'Probability accuracy by forecast lead. 0 matches Traditional Climatology, 1 is perfect, below 0 is worse — higher is better. Click a model to toggle it; hover for exact values.'
 	},
 	{
 		key: 'aucByLead',
 		label: 'Area Under ROC Curve',
 		reference: 0.5,
 		referenceLabel: 'No skill (chance)',
+		scale: 'Absolute score, not relative to climatology',
 		caption:
-			'Ability to rank onset weeks correctly, by forecast lead. 0.5 is no skill, 1.0 is perfect — higher is better. Click a model to toggle it; hover for exact values.'
+			'Ability to rank onset weeks correctly, by forecast lead. 0.5 is chance, 1.0 is perfect — higher is better. The climatology lines are shown for comparison. Click a model to toggle it; hover for exact values.'
 	}
 ];
 
@@ -131,7 +161,8 @@ export const OVERALL_METRICS: OverallMetric[] = [
 ];
 
 // Turn a raw model id into a reader-friendly label.
-//   blended_model                 -> "Blend"
+//   blended_model                 -> "Week-level blend"
+//   blended_forest                -> "Day-level blend"
 //   clim_raw                      -> "Conditional Climatology"
 //   unc_clim_raw                  -> "Traditional Climatology"
 //   aifs_fixed_cutoff_raw         -> "AIFS (raw)"
@@ -142,8 +173,8 @@ export const OVERALL_METRICS: OverallMetric[] = [
 // probabilities so they match observed frequencies. It leaves the underlying
 // rainfall biases untouched, so calling it bias correction overclaims — and the
 // package's own column name is already `_calibrated`.
-function prettyModel(model: string): string {
-	if (model === BLEND_MODEL) return 'Blend';
+export function modelLabel(model: string): string {
+	if (isBlendModel(model)) return blendLabel(model);
 	if (model === CONDITIONAL_CLIMATOLOGY_MODEL) return 'Conditional Climatology';
 	if (model === BASELINE_MODEL) return 'Traditional Climatology';
 
@@ -167,9 +198,7 @@ function prettyModel(model: string): string {
  * stay one click away.
  */
 export function isDefaultVisibleSeries(model: string): boolean {
-	return (
-		model === BLEND_MODEL || model === CONDITIONAL_CLIMATOLOGY_MODEL || model === BASELINE_MODEL
-	);
+	return isBlendModel(model) || model === CONDITIONAL_CLIMATOLOGY_MODEL || model === BASELINE_MODEL;
 }
 
 function finite(value: string | undefined): number | null {
@@ -215,8 +244,8 @@ export function parsePooledSummary(csv: string): SkillRow[] {
 		if (aucByLead.some((v) => v === null)) continue;
 		rows.push({
 			model,
-			label: prettyModel(model),
-			isBlend: model === BLEND_MODEL,
+			label: modelLabel(model),
+			isBlend: isBlendModel(model),
 			isBaseline: model === BASELINE_MODEL,
 			auc: at(cells, 'auc') ?? 0,
 			brier: at(cells, 'brier'),
@@ -243,6 +272,6 @@ export function parsePooledSummary(csv: string): SkillRow[] {
 		}
 	}
 
-	// Blend first: it draws on top and leads the legend.
-	return rows.sort((a, b) => Number(b.isBlend) - Number(a.isBlend));
+	// Blends first: they draw on top and lead the legend.
+	return rows.sort((a, b) => blendRank(a.model) - blendRank(b.model));
 }

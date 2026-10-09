@@ -285,7 +285,9 @@ def _auth_ready() -> bool:
     if settings.auth_mode == "proxy":
         return bool(settings.allowed_groups)
     if settings.auth_mode == "globus":
-        return bool(settings.globus_client_id)
+        from ai_almanac.server.auth import globus_client_configured
+
+        return globus_client_configured()
     return False
 
 

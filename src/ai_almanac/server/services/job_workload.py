@@ -98,18 +98,21 @@ def _run_blend(job_id: str, config: dict) -> None:
     _stream_process(process)
 
 
-def _group_forecast_models_by_env(model_ids: list[str]) -> dict[str, list[str]]:
-    """Group a job's models by execution environment, so each incompatible AIFS
-    family is rolled out in its own subprocess (see FORECAST_ENVIRONMENTS).
-    Model ids are blend model names — resolve them like the runners do, so an
-    alias (e.g. aifs_single_v2 → aifs2) lands in its model's env."""
-    from ai_almanac.settings import get_packaged_forecast_models, resolve_forecast_model
+def _group_forecast_models_by_env(config: dict) -> dict[str, list[str]]:
+    """Group a job's blend members by execution environment, so each
+    incompatible AIFS family is rolled out in its own subprocess (see
+    FORECAST_ENVIRONMENTS). Members run their linked registry model."""
+    from ai_almanac.settings import (
+        forecast_model_by_id,
+        get_packaged_forecast_models,
+        member_forecast_model_id,
+    )
 
     registry = get_packaged_forecast_models()
     groups: dict[str, list[str]] = {}
-    for model_id in model_ids:
-        entry = resolve_forecast_model(registry, model_id) or {}
-        groups.setdefault(entry.get("env", "base"), []).append(model_id)
+    for member in config.get("forecast_model_ids") or []:
+        entry = forecast_model_by_id(registry, member_forecast_model_id(config, member)) or {}
+        groups.setdefault(entry.get("env", "base"), []).append(member)
     return groups
 
 
@@ -129,7 +132,7 @@ def _run_forecast(job_id: str, config: dict) -> None:
 
     # Inference: one subprocess per model-group environment (the AIFS families
     # can't share an env). Each stages its models' season files into staging_dir.
-    groups = _group_forecast_models_by_env(config.get("forecast_model_ids") or [])
+    groups = _group_forecast_models_by_env(config)
     for env_name, model_ids in groups.items():
         print(f"==> Season inference [{env_name}]: {model_ids}", flush=True)
         process = forecast_pixi_run(

@@ -40,6 +40,7 @@ async def _seed_source(
     path: str,
     years: tuple[int, int] | None = None,
     grid_step: float | None = None,
+    extra_metadata: dict | None = None,
 ) -> str:
     from ai_almanac.server.db import get_db
 
@@ -48,6 +49,7 @@ async def _seed_source(
     metadata = {"start_year": years[0], "end_year": years[1]} if years else {}
     if grid_step is not None:
         metadata["grid_step_deg"] = grid_step
+    metadata.update(extra_metadata or {})
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -123,6 +125,94 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
+    assert config["train_day_level_blend"] is False
+
+
+@pytest.mark.asyncio
+async def test_blend_trains_the_day_level_blend_when_it_is_switched_on(
+    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.db import get_db
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "enable_day_level_blend", True)
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="day-level",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["train_day_level_blend"] is True
+
+
+@pytest.mark.asyncio
+async def test_blend_config_carries_each_models_registered_dims_and_units(
+    client, user_id: str, _stub_runner
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    dims = {"init_time": "time", "step": "prediction_timedelta_daily", "lat": "lat", "lon": "lon"}
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd")
+    aifs_id = await _seed_source(
+        "model",
+        "AIFS v2",
+        "gs://data/models/aifs",
+        extra_metadata={"forecast_dims": dims, "unit_cvt": 1000.0},
+    )
+    legacy_id = await _seed_source("model", "FuXi", "gs://data/models/fuxi")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="india",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id, legacy_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    layouts = json.loads(row["config_json"])["model_layouts"]
+    assert layouts["aifs_v2"] == {"forecast_dims": dims, "unit_cvt": 1000.0}
+    assert layouts["fuxi"] == {"forecast_dims": None, "unit_cvt": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", years=(2000, 2024))
+    model_id = await _seed_source(
+        "model",
+        "Renamed",
+        "gs://data/models/renamed",
+        years=(2000, 2024),
+        extra_metadata={"forecast_dims": {"init_time": "issued", "step": "lead"}},
+    )
+
+    response = await client.post(
+        "/blends",
+        headers=auth_headers,
+        json={
+            "name": "renamed",
+            "obs_dataset_id": obs_id,
+            "model_ids": [model_id],
+            "params": {"training_years": "2010:2020", "cv_holdout_years": "2020"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Renamed names it 'issued'" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -282,7 +372,9 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
 
     obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
     ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
-    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+    aifs_id = await _seed_source(
+        "model", "AIFS", "gs://data/models/aifs", extra_metadata={"forecast_model_id": "aifs"}
+    )
 
     blend = await create_blend_for_user(
         BlendCreate(
@@ -302,29 +394,25 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
             user_id,
         )
     assert exc.value.status_code == 400
-    assert "No live forecast model" in exc.value.detail
-    assert "neuralgcm" in exc.value.detail
+    assert "neuralgcm: This data isn't linked to a live forecast model." in exc.value.detail
+    assert "aifs:" not in exc.value.detail
 
 
-@pytest.mark.parametrize(
-    ("names", "expected"),
-    [
-        (["aifs", "neuralgcm"], ["neuralgcm"]),
-        (["ngcm", "ifs", "fuxi_s2s", "aifs_daily"], ["aifs_daily", "fuxi_s2s", "ifs", "ngcm"]),
-        (["aifs", "aifs_single_v2", "graphcast", "fuxi"], []),
-    ],
-)
-def test_live_forecast_blockers_by_name(names: list[str], expected: list[str]) -> None:
-    """Guards the alias normalization: no blendable-only model may accidentally
-    resolve to a live forecast registry entry (and vice versa)."""
-    blockers = job_submission.live_forecast_blockers((name, None) for name in names)
-    assert [blocker.split(":")[0] for blocker in blockers] == expected
+def test_live_forecast_blockers_follow_the_link_not_the_name() -> None:
+    BlendMember = job_submission.BlendMember
+    blockers = job_submission.live_forecast_blockers(
+        [BlendMember("aifs", None, 0.25), BlendMember("aifs_v2_india_0_25", "aifs2", 0.25)]
+    )
+    assert [blocker.split(":")[0] for blocker in blockers] == ["aifs"]
 
 
 def test_live_forecast_blockers_reject_grid_mismatch() -> None:
-    blockers = job_submission.live_forecast_blockers([("graphcast", 0.25), ("fuxi", 0.25)])
+    BlendMember = job_submission.BlendMember
+    blockers = job_submission.live_forecast_blockers(
+        [BlendMember("graphcast_india", "graphcast", 0.25), BlendMember("fuxi", "fuxi", 0.25)]
+    )
     assert len(blockers) == 1
-    assert blockers[0].startswith("graphcast:")
+    assert blockers[0].startswith("graphcast_india:")
     assert "1° grid" in blockers[0]
 
 
@@ -438,7 +526,7 @@ async def test_not_ready_shared_source_does_not_disclose_its_path(
         )
 
     with pytest.raises(HTTPException) as exc:
-        await job_submission._resolve_obs_dir(obs_id, None, user_id)
+        await job_submission._resolve_obs_dir(obs_id, user_id)
 
     assert exc.value.status_code == 409
     assert "private-bucket" not in str(exc.value.detail)
@@ -514,3 +602,99 @@ def test_blend_params_accepts_valid_onset_definition() -> None:
     )
     assert params.threshold_mm == 25.5
     assert job_submission.onset_param_errors(None, None, None) == []
+
+
+async def _link_forecast_model(source_id: str, forecast_model_id: str) -> None:
+    from ai_almanac.server.services import data_sources
+
+    source = await data_sources.get_source(source_id)
+    metadata = {**source["metadata"], "forecast_model_id": forecast_model_id}
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE data_sources SET metadata = :metadata WHERE id = :id"),
+            {"metadata": json.dumps(metadata), "id": source_id},
+        )
+
+
+@pytest.mark.asyncio
+async def test_linking_member_data_after_training_makes_the_blend_forecastable(
+    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+) -> None:
+    """Archive names say nothing about the live model; the link on each member's
+    data source decides, so a blend trained before linking forecasts once linked."""
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await _seed_source(
+        "model", "AIFS v2 India 0.25", "gs://data/models/aifs2", grid_step=0.25
+    )
+    graphcast_id = await _seed_source(
+        "model", "GraphCast India 0.25", "gs://data/models/graphcast", grid_step=0.25
+    )
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="india",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id, graphcast_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+    assert blend.forecast_models == {}
+
+    await _link_forecast_model(aifs_id, "aifs2")
+    await _link_forecast_model(graphcast_id, "graphcast_operational")
+
+    listed = (await client.get("/blends", headers=auth_headers)).json()
+    linked = {"aifs_v2_india_0_25": "aifs2", "graphcast_india_0_25": "graphcast_operational"}
+    assert next(b for b in listed if b["id"] == blend.id)["forecast_models"] == linked
+
+    forecast = await job_submission.create_forecast_for_user(
+        job_submission.ForecastCreate(blend_id=blend.id), user_id
+    )
+    async with get_db() as conn:
+        row = (
+            (await conn.execute(sa.select(jobs).where(jobs.c.id == forecast.id)))
+            .mappings()
+            .fetchone()
+        )
+    assert json.loads(row["config_json"])["forecast_models"] == linked
+
+
+@pytest.mark.parametrize("link", [["aifs"], "", "  "])
+def test_malformed_link_on_uninspected_source_counts_as_unlinked(link) -> None:
+    cfg = {"model_names": ["remote"], "model_source_ids": ["s1"]}
+    sources = {"s1": {"metadata": {"forecast_model_id": link}}}
+    assert job_submission.blend_forecast_models(cfg, sources) == {}
+
+
+def test_blend_out_reports_true_holdout_years() -> None:
+    from ai_almanac.server.services.job_submission import blend_row_to_out
+
+    row = {
+        "id": "b1",
+        "status": "complete",
+        "created_at": "2026-10-08T00:00:00Z",
+        "config_json": json.dumps(
+            {"blend_params": {"training_years": "2000:2019", "true_holdout_years": "2020:2022"}}
+        ),
+    }
+
+    assert blend_row_to_out(row, None).true_holdout_years == [2020, 2021, 2022]
+
+
+def test_blend_out_reads_a_malformed_stored_holdout_as_none() -> None:
+    from ai_almanac.server.services.job_submission import blend_row_to_out
+
+    row = {
+        "id": "b2",
+        "status": "complete",
+        "created_at": "2026-10-08T00:00:00Z",
+        "config_json": json.dumps({"blend_params": {"true_holdout_years": "20x0"}}),
+    }
+
+    assert blend_row_to_out(row, None).true_holdout_years == []

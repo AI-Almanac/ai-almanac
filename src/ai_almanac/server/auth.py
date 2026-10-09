@@ -365,6 +365,10 @@ OptionalCurrentUser = Annotated[AuthenticatedUser | None, Depends(optional_user)
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
 
 
+def globus_client_configured() -> bool:
+    return bool(settings.globus_client_id and settings.globus_client_secret)
+
+
 def enforce_deployment_invariants() -> None:
     """Validate and harden configuration for the active deployment mode.
 
@@ -401,8 +405,11 @@ def enforce_deployment_invariants() -> None:
         raise RuntimeError("shared proxy deployment requires ALLOWED_GROUPS")
     # Without a client id the introspection stub treats the bearer token as its
     # own subject, so any caller could present an admin subject as their token.
-    if settings.auth_mode == "globus" and not settings.globus_client_id:
-        raise RuntimeError("shared globus deployment requires GLOBUS_CLIENT_ID")
+    # Without the secret, introspection fails and no one can sign in.
+    if settings.auth_mode == "globus" and not globus_client_configured():
+        raise RuntimeError(
+            "shared globus deployment requires GLOBUS_CLIENT_ID and GLOBUS_CLIENT_SECRET"
+        )
     if not settings.credential_encryption_key:
         raise RuntimeError("shared deployment requires CREDENTIAL_ENCRYPTION_KEY")
     if settings.chat_figure_signing_secret == "dev-chat-figure-secret":

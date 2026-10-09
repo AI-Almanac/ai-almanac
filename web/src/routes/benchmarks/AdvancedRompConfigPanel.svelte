@@ -3,7 +3,6 @@
 	import PerModelConfig from './PerModelConfig.svelte';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
-	import { getForecastModels, forecastModelFor, type ForecastModel } from '$lib/api';
 
 	interface Props {
 		open: boolean;
@@ -16,7 +15,7 @@
 	const regions = $derived(form.regions);
 	const datasets = $derived(form.datasets);
 	const dataLoaded = $derived(form.dataLoaded);
-	const models = $derived(form.models);
+	const models = $derived(form.availableModels);
 	const selectedRegionId = $derived(form.selectedRegionId);
 	const selectedDatasetId = $derived(form.selectedDatasetId);
 	const selectedModelIds = $derived(form.selectedModelIds);
@@ -40,16 +39,6 @@
 	function isSelected(modelId: string) {
 		return selectedModelIds.includes(modelId);
 	}
-
-	// Forecast registry; a model can run live forecasts when its name resolves
-	// to an entry (same gate as the blend form). Rejects (feature off) leave
-	// the list empty so no badges show.
-	let forecastModels = $state<ForecastModel[]>([]);
-	$effect(() => {
-		getForecastModels()
-			.then((list) => (forecastModels = list))
-			.catch(() => {});
-	});
 
 	function closeOnEscape(event: KeyboardEvent) {
 		if (open && event.key === 'Escape') onClose();
@@ -200,7 +189,9 @@
 									Select ground truth and benchmark coverage to see available models.
 								</p>
 							{:else if models.length === 0}
-								<p class="empty">No models are available for the selected region.</p>
+								<p class="empty">
+									No models are available for the selected ground truth's region and grid.
+								</p>
 							{:else}
 								<div class="model-table">
 									<div class="model-row header" aria-hidden="true">
@@ -220,7 +211,7 @@
 											</span>
 											<span>
 												<strong>{model.display_name}</strong>
-												{#if forecastModelFor(forecastModels, model.display_name)}
+												{#if model.forecast_model_id}
 													<span
 														class="forecast-badge"
 														title="This model can also generate live forecasts.">Live forecast</span

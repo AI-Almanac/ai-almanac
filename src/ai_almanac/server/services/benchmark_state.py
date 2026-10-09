@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 
 SpecStatus = Literal["collecting", "needs_confirmation", "runnable", "running"]
 
+# The event kinds a benchmark can score; the UI names each one. Regional names
+# ("Kiremt", "rainy season onset") are how the event is described, not new ids.
+BenchmarkEventType = Literal["monsoon_onset"]
+
 
 class BenchmarkRunSpec(BaseModel):
     intent: str = ""

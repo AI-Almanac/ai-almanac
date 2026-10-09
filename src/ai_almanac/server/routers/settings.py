@@ -162,6 +162,11 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Let users generate live AI weather forecasts and score them against a trained blend",
             ),
             (
+                "enable_day_level_blend",
+                "Day-level blend",
+                "Train a day-by-day onset model alongside every new blend, so forecasts can show onset chances by day",
+            ),
+            (
                 "assistant_comparisons_audience",
                 "Assistant comparisons",
                 "Who can compare two assistant rulesets side by side and vote; each comparison costs two model replies. 'admins' lets admins test before exposing it to everyone",

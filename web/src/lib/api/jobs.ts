@@ -91,6 +91,10 @@ export type ModelConfig = {
 	end_year_clim: number;
 	// Absent for sources registered before gaps were detected: unknown, not gap-free.
 	missing_years?: number[];
+	// The live forecast model this data was produced by, when linked at registration.
+	forecast_model_id?: string | null;
+	// Absent for sources registered before grid steps were recorded.
+	grid_step_deg?: number | null;
 };
 
 export type JobResult = {
@@ -261,8 +265,11 @@ export type BboxExtent = {
 };
 
 /** Named administrative units picked on the map; outlines are attached at submission. */
+/** States or regions, and the districts or zones inside them. */
+export type FocusUnitLevel = 'adm1' | 'adm2';
+
 export type FocusUnits = {
-	level: 'adm2';
+	level: FocusUnitLevel;
 	units: string[];
 };
 
@@ -414,9 +421,16 @@ export type BlendCellGrid = {
 	clipped: number;
 };
 
+/** The week-level blend, and the day-level blend that newer jobs also train. */
+export type BlendModel = 'blended_model' | 'blended_forest';
+
 export type BlendCellMetrics = {
 	job_id: string;
+	/** The blend these skill values score. */
+	blend_model: BlendModel;
 	baseline_model: string;
+	/** Blends the per-point summary scores; older jobs have only the week-level one. */
+	available_models: BlendModel[];
 	cell_size_deg: number | null;
 	min_observations: number;
 	grids: BlendCellGrid[];
@@ -449,9 +463,14 @@ export type BlendAreaMetric = {
 export type SkillLayer = BlendCellGrid | BlendAreaMetric;
 
 /**
- * Per-grid-point blend skill. A run whose per-cell summary is missing, or which
- * lacks the blend or baseline rows, returns empty `grids` rather than an error.
+ * One blend's per-grid-point skill. A run whose per-cell summary is missing, or
+ * which lacks that blend or the baseline rows, returns empty `grids` rather than
+ * an error.
  */
-export async function getBlendCellMetrics(id: string): Promise<BlendCellMetrics> {
-	return request<BlendCellMetrics>(`/jobs/${id}/blend-cell-metrics`);
+export async function getBlendCellMetrics(
+	id: string,
+	model: BlendModel = 'blended_model'
+): Promise<BlendCellMetrics> {
+	const params = new URLSearchParams({ model });
+	return request<BlendCellMetrics>(`/jobs/${id}/blend-cell-metrics?${params}`);
 }
