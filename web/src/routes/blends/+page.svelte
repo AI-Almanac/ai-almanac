@@ -598,7 +598,6 @@
 								'Which models should I combine based on my benchmarks?',
 								'What do the training and cross-validation years mean?'
 							]}
-							showArtifacts={false}
 							onBlendConfig={applyBlendConfig}
 							onBlendSubmitted={handleBlendSubmitted}
 						/>
@@ -967,7 +966,6 @@
 									'How does the blend compare to the individual models?',
 									'Summarise the forecast skill of this blend.'
 								]}
-								showArtifacts={false}
 								onComparingChange={(value) => (chatComparing = value)}
 								onBlendConfig={applyBlendConfig}
 								onBlendSubmitted={handleBlendSubmitted}

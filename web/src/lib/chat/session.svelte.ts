@@ -20,6 +20,7 @@ import {
 	type ChatSession,
 	type Job
 } from '$lib/api';
+import { emptyAssistantTurn, foldTurnEvent, startsTurn } from '$lib/chat/turn';
 
 export interface ChatSessionCallbacks {
 	onSessionReady?: (sessionId: string) => void;
@@ -295,73 +296,19 @@ export class ChatSessionState {
 		}
 	}
 
-	private startTurn(turnId: string): ChatMessage {
-		return {
-			id: turnId,
-			role: 'assistant',
-			content: '',
-			created_at: new Date().toISOString(),
-			tool_calls: [],
-			artifacts: [],
-			guardrails: []
-		};
-	}
-
 	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
-		if (event.type === 'text_delta') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) {
-				this.streamingTurn = this.startTurn(event.turn_id);
-			}
-			this.streamingTurn = {
-				...this.streamingTurn,
-				content: this.streamingTurn.content + event.content
-			};
-		} else if (event.type === 'tool_call') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) {
-				this.streamingTurn = this.startTurn(event.turn_id);
-			}
-			this.streamingTurn = {
-				...this.streamingTurn,
-				tool_calls: [...(this.streamingTurn.tool_calls ?? []), event.tool_call]
-			};
-		} else if (event.type === 'tool_result') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
+		if (startsTurn(event) && this.streamingTurn?.id !== event.turn_id) {
+			this.streamingTurn = emptyAssistantTurn(event.turn_id);
+		}
+		if ('turn_id' in event && this.streamingTurn?.id === event.turn_id) {
+			this.streamingTurn = foldTurnEvent(this.streamingTurn, event);
+		}
+		if (event.type === 'tool_result') {
 			const createdJob = jobFromToolResult(event.result);
 			if (createdJob) this.callbacks.onJobsCreated?.([createdJob]);
-			this.streamingTurn = {
-				...this.streamingTurn,
-				tool_calls: (this.streamingTurn.tool_calls ?? []).map((tc) =>
-					tc.id === event.tool_call_id ? { ...tc, status: event.status, result: event.result } : tc
-				)
-			};
-		} else if (event.type === 'artifact') {
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
-			this.streamingTurn = {
-				...this.streamingTurn,
-				artifacts: [...(this.streamingTurn.artifacts ?? []), event.artifact],
-				tool_calls: (this.streamingTurn.tool_calls ?? []).map((tc) =>
-					tc.id === event.tool_call_id
-						? { ...tc, artifacts: [...(tc.artifacts ?? []), event.artifact] }
-						: tc
-				)
-			};
-		} else if (event.type === 'guardrail') {
-			// Attached to the turn from the backend's validation payload, so the
-			// caution renders even when the assistant's prose omits it.
-			if (!this.streamingTurn || this.streamingTurn.id !== event.turn_id) return;
-			this.streamingTurn = {
-				...this.streamingTurn,
-				guardrails: [
-					...(this.streamingTurn.guardrails ?? []),
-					{
-						tool_call_id: event.tool_call_id,
-						errors: event.errors,
-						warnings: event.warnings,
-						finding_keys: event.finding_keys
-					}
-				]
-			};
-		} else if (event.type === 'error') {
+		}
+
+		if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));
 		} else if (event.type === 'benchmark_approval_request') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);

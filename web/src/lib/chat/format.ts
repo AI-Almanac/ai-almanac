@@ -9,27 +9,55 @@ export function renderMarkdown(text: string): string {
 
 const CODE_TOOLS = new Set(['run_code_sandbox', 'run_code']);
 
-const TOOL_LABELS: Record<string, string> = {
-	list_regions: 'checking regions',
-	list_datasets: 'checking datasets',
-	list_models: 'checking models',
-	get_benchmark_config: 'reading benchmark plan',
-	update_benchmark_config: 'updating benchmark plan',
-	validate_benchmark_config: 'validating benchmark plan',
-	submit_benchmark: 'submitting benchmark',
-	list_jobs: 'listing jobs',
-	list_failed_jobs: 'checking failed jobs',
-	get_job_info: 'fetching job info',
-	get_job_logs: 'reading job logs',
-	rerun_job: 'rerunning job',
-	get_job_metrics: 'loading metrics',
-	get_spatial_summary: 'loading spatial summary',
-	run_code_sandbox: 'running sandbox computation',
-	run_code: 'running custom analysis'
+type ToolLabel = { active: string; done: string };
+
+const TOOL_LABELS: Record<string, ToolLabel> = {
+	list_regions: { active: 'Checking regions', done: 'Checked regions' },
+	list_datasets: { active: 'Checking datasets', done: 'Checked datasets' },
+	list_models: { active: 'Checking models', done: 'Checked models' },
+	get_benchmark_config: { active: 'Reading the benchmark plan', done: 'Read the benchmark plan' },
+	update_benchmark_config: {
+		active: 'Updating the benchmark plan',
+		done: 'Updated the benchmark plan'
+	},
+	validate_benchmark_config: {
+		active: 'Checking the benchmark plan',
+		done: 'Checked the benchmark plan'
+	},
+	submit_benchmark: { active: 'Submitting the benchmark', done: 'Submitted the benchmark' },
+	list_blend_models: { active: 'Checking blendable models', done: 'Checked blendable models' },
+	get_blend_config: { active: 'Reading the blend plan', done: 'Read the blend plan' },
+	update_blend_config: { active: 'Updating the blend plan', done: 'Updated the blend plan' },
+	validate_blend_config: { active: 'Checking the blend plan', done: 'Checked the blend plan' },
+	submit_blend: { active: 'Submitting the blend', done: 'Submitted the blend' },
+	get_blend_results: { active: 'Reading blend results', done: 'Read blend results' },
+	list_jobs: { active: 'Listing runs', done: 'Listed runs' },
+	list_failed_jobs: { active: 'Checking failed runs', done: 'Checked failed runs' },
+	get_job_info: { active: 'Reading run details', done: 'Read run details' },
+	get_job_logs: { active: 'Reading run logs', done: 'Read run logs' },
+	rerun_job: { active: 'Rerunning', done: 'Reran' },
+	get_job_metrics: { active: 'Loading metrics', done: 'Loaded metrics' },
+	get_skill_scores: { active: 'Loading skill scores', done: 'Loaded skill scores' },
+	get_spatial_summary: {
+		active: 'Loading the spatial summary',
+		done: 'Loaded the spatial summary'
+	},
+	run_code_sandbox: { active: 'Running a computation', done: 'Ran a computation' },
+	run_code: { active: 'Running custom analysis', done: 'Ran custom analysis' }
 };
 
-export function formatToolName(name: string): string {
-	return TOOL_LABELS[name] ?? name.replace(/_/g, ' ');
+function fallbackLabel(name: string): ToolLabel {
+	const words = name.replace(/_/g, ' ');
+	const label = words.charAt(0).toUpperCase() + words.slice(1);
+	return { active: label, done: label };
+}
+
+/** What a tool step is doing, or did, in the user's terms. */
+export function toolLabel(toolCall: Pick<ChatToolCall, 'name' | 'status'>): string {
+	if (toolCall.status === 'pending' && CODE_TOOLS.has(toolCall.name))
+		return 'Writing analysis code';
+	const label = TOOL_LABELS[toolCall.name] ?? fallbackLabel(toolCall.name);
+	return toolCall.status === 'pending' || toolCall.status === 'running' ? label.active : label.done;
 }
 
 export function codeForToolCall(toolCall: ChatToolCall): string | null {
@@ -54,7 +82,7 @@ export type GalleryFigure = {
 	createdAt: string;
 };
 
-function artifactToFigure(artifact: ChatArtifact): ParsedFigure {
+export function artifactToFigure(artifact: ChatArtifact): ParsedFigure {
 	const name = artifact.filename ?? `${artifact.id}.webp`;
 	return {
 		raw: {

@@ -123,7 +123,6 @@
 					'What does climatology mean in this context?'
 				]}
 				initialMessage={initialPrompt}
-				showArtifacts={false}
 				onSessionReady={form.handleSessionReady}
 				onBenchmarkConfig={form.applySpec}
 				onBenchmarkSubmitted={form.handleBenchmarkSubmitted}

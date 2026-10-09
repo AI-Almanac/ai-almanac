@@ -16,8 +16,9 @@ import re
 import time
 from asyncio import Lock, Semaphore
 from collections import defaultdict, deque
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass, replace
+from urllib.parse import urlparse
 
 from pydantic_ai import (
     Agent,
@@ -38,10 +39,15 @@ from pydantic_ai.messages import (
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+    ToolCallPart,
     ToolReturnPart,
 )
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
@@ -54,11 +60,12 @@ from .chat_state import (
     ChatScope,
     ChatToolCall,
     ChatTurn,
-    GuardrailNotice,
+    TextBlock,
     new_turn_id,
     utc_now,
 )
 from .rulesets import Ruleset
+from .turn_events import apply_stream_event
 from .turn_log import TurnRecord, record_turn
 
 _SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
@@ -97,15 +104,18 @@ def _scope_suffix(scope: ChatScope) -> str:
     )
 
 
-def _instructions_for_ruleset(ruleset: Ruleset, scope: ChatScope) -> str:
+def _instructions_for_ruleset(
+    ruleset: Ruleset, scope: ChatScope, available_tools: Collection[str] | None = None
+) -> str:
     """Assemble the system prompt for a ruleset and a session scope.
 
     The ruleset owns the wording, section ordering, and which sections apply to
-    which scope kind. This function owns only the scope suffix, because the
-    sanitizing of scope ids belongs next to the tested guard above and must not
-    become an admin-editable string.
+    which scope kind and set of tools. This function owns only the scope suffix,
+    because the sanitizing of scope ids belongs next to the tested guard above
+    and must not become an admin-editable string.
     """
-    return rulesets.build_instructions(ruleset, scope.kind) + _scope_suffix(scope)
+    instructions = rulesets.build_instructions(ruleset, scope.kind, available_tools=available_tools)
+    return instructions + _scope_suffix(scope)
 
 
 def serialize_model_messages(messages: Sequence[ModelMessage]) -> list[dict]:
@@ -129,8 +139,6 @@ def llm_is_configured() -> bool:
 
 
 def _build_model() -> OpenAIChatModel | str:
-    from openai import AsyncOpenAI
-
     provider_name = settings.llm_provider.lower()
     if provider_name not in _SUPPORTED_LLM_PROVIDERS:
         supported = ", ".join(sorted(_SUPPORTED_LLM_PROVIDERS))
@@ -148,13 +156,37 @@ def _build_model() -> OpenAIChatModel | str:
 
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    client = AsyncOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        timeout=settings.llm_timeout_seconds,
-    )
-    provider = OpenAIProvider(openai_client=client)
-    return OpenAIChatModel(settings.llm_model, provider=provider)
+    return _openai_compatible_model(settings.llm_model, settings.llm_base_url, settings.llm_api_key)
+
+
+# OpenRouter only returns reasoning when asked. Claude Sonnet 5.5 writes its
+# between-tool progress notes as thinking, so without this the chat goes silent
+# for the whole tool loop and the answer lands in one piece. A ruleset's
+# model_settings can still override it.
+_OPENROUTER_DEFAULT_SETTINGS = OpenRouterModelSettings(openrouter_reasoning={"enabled": True})
+
+
+def _is_openrouter(base_url: str) -> bool:
+    host = urlparse(base_url).hostname or ""
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None):
+    """Build a chat-completions model, using OpenRouter's dialect when the URL is OpenRouter's.
+
+    The OpenRouter model streams reasoning and replays its `reasoning_details`
+    on later turns, which the generic client drops.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=settings.llm_timeout_seconds)
+    if _is_openrouter(base_url):
+        return OpenRouterModel(
+            model_name,
+            provider=OpenRouterProvider(openai_client=client),
+            settings=_OPENROUTER_DEFAULT_SETTINGS,
+        )
+    return OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
 
 
 def _trim_text(value: str) -> str:
@@ -490,8 +522,8 @@ def _apply_tool_policy(
     return toolsets
 
 
-def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
-    toolsets = _apply_tool_policy(
+def _offered_toolsets(ruleset: Ruleset) -> list[FunctionToolset[ChatDeps]]:
+    return _apply_tool_policy(
         [
             _benchmark_toolset(),
             _blend_toolset(),
@@ -501,10 +533,20 @@ def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
         ],
         ruleset,
     )
+
+
+def offered_tool_names(ruleset: Ruleset) -> list[str]:
+    """Every tool the assistant is given under this ruleset in this deployment."""
+    return sorted(name for toolset in _offered_toolsets(ruleset) for name in toolset.tools)
+
+
+def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
+    toolsets = _offered_toolsets(ruleset)
+    tool_names = {name for toolset in toolsets for name in toolset.tools}
     return Agent(
         model or _build_model(),
         output_type=[str, DeferredToolRequests],
-        instructions=_instructions_for_ruleset(ruleset, scope),
+        instructions=_instructions_for_ruleset(ruleset, scope, tool_names),
         deps_type=ChatDeps,
         toolsets=toolsets,
         model_settings=ruleset.model_settings or None,
@@ -553,6 +595,23 @@ def _guardrail_event(turn_id: str, tool_call_id: str, parsed_result: object) -> 
             "finding_keys": keys,
         }
     )
+
+
+def _streamed_text(event: object, part_type: type, delta_type: type) -> str:
+    """Text a part-start or part-delta event adds to a part of the given kind."""
+    if isinstance(event, PartStartEvent) and isinstance(event.part, part_type):
+        return event.part.content
+    if isinstance(event, PartDeltaEvent) and isinstance(event.delta, delta_type):
+        return event.delta.content_delta or ""
+    return ""
+
+
+def _strip_sandbox_images(turn: ChatTurn) -> None:
+    """Drop markdown images that point into the sandbox; figures arrive as artifacts."""
+    turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
+    for block in turn.blocks:
+        if isinstance(block, TextBlock):
+            block.text = _SANDBOX_IMAGE_RE.sub("", block.text)
 
 
 def _tool_result_content(content: object) -> object:
@@ -687,16 +746,9 @@ async def _stream_response_unlimited(
                 raise RuntimeError("Profile model name must include a Pydantic AI provider prefix")
             model = model_name
         elif profile.provider_type == "openai-compatible":
-            from openai import AsyncOpenAI
-
             if not profile.base_url:
                 raise RuntimeError("The selected provider has no base URL")
-            client = AsyncOpenAI(
-                base_url=profile.base_url,
-                api_key=profile.api_key,
-                timeout=settings.llm_timeout_seconds,
-            )
-            model = OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
+            model = _openai_compatible_model(model_name, profile.base_url, profile.api_key)
         else:
             raise RuntimeError(f"Unsupported provider type: {profile.provider_type}")
     elif ruleset.model:
@@ -711,13 +763,17 @@ async def _stream_response_unlimited(
         record.turn_id = turn.id
         record.ruleset_id = ruleset.id
         record.ruleset_version = ruleset.version
+        record.offered_tools = offered_tool_names(ruleset)
         record.model_name = getattr(model, "model_name", None) or (
             model if isinstance(model, str) else settings.llm_model
         )
-    tool_calls_by_id: dict[str, ChatToolCall] = {}
     final_output: str | None = None
     final_messages: list[ModelMessage] = message_history
-    just_finished_tool_call = False
+
+    def emit(event_type: str, **payload: object) -> str:
+        event = {"type": event_type, "turn_id": turn.id, **payload}
+        apply_stream_event(turn, event)
+        return json.dumps(event)
 
     # pydantic-ai 2.0: run_stream_events is an async context manager (it owns a
     # background run task). Wrap it in a generator so the event-handling body
@@ -734,51 +790,34 @@ async def _stream_response_unlimited(
                 yield event
 
     async for event in _events():
-        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-            content = event.part.content
-            if content:
-                if just_finished_tool_call and turn.content and not turn.content[-1].isspace():
-                    sep = "\n\n"
-                    turn.content += sep
-                    yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": sep})
-                just_finished_tool_call = False
-                turn.content += content
-                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": content})
+        if text := _streamed_text(event, TextPart, TextPartDelta):
+            yield emit("text_delta", content=text)
             continue
 
-        if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-            content = event.delta.content_delta
-            if not content:
-                continue
-            if just_finished_tool_call and turn.content and not turn.content[-1].isspace():
-                sep = "\n\n"
-                turn.content += sep
-                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": sep})
-            just_finished_tool_call = False
-            turn.content += content
-            yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": content})
+        if text := _streamed_text(event, ThinkingPart, ThinkingPartDelta):
+            yield emit("thinking_delta", content=text)
+            continue
+
+        if isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart):
+            # Announced while the model is still writing the arguments, so a long
+            # code tool shows up when the model starts it, not when it runs.
+            pending = ChatToolCall(
+                id=event.part.tool_call_id, name=event.part.tool_name, status="pending"
+            )
+            yield emit("tool_call", tool_call=pending.model_dump(mode="json"))
             continue
 
         if isinstance(event, FunctionToolCallEvent):
             part = event.part
-            args = _tool_event_args(part.args_as_dict())
             tool_call = ChatToolCall(
                 id=part.tool_call_id,
                 name=part.tool_name,
                 status="running",
-                input=args,
+                input=_tool_event_args(part.args_as_dict()),
             )
-            tool_calls_by_id[tool_call.id] = tool_call
-            turn.tool_calls.append(tool_call)
             if record is not None:
                 record.tool_calls.append(tool_call.name)
-            yield json.dumps(
-                {
-                    "type": "tool_call",
-                    "turn_id": turn.id,
-                    "tool_call": tool_call.model_dump(mode="json"),
-                }
-            )
+            yield emit("tool_call", tool_call=tool_call.model_dump(mode="json"))
             continue
 
         if isinstance(event, FunctionToolResultEvent):
@@ -790,51 +829,28 @@ async def _stream_response_unlimited(
                 if isinstance(parsed_result, dict) and parsed_result.get("error")
                 else "completed"
             )
-            tool_call = tool_calls_by_id.get(tool_call_id)
-            if tool_call is not None:
-                tool_call.status = status
-                tool_call.result = parsed_result
             if isinstance(parsed_result, dict):
                 for artifact_payload in parsed_result.get("artifacts", []):
                     if not isinstance(artifact_payload, dict):
                         continue
                     artifact = ChatArtifact.model_validate(artifact_payload)
-                    if tool_call is not None:
-                        tool_call.artifacts.append(artifact)
-                    turn.artifacts.append(artifact)
-                    yield json.dumps(
-                        {
-                            "type": "artifact",
-                            "turn_id": turn.id,
-                            "tool_call_id": tool_call_id,
-                            "artifact": artifact.model_dump(mode="json"),
-                        }
+                    yield emit(
+                        "artifact",
+                        tool_call_id=tool_call_id,
+                        artifact=artifact.model_dump(mode="json"),
                     )
-            yield json.dumps(
-                {
-                    "type": "tool_result",
-                    "turn_id": turn.id,
-                    "tool_call_id": tool_call_id,
-                    "status": status,
-                    "result": parsed_result,
-                }
+            yield emit(
+                "tool_result", tool_call_id=tool_call_id, status=status, result=parsed_result
             )
             guardrail_event = _guardrail_event(turn.id, tool_call_id, parsed_result)
             if guardrail_event is not None:
-                yield guardrail_event
+                # Recorded on the turn by the reducer as well as streamed. The
+                # `done` event ships this turn as the persisted one, so a finding
+                # left only on the SSE stream would render live and then vanish
+                # the moment the turn was replaced — and be gone on reload.
                 payload = json.loads(guardrail_event)
-                # Also record it on the turn itself. The `done` event ships this
-                # turn as the persisted one, so a finding left only on the SSE
-                # stream would render live and then vanish the moment the turn
-                # was replaced — and be gone entirely on reload.
-                turn.guardrails.append(
-                    GuardrailNotice(
-                        tool_call_id=tool_call_id,
-                        errors=payload["errors"],
-                        warnings=payload["warnings"],
-                        finding_keys=payload["finding_keys"],
-                    )
-                )
+                apply_stream_event(turn, payload)
+                yield guardrail_event
                 if record is not None:
                     record.guardrail_keys.extend(payload["finding_keys"])
             if isinstance(parsed_result, dict) and parsed_result.get("benchmark_config"):
@@ -881,7 +897,6 @@ async def _stream_response_unlimited(
                             "jobs": parsed_result.get("jobs"),
                         }
                     )
-            just_finished_tool_call = True
             continue
 
         if isinstance(event, AgentRunResultEvent):
@@ -935,10 +950,9 @@ async def _stream_response_unlimited(
                         )
 
     if final_output is not None and not turn.content:
-        turn.content = final_output
-        yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": final_output})
+        yield emit("text_delta", content=final_output)
 
-    turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
+    _strip_sandbox_images(turn)
     if record is not None:
         record.text = turn.content
     yield json.dumps(

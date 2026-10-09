@@ -530,10 +530,10 @@ def test_guardrail_event_is_omitted_when_a_config_is_clean() -> None:
 def test_guardrail_events_are_recorded_on_the_turn() -> None:
     """Persisted rather than stream-only, so the caution survives a reload."""
     from ai_almanac.server.services.chat_state import ChatTurn, utc_now
-    from ai_almanac.server.services.chat_turns import _apply_stream_event
+    from ai_almanac.server.services.turn_events import apply_stream_event
 
     turn = ChatTurn(id="turn-1", role="assistant", created_at=utc_now())
-    _apply_stream_event(
+    apply_stream_event(
         turn,
         {
             "type": "guardrail",

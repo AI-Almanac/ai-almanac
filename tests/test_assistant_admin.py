@@ -77,7 +77,7 @@ async def test_clone_then_activate_changes_what_chat_resolves(
     )
     assert clone.status_code == 200, clone.text
     assert clone.json()["source"] == "custom"
-    assert clone.json()["version"] == 2
+    assert clone.json()["version"] == rulesets.packaged_ruleset("builtin").version + 1
 
     detail = clone.json()
     sections = [

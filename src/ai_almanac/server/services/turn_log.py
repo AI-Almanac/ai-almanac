@@ -3,7 +3,7 @@
 The point of recording a turn is to answer, with data rather than conviction,
 whether a ruleset change made the assistant better. So every turn is stored
 against the ruleset version and model that produced it, together with the tools
-it called, the guardrails that fired, and three derived flags.
+it called, the guardrails that fired, and the flags derived from them.
 
 The flags **measure**; they never enforce. The user is warned by the guardrail
 banner regardless (see ``services.guardrails``), and a flag being wrong costs a
@@ -50,6 +50,9 @@ DATA_READING_TOOLS = frozenset(
 # would flag every correct conceptual answer.
 _DECIMAL = re.compile(r"\d+\.\d+")
 
+# Keys of the stored benchmark plan the assistant patches, never what a user sees.
+_CONFIG_PATH_TERMS = ("advanced_params", "per_model_params")
+
 _MAP_DETAIL = re.compile(
     r"grid[- ]?(?:point|cell)|per[- ]grid|this cell|that cell|these cells", re.IGNORECASE
 )
@@ -75,10 +78,17 @@ class TurnRecord:
     text: str = ""
     tool_calls: list[str] = field(default_factory=list)
     guardrail_keys: list[str] = field(default_factory=list)
+    # Read by the flags, not stored: the names the answer must not show the user.
+    offered_tools: list[str] = field(default_factory=list)
+
+
+def _names_internal_terms(text: str, offered_tools: list[str]) -> bool:
+    terms = [*offered_tools, *_CONFIG_PATH_TERMS]
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in terms)
 
 
 def compute_flags(record: TurnRecord) -> dict[str, bool]:
-    """The three behaviours worth counting across rulesets.
+    """The behaviours worth counting across rulesets.
 
     ``numbers_without_tool_call`` — the answer quotes a decimal but the turn read
     no data. The proxy for the assistant doing arithmetic in its head instead of
@@ -92,6 +102,9 @@ def compute_flags(record: TurnRecord) -> dict[str, bool]:
 
     ``map_narration`` — the answer walks through grid-point detail on a sample
     the platform flagged as too small to support it.
+
+    ``names_internal_terms`` — the answer shows the user a tool name or a
+    configuration path, which they can neither see nor type.
     """
     text = record.text
     lowered = text.lower()
@@ -109,6 +122,7 @@ def compute_flags(record: TurnRecord) -> dict[str, bool]:
         and not (called & DATA_READING_TOOLS),
         "guardrail_unacknowledged": unacknowledged,
         "map_narration": bool(_MAP_DETAIL.search(text)) and "small_test_sample" in fired,
+        "names_internal_terms": _names_internal_terms(text, record.offered_tools),
     }
 
 

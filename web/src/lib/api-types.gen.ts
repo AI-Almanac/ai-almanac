@@ -2614,7 +2614,7 @@ export interface components {
              * @default completed
              * @enum {string}
              */
-            status: "completed" | "failed" | "running";
+            status: "completed" | "failed" | "pending" | "running";
             /** Input */
             input?: {
                 [key: string]: unknown;
@@ -2657,6 +2657,8 @@ export interface components {
             artifacts?: components["schemas"]["ChatArtifact"][];
             /** Guardrails */
             guardrails?: components["schemas"]["GuardrailNotice"][];
+            /** Blocks */
+            blocks?: (components["schemas"]["TextBlock"] | components["schemas"]["ThinkingBlock"] | components["schemas"]["ToolBlock"])[];
         };
         /** CompareRequest */
         CompareRequest: {
@@ -3889,6 +3891,8 @@ export interface components {
             enabled: boolean;
             /** Scope Kinds */
             scope_kinds?: string[];
+            /** Requires Tools */
+            requires_tools?: string[];
         };
         /**
          * Properties
@@ -4497,6 +4501,35 @@ export interface components {
             /** True Holdout Years */
             true_holdout_years: string;
         };
+        /** TextBlock */
+        TextBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
+        /**
+         * ThinkingBlock
+         * @description Reasoning summary or between-tool progress note the model wrote.
+         */
+        ThinkingBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "thinking";
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+        };
         /**
          * TileJSON
          * @description TileJSON model.
@@ -4721,6 +4754,16 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /** ToolBlock */
+        ToolBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "tool";
+            /** Tool Call Id */
+            tool_call_id: string;
+        };
         /**
          * ToolPolicy
          * @description Tools withheld from the assistant.

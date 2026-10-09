@@ -390,7 +390,8 @@ def execute_job(job_id: str) -> None:
             status, error = "complete", None
         else:
             status = "failed"
-            error = f"Job workload exited with code {exit_code}; see {log_path}."
+            # The log's path is on this host; the user reaches the log from the run page.
+            error = f"The run stopped with an error (exit code {exit_code}). The run log has the details."
         now = _now()
         with engine.begin() as conn:
             conn.execute(
