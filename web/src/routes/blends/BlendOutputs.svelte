@@ -6,9 +6,14 @@
 	let {
 		jobId,
 		artifacts,
+		trueHoldoutYears = [],
 		ondownload
-	}: { jobId: string; artifacts: JobArtifact[]; ondownload: (artifact: JobArtifact) => void } =
-		$props();
+	}: {
+		jobId: string;
+		artifacts: JobArtifact[];
+		trueHoldoutYears?: number[];
+		ondownload: (artifact: JobArtifact) => void;
+	} = $props();
 
 	const groups = $derived(groupBlendOutputs(artifacts));
 	const primary = $derived(groups.filter((g) => g.key !== 'other'));
@@ -40,6 +45,7 @@
 	});
 
 	const showModel = $derived(new Set(yearly.map((r) => r.model)).size > 1);
+	const hasTrueHoldout = $derived(yearly.some((r) => trueHoldoutYears.includes(r.year)));
 
 	function fmt(value: number | null): string {
 		return value == null ? '—' : value.toFixed(3);
@@ -64,13 +70,16 @@
 		<h3>Scores by held-out year</h3>
 		<p class="hint">
 			Absolute scores, not relative to climatology. Each year is scored with weights fitted without
-			it. Lower Brier Score and Ranked Probability Score are better; higher Area Under ROC Curve is
-			better.
+			it.{#if hasTrueHoldout}
+				True holdout years were also left out of every cross-validation fit, so they are the fairest
+				guide to a new season.{/if} Lower Brier Score and Ranked Probability Score are better; higher
+			Area Under ROC Curve is better.
 		</p>
 		<table>
 			<thead>
 				<tr>
 					<th scope="col">Year</th>
+					{#if hasTrueHoldout}<th scope="col">Scored as</th>{/if}
 					{#if showModel}<th scope="col">Model</th>{/if}
 					<th scope="col">Brier Score</th>
 					<th scope="col">Ranked Probability Score</th>
@@ -81,6 +90,9 @@
 				{#each yearly as row (`${row.year}-${row.model}`)}
 					<tr>
 						<td>{row.year}</td>
+						{#if hasTrueHoldout}
+							<td>{trueHoldoutYears.includes(row.year) ? 'True holdout' : 'Cross-validation'}</td>
+						{/if}
 						{#if showModel}<td>{modelLabel(row.model)}</td>{/if}
 						<td>{fmt(row.brier)}</td>
 						<td>{fmt(row.rps)}</td>

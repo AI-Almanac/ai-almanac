@@ -7,6 +7,7 @@
 		createBlend,
 		listDataSources,
 		getCapabilities,
+		getGuardrailThresholds,
 		getJobArtifacts,
 		getBlendSummary,
 		cancelJob,
@@ -29,6 +30,7 @@
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import {
 		MIN_ONSET_YEARS,
+		DEFAULT_MIN_TRAINING_YEARS,
 		computeCoverage,
 		coverageLimits,
 		defaultSplit,
@@ -136,6 +138,8 @@
 	let cvHoldoutYears = $state('');
 	let forecastYears = $state('');
 	let trueHoldoutYears = $state('');
+	// The enforced minimum, so the prefilled split is one the server accepts.
+	let minTrainingYears = $state(DEFAULT_MIN_TRAINING_YEARS);
 	let formulaText = $state('');
 	let focusArea = $state<FocusAreaValue | null>(null);
 	// Onset definition overrides; blank means the workflow default.
@@ -209,10 +213,11 @@
 	// the user edits the year fields themselves.
 	$effect(() => {
 		if (!coverage || yearsDirty) return;
-		const split = defaultSplit(coverage);
+		const split = defaultSplit(coverage, minTrainingYears);
 		if (!split) return;
 		trainingYears = split.training;
 		cvHoldoutYears = split.cv;
+		trueHoldoutYears = split.trueHoldout;
 	});
 
 	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
@@ -242,11 +247,12 @@
 	);
 
 	async function load() {
-		const [b, obs, models, caps] = await Promise.allSettled([
+		const [b, obs, models, caps, thresholds] = await Promise.allSettled([
 			listBlends(),
 			listDataSources('obs'),
 			listDataSources('model'),
-			getCapabilities()
+			getCapabilities(),
+			getGuardrailThresholds()
 		]);
 		if (b.status === 'fulfilled') blends = b.value;
 		if (!selectedId && !creating) selectedId = defaultBlend(blends)?.id ?? null;
@@ -254,6 +260,7 @@
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
 		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		if (thresholds.status === 'fulfilled') minTrainingYears = thresholds.value.min_training_years;
 		loaded = true;
 	}
 
@@ -587,9 +594,9 @@
 							emptyMessage="Describe the blend you want, or ask which models to combine based on your benchmark results."
 							placeholder="Ask for the blend you want, or a question…"
 							suggestions={[
-								'Blend the best monsoon-onset models for India',
+								'Set up a blend for Kiremt onset in Ethiopia',
 								'Which models should I combine based on my benchmarks?',
-								'What do the training and CV holdout years mean?'
+								'What do the training and cross-validation years mean?'
 							]}
 							showArtifacts={false}
 							onBlendConfig={applyBlendConfig}
@@ -716,14 +723,26 @@
 						</label>
 						<label class="field">
 							{@render fieldLabel(
-								'CV holdout years',
-								'Years scored with the weights fitted without them, to check the blend on data it did not learn from. Defaults to the training years, so every training year gets checked in turn.'
+								'Cross-validation years',
+								'Cross-validation checks the blend on years it did not learn from: each year listed here is left out of training, the weights are fitted on the remaining years, and the left-out year is scored. Defaults to the training years, so every training year gets a turn being left out.'
 							)}
 							<input
 								type="text"
 								bind:value={cvHoldoutYears}
 								oninput={() => (yearsDirty = true)}
 								placeholder="2015:2020"
+							/>
+						</label>
+						<label class="field">
+							{@render fieldLabel(
+								'True holdout years',
+								`Years kept out of training and cross-validation entirely, so their scores show how the blend does on seasons it has never seen — the closest stand-in for a new season. Defaults to the most recent fifth of the shared years, as long as at least ${minTrainingYears} training years remain. Leave empty to train on every year.`
+							)}
+							<input
+								type="text"
+								bind:value={trueHoldoutYears}
+								oninput={() => (yearsDirty = true)}
+								placeholder="optional"
 							/>
 						</label>
 					</div>
@@ -762,13 +781,6 @@
 									bind:value={forecastYears}
 									placeholder="defaults to training + holdout"
 								/>
-							</label>
-							<label class="field">
-								{@render fieldLabel(
-									'True holdout years',
-									'Years never shown during training or cross-validation, reserved for a final unbiased evaluation. Optional.'
-								)}
-								<input type="text" bind:value={trueHoldoutYears} placeholder="optional" />
 							</label>
 						</div>
 						<label class="field">
@@ -929,7 +941,12 @@
 							{#if artifacts.length === 0}
 								<p class="muted">No files found.</p>
 							{:else}
-								<BlendOutputs jobId={selected.id} {artifacts} ondownload={downloadArtifact} />
+								<BlendOutputs
+									jobId={selected.id}
+									{artifacts}
+									trueHoldoutYears={selected.true_holdout_years ?? []}
+									ondownload={downloadArtifact}
+								/>
 							{/if}
 						</div>
 					{/if}

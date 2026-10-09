@@ -133,7 +133,7 @@
 			<input
 				name="q"
 				bind:value={prompt}
-				placeholder="Which model performs best for monsoon onset over India?"
+				placeholder="Which forecasts beat climatology for monsoon onset, and how far ahead?"
 				aria-label="Benchmark question"
 			/>
 			<button type="submit" disabled={!prompt.trim()}>Ask</button>

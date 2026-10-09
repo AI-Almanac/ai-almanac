@@ -21,23 +21,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/assistant/guardrails": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Guardrails */
-        get: operations["read_guardrails_assistant_guardrails_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/assistant/rulesets/{ruleset_id}": {
         parameters: {
             query?: never;
@@ -626,6 +609,23 @@ export interface paths {
         };
         /** Romp Defaults */
         get: operations["romp_defaults_config_romp_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Guardrail Thresholds */
+        get: operations["guardrail_thresholds_config_guardrails_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2291,6 +2291,11 @@ export interface components {
             forecast_models: {
                 [key: string]: string;
             };
+            /**
+             * True Holdout Years
+             * @default []
+             */
+            true_holdout_years: number[];
         };
         /**
          * BlendParams
@@ -2446,6 +2451,7 @@ export interface components {
             warnings?: string[];
             /** Finding Keys */
             finding_keys?: string[];
+            suggested_years?: components["schemas"]["SuggestedYears"] | null;
         };
         /**
          * BlindCompareRequest
@@ -2986,9 +2992,9 @@ export interface components {
         FocusUnits: {
             /**
              * Level
-             * @constant
+             * @enum {string}
              */
-            level: "adm2";
+            level: "adm1" | "adm2";
             /** Units */
             units: string[];
             /** Geometry */
@@ -3296,11 +3302,12 @@ export interface components {
         };
         /**
          * GuardrailThresholds
-         * @description The enforced thresholds, read-only here.
+         * @description The thresholds the platform enforces, read-only.
          *
-         *     Surfaced so an admin editing prose can see the numbers the {{placeholders}}
-         *     will resolve to. Editing them is a platform setting (PATCH /settings), not a
-         *     ruleset edit, because the submission chokepoint reads the same value.
+         *     Shown to admins editing assistant prose, so they see what its {{placeholders}}
+         *     resolve to, and read by forms so they prefill values the server will accept.
+         *     Editing them is a platform setting (PATCH /settings), because the submission
+         *     chokepoint reads the same value.
          */
         GuardrailThresholds: {
             /** Min Onset Years */
@@ -4478,6 +4485,19 @@ export interface components {
             approved_config?: components["schemas"]["BlendRunSpec"] | null;
         };
         /**
+         * SuggestedYears
+         * @description A working year split for the chosen sources: a recent true holdout, the
+         *     rest trained on and cross-validated. See ``blend_domain.default_year_split``.
+         */
+        SuggestedYears: {
+            /** Training Years */
+            training_years: string;
+            /** Cv Holdout Years */
+            cv_holdout_years: string;
+            /** True Holdout Years */
+            true_holdout_years: string;
+        };
+        /**
          * TileJSON
          * @description TileJSON model.
          *
@@ -4862,26 +4882,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RulesetSummary"][];
-                };
-            };
-        };
-    };
-    read_guardrails_assistant_guardrails_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GuardrailThresholds"];
                 };
             };
         };
@@ -5992,6 +5992,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    guardrail_thresholds_config_guardrails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailThresholds"];
                 };
             };
         };

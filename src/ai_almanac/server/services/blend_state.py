@@ -40,6 +40,15 @@ class BlendRunSpec(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
 
 
+class SuggestedYears(BaseModel):
+    """A working year split for the chosen sources: a recent true holdout, the
+    rest trained on and cross-validated. See ``blend_domain.default_year_split``."""
+
+    training_years: str
+    cv_holdout_years: str
+    true_holdout_years: str
+
+
 class BlendValidation(BaseModel):
     can_run: bool = False
     status: BlendStatus = "collecting"
@@ -50,3 +59,4 @@ class BlendValidation(BaseModel):
     # UI and the turn log can key on the rule rather than on its wording. See
     # services.guardrails.
     finding_keys: list[str] = Field(default_factory=list)
+    suggested_years: SuggestedYears | None = None
