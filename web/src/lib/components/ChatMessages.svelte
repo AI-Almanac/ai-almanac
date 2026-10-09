@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
-	import { codeForToolCall, copyCode, formatToolName, renderMarkdown } from '$lib/chat/format';
+	import ChatActivity from '$lib/components/ChatActivity.svelte';
+	import { renderMarkdown } from '$lib/chat/format';
+	import { turnTimeline } from '$lib/chat/timeline';
 	import { rateChatTurn } from '$lib/api';
 
 	interface Props {
@@ -24,7 +26,6 @@
 	}: Props = $props();
 
 	let messagesEl = $state<HTMLElement | null>(null);
-	let shownCode = $state<Set<string>>(new Set());
 	let ratings = $state<Record<string, 1 | -1>>({});
 
 	async function rate(turnId: string, value: 1 | -1) {
@@ -39,13 +40,6 @@
 			const { [turnId]: _dropped, ...rest } = ratings;
 			ratings = rest;
 		}
-	}
-
-	function toggleCode(key: string) {
-		const next = new Set(shownCode);
-		if (next.has(key)) next.delete(key);
-		else next.add(key);
-		shownCode = next;
 	}
 
 	// Scroll to bottom whenever messages update.
@@ -77,44 +71,26 @@
 		</div>
 	{/if}
 
-	{#each chat.visibleTurns as msg, i}
-		{#if msg.role === 'user' || msg.content}
-			<div class="message {msg.role}">
-				<div class="message-content" class:prose={msg.role === 'assistant'}>
-					{#if msg.role === 'assistant'}
-						{@html renderMarkdown(msg.content)}
-					{:else}
-						{msg.content}
-					{/if}
-				</div>
+	{#each chat.visibleTurns as msg}
+		{#if msg.role === 'user'}
+			<div class="message user">
+				<div class="message-content">{msg.content}</div>
 			</div>
-		{/if}
-
-		{#if msg.role === 'assistant'}
-			{#each msg.tool_calls ?? [] as toolCall, ti}
-				{@const code = codeForToolCall(toolCall)}
-				{#if code}
-					{@const key = `hist-${i}-${ti}`}
-					<div class="code-snippet">
-						<div class="code-snippet-header">
-							<span class="code-snippet-label">{formatToolName(toolCall.name)}</span>
-							<div class="code-snippet-actions">
-								<button class="code-action-btn" onclick={() => copyCode(code)}>Copy</button>
-								<button class="code-action-btn" onclick={() => toggleCode(key)}>
-									{shownCode.has(key) ? 'Hide code' : 'Show code'}
-								</button>
-							</div>
-						</div>
-						{#if shownCode.has(key)}
-							<pre class="code-block"><code>{code}</code></pre>
-						{/if}
+		{:else}
+			{@const timeline = turnTimeline(msg)}
+			{@const streaming = msg.id === chat.streamingTurn?.id}
+			{#each timeline as item, ii (item.key)}
+				{#if item.kind === 'text'}
+					<div class="message assistant">
+						<div class="message-content prose">{@html renderMarkdown(item.text)}</div>
 					</div>
+				{:else}
+					<ChatActivity
+						group={item}
+						live={streaming && ii === timeline.length - 1}
+						{onOpenArtifact}
+					/>
 				{/if}
-				{#each toolCall.artifacts ?? [] as artifact}
-					<button class="artifact-chip" onclick={() => onOpenArtifact(artifact.id)}>
-						&#128444; {artifact.label ?? 'Figure'} &rarr;
-					</button>
-				{/each}
 			{/each}
 
 			{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
@@ -201,16 +177,10 @@
 		</div>
 	{/if}
 
-	{#if chat.sending}
-		{@const runningTool = chat.streamingTurn?.tool_calls?.find((tc) => tc.status === 'running')}
-		{#if !chat.streamingTurn || runningTool}
-			<div class="thinking">
-				{#if runningTool}
-					<span class="thinking-label">{formatToolName(runningTool.name)}…</span>
-				{/if}
-				<span class="dot"></span><span class="dot"></span><span class="dot"></span>
-			</div>
-		{/if}
+	{#if chat.sending && !chat.streamingTurn}
+		<div class="thinking" aria-label="Assistant is working">
+			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+		</div>
 	{/if}
 </div>
 
@@ -400,89 +370,6 @@
 		background: var(--color-surface-raised);
 	}
 
-	.code-snippet {
-		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		font-size: 0.78rem;
-	}
-
-	.artifact-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-		padding: 0.25rem 0.65rem;
-		border: 1px solid var(--color-accent);
-		border-radius: 2rem;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font-size: 0.72rem;
-		font-weight: 500;
-		cursor: pointer;
-		transition:
-			background-color 0.12s,
-			color 0.12s;
-		margin-top: 0.25rem;
-	}
-
-	.artifact-chip:hover {
-		background: var(--color-accent);
-		color: var(--color-bg);
-	}
-
-	.code-snippet-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0.35rem 0.65rem;
-		background: var(--color-surface);
-		border-radius: 6px;
-		gap: 0.5rem;
-	}
-
-	.code-snippet-label {
-		font-size: 0.7rem;
-		font-weight: 600;
-		color: var(--color-accent);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-
-	.code-snippet-actions {
-		display: flex;
-		gap: 0.35rem;
-	}
-
-	.code-action-btn {
-		padding: 0.15rem 0.5rem;
-		background: none;
-		border: 1px solid var(--color-border);
-		border-radius: 3px;
-		font-family: inherit;
-		font-size: 0.68rem;
-		color: var(--color-text-muted);
-		cursor: pointer;
-		transition:
-			color 0.12s,
-			border-color 0.12s;
-	}
-	.code-action-btn:hover {
-		color: var(--color-accent);
-		border-color: var(--color-accent);
-	}
-
-	.code-block {
-		margin: 0;
-		padding: 0.75rem 1rem;
-		background: var(--color-bg);
-		border-top: 1px solid var(--color-border);
-		overflow-x: auto;
-		font-family: var(--font-mono, monospace);
-		font-size: 0.78rem;
-		line-height: 1.5;
-		color: var(--color-text);
-		white-space: pre;
-	}
-
 	.approval-card {
 		border: 1px solid var(--color-accent-border);
 		border-radius: 0.5rem;
@@ -602,11 +489,6 @@
 		align-items: center;
 		gap: 6px;
 		padding: 0.4rem 0;
-	}
-	.thinking-label {
-		font-size: 0.72rem;
-		color: var(--color-text-muted);
-		font-style: italic;
 	}
 	.dot {
 		width: 6px;

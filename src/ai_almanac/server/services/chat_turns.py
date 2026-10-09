@@ -25,13 +25,7 @@ from sqlalchemy import text
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.chat_artifacts import hydrate_turn_artifact_urls
-from ai_almanac.server.services.chat_state import (
-    ChatArtifact,
-    ChatScope,
-    ChatToolCall,
-    ChatTurn,
-    GuardrailNotice,
-)
+from ai_almanac.server.services.chat_state import ChatScope, ChatTurn
 from ai_almanac.server.services.chat_tools import (
     SubmitBenchmarkApproval,
     SubmitBlendApproval,
@@ -42,6 +36,7 @@ from ai_almanac.server.services.llm import (
     stream_response,
 )
 from ai_almanac.server.services.rulesets import Ruleset, selectable_ruleset
+from ai_almanac.server.services.turn_events import apply_stream_event
 
 logger = logging.getLogger(__name__)
 
@@ -91,64 +86,6 @@ def _replace_turn(transcript: list[dict], turn: ChatTurn) -> list[dict]:
 
 def _stream_event(event_type: str, **payload: object) -> str:
     return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
-
-
-def _append_tool_call(turn: ChatTurn, payload: dict) -> None:
-    tool_call = ChatToolCall.model_validate(payload)
-    if any(existing.id == tool_call.id for existing in turn.tool_calls):
-        return
-    turn.tool_calls.append(tool_call)
-
-
-def _append_artifact(turn: ChatTurn, tool_call_id: str | None, payload: dict) -> None:
-    artifact = ChatArtifact.model_validate(payload)
-    if not any(existing.id == artifact.id for existing in turn.artifacts):
-        turn.artifacts.append(artifact)
-    if not tool_call_id:
-        return
-    for tool_call in turn.tool_calls:
-        if tool_call.id != tool_call_id:
-            continue
-        if any(existing.id == artifact.id for existing in tool_call.artifacts):
-            return
-        tool_call.artifacts.append(artifact)
-        return
-
-
-def _apply_stream_event(turn: ChatTurn, data: dict) -> None:
-    event_type = data.get("type")
-    if event_type == "text_delta":
-        turn.content += data.get("content", "")
-        return
-    if event_type == "tool_call":
-        tool_payload = data.get("tool_call")
-        if isinstance(tool_payload, dict):
-            _append_tool_call(turn, tool_payload)
-        return
-    if event_type == "artifact":
-        artifact_payload = data.get("artifact")
-        if isinstance(artifact_payload, dict):
-            _append_artifact(turn, data.get("tool_call_id"), artifact_payload)
-        return
-    if event_type == "guardrail":
-        turn.guardrails.append(
-            GuardrailNotice(
-                tool_call_id=data.get("tool_call_id"),
-                errors=[item for item in data.get("errors") or [] if isinstance(item, str)],
-                warnings=[item for item in data.get("warnings") or [] if isinstance(item, str)],
-                finding_keys=[
-                    item for item in data.get("finding_keys") or [] if isinstance(item, str)
-                ],
-            )
-        )
-        return
-    if event_type == "tool_result":
-        tool_call_id = data.get("tool_call_id")
-        for tool_call in turn.tool_calls:
-            if tool_call.id == tool_call_id:
-                tool_call.status = data.get("status", tool_call.status)
-                tool_call.result = data.get("result")
-                return
 
 
 async def _update_session_state(
@@ -541,7 +478,7 @@ async def stream_chat_turn(
                     )
                     break
 
-                _apply_stream_event(assistant_turn, data)
+                apply_stream_event(assistant_turn, data)
                 yield f"data: {event}\n\n"
             else:
                 raise RuntimeError("Chat stream ended without a terminal event")

@@ -19,7 +19,7 @@
 		type Region,
 		type RompDefaults
 	} from '$lib/api';
-	import { EVENT_TYPES } from '$lib/data/event-types';
+	import { eventTypeName } from '$lib/data/event-types';
 	import { modelDisplayName } from '$lib/model-names';
 	import { takeSetupRequest } from '$lib/setup-request';
 	import BenchmarkForm from './BenchmarkForm.svelte';
@@ -114,10 +114,6 @@
 		const runId = jobs[0]?.run_id ?? store.selectedGroupKey;
 		if (!runId) return;
 		store.acceptSubmittedJobs(runId, jobs);
-	}
-
-	function eventTypeName(eventType: string): string {
-		return EVENT_TYPES.find((event) => event.id === eventType)?.name ?? eventType;
 	}
 
 	function formatRunDate(value: string): string {

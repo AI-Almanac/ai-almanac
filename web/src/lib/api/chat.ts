@@ -110,6 +110,13 @@ export type GuardrailNotice = {
 	finding_keys?: string[];
 };
 
+/** One step of an assistant turn, in the order it happened. */
+export type ChatTurnBlock =
+	| { kind: 'text'; text: string }
+	/** A reasoning summary or a progress note the model wrote between tool calls. */
+	| { kind: 'thinking'; text: string }
+	| { kind: 'tool'; tool_call_id: string };
+
 export type ChatMessage = {
 	id: string;
 	role: 'user' | 'assistant';
@@ -118,6 +125,8 @@ export type ChatMessage = {
 	tool_calls?: ChatToolCall[];
 	artifacts?: ChatArtifact[];
 	guardrails?: GuardrailNotice[];
+	/** Absent on turns saved before blocks were recorded. */
+	blocks?: ChatTurnBlock[];
 };
 
 export type ChatArtifact = {
@@ -133,7 +142,8 @@ export type ChatArtifact = {
 export type ChatToolCall = {
 	id: string;
 	name: string;
-	status: 'running' | 'completed' | 'failed';
+	/** `pending` while the model is still writing the call's arguments. */
+	status: 'pending' | 'running' | 'completed' | 'failed';
 	input: Record<string, unknown>;
 	result?: unknown;
 	artifacts: ChatArtifact[];
@@ -146,6 +156,7 @@ export type ChatSessionDetail = ChatSession & {
 
 export type ChatEvent =
 	| { type: 'text_delta'; turn_id: string; content: string }
+	| { type: 'thinking_delta'; turn_id: string; content: string }
 	| { type: 'tool_call'; turn_id: string; tool_call: ChatToolCall }
 	| {
 			type: 'tool_result';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { EVENT_TYPES } from '$lib/data/event-types';
+	import { eventTypeName } from '$lib/data/event-types';
 	import RunSidebar, {
 		type RunListItem,
 		type RunSection,
@@ -14,10 +14,6 @@
 	}
 
 	const { store, onNewBenchmark, onSelectGroup }: Props = $props();
-
-	function eventLabel(eventType: string): string {
-		return EVENT_TYPES.find((event) => event.id === eventType)?.name ?? eventType;
-	}
 
 	function formatRunDate(value: string): string {
 		if (!value) return 'Unknown date';
@@ -52,7 +48,7 @@
 		return {
 			id: group.key,
 			title: group.region,
-			meta: `${formatRunDate(group.mostRecentAt)} · ${eventLabel(group.eventType)}`,
+			meta: `${formatRunDate(group.mostRecentAt)} · ${eventTypeName(group.eventType)}`,
 			count: group.jobs.length,
 			status: groupStatus(group),
 			canDelete: group.isOwner || isExample,

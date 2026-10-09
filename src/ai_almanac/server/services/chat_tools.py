@@ -20,7 +20,7 @@ from ai_almanac.server.services.romp import (
 )
 
 from . import benchmark_domain, blend_domain
-from .benchmark_state import BenchmarkRunSpec
+from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
 from .chat_state import ChatScope
@@ -64,7 +64,7 @@ class BenchmarkConfigPatch(BaseModel):
     region_id: str | None = None
     dataset_id: str | None = None
     model_ids: list[str] | None = None
-    event_type: str | None = None
+    event_type: BenchmarkEventType | None = None
     forecast_window_days: Annotated[int, PydanticField(ge=30)] | None = None
     advanced_params: BenchmarkAdvancedParams | None = PydanticField(default=None)
 
