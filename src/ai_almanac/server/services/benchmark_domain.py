@@ -792,6 +792,41 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: BenchmarkScope) -> st
     return json.dumps(jobs)
 
 
+def scope_names_jobs(scope: BenchmarkScope) -> bool:
+    """Whether the scope identifies particular jobs. A setup scope carries none,
+    and `_scope_conditions` reads that as every job the user owns."""
+    return scope.kind == "benchmark_run_group" or bool(scope.job_ids)
+
+
+async def scope_job_statuses(user_id: str, scope: BenchmarkScope) -> list[dict]:
+    """Id, label, status and completion time of each job in the scope."""
+    from ai_almanac.server.db import get_db
+
+    if not scope_names_jobs(scope):
+        return []
+    query = sa.select(
+        _jobs.c.id, _jobs.c.job_type, _jobs.c.config_json, _jobs.c.status, _jobs.c.completed_at
+    ).where(_jobs.c.user_id == sa.bindparam("uid"), *_scope_conditions(scope, _jobs))
+    async with get_db() as conn:
+        rows = (
+            (await conn.execute(query, {"uid": user_id, **_scope_params(scope)}))
+            .mappings()
+            .fetchall()
+        )
+    statuses = []
+    for row in rows:
+        fields = _job_listing_fields(row["job_type"], json.loads(row["config_json"] or "{}"))
+        statuses.append(
+            {
+                "job_id": row["id"],
+                "label": fields.get("blend_name") or fields.get("model_name") or "",
+                "status": row["status"],
+                "completed_at": row["completed_at"],
+            }
+        )
+    return statuses
+
+
 async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
 

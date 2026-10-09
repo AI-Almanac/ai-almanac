@@ -597,6 +597,17 @@ def _guardrail_event(turn_id: str, tool_call_id: str, parsed_result: object) -> 
     )
 
 
+def _user_prompt(message: str | None, platform_note: str | None) -> str | list[str] | None:
+    """The user's message, preceded by the platform's note when there is one.
+
+    Sent as a separate part of the same user message so the transcript keeps the
+    user's words as typed, and the note stays in the model's history afterwards.
+    """
+    if message is None or platform_note is None:
+        return message
+    return [platform_note, message]
+
+
 def _streamed_text(event: object, part_type: type, delta_type: type) -> str:
     """Text a part-start or part-delta event adds to a part of the given kind."""
     if isinstance(event, PartStartEvent) and isinstance(event.part, part_type):
@@ -646,6 +657,7 @@ async def stream_response(
     session_scope: ChatScope,
     *,
     latest_user_message: str | None = None,
+    platform_note: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
     comparison_id: str | None = None,
@@ -670,6 +682,7 @@ async def stream_response(
             session_id,
             session_scope,
             latest_user_message=latest_user_message,
+            platform_note=platform_note,
             deferred_tool_results=deferred_tool_results,
             active_ruleset=active_ruleset,
             record=record,
@@ -710,6 +723,7 @@ async def _stream_response_unlimited(
     session_scope: ChatScope,
     *,
     latest_user_message: str | None = None,
+    platform_note: str | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
     active_ruleset: Ruleset | None = None,
     record: TurnRecord | None = None,
@@ -780,7 +794,7 @@ async def _stream_response_unlimited(
     # below stays unchanged while the stream is still closed deterministically.
     async def _events() -> AsyncIterator[object]:
         async with agent.run_stream_events(
-            latest_user_message,
+            _user_prompt(latest_user_message, platform_note),
             message_history=message_history,
             deps=deps,
             deferred_tool_results=deferred_tool_results,
