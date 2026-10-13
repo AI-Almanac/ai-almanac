@@ -563,9 +563,9 @@ def _handoff_toolset() -> FunctionToolset[ChatDeps]:
     return toolset
 
 
-# Tools that build or run a config held on the session. A general conversation
-# has no setup form to show that config, so it hands off to a page that does.
-_SETUP_TOOLS = frozenset(
+# Tools that build a run or launch one. A general conversation has no setup
+# form to show a config or confirm a run, so it hands off to a page that does.
+_SETUP_AND_RUN_TOOLS = frozenset(
     {
         "get_benchmark_config",
         "update_benchmark_config",
@@ -575,6 +575,7 @@ _SETUP_TOOLS = frozenset(
         "update_blend_config",
         "validate_blend_config",
         "submit_blend",
+        "rerun_job",
     }
 )
 
@@ -588,7 +589,7 @@ def _toolsets_for_scope(scope_kind: str) -> list[FunctionToolset[ChatDeps]]:
         _analysis_toolset(),
     ]
     if scope_kind == "general":
-        return [*_without_tools(toolsets, _SETUP_TOOLS), _handoff_toolset()]
+        return [*_without_tools(toolsets, _SETUP_AND_RUN_TOOLS), _handoff_toolset()]
     return toolsets
 
 

@@ -212,7 +212,15 @@ async def test_a_general_chat_hands_setup_off_instead_of_building_a_config() -> 
     offered = await _tools_offered_to_the_model(scope, builtin())
 
     assert {"open_setup", "list_regions", "list_blend_models", "list_jobs"} <= offered
-    assert offered.isdisjoint(llm._SETUP_TOOLS)
+    assert offered.isdisjoint(
+        {
+            "update_benchmark_config",
+            "submit_benchmark",
+            "update_blend_config",
+            "submit_blend",
+            "rerun_job",
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -251,3 +259,13 @@ def test_only_a_general_chat_is_told_how_to_hand_off_setup() -> None:
 
     assert "open_setup" in general
     assert "open_setup" not in setup
+
+
+def test_a_general_chat_is_not_told_to_use_tools_it_does_not_have() -> None:
+    scope = ChatScope(kind="general", key="assistant", job_ids=[])
+    tools = llm.offered_tool_names(builtin(), scope.kind)
+
+    general = llm._instructions_for_ruleset(builtin(), scope, tools)
+
+    for absent in ("update_benchmark_config", "submit_benchmark", "submit_blend", "rerun_job"):
+        assert absent not in general
