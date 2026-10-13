@@ -15,7 +15,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+
+from ai_almanac.server.db import get_db
 
 
 def _scope(*, job_ids: list[str] | None = None) -> dict:
@@ -550,28 +551,28 @@ def test_guardrail_events_are_recorded_on_the_turn() -> None:
 
 async def _create_session(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     *,
     title: str = "Session",
     ruleset_id: str | None = None,
 ) -> dict:
     response = await client.post(
         "/chat/sessions",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"title": title, "scope": _scope(), "ruleset_id": ruleset_id},
     )
     assert response.status_code == 201
     return response.json()
 
 
-async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
+async def _insert_job(user_id: str, job_id: str) -> None:
     now = datetime.now(UTC).isoformat()
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         await conn.execute(
             text(
                 """
                 INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at)
-                VALUES (:id, :user_id, :dataset_id, 'complete', '{}'::text, :created_at)
+                VALUES (:id, :user_id, :dataset_id, 'complete', '{}', :created_at)
                 """
             ),
             {
@@ -585,45 +586,45 @@ async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_chat_session_lifecycle(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
-    created = await _create_session(client, auth_headers, title="Original title")
+    created = await _create_session(client, as_new_user, title="Original title")
     session_id = created["id"]
 
     list_response = await client.get(
         "/chat/sessions",
-        headers=auth_headers,
+        headers=as_new_user,
         params={"scope_kind": "benchmark_run_group", "scope_key": "group-1"},
     )
     assert list_response.status_code == 200
     assert [session["id"] for session in list_response.json()] == [session_id]
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert detail_response.status_code == 200
     assert detail_response.json()["transcript"] == []
 
     rename_response = await client.patch(
         f"/chat/sessions/{session_id}",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"title": "Renamed"},
     )
     assert rename_response.status_code == 200
     assert rename_response.json()["title"] == "Renamed"
 
-    delete_response = await client.delete(f"/chat/sessions/{session_id}", headers=auth_headers)
+    delete_response = await client.delete(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert delete_response.status_code == 204
 
-    missing_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    missing_response = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert missing_response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_send_message_persists_user_and_assistant_turns(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     session_id = created["id"]
 
     async def fake_stream_response(
@@ -657,7 +658,7 @@ async def test_send_message_persists_user_and_assistant_turns(
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"content": "How did this run do?"},
     )
     assert response.status_code == 200
@@ -667,7 +668,7 @@ async def test_send_message_persists_user_and_assistant_turns(
     assert events[-1]["type"] == "done"
     assert events[-1]["turn"]["content"] == "It finished successfully."
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "How did this run do?"
@@ -678,10 +679,10 @@ async def test_send_message_persists_user_and_assistant_turns(
 @pytest.mark.asyncio
 async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     session_id = created["id"]
 
     async def failing_stream_response(
@@ -704,7 +705,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"content": "Summarize this failure"},
     )
     assert response.status_code == 200
@@ -714,7 +715,7 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     assert events[-1]["type"] == "error"
     assert events[-1]["message"] == "Chat response failed"
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "Summarize this failure"
@@ -726,13 +727,12 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
 @pytest.mark.asyncio
 async def test_send_message_denies_pending_tool_calls_before_new_prompt(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
-    _test_engine: AsyncEngine,
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_almanac.server.services.llm import serialize_model_messages
 
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     session_id = created["id"]
     provider_state = serialize_model_messages(
         [
@@ -747,7 +747,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
             )
         ]
     )
-    async with _test_engine.begin() as conn:
+    async with get_db() as conn:
         await conn.execute(
             text("UPDATE chat_sessions SET provider_state = :state WHERE id = :id"),
             {"state": json.dumps(provider_state), "id": session_id},
@@ -787,7 +787,7 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"content": "Let's revise this first."},
     )
     assert response.status_code == 200
@@ -797,15 +797,14 @@ async def test_send_message_denies_pending_tool_calls_before_new_prompt(
 @pytest.mark.asyncio
 async def test_send_message_refreshes_scope_job_ids(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
-    _test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     session_id = created["id"]
     job_id = f"job-{uuid4()}"
-    await _insert_job(_test_engine, user_id, job_id)
+    await _insert_job(user_id, job_id)
 
     async def fake_stream_response(
         provider_state: list,
@@ -837,7 +836,7 @@ async def test_send_message_refreshes_scope_job_ids(
 
     response = await client.post(
         f"/chat/sessions/{session_id}/message",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "content": "Use the latest jobs",
             "scope": _scope(job_ids=[job_id, job_id]),
@@ -846,7 +845,7 @@ async def test_send_message_refreshes_scope_job_ids(
     assert response.status_code == 200
     assert _sse_events(response.text)[-1]["type"] == "done"
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert detail_response.status_code == 200
     assert detail_response.json()["scope"]["job_ids"] == [job_id]
 
@@ -854,19 +853,18 @@ async def test_send_message_refreshes_scope_job_ids(
 @pytest.mark.asyncio
 async def test_get_job_metrics_returns_tool_error_for_unreadable_nc(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
-    _test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_almanac.server.services.benchmark_domain import get_job_metrics
     from ai_almanac.server.services.chat_state import ChatScope
 
-    response = await client.get("/chat/sessions", headers=auth_headers)
+    response = await client.get("/chat/sessions", headers=as_new_user)
     assert response.status_code == 200
 
     job_id = f"job-{uuid4()}"
-    await _insert_job(_test_engine, user_id, job_id)
+    await _insert_job(user_id, job_id)
 
     class UnreadableStorage:
         def list_nc_output_files(self, job_id_arg: str) -> list[str]:
@@ -927,8 +925,7 @@ async def test_run_code_sandbox_preserves_figure_artifacts(
             }
 
     monkeypatch.setattr("ai_almanac.settings.settings.enable_run_code_sandbox", True)
-    monkeypatch.setattr("ai_almanac.settings.settings.modal_token_id", "token-id")
-    monkeypatch.setattr("ai_almanac.settings.settings.modal_token_secret", "token-secret")
+    monkeypatch.setattr("ai_almanac.settings.settings.job_runner", "modal")
     monkeypatch.setattr("modal.Function.from_name", lambda *args: FakeModalFunction())
 
     async def fake_create_chat_figure_artifact(
@@ -1035,8 +1032,6 @@ async def test_a_ruleset_model_pin_does_not_override_a_users_own_credentials(
 
 
 async def _archive_ruleset(ruleset_id: str) -> None:
-    from ai_almanac.server.db import get_db
-
     async with get_db() as conn:
         await conn.execute(
             text("UPDATE assistant_rulesets SET archived = TRUE WHERE id = :id"),
@@ -1056,7 +1051,7 @@ async def _seed_exposed_rulesets() -> None:
 @pytest.mark.asyncio
 async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1066,7 +1061,7 @@ async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
     from ai_almanac.server.services.chat_turns import resume_deferred_setup_tool
 
     await _seed_exposed_rulesets()
-    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    created = await _create_session(client, as_new_user, ruleset_id="unconstrained")
 
     seen_rulesets: list[object] = []
 
@@ -1097,9 +1092,8 @@ async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
 @pytest.mark.asyncio
 async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
-    _test_engine: AsyncEngine,
 ) -> None:
     """The id the UI rates is the transcript's, so the turn log must use it too.
 
@@ -1110,11 +1104,11 @@ async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
         "ai_almanac.server.services.llm._build_model",
         lambda: TestModel(call_tools=[], custom_output_text="Rated answer."),
     )
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     session_id = created["id"]
 
     response = await client.post(
-        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+        f"/chat/sessions/{session_id}/message", headers=as_new_user, json={"content": "hi"}
     )
     assert response.status_code == 200
     done = _sse_events(response.text)[-1]
@@ -1123,12 +1117,12 @@ async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
 
     rating = await client.post(
         f"/chat/sessions/{session_id}/turns/{turn_id}/rating",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"value": 1},
     )
     assert rating.status_code == 204, rating.text
 
-    async with _test_engine.begin() as conn:
+    async with get_db() as conn:
         row = (
             (
                 await conn.execute(
@@ -1147,31 +1141,31 @@ async def test_a_streamed_turn_can_be_rated_by_its_transcript_id(
 
 @pytest.mark.asyncio
 async def test_a_session_carries_its_chosen_ruleset(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await _seed_exposed_rulesets()
 
-    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    created = await _create_session(client, as_new_user, ruleset_id="unconstrained")
     session_id = created["id"]
     assert created["ruleset_id"] == "unconstrained"
 
-    detail = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert detail.json()["ruleset_id"] == "unconstrained"
 
     # A rename does not disturb the ruleset choice.
     renamed = await client.patch(
-        f"/chat/sessions/{session_id}", headers=auth_headers, json={"title": "Renamed"}
+        f"/chat/sessions/{session_id}", headers=as_new_user, json={"title": "Renamed"}
     )
     assert renamed.json()["title"] == "Renamed"
     assert renamed.json()["ruleset_id"] == "unconstrained"
 
     # Switching and clearing are both PATCHes on the same field.
     switched = await client.patch(
-        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": "builtin"}
+        f"/chat/sessions/{session_id}", headers=as_new_user, json={"ruleset_id": "builtin"}
     )
     assert switched.json()["ruleset_id"] == "builtin"
     cleared = await client.patch(
-        f"/chat/sessions/{session_id}", headers=auth_headers, json={"ruleset_id": None}
+        f"/chat/sessions/{session_id}", headers=as_new_user, json={"ruleset_id": None}
     )
     assert cleared.json()["ruleset_id"] is None
     assert cleared.json()["title"] == "Renamed"
@@ -1179,21 +1173,21 @@ async def test_a_session_carries_its_chosen_ruleset(
 
 @pytest.mark.asyncio
 async def test_an_unavailable_ruleset_cannot_be_selected(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await _seed_exposed_rulesets()
 
     unknown = await client.post(
         "/chat/sessions",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"title": "S", "scope": _scope(), "ruleset_id": "no-such-ruleset"},
     )
     assert unknown.status_code == 400
 
-    created = await _create_session(client, auth_headers)
+    created = await _create_session(client, as_new_user)
     patched = await client.patch(
         f"/chat/sessions/{created['id']}",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"ruleset_id": "no-such-ruleset"},
     )
     assert patched.status_code == 400
@@ -1202,7 +1196,7 @@ async def test_an_unavailable_ruleset_cannot_be_selected(
     try:
         archived = await client.patch(
             f"/chat/sessions/{created['id']}",
-            headers=auth_headers,
+            headers=as_new_user,
             json={"ruleset_id": "unconstrained"},
         )
         assert archived.status_code == 400
@@ -1213,12 +1207,12 @@ async def test_an_unavailable_ruleset_cannot_be_selected(
 @pytest.mark.asyncio
 async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _seed_exposed_rulesets()
 
-    created = await _create_session(client, auth_headers, ruleset_id="unconstrained")
+    created = await _create_session(client, as_new_user, ruleset_id="unconstrained")
     session_id = created["id"]
 
     seen_rulesets: list[object] = []
@@ -1248,7 +1242,7 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
     )
 
     response = await client.post(
-        f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+        f"/chat/sessions/{session_id}/message", headers=as_new_user, json={"content": "hi"}
     )
     assert response.status_code == 200
     assert response.text  # drain the stream
@@ -1258,7 +1252,7 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
     await _archive_ruleset("unconstrained")
     try:
         response = await client.post(
-            f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": "hi"}
+            f"/chat/sessions/{session_id}/message", headers=as_new_user, json={"content": "hi"}
         )
         assert response.status_code == 200
         assert response.text
@@ -1270,15 +1264,15 @@ async def test_a_sessions_ruleset_governs_its_turns_until_it_disappears(
 
 @pytest.mark.asyncio
 async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
-    session_id = (await _create_session(client, auth_headers))["id"]
+    session_id = (await _create_session(client, as_new_user))["id"]
     url = f"/chat/sessions/{session_id}/benchmark/config"
 
-    await client.patch(url, headers=auth_headers, json={"region_id": "india"})
-    kept = await client.patch(url, headers=auth_headers, json={"intent": "Monsoon onset"})
+    await client.patch(url, headers=as_new_user, json={"region_id": "india"})
+    kept = await client.patch(url, headers=as_new_user, json={"intent": "Monsoon onset"})
     assert kept.json()["benchmark_config"]["region_id"] == "india"
-    cleared = await client.patch(url, headers=auth_headers, json={"region_id": None})
+    cleared = await client.patch(url, headers=as_new_user, json={"region_id": None})
     assert cleared.json()["benchmark_config"]["region_id"] is None
 
 

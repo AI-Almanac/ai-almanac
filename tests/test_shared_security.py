@@ -13,7 +13,7 @@ from ai_almanac.settings import settings
 @pytest.mark.asyncio
 async def test_llm_profile_key_is_encrypted_and_not_returned(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -23,7 +23,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
     )
     provider = await client.post(
         "/llm/providers",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "provider_type": "openai-compatible",
             "display_name": "Approved endpoint",
@@ -33,7 +33,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
     assert provider.status_code == 201
     profile = await client.post(
         "/llm/profiles",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "provider_id": provider.json()["id"],
             "model_name": "test-model",

@@ -240,13 +240,13 @@ def _write_output(job_id: str, filename: str, body: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_parsed_scores(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_returns_parsed_scores(client, user_id: str, as_new_user) -> None:
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id)
     _write_output(job_id, "overall_skill_scores_fuxi_1-15.csv", _OVERALL_CSV)
     _write_output(job_id, "binned_skill_scores_fuxi_1-15.csv", _BINNED_CSV)
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 200
     body = resp.json()
     assert body["job_id"] == job_id
@@ -260,22 +260,22 @@ async def test_endpoint_returns_parsed_scores(client, user_id: str, auth_headers
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_empty_not_404(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_returns_empty_not_404(client, user_id: str, as_new_user) -> None:
     """A deterministic job has no skill CSVs; that is empty, not an error."""
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id)
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 200
     assert resp.json()["windows"] == []
 
 
 @pytest.mark.asyncio
-async def test_endpoint_rejects_incomplete(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_rejects_incomplete(client, user_id: str, as_new_user) -> None:
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id, status="running")
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 409
 
 

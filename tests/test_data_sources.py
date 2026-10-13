@@ -85,7 +85,7 @@ def test_year_detection_keeps_the_first_year_in_each_filename() -> None:
 @pytest.mark.asyncio
 async def test_local_sources_drive_benchmark_selection_and_submission(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Path(__file__).parents[1] / "testdata" / "ethiopia"
@@ -148,7 +148,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert model["metadata"]["init_time_coordinate"] == "time"
     assert model["metadata"]["init_time_sample_count"] == 26
 
-    datasets_response = await client.get("/datasets", headers=auth_headers)
+    datasets_response = await client.get("/datasets", headers=as_new_user)
     assert datasets_response.status_code == 200
     listed_obs = {dataset["id"]: dataset for dataset in datasets_response.json()}
     assert listed_obs[obs["id"]]["grid_step_deg"] == 0.25
@@ -167,7 +167,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     job_response = await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "dataset_id": obs["id"],
             "model_name": model["id"],

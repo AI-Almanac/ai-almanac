@@ -235,7 +235,7 @@ async def test_a_logging_failure_never_breaks_the_turn(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_rating_a_turn_records_the_score(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], user_id: str
+    client: httpx.AsyncClient, as_new_user: dict[str, str], user_id: str
 ) -> None:
     from ai_almanac.server.db import get_db
 
@@ -245,7 +245,7 @@ async def test_rating_a_turn_records_the_score(
 
     res = await client.post(
         "/chat/sessions/sess-rate/turns/turn-rate/rating",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"value": 1, "note": "clear and cautious"},
     )
     assert res.status_code == 204, res.text
@@ -269,7 +269,7 @@ async def test_rating_a_turn_records_the_score(
 
 @pytest.mark.asyncio
 async def test_rating_someone_elses_turn_is_a_404(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """The update is scoped by user_id, so another user's turn simply isn't
     found rather than being silently rated."""
@@ -281,7 +281,7 @@ async def test_rating_someone_elses_turn_is_a_404(
 
     res = await client.post(
         "/chat/sessions/sess-other/turns/turn-other/rating",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"value": -1},
     )
     assert res.status_code == 404
@@ -289,10 +289,10 @@ async def test_rating_someone_elses_turn_is_a_404(
 
 @pytest.mark.asyncio
 async def test_an_out_of_range_rating_is_rejected(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     res = await client.post(
-        "/chat/sessions/s/turns/t/rating", headers=auth_headers, json={"value": 5}
+        "/chat/sessions/s/turns/t/rating", headers=as_new_user, json={"value": 5}
     )
     assert res.status_code == 422
 
@@ -431,7 +431,7 @@ async def test_guardrails_survive_onto_the_persisted_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_the_log_is_written_by_the_time_the_turn_stream_ends(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No caller should have to wait for garbage collection to read a turn's log.
 
@@ -452,7 +452,7 @@ async def test_the_log_is_written_by_the_time_the_turn_stream_ends(
     )
     created = await client.post(
         "/chat/sessions",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"scope": {"kind": "blend_setup", "key": "k", "job_ids": []}},
     )
     session_id = created.json()["id"]

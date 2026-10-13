@@ -16,11 +16,11 @@ from ai_almanac.server.services import rulesets
 
 @pytest.mark.asyncio
 async def test_listing_reports_the_packaged_rulesets_and_which_is_active(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
-    res = await client.get("/assistant/rulesets", headers=auth_headers)
+    res = await client.get("/assistant/rulesets", headers=as_new_user)
 
     assert res.status_code == 200, res.text
     by_id = {item["id"]: item for item in res.json()}
@@ -31,13 +31,13 @@ async def test_listing_reports_the_packaged_rulesets_and_which_is_active(
 
 @pytest.mark.asyncio
 async def test_preview_renders_the_exact_prompt_the_chat_path_would_use(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
     res = await client.post(
         "/assistant/rulesets/builtin/preview",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"scope_kind": "blend_setup"},
     )
 
@@ -52,11 +52,11 @@ async def test_preview_renders_the_exact_prompt_the_chat_path_would_use(
 
 @pytest.mark.asyncio
 async def test_preview_rejects_an_unknown_scope_kind(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     res = await client.post(
         "/assistant/rulesets/builtin/preview",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"scope_kind": "not_a_scope"},
     )
     assert res.status_code == 400
@@ -64,7 +64,7 @@ async def test_preview_rejects_an_unknown_scope_kind(
 
 @pytest.mark.asyncio
 async def test_clone_then_activate_changes_what_chat_resolves(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """The whole point of Phase 2: change the wording and have it take effect
     without a restart."""
@@ -72,7 +72,7 @@ async def test_clone_then_activate_changes_what_chat_resolves(
 
     clone = await client.post(
         "/assistant/rulesets/builtin/clone",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"id": "builtin-terse", "name": "Built-in, terser", "prompt_sections": []},
     )
     assert clone.status_code == 200, clone.text
@@ -88,7 +88,7 @@ async def test_clone_then_activate_changes_what_chat_resolves(
     ]
     save = await client.put(
         "/assistant/rulesets/builtin-terse",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "id": "builtin-terse",
             "name": "Built-in, terser",
@@ -98,7 +98,7 @@ async def test_clone_then_activate_changes_what_chat_resolves(
     )
     assert save.status_code == 200, save.text
 
-    activate = await client.post("/assistant/rulesets/builtin-terse/activate", headers=auth_headers)
+    activate = await client.post("/assistant/rulesets/builtin-terse/activate", headers=as_new_user)
     assert activate.status_code == 200, activate.text
 
     active = await rulesets.active_ruleset()
@@ -112,7 +112,7 @@ async def test_clone_then_activate_changes_what_chat_resolves(
 
 @pytest.mark.asyncio
 async def test_the_comparison_control_cannot_be_made_active(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """The unconstrained arm exists to be compared against, never deployed:
     activating it would strip every user's assistant of its caveats in one
@@ -120,12 +120,12 @@ async def test_the_comparison_control_cannot_be_made_active(
     await rulesets.seed_packaged_rulesets()
     before = await rulesets.active_ruleset()
 
-    response = await client.post("/assistant/rulesets/unconstrained/activate", headers=auth_headers)
+    response = await client.post("/assistant/rulesets/unconstrained/activate", headers=as_new_user)
 
     assert response.status_code == 409, response.text
     # The refusal rolled back cleanly: the previous ruleset is still active.
     assert (await rulesets.active_ruleset()).id == before.id
-    listing = await client.get("/assistant/rulesets", headers=auth_headers)
+    listing = await client.get("/assistant/rulesets", headers=as_new_user)
     summaries = {entry["id"]: entry for entry in listing.json()}
     assert summaries["unconstrained"]["activatable"] is False
     assert summaries["builtin"]["activatable"] is True
@@ -133,12 +133,12 @@ async def test_the_comparison_control_cannot_be_made_active(
 
 @pytest.mark.asyncio
 async def test_cloning_onto_an_existing_id_conflicts(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
     res = await client.post(
         "/assistant/rulesets/builtin/clone",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"id": "unconstrained", "name": "Clash", "prompt_sections": []},
     )
     assert res.status_code == 409
@@ -146,7 +146,7 @@ async def test_cloning_onto_an_existing_id_conflicts(
 
 @pytest.mark.asyncio
 async def test_cloning_reclaims_a_deleted_ruleset_id(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """Delete is an archive that keeps the row, so without reclaiming, a
     deleted id would block that name forever (issue #122). The new clone's
@@ -156,7 +156,7 @@ async def test_cloning_reclaims_a_deleted_ruleset_id(
 
     first = await client.post(
         "/assistant/rulesets/builtin/clone",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"id": "test", "name": "Test", "prompt_sections": []},
     )
     assert first.status_code == 200, first.text
@@ -164,7 +164,7 @@ async def test_cloning_reclaims_a_deleted_ruleset_id(
 
     again = await client.post(
         "/assistant/rulesets/unconstrained/clone",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"id": "test", "name": "Test", "prompt_sections": []},
     )
     assert again.status_code == 200, again.text
@@ -178,14 +178,14 @@ async def test_cloning_reclaims_a_deleted_ruleset_id(
 
 @pytest.mark.asyncio
 async def test_saving_cannot_disable_a_required_section(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """The failure mode the old wholesale prompt override had: an edit that
     silently drops the statistical cautions."""
     await rulesets.seed_packaged_rulesets()
     res = await client.put(
         "/assistant/rulesets/builtin-copy",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "id": "builtin-copy",
             "name": "Copy",
@@ -199,40 +199,38 @@ async def test_saving_cannot_disable_a_required_section(
 
 @pytest.mark.asyncio
 async def test_guardrail_thresholds_are_reported_read_only(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """Shown so an admin can see what the {{placeholders}} resolve to. There is
     no PUT: changing them is a platform setting, because the chokepoint reads the
     same value."""
-    res = await client.get("/config/guardrails", headers=auth_headers)
+    res = await client.get("/config/guardrails", headers=as_new_user)
     assert res.status_code == 200, res.text
     assert res.json()["min_training_years"] >= 1
 
-    assert (
-        await client.put("/config/guardrails", headers=auth_headers, json={})
-    ).status_code == 405
+    assert (await client.put("/config/guardrails", headers=as_new_user, json={})).status_code == 405
 
 
 @pytest.mark.asyncio
 async def test_an_unknown_ruleset_is_a_404(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
-    res = await client.get("/assistant/rulesets/no-such-thing", headers=auth_headers)
+    res = await client.get("/assistant/rulesets/no-such-thing", headers=as_new_user)
     assert res.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """Seeding rewrites packaged rows on every startup, so accepting this save
     would look successful and then revert on the next restart."""
     await rulesets.seed_packaged_rulesets()
-    detail = (await client.get("/assistant/rulesets/builtin", headers=auth_headers)).json()
+    detail = (await client.get("/assistant/rulesets/builtin", headers=as_new_user)).json()
 
     res = await client.put(
         "/assistant/rulesets/builtin",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "id": "builtin",
             "name": detail["name"],
@@ -301,14 +299,14 @@ async def test_endpoints_reject_an_unidentified_caller_in_shared(
 
 @pytest.mark.asyncio
 async def test_the_exposure_flag_gates_what_users_see(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
     await rulesets.set_comparison_enabled("builtin", False)
     await rulesets.set_comparison_enabled("unconstrained", False)
 
     async def option_ids() -> set[str]:
-        res = await client.get("/assistant/ruleset-options", headers=auth_headers)
+        res = await client.get("/assistant/ruleset-options", headers=as_new_user)
         return {item["id"] for item in res.json()["rulesets"]}
 
     # The active built-in is always listed; everything else needs the flag.
@@ -316,7 +314,7 @@ async def test_the_exposure_flag_gates_what_users_see(
 
     enabled = await client.post(
         "/assistant/rulesets/unconstrained/comparison-enabled",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"enabled": True},
     )
     assert enabled.status_code == 200, enabled.text
@@ -324,14 +322,14 @@ async def test_the_exposure_flag_gates_what_users_see(
     assert await option_ids() == {"builtin", "unconstrained"}
 
     # The admin listing shows the flag; the user listing never shows hidden rows.
-    listed = await client.get("/assistant/rulesets", headers=auth_headers)
+    listed = await client.get("/assistant/rulesets", headers=as_new_user)
     flags = {item["id"]: item["comparison_enabled"] for item in listed.json()}
     assert flags["unconstrained"] is True
     assert flags["builtin"] is False
 
     disabled = await client.post(
         "/assistant/rulesets/unconstrained/comparison-enabled",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"enabled": False},
     )
     assert disabled.status_code == 200
@@ -339,7 +337,7 @@ async def test_the_exposure_flag_gates_what_users_see(
 
     missing = await client.post(
         "/assistant/rulesets/no-such/comparison-enabled",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"enabled": True},
     )
     assert missing.status_code == 404
@@ -347,7 +345,7 @@ async def test_the_exposure_flag_gates_what_users_see(
 
 @pytest.mark.asyncio
 async def test_admin_preview_is_visible_to_admins_only(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from ai_almanac.settings import settings
 
@@ -356,20 +354,20 @@ async def test_admin_preview_is_visible_to_admins_only(
 
     enabled = await client.post(
         "/assistant/rulesets/unconstrained/admin-enabled",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"enabled": True},
     )
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["admin_enabled"] is True
 
     missing = await client.post(
-        "/assistant/rulesets/no-such/admin-enabled", headers=auth_headers, json={"enabled": True}
+        "/assistant/rulesets/no-such/admin-enabled", headers=as_new_user, json={"enabled": True}
     )
     assert missing.status_code == 404
 
     # The admin's picker includes the preview, badged, and it counts toward
     # comparison availability for the admin.
-    res = (await client.get("/assistant/ruleset-options", headers=auth_headers)).json()
+    res = (await client.get("/assistant/ruleset-options", headers=as_new_user)).json()
     options = {item["id"]: item for item in res["rulesets"]}
     assert options["unconstrained"]["admin_only"] is True
     assert options["builtin"]["admin_only"] is False
@@ -411,12 +409,12 @@ async def test_admin_preview_selectability_and_archive_clears_it(
 
 @pytest.mark.asyncio
 async def test_deleting_a_ruleset_archives_it_and_its_provenance_survives(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
     saved = await client.put(
         "/assistant/rulesets/doomed",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "id": "doomed",
             "name": "Doomed",
@@ -425,30 +423,30 @@ async def test_deleting_a_ruleset_archives_it_and_its_provenance_survives(
     )
     assert saved.status_code == 200, saved.text
 
-    deleted = await client.delete("/assistant/rulesets/doomed", headers=auth_headers)
+    deleted = await client.delete("/assistant/rulesets/doomed", headers=as_new_user)
     assert deleted.status_code == 204
 
-    listed = await client.get("/assistant/rulesets", headers=auth_headers)
+    listed = await client.get("/assistant/rulesets", headers=as_new_user)
     assert "doomed" not in {item["id"] for item in listed.json()}
     # The row survives for turn-log provenance; only the listings lose it.
     assert (await rulesets.get_ruleset("doomed")) is not None
 
-    again = await client.delete("/assistant/rulesets/doomed", headers=auth_headers)
+    again = await client.delete("/assistant/rulesets/doomed", headers=as_new_user)
     assert again.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_packaged_and_active_rulesets_cannot_be_deleted(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
 
-    packaged = await client.delete("/assistant/rulesets/unconstrained", headers=auth_headers)
+    packaged = await client.delete("/assistant/rulesets/unconstrained", headers=as_new_user)
     assert packaged.status_code == 409
 
     saved = await client.put(
         "/assistant/rulesets/active-custom",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "id": "active-custom",
             "name": "Active custom",
@@ -456,9 +454,9 @@ async def test_packaged_and_active_rulesets_cannot_be_deleted(
         },
     )
     assert saved.status_code == 200, saved.text
-    await client.post("/assistant/rulesets/active-custom/activate", headers=auth_headers)
+    await client.post("/assistant/rulesets/active-custom/activate", headers=as_new_user)
     try:
-        active = await client.delete("/assistant/rulesets/active-custom", headers=auth_headers)
+        active = await client.delete("/assistant/rulesets/active-custom", headers=as_new_user)
         assert active.status_code == 409
     finally:
-        await client.post("/assistant/rulesets/builtin/activate", headers=auth_headers)
+        await client.post("/assistant/rulesets/builtin/activate", headers=as_new_user)

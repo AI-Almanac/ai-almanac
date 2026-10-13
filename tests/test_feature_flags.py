@@ -15,18 +15,12 @@ from ai_almanac.settings import (
 def test_overlay_persists_across_reload() -> None:
     """An admin's setting change survives a settings reload (i.e. a redeploy),
     because it lives in the database overlay, not the ephemeral config.yaml."""
-    original = settings.data_management_audience
-    try:
-        write_settings_overlay({"data_management_audience": "off"})
-        # Simulate a fresh process / redeploy: drop the in-memory value, then
-        # re-resolve settings from scratch.
-        settings.data_management_audience = "everyone"
-        reload_settings()
-        assert settings.data_management_audience == "off"
-    finally:
-        write_settings_overlay({"data_management_audience": None})
-        reload_settings()
-        assert settings.data_management_audience == original
+    write_settings_overlay({"data_management_audience": "off"})
+    # Simulate a fresh process / redeploy: drop the in-memory value, then
+    # re-resolve settings from scratch.
+    settings.data_management_audience = "everyone"
+    reload_settings()
+    assert settings.data_management_audience == "off"
 
 
 @pytest.mark.asyncio

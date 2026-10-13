@@ -10,8 +10,8 @@ from uuid import uuid4
 import httpx
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
 
+from ai_almanac.server.db import get_db
 from ai_almanac.server.services.chat_job_events import job_activity, platform_note
 
 START = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
@@ -81,8 +81,8 @@ def test_the_reported_states_are_the_job_runner_terminal_states() -> None:
 # --- through the API -----------------------------------------------------
 
 
-async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str, status: str) -> None:
-    async with engine.begin() as conn:
+async def _insert_job(user_id: str, job_id: str, status: str) -> None:
+    async with get_db() as conn:
         await conn.execute(
             text(
                 "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at) "
@@ -98,8 +98,8 @@ async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str, status: st
         )
 
 
-async def _finish_job(engine: AsyncEngine, job_id: str, status: str) -> None:
-    async with engine.begin() as conn:
+async def _finish_job(job_id: str, status: str) -> None:
+    async with get_db() as conn:
         await conn.execute(
             text("UPDATE jobs SET status = :status, completed_at = :now WHERE id = :id"),
             {"id": job_id, "status": status, "now": datetime.now(UTC)},
@@ -115,22 +115,21 @@ async def _session(client: httpx.AsyncClient, headers: dict[str, str], scope: di
 @pytest.mark.asyncio
 async def test_the_chat_learns_when_a_run_in_its_scope_fails(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
-    _test_engine: AsyncEngine,
 ) -> None:
     job_id = f"job-{uuid4()}"
-    await _insert_job(_test_engine, user_id, job_id, "running")
-    session_id = await _session(client, auth_headers, RUN_GROUP)
+    await _insert_job(user_id, job_id, "running")
+    session_id = await _session(client, as_new_user, RUN_GROUP)
 
     running = (
-        await client.get(f"/chat/sessions/{session_id}/job-events", headers=auth_headers)
+        await client.get(f"/chat/sessions/{session_id}/job-events", headers=as_new_user)
     ).json()
     assert running == {"events": [], "active": 1}
 
-    await _finish_job(_test_engine, job_id, "failed")
+    await _finish_job(job_id, "failed")
     finished = (
-        await client.get(f"/chat/sessions/{session_id}/job-events", headers=auth_headers)
+        await client.get(f"/chat/sessions/{session_id}/job-events", headers=as_new_user)
     ).json()
     assert [(e["job_id"], e["status"]) for e in finished["events"]] == [(job_id, "failed")]
     assert finished["active"] == 0
@@ -139,33 +138,31 @@ async def test_the_chat_learns_when_a_run_in_its_scope_fails(
 @pytest.mark.asyncio
 async def test_a_setup_chat_does_not_report_every_run_the_user_owns(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
-    _test_engine: AsyncEngine,
 ) -> None:
     """A setup scope names no jobs, which the job queries read as "all of them"."""
     session_id = await _session(
-        client, auth_headers, {"kind": "benchmark_setup", "key": "setup-1", "job_ids": []}
+        client, as_new_user, {"kind": "benchmark_setup", "key": "setup-1", "job_ids": []}
     )
     job_id = f"job-{uuid4()}"
-    await _insert_job(_test_engine, user_id, job_id, "running")
-    await _finish_job(_test_engine, job_id, "failed")
+    await _insert_job(user_id, job_id, "running")
+    await _finish_job(job_id, "failed")
 
-    response = await client.get(f"/chat/sessions/{session_id}/job-events", headers=auth_headers)
+    response = await client.get(f"/chat/sessions/{session_id}/job-events", headers=as_new_user)
     assert response.json() == {"events": [], "active": 0}
 
 
 @pytest.mark.asyncio
 async def test_the_next_turn_tells_the_assistant_what_finished_since_the_last_one(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
-    _test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_id = f"job-{uuid4()}"
-    await _insert_job(_test_engine, user_id, job_id, "running")
-    session_id = await _session(client, auth_headers, RUN_GROUP)
+    await _insert_job(user_id, job_id, "running")
+    session_id = await _session(client, as_new_user, RUN_GROUP)
     notes: list[str | None] = []
 
     async def fake_stream_response(*_args, platform_note=None, **_kwargs) -> AsyncIterator[str]:
@@ -178,12 +175,12 @@ async def test_the_next_turn_tells_the_assistant_what_finished_since_the_last_on
 
     async def send(content: str) -> None:
         response = await client.post(
-            f"/chat/sessions/{session_id}/message", headers=auth_headers, json={"content": content}
+            f"/chat/sessions/{session_id}/message", headers=as_new_user, json={"content": content}
         )
         assert response.status_code == 200
 
     await send("Start watching FuXi")
-    await _finish_job(_test_engine, job_id, "failed")
+    await _finish_job(job_id, "failed")
     await send("Anything new?")
     await send("And now?")
 

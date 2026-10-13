@@ -189,7 +189,7 @@ async def test_blend_config_carries_each_models_registered_dims_and_units(
 
 @pytest.mark.asyncio
 async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
-    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
     obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", years=(2000, 2024))
     model_id = await _seed_source(
@@ -202,7 +202,7 @@ async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
 
     response = await client.post(
         "/blends",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "name": "renamed",
             "obs_dataset_id": obs_id,
@@ -217,7 +217,7 @@ async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
 
 @pytest.mark.asyncio
 async def test_post_blends_rejects_thin_climatology_coverage(
-    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
     """The API must apply the same coverage rule as the UI and the chat path:
     the onset climatology needs MIN_ONSET_YEARS of observations before the
@@ -227,7 +227,7 @@ async def test_post_blends_rejects_thin_climatology_coverage(
 
     response = await client.post(
         "/blends",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "name": "too early",
             "obs_dataset_id": obs_id,
@@ -258,7 +258,7 @@ def test_grid_mismatch_skips_sources_without_a_recorded_grid() -> None:
 
 @pytest.mark.asyncio
 async def test_post_blends_rejects_models_on_another_grid(
-    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
     obs_id = await _seed_source(
         "obs", "IMD 0.25", "gs://data/obs/imd", years=(1990, 2024), grid_step=0.25
@@ -269,7 +269,7 @@ async def test_post_blends_rejects_models_on_another_grid(
 
     response = await client.post(
         "/blends",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "name": "mismatched",
             "obs_dataset_id": obs_id,
@@ -284,14 +284,14 @@ async def test_post_blends_rejects_models_on_another_grid(
 
 @pytest.mark.asyncio
 async def test_post_jobs_rejects_a_model_on_another_grid(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     obs_id = await _seed_source("obs", "IMD 0.25", "gs://data/obs/imd", grid_step=0.25)
     model_id = await _seed_source("model", "GraphCast", "gs://data/models/gc", grid_step=2.0)
 
     response = await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"dataset_id": obs_id, "model_name": model_id, "params": {"region": "india"}},
     )
 
@@ -301,14 +301,14 @@ async def test_post_jobs_rejects_a_model_on_another_grid(
 
 @pytest.mark.asyncio
 async def test_post_blends_accepts_sufficient_coverage(
-    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
     obs_id = await _seed_source("obs", "ERA5 deep", "gs://data/obs/deep", years=(2010, 2024))
     model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
 
     response = await client.post(
         "/blends",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "name": "late enough",
             "obs_dataset_id": obs_id,
@@ -620,7 +620,7 @@ async def _link_forecast_model(source_id: str, forecast_model_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_linking_member_data_after_training_makes_the_blend_forecastable(
-    client, user_id: str, auth_headers: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
     """Archive names say nothing about the live model; the link on each member's
     data source decides, so a blend trained before linking forecasts once linked."""
@@ -649,7 +649,7 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     await _link_forecast_model(aifs_id, "aifs2")
     await _link_forecast_model(graphcast_id, "graphcast_operational")
 
-    listed = (await client.get("/blends", headers=auth_headers)).json()
+    listed = (await client.get("/blends", headers=as_new_user)).json()
     linked = {"aifs_v2_india_0_25": "aifs2", "graphcast_india_0_25": "graphcast_operational"}
     assert next(b for b in listed if b["id"] == blend.id)["forecast_models"] == linked
 

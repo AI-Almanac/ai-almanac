@@ -98,12 +98,12 @@ async def _wait_for_status(job_id: str, status: str, timeout: float = 10.0) -> N
 @pytest.mark.asyncio
 async def test_cancel_job_persists_requested_state(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
 ) -> None:
     job_id = await _insert_job(user_id, "running")
 
-    response = await client.post(f"/jobs/{job_id}/cancel", headers=auth_headers)
+    response = await client.post(f"/jobs/{job_id}/cancel", headers=as_new_user)
 
     assert response.status_code == 200
     assert response.json()["status"] == "canceling"

@@ -99,7 +99,7 @@ async def test_region_bounds_are_parsed_at_api_boundary(
 @pytest.mark.asyncio
 async def test_user_region_bounds_are_applied_to_jobs(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     region = (
@@ -154,7 +154,7 @@ async def test_user_region_bounds_are_applied_to_jobs(
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     response = await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "dataset_id": obs["id"],
             "model_name": model["id"],
@@ -180,7 +180,7 @@ async def test_user_region_bounds_are_applied_to_jobs(
 @pytest.mark.asyncio
 async def test_broader_observations_can_support_a_custom_benchmark_region(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     region = (
@@ -235,7 +235,7 @@ async def test_broader_observations_can_support_a_custom_benchmark_region(
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     response = await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "dataset_id": obs["id"],
             "model_name": model["id"],

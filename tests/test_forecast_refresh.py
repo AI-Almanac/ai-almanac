@@ -5,7 +5,7 @@ import json
 import pytest
 import sqlalchemy as sa
 
-from ai_almanac.server.db import engine, get_or_create_user
+from ai_almanac.server.db import get_db, get_or_create_user
 from ai_almanac.server.services import job_submission
 from ai_almanac.server.tables import jobs
 
@@ -15,7 +15,7 @@ async def test_refresh_replays_original_params(monkeypatch):
     """An update must re-run with the ORIGINAL init source/window/time so it
     lands on the same trajectory set and reuses the cache — not fall back to
     submission defaults (gfs, full season)."""
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="refresh-user")
         uid = user["id"]
         config = {
@@ -67,7 +67,7 @@ async def test_refresh_replays_original_params(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refresh_unknown_forecast_404():
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="refresh-user-2")
     with pytest.raises(Exception) as exc:
         await job_submission.refresh_forecast_for_user("nope", user["id"])

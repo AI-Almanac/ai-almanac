@@ -61,24 +61,24 @@ async def _register_sources(
 
 
 async def _post_job(
-    client: httpx.AsyncClient, auth_headers: dict[str, str], sources: tuple[str, str], **job: object
+    client: httpx.AsyncClient, as_new_user: dict[str, str], sources: tuple[str, str], **job: object
 ) -> httpx.Response:
     obs_id, model_id = sources
     return await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"dataset_id": obs_id, "model_name": model_id, **job},
     )
 
 
 async def _submit(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     params: dict,
     model_metadata: dict | None = None,
 ) -> httpx.Response:
     sources = await _register_sources(client, model_metadata)
-    return await _post_job(client, auth_headers, sources, params=params)
+    return await _post_job(client, as_new_user, sources, params=params)
 
 
 async def _stored_settings(job_id: str) -> dict:
@@ -112,12 +112,12 @@ async def _stored_settings(job_id: str) -> dict:
 @pytest.mark.asyncio
 async def test_settings_that_could_escape_romps_config_are_rejected(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
     field: str,
     value: str,
 ) -> None:
-    response = await _submit(client, auth_headers, {"region": "ethiopia", field: value})
+    response = await _submit(client, as_new_user, {"region": "ethiopia", field: value})
 
     assert response.status_code == 422
     assert field in json.dumps(response.json()["detail"])
@@ -127,12 +127,12 @@ async def test_settings_that_could_escape_romps_config_are_rejected(
 @pytest.mark.asyncio
 async def test_unsafe_model_source_metadata_is_rejected_at_submission(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
 ) -> None:
     response = await _submit(
         client,
-        auth_headers,
+        as_new_user,
         {"region": "ethiopia"},
         model_metadata={"members": f"0), {CODE}, (1", "probabilistic": True},
     )
@@ -145,12 +145,12 @@ async def test_unsafe_model_source_metadata_is_rejected_at_submission(
 @pytest.mark.asyncio
 async def test_valid_settings_are_stored_in_canonical_form(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
 ) -> None:
     response = await _submit(
         client,
-        auth_headers,
+        as_new_user,
         {
             "region": "ethiopia",
             "event_type": "monsoon_onset",
@@ -196,14 +196,14 @@ def test_settings_already_stored_on_jobs_still_parse(stored: dict) -> None:
 @pytest.mark.asyncio
 async def test_chat_rerun_reports_invalid_override_without_creating_a_job(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     user_id: str,
     launched: list[str],
 ) -> None:
     from ai_almanac.server.services import benchmark_domain
     from ai_almanac.server.services.benchmark_state import BenchmarkScope
 
-    job_id = (await _submit(client, auth_headers, {"region": "ethiopia"})).json()["id"]
+    job_id = (await _submit(client, as_new_user, {"region": "ethiopia"})).json()["id"]
 
     result = await benchmark_domain._exec_rerun_job(
         {"job_id": job_id, "params_override": {"obs_var": f'RAINFALL"\n{CODE}'}},
@@ -239,7 +239,7 @@ def test_years_skipped_for_missing_data_survive_into_the_stored_settings() -> No
 @pytest.mark.asyncio
 async def test_shared_deployments_reject_host_paths_in_jobs(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
     monkeypatch: pytest.MonkeyPatch,
     job: dict,
@@ -249,7 +249,7 @@ async def test_shared_deployments_reject_host_paths_in_jobs(
 
     response = await _post_job(
         client,
-        auth_headers,
+        as_new_user,
         sources,
         **{**job, "params": {"region": "ethiopia", **job.get("params", {})}},
     )
@@ -262,7 +262,7 @@ async def test_shared_deployments_reject_host_paths_in_jobs(
 @pytest.mark.asyncio
 async def test_shared_deployments_accept_cloud_paths_in_jobs(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -271,7 +271,7 @@ async def test_shared_deployments_accept_cloud_paths_in_jobs(
 
     response = await _post_job(
         client,
-        auth_headers,
+        as_new_user,
         sources,
         params={"region": "ethiopia", "nc_mask": "gs://almanac-data-ai-almanac/masks/eth.nc"},
     )
@@ -283,12 +283,12 @@ async def test_shared_deployments_accept_cloud_paths_in_jobs(
 @pytest.mark.asyncio
 async def test_jobs_read_their_registered_observations_whatever_obs_dir_is_sent(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     launched: list[str],
 ) -> None:
     response = await _post_job(
         client,
-        auth_headers,
+        as_new_user,
         await _register_sources(client),
         obs_dir="gs://almanac-uploads-ai-almanac/another-users-job/",
         params={"region": "ethiopia"},

@@ -214,7 +214,7 @@ def _write_artifact(job_id: str, filename: str, body: str) -> None:
 
 @pytest.mark.asyncio
 async def test_blend_summary_serves_the_requested_csv(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = str(uuid.uuid4())
     await _insert_blend_job(user_id, job_id)
@@ -231,12 +231,12 @@ async def test_blend_summary_serves_the_requested_csv(
         _write_artifact(job_id, filename, body)
         await _index_artifact(job_id, "output", filename, len(body))
 
-    pooled = await client.get(f"/jobs/{job_id}/blend-summary", headers=auth_headers)
+    pooled = await client.get(f"/jobs/{job_id}/blend-summary", headers=as_new_user)
     yearly = await client.get(
-        f"/jobs/{job_id}/blend-summary", params={"table": "yearly"}, headers=auth_headers
+        f"/jobs/{job_id}/blend-summary", params={"table": "yearly"}, headers=as_new_user
     )
     unknown = await client.get(
-        f"/jobs/{job_id}/blend-summary", params={"table": "../secrets"}, headers=auth_headers
+        f"/jobs/{job_id}/blend-summary", params={"table": "../secrets"}, headers=as_new_user
     )
 
     assert pooled.json()["csv"] == _SUMMARY_CSV
@@ -298,24 +298,24 @@ _CELLS_CSV = (
 )
 
 
-async def _cell_metrics(client, auth_headers: dict[str, str], job_id: str, **params: str):
+async def _cell_metrics(client, as_new_user: dict[str, str], job_id: str, **params: str):
     return await client.get(
-        f"/jobs/{job_id}/blend-cell-metrics", params=params, headers=auth_headers
+        f"/jobs/{job_id}/blend-cell-metrics", params=params, headers=as_new_user
     )
 
 
 @pytest.mark.asyncio
 async def test_blend_cell_metrics_serves_the_requested_blend(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = str(uuid.uuid4())
     await _insert_blend_job(user_id, job_id)
     _write_artifact(job_id, "summary_models_fixed_cutoff.csv", _CELLS_CSV)
     await _index_artifact(job_id, "output", "summary_models_fixed_cutoff.csv", len(_CELLS_CSV))
 
-    default = (await _cell_metrics(client, auth_headers, job_id)).json()
-    forest = (await _cell_metrics(client, auth_headers, job_id, model="blended_forest")).json()
-    unknown = await _cell_metrics(client, auth_headers, job_id, model="aifs_raw")
+    default = (await _cell_metrics(client, as_new_user, job_id)).json()
+    forest = (await _cell_metrics(client, as_new_user, job_id, model="blended_forest")).json()
+    unknown = await _cell_metrics(client, as_new_user, job_id, model="aifs_raw")
 
     def rps(body: dict) -> float:
         grid = next(g for g in body["grids"] if g["metric"] == "ranked_probability_skill_score")
@@ -331,11 +331,11 @@ async def test_blend_cell_metrics_serves_the_requested_blend(
 
 @pytest.mark.asyncio
 async def test_blend_cell_metrics_without_a_summary_offers_no_blend(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = str(uuid.uuid4())
     await _insert_blend_job(user_id, job_id)
 
-    body = (await _cell_metrics(client, auth_headers, job_id, model="blended_forest")).json()
+    body = (await _cell_metrics(client, as_new_user, job_id, model="blended_forest")).json()
 
     assert body["grids"] == [] and body["available_models"] == []

@@ -88,26 +88,21 @@ def test_enum_fields_declare_their_choices() -> None:
 def test_legacy_feature_flag_maps_to_audience_off(
     legacy_flag: str, audience: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_config_yaml",
-            lambda: {legacy_flag: False},
-        )
-        monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
-        reload_settings()
-        assert getattr(settings, audience) == "off"
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_config_yaml",
+        lambda: {legacy_flag: False},
+    )
+    monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
+    reload_settings()
+    assert getattr(settings, audience) == "off"
 
-        # An explicit audience wins over the deprecated flag.
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay",
-            lambda: {audience: "everyone"},
-        )
-        reload_settings()
-        assert getattr(settings, audience) == "everyone"
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    # An explicit audience wins over the deprecated flag.
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay",
+        lambda: {audience: "everyone"},
+    )
+    reload_settings()
+    assert getattr(settings, audience) == "everyone"
 
 
 def test_db_overlay_beats_env_but_yaml_seed_does_not(
@@ -116,42 +111,32 @@ def test_db_overlay_beats_env_but_yaml_seed_does_not(
     """Issue #179: a prod deploy sets LLM_MODEL via env; an admin's saved
     change (the DB overlay) must still take effect, while config.yaml stays a
     seed below env."""
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setenv("LLM_MODEL", "env-model")
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_config_yaml", lambda: {"llm_model": "yaml-model"}
-        )
-        monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
-        reload_settings()
-        assert settings.llm_model == "env-model"
+    monkeypatch.setenv("LLM_MODEL", "env-model")
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_config_yaml", lambda: {"llm_model": "yaml-model"}
+    )
+    monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
+    reload_settings()
+    assert settings.llm_model == "env-model"
 
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay", lambda: {"llm_model": "admin-model"}
-        )
-        reload_settings()
-        assert settings.llm_model == "admin-model"
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay", lambda: {"llm_model": "admin-model"}
+    )
+    reload_settings()
+    assert settings.llm_model == "admin-model"
 
 
 def test_shared_env_only_fields_resist_the_db_overlay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setenv("DEPLOYMENT_MODE", "shared")
-        monkeypatch.setattr("ai_almanac.settings._load_config_yaml", dict)
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay",
-            lambda: {"admin_emails": "attacker@example.com"},
-        )
-        reload_settings()
-        assert settings.admin_emails == ""
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    monkeypatch.setenv("DEPLOYMENT_MODE", "shared")
+    monkeypatch.setattr("ai_almanac.settings._load_config_yaml", dict)
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay",
+        lambda: {"admin_emails": "attacker@example.com"},
+    )
+    reload_settings()
+    assert settings.admin_emails == ""
 
 
 def test_secret_overlay_value_is_sealed_at_rest(
