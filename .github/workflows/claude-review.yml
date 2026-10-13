@@ -36,14 +36,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MAX_TURNS: 50
+      # Strip credentials the agent's shell does not need (PR content can
+      # prompt-inject it); GH_TOKEN stays for gh.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     permissions:
       contents: read
       pull-requests: write
       issues: write
-    # Strip credentials the agent's shell does not need (PR content can
-    # prompt-inject it); GH_TOKEN stays for gh.
-    env:
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
