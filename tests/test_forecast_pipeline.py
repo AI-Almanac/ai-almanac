@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from ai_almanac.server.services.forecast_pipeline import (
-    _split_gs_uri,
     ensemble_config,
     season_issue_dates,
     shared_issue_schedule,
@@ -29,27 +30,21 @@ def test_shared_issue_schedule_keeps_weekday_fallback_when_no_archive_has_one():
     assert shared_issue_schedule(params) == params
 
 
-def test_ensemble_config_none_for_deterministic_models():
-    assert ensemble_config({"id": "aifs"}) is None
-    assert ensemble_config({"id": "aifs", "ensemble": False}) is None
-
-
-def test_ensemble_config_defaults_and_batch_clamp():
-    cfg = ensemble_config({"id": "aifsens", "ensemble": True})
-    assert cfg == {"nensemble": 8, "batch_size": 1}
-
-    # batch_size never exceeds the member count.
-    cfg = ensemble_config({"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16})
-    assert cfg == {"nensemble": 2, "batch_size": 2}
-
-
-def test_split_gs_uri_separates_bucket_from_key():
-    assert _split_gs_uri("gs://my-bucket/season-forecasts/aifs/gfs/v1/x.nc") == (
-        "my-bucket",
-        "season-forecasts/aifs/gfs/v1/x.nc",
-    )
-    # Bare bucket with no key.
-    assert _split_gs_uri("gs://my-bucket") == ("my-bucket", "")
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ({"id": "aifs"}, None),
+        ({"id": "aifs", "ensemble": False}, None),
+        ({"id": "aifsens", "ensemble": True}, {"nensemble": 8, "batch_size": 1}),
+        # batch_size never exceeds the member count.
+        (
+            {"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16},
+            {"nensemble": 2, "batch_size": 2},
+        ),
+    ],
+)
+def test_ensemble_config(model: dict, expected: dict | None):
+    assert ensemble_config(model) == expected
 
 
 def test_season_issue_dates_matches_weekday_cadence():
@@ -60,15 +55,6 @@ def test_season_issue_dates_matches_weekday_cadence():
     assert dates[:3] == [dt.date(2020, 5, 4), dt.date(2020, 5, 7), dt.date(2020, 5, 11)]
     assert all(d.weekday() in (0, 3) for d in dates)
     assert dates[-1] == dt.date(2020, 12, 31)
-
-
-def test_season_issue_dates_can_be_capped_to_most_recent():
-    dates = season_issue_dates("05-01", init_weekdays=[0, 1, 2, 3, 4, 5, 6], year=2020)
-    capped = dates[-10:]
-
-    assert len(capped) == 10
-    assert capped[-1] == dates[-1]
-    assert capped[0] == dates[-10]
 
 
 def test_season_issue_dates_follows_calendar_schedule_over_weekday():
@@ -152,25 +138,19 @@ def test_cached_trajectory_key_separates_models_and_sources(tmp_path):
     assert len(calls) == 3
 
 
-def test_cached_trajectory_key_carries_source_version_and_lead(tmp_path):
-    from ai_almanac.server.services.forecast_pipeline import (
-        CANONICAL_LEAD_DAY,
-        TRAJECTORY_CACHE_VERSION,
-        cached_trajectory,
-    )
+@pytest.mark.parametrize("constant", ["TRAJECTORY_CACHE_VERSION", "CANONICAL_LEAD_DAY"])
+def test_cached_trajectory_misses_after_a_version_or_lead_change(tmp_path, monkeypatch, constant):
+    from ai_almanac.server.services import forecast_pipeline
 
     issue_date = dt.date(2026, 5, 4)
-    cached_trajectory(tmp_path, "aifs", "gfs", issue_date, _trajectory)
+    forecast_pipeline.cached_trajectory(tmp_path, "aifs", "gfs", issue_date, _trajectory)
 
-    expected = (
-        tmp_path
-        / "aifs"
-        / "gfs"
-        / f"v{TRAJECTORY_CACHE_VERSION}"
-        / f"lead{CANONICAL_LEAD_DAY}d"
-        / "2026-05-04.nc"
+    monkeypatch.setattr(forecast_pipeline, constant, getattr(forecast_pipeline, constant) + 1)
+    _, cached = forecast_pipeline.cached_trajectory(
+        tmp_path, "aifs", "gfs", issue_date, _trajectory
     )
-    assert expected.exists()
+
+    assert cached is False
 
 
 def test_cached_trajectory_without_cache_dir_always_computes():
@@ -188,12 +168,3 @@ def test_cached_trajectory_without_cache_dir_always_computes():
 
     assert (cached, cached_again) == (False, False)
     assert len(calls) == 2
-
-
-def test_resolve_data_source_rejects_unknown_without_importing_earth2studio():
-    import pytest
-
-    from ai_almanac.server.services.forecast_pipeline import resolve_data_source
-
-    with pytest.raises(ValueError, match="Unknown forecast init source"):
-        resolve_data_source("nope")

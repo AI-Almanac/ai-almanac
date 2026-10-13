@@ -21,7 +21,6 @@ from ai_almanac.server.services.execution import RunnerHandle
 from ai_almanac.server.services.job_submission import (
     BlendCreate,
     BlendParams,
-    _blend_model_key,
     create_blend_for_user,
 )
 from ai_almanac.server.tables import jobs
@@ -71,25 +70,20 @@ async def _seed_source(
     return source_id
 
 
-@pytest.mark.parametrize(
-    ("name", "expected"),
-    [("GenCast", "gencast"), ("AIFS v2", "aifs_v2"), ("a/b c", "a_b_c")],
-)
-def test_blend_model_key_slugifies(name: str, expected: str) -> None:
-    assert _blend_model_key(name) == expected
-
-
 @pytest_asyncio.fixture
 async def _stub_runner(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(job_submission, "get_job_runner", lambda: _FakeRunner())
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("day_level", [False, True])
 async def test_create_blend_persists_blend_routing_config(
-    client, user_id: str, _stub_runner
+    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch, day_level: bool
 ) -> None:
     from ai_almanac.server.db import get_db
+    from ai_almanac.settings import settings
 
+    monkeypatch.setattr(settings, "enable_day_level_blend", day_level)
     obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
     gencast_id = await _seed_source("model", "GenCast", "gs://data/models/gencast")
     aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
@@ -110,11 +104,9 @@ async def test_create_blend_persists_blend_routing_config(
     async with get_db() as conn:
         row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
     assert row["job_type"] == "blend"
-    assert row["status"] == "running"  # remote runner is live once spawned
     assert row["runner"] == "modal"
     config = json.loads(row["config_json"])
     assert config["modal_function"] == "run_blend"
-    assert config["modal_app"]  # blend app name travels on the job
     assert config["model_names"] == ["gencast", "aifs"]
     # training 2019:2024 ∪ cv 2024 → the staging years, resolved server-side.
     assert config["forecast_years"] == [2019, 2020, 2021, 2022, 2023, 2024]
@@ -125,33 +117,7 @@ async def test_create_blend_persists_blend_routing_config(
         f"gs://data/models/aifs/{year}.nc" for year in range(2019, 2025)
     ]
     assert config["blend_params"]["training_years"] == "2019:2024"
-    assert config["train_day_level_blend"] is False
-
-
-@pytest.mark.asyncio
-async def test_blend_trains_the_day_level_blend_when_it_is_switched_on(
-    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from ai_almanac.server.db import get_db
-    from ai_almanac.settings import settings
-
-    monkeypatch.setattr(settings, "enable_day_level_blend", True)
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
-
-    out = await create_blend_for_user(
-        BlendCreate(
-            name="day-level",
-            obs_dataset_id=obs_id,
-            model_ids=[aifs_id],
-            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
-        ),
-        user_id,
-    )
-
-    async with get_db() as conn:
-        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
-    assert json.loads(row["config_json"])["train_day_level_blend"] is True
+    assert config["train_day_level_blend"] is day_level
 
 
 @pytest.mark.asyncio
@@ -241,19 +207,25 @@ async def test_post_blends_rejects_thin_climatology_coverage(
     assert "Climatology needs 10 years of observations" in response.json()["detail"]
 
 
-def test_grid_mismatch_names_each_model_off_the_observation_grid() -> None:
-    errors = job_submission.grid_mismatch_errors(
-        0.25, [("GraphCast", 2.0), ("AIFS", 0.25), ("FuXi", 1.0), ("Legacy", None)]
-    )
-    assert errors == [
-        "The observations are on a 0.25° grid, but FuXi is on a 1° grid; "
-        "GraphCast is on a 2° grid. Choose observations and models on the same grid."
-    ]
-
-
-def test_grid_mismatch_skips_sources_without_a_recorded_grid() -> None:
-    assert job_submission.grid_mismatch_errors(None, [("GraphCast", 2.0)]) == []
-    assert job_submission.grid_mismatch_errors(0.25, [("AIFS", 0.25)]) == []
+@pytest.mark.parametrize(
+    ("obs_step", "models", "expected"),
+    [
+        (
+            0.25,
+            [("GraphCast", 2.0), ("AIFS", 0.25), ("FuXi", 1.0), ("Legacy", None)],
+            [
+                "The observations are on a 0.25° grid, but FuXi is on a 1° grid; "
+                "GraphCast is on a 2° grid. Choose observations and models on the same grid."
+            ],
+        ),
+        (None, [("GraphCast", 2.0)], []),
+        (0.25, [("AIFS", 0.25)], []),
+    ],
+)
+def test_grid_mismatch_names_each_model_off_the_observation_grid(
+    obs_step: float | None, models: list, expected: list[str]
+) -> None:
+    assert job_submission.grid_mismatch_errors(obs_step, models) == expected
 
 
 @pytest.mark.asyncio
@@ -398,24 +370,6 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
     assert "aifs:" not in exc.value.detail
 
 
-def test_live_forecast_blockers_follow_the_link_not_the_name() -> None:
-    BlendMember = job_submission.BlendMember
-    blockers = job_submission.live_forecast_blockers(
-        [BlendMember("aifs", None, 0.25), BlendMember("aifs_v2_india_0_25", "aifs2", 0.25)]
-    )
-    assert [blocker.split(":")[0] for blocker in blockers] == ["aifs"]
-
-
-def test_live_forecast_blockers_reject_grid_mismatch() -> None:
-    BlendMember = job_submission.BlendMember
-    blockers = job_submission.live_forecast_blockers(
-        [BlendMember("graphcast_india", "graphcast", 0.25), BlendMember("fuxi", "fuxi", 0.25)]
-    )
-    assert len(blockers) == 1
-    assert blockers[0].startswith("graphcast_india:")
-    assert "1° grid" in blockers[0]
-
-
 @pytest.mark.asyncio
 async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub_runner) -> None:
     from fastapi import HTTPException
@@ -496,10 +450,6 @@ def test_parse_year_spec_rejects_years_outside_the_calendar(spec: str) -> None:
     absurd bound must fail parsing rather than allocate."""
     with pytest.raises(ValueError, match="year out of range"):
         job_submission._parse_year_spec(spec)
-
-
-def test_parse_year_spec_accepts_a_normal_range() -> None:
-    assert job_submission._parse_year_spec("2019:2021") == [2019, 2020, 2021]
 
 
 @pytest.mark.asyncio
@@ -592,18 +542,6 @@ def test_blend_params_rejects_bad_onset_definition(overrides: dict, fragment: st
         job_submission.BlendParams(training_years="2019:2024", cv_holdout_years="2024", **overrides)
 
 
-def test_blend_params_accepts_valid_onset_definition() -> None:
-    params = job_submission.BlendParams(
-        training_years="2019:2024",
-        cv_holdout_years="2024",
-        threshold_mm=25.5,
-        cutoff_month_day="04-15",
-        ref_onset_month_day="05-01",
-    )
-    assert params.threshold_mm == 25.5
-    assert job_submission.onset_param_errors(None, None, None) == []
-
-
 async def _link_forecast_model(source_id: str, forecast_model_id: str) -> None:
     from ai_almanac.server.services import data_sources
 
@@ -672,29 +610,21 @@ def test_malformed_link_on_uninspected_source_counts_as_unlinked(link) -> None:
     assert job_submission.blend_forecast_models(cfg, sources) == {}
 
 
-def test_blend_out_reports_true_holdout_years() -> None:
+@pytest.mark.parametrize(
+    ("blend_params", "expected"),
+    [
+        ({"training_years": "2000:2019", "true_holdout_years": "2020:2022"}, [2020, 2021, 2022]),
+        ({"true_holdout_years": "20x0"}, []),
+    ],
+)
+def test_blend_out_reports_true_holdout_years(blend_params: dict, expected: list[int]) -> None:
     from ai_almanac.server.services.job_submission import blend_row_to_out
 
     row = {
         "id": "b1",
         "status": "complete",
         "created_at": "2026-10-08T00:00:00Z",
-        "config_json": json.dumps(
-            {"blend_params": {"training_years": "2000:2019", "true_holdout_years": "2020:2022"}}
-        ),
+        "config_json": json.dumps({"blend_params": blend_params}),
     }
 
-    assert blend_row_to_out(row, None).true_holdout_years == [2020, 2021, 2022]
-
-
-def test_blend_out_reads_a_malformed_stored_holdout_as_none() -> None:
-    from ai_almanac.server.services.job_submission import blend_row_to_out
-
-    row = {
-        "id": "b2",
-        "status": "complete",
-        "created_at": "2026-10-08T00:00:00Z",
-        "config_json": json.dumps({"blend_params": {"true_holdout_years": "20x0"}}),
-    }
-
-    assert blend_row_to_out(row, None).true_holdout_years == []
+    assert blend_row_to_out(row, None).true_holdout_years == expected

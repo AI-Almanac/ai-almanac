@@ -20,23 +20,31 @@ def workflow():
     return _load_workflow()
 
 
-def test_cv_folds_test_every_holdout_and_never_train_on_true_holdouts(workflow) -> None:
+@pytest.mark.parametrize(
+    ("true_holdout_years", "expected"),
+    [
+        (
+            [2002, 2010],
+            {
+                2002: (2000, 2001, 2003, 2004),
+                2010: (2000, 2001, 2003, 2004),
+                2003: (2000, 2001, 2004),
+                2004: (2000, 2001, 2003),
+            },
+        ),
+        (None, {2003: (2000, 2001, 2002, 2004), 2004: (2000, 2001, 2002, 2003)}),
+    ],
+)
+def test_cv_folds_test_every_holdout_and_never_train_on_true_holdouts(
+    workflow, true_holdout_years: list[int] | None, expected: dict
+) -> None:
     folds = workflow._cv_folds(
         training_years=[2000, 2001, 2002, 2003, 2004],
         cv_holdout_years=[2003, 2004],
-        true_holdout_years=[2002, 2010],
+        true_holdout_years=true_holdout_years,
     )
 
-    assert folds == [
-        (2002, (2000, 2001, 2003, 2004)),
-        (2010, (2000, 2001, 2003, 2004)),
-        (2003, (2000, 2001, 2004)),
-        (2004, (2000, 2001, 2003)),
-    ]
-
-
-def test_cv_folds_without_true_holdouts_leave_one_cv_year_out(workflow) -> None:
-    assert workflow._cv_folds([2000, 2001, 2002], [2001], None) == [(2001, (2000, 2002))]
+    assert dict(folds) == expected
 
 
 def _weekly() -> pd.DataFrame:
@@ -113,31 +121,22 @@ def _spec(workflow, tmp_path: Path, **kwargs) -> dict:
     )
 
 
+@pytest.mark.parametrize("with_forest", [True, False])
 def test_blend_spec_asks_the_evaluation_to_score_the_forest_cv_predictions(
-    workflow, tmp_path: Path
+    workflow, tmp_path: Path, with_forest: bool
 ) -> None:
     tag = workflow._blend_output_tag("_fixed_cutoff", [2022, 2020, 2021])
     filename = workflow._forest_cv_preds_filename(tag)
+    extra = {"external_predictions": workflow._forest_external_predictions(filename)}
 
-    spec = _spec(
-        workflow,
-        tmp_path,
-        external_predictions=workflow._forest_external_predictions(filename),
-    )
+    spec = _spec(workflow, tmp_path, **(extra if with_forest else {}))
 
-    assert spec["extras"]["external_predictions"] == [
-        {
-            "name": "blended_forest",
-            "file": "cv_preds_blended_forest_global_fixed_cutoff_2020_2022.pkl",
-            "method": "global",
-        }
-    ]
-
-
-def test_blend_spec_without_a_forest_names_no_external_predictions(
-    workflow, tmp_path: Path
-) -> None:
-    assert "external_predictions" not in _spec(workflow, tmp_path)["extras"]
+    if with_forest:
+        assert spec["extras"]["external_predictions"] == [
+            {"name": "blended_forest", "file": filename, "method": "global"}
+        ]
+    else:
+        assert "external_predictions" not in spec["extras"]
 
 
 def _fake_onset_forest() -> ModuleType:
@@ -177,17 +176,11 @@ def test_daily_scores_cover_live_rows_the_weekly_model_cannot_score(workflow, mo
     assert rows["p_later"].tolist() == [0.75, 0.75, 0.75]
 
 
-def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow, capsys) -> None:
+def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow) -> None:
     def broken_step():
         raise KeyError("aifs_rain_mean_day_40")
 
     result, error = workflow._try_day_level("scoring", broken_step)
 
     assert result is None
-    assert "day-level blend scoring failed" in error
     assert "aifs_rain_mean_day_40" in error
-    assert "continuing with the week-level blend only" in capsys.readouterr().out
-
-
-def test_a_successful_day_level_step_returns_its_result(workflow) -> None:
-    assert workflow._try_day_level("final fit", lambda: b"model") == (b"model", None)

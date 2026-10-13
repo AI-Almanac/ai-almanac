@@ -4,6 +4,7 @@ import json
 
 import pytest
 import sqlalchemy as sa
+from fastapi import HTTPException
 
 from ai_almanac.server.db import get_db, get_or_create_user
 from ai_almanac.server.services import job_submission
@@ -69,6 +70,6 @@ async def test_refresh_replays_original_params(monkeypatch):
 async def test_refresh_unknown_forecast_404():
     async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="refresh-user-2")
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(HTTPException) as exc:
         await job_submission.refresh_forecast_for_user("nope", user["id"])
-    assert "404" in str(exc.value) or "Unknown forecast" in str(exc.value)
+    assert exc.value.status_code == 404

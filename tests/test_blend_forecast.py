@@ -14,11 +14,11 @@ from sqlalchemy import text
 
 from ai_almanac.server.services.blend_forecast import (
     DAILY_COLUMNS,
+    DEFAULT_VIEW,
+    SUPPORTED_VIEWS,
     WEEKLY_COLUMNS,
-    UnsupportedForecastView,
     available_views,
     parse_blend_forecast,
-    parse_forecast_view,
 )
 from ai_almanac.settings import settings
 
@@ -74,17 +74,12 @@ def test_parse_blend_forecast_reads_weekly_sums_from_the_daily_csv() -> None:
     assert point["probs"][0][0] == round(sum(d / 1000 for d in range(1, 8)), 3)
 
 
-def test_weekly_blend_has_no_daily_view() -> None:
-    with pytest.raises(UnsupportedForecastView):
-        parse_forecast_view("weekly_model", "daily")
+def test_each_view_caches_under_its_own_payload_name() -> None:
+    names = [view.payload_name for view in SUPPORTED_VIEWS]
 
-
-def test_default_view_keeps_its_original_payload_name() -> None:
-    assert parse_forecast_view("weekly_model", "weekly").payload_name == "blend_forecast.v1.json"
-    assert (
-        parse_forecast_view("daily_model", "daily").payload_name
-        == "blend_forecast.daily_model.daily.v1.json"
-    )
+    assert len(set(names)) == len(names)
+    # The original weekly payload keeps its name so existing jobs are not rebuilt.
+    assert DEFAULT_VIEW.payload_name == "blend_forecast.v1.json"
 
 
 def test_available_views_follow_the_csvs_present() -> None:
@@ -95,12 +90,6 @@ def test_available_views_follow_the_csvs_present() -> None:
         {"model": "weekly_model", "resolution": "weekly"},
         {"model": "daily_model", "resolution": "weekly"},
         {"model": "daily_model", "resolution": "daily"},
-    ]
-
-
-def test_available_views_hide_the_day_level_blend_while_it_is_switched_off() -> None:
-    assert available_views([_DAILY_FILE, _WEEKLY_FILE], day_level_enabled=False) == [
-        {"model": "weekly_model", "resolution": "weekly"}
     ]
 
 

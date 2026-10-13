@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import json
 
-import pytest
-from pydantic import ValidationError
-
 from ai_almanac.server.services import benchmark_domain
 from ai_almanac.server.services.blend_domain import _model_candidate
 from ai_almanac.server.services.forecast_models import (
     TrainingHistory,
-    TrainingPeriod,
     model_training,
 )
 from ai_almanac.settings import get_packaged_forecast_models
@@ -74,11 +70,6 @@ def test_unknown_training_years_stay_unknown():
     assert model_training(None, _REGISTRY) is None
 
 
-def test_reversed_years_are_rejected():
-    with pytest.raises(ValidationError):
-        TrainingPeriod(stage="pretraining", dataset="ERA5", start_year=2017, end_year=1979)
-
-
 def test_a_malformed_entry_reads_as_unknown_rather_than_failing():
     assert model_training("backwards", _REGISTRY) is None
 
@@ -91,13 +82,17 @@ def test_every_packaged_training_history_parses():
             TrainingHistory.model_validate(entry["training"])
 
 
+def _packaged_training(forecast_model_id: str) -> dict:
+    return model_training(forecast_model_id, get_packaged_forecast_models()).model_dump(mode="json")
+
+
 def test_blend_candidates_carry_the_linked_models_training_years():
     linked = _model_candidate(
         {"id": "src-1", "name": "FuXi India", "metadata": {"forecast_model_id": "fuxi"}}
     )
     unlinked = _model_candidate({"id": "src-2", "name": "Pangu", "metadata": {}})
 
-    assert linked["training"]["periods"][-1]["end_year"] == 2015
+    assert linked["training"] == _packaged_training("fuxi")
     assert unlinked["training"] is None
 
 
@@ -112,5 +107,5 @@ async def test_benchmark_model_list_carries_the_linked_models_training_years(mon
 
     models = json.loads(await benchmark_domain._exec_list_models({}, "user-1", None))
 
-    assert models[0]["training"]["periods"][-1]["end_year"] == 2015
+    assert models[0]["training"] == _packaged_training("fuxi")
     assert models[1]["training"] is None

@@ -58,15 +58,10 @@ def test_parse_pooled_summary_orders_blend_first() -> None:
     assert blend["brier_skill"] == 0.15
     assert blend["auc_by_lead"] == [0.90, 0.85, 0.80, 0.78, 0.70]
 
-
-def test_parse_pooled_summary_leads_with_both_blends_in_order() -> None:
-    csv_text = (
-        "model,auc,brier_skill,auc_week1,auc_week2,auc_week3,auc_week4,auc_later\n"
-        "blended_forest,0.84,0.18,0.91,0.86,0.81,0.79,0.71\n"
-        "aifs_raw,0.78,0.10,0.88,0.82,0.76,0.72,0.65\n"
-        "blended_model,0.82,0.15,0.90,0.85,0.80,0.78,0.70\n"
+    with_forest = _SUMMARY_CSV.replace(
+        "aifs_raw,", "blended_forest,0.84,0.18,0.91,0.86,0.81,0.79,0.71\naifs_raw,"
     )
-    rows = blend_domain._parse_pooled_summary(csv_text)
+    rows = blend_domain._parse_pooled_summary(with_forest)
     assert [(r["model"], r["is_blend"]) for r in rows] == [
         ("blended_model", True),
         ("blended_forest", True),
@@ -91,9 +86,11 @@ def test_parse_pooled_summary_keeps_pooled_scores() -> None:
     assert blend["brier_by_lead"] == [0.088, 0.113, 0.118, 0.119, 0.137]
 
 
-def test_parse_pooled_summary_flags_the_baseline() -> None:
+def test_parse_pooled_summary_flags_the_baseline_and_scores_it_at_zero() -> None:
     rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
-    assert [r["model"] for r in rows if r["is_baseline"]] == ["unc_clim_raw"]
+    baselines = [r for r in rows if r["is_baseline"]]
+    assert [r["model"] for r in baselines] == ["unc_clim_raw"]
+    assert baselines[0]["brier_skill_by_lead"] == [0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 def test_parse_pooled_summary_derives_per_lead_brier_skill() -> None:
@@ -106,23 +103,21 @@ def test_parse_pooled_summary_derives_per_lead_brier_skill() -> None:
     assert blend["brier_skill_by_lead"][2] < 0
 
 
-def test_parse_pooled_summary_scores_baseline_at_zero() -> None:
-    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, _FULL_BASELINE))
-    baseline = next(r for r in rows if r["is_baseline"])
-    assert baseline["brier_skill_by_lead"] == [0.0, 0.0, 0.0, 0.0, 0.0]
-
-
-def test_parse_pooled_summary_without_baseline_yields_no_lead_skill() -> None:
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (_FULL_BLEND,),
+        (_FULL_BLEND, _FULL_BASELINE.replace("0.091,0.114,0.117,0.120,0.156", "0,0,0,0,0")),
+    ],
+    ids=["no baseline", "zero baseline brier"],
+)
+def test_parse_pooled_summary_without_a_usable_baseline_yields_no_lead_skill(
+    rows: tuple[str, ...],
+) -> None:
     """Inventing a reference would silently change what the numbers claim."""
-    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND))
-    assert rows[0]["brier_skill_by_lead"] == [None] * 5
-    assert rows[0]["brier_by_lead"][0] == 0.088
-
-
-def test_parse_pooled_summary_survives_zero_baseline_brier() -> None:
-    zeroed = _FULL_BASELINE.replace("0.091,0.114,0.117,0.120,0.156", "0,0,0,0,0")
-    rows = blend_domain._parse_pooled_summary(_full_csv(_FULL_BLEND, zeroed))
-    assert rows[0]["brier_skill_by_lead"] == [None] * 5
+    parsed = blend_domain._parse_pooled_summary(_full_csv(*rows))
+    assert parsed[0]["brier_skill_by_lead"] == [None] * 5
+    assert parsed[0]["brier_by_lead"][0] == 0.088
 
 
 def test_parse_pooled_summary_treats_blanks_as_missing() -> None:

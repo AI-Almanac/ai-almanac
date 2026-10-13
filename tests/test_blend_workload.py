@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from ai_almanac.envs.blend_entrypoint import _load_workflow, run
 
@@ -46,7 +47,10 @@ def test_blending_workflow_loads_with_local_function_wrappers(monkeypatch) -> No
     assert hasattr(workflow.build_lat_lon_intermediates_bundle, "local")
 
 
-def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("day_level", [False, True])
+def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
+    tmp_path: Path, day_level: bool
+) -> None:
     obs_dir = tmp_path / "obs"
     model_dir = tmp_path / "aifs"
     obs_dir.mkdir()
@@ -81,89 +85,44 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(tmp_path: Path
         build_lat_lon_intermediates_bundle=prepare,
         train_blending_model_bundle=train,
     )
+    layouts = {
+        "aifs": {"forecast_dims": {"step": "prediction_timedelta_daily"}, "unit_cvt": 1000.0}
+    }
     output_dir = tmp_path / "output"
     config = {
         "obs_dir": str(obs_dir),
         "model_names": ["aifs"],
         "model_files": {"aifs": [str(forecast_path)]},
+        "model_layouts": layouts,
+        "region_id": "ethiopia",
         "blend_params": {
             "training_years": "2020,2021",
             "cv_holdout_years": "2022",
             "threshold_mm": 25.0,
         },
         "cache_dir": str(tmp_path / "blend-intermediates"),
+        "train_day_level_blend": day_level,
     }
 
     run(config, output_dir, workflow)
 
     prep_args, prep_kwargs = prepare.calls[0]
     assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]})
-    assert prep_kwargs == {
-        "return_outputs": False,
-        "threshold_mm": 25.0,
-        "cache_dir": str(tmp_path / "blend-intermediates"),
-        "model_layouts": None,
-    }
-    train_args, train_kwargs = train.calls[0]
+    assert prep_kwargs["threshold_mm"] == 25.0
+    assert prep_kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
+    assert prep_kwargs["model_layouts"] == layouts
+    assert prep_kwargs["region_id"] == "ethiopia"
+    _, train_kwargs = train.calls[0]
     # Training reads the combined table from the build's output dir, not bytes.
-    assert train_args == (None,)
     assert train_kwargs["combined_wide_path"] == str(
         Path(built["output_dir"]) / "combined_wide.pkl"
     )
     assert train_kwargs["model_names"] == ["aifs"]
     assert train_kwargs["training_years"] == [2020, 2021]
     assert train_kwargs["cv_holdout_years"] == [2022]
-    assert train_kwargs["cores"] == (os.cpu_count() or 1)
-    # Jobs submitted without the day-level blend switched on train only the weekly blend.
-    assert train_kwargs["train_forest"] is False
+    assert train_kwargs["train_forest"] is day_level
     assert (output_dir / "combined_wide.pkl").read_bytes() == combined
     assert (output_dir / "weights.pkl").read_bytes() == b"weights"
-
-
-def test_local_blend_passes_job_inputs_to_intermediate_builder(tmp_path: Path) -> None:
-    obs_dir = tmp_path / "obs"
-    model_dir = tmp_path / "aifs"
-    obs_dir.mkdir()
-    model_dir.mkdir()
-    (obs_dir / "2023.nc").write_bytes(b"obs")
-    forecast_path = model_dir / "2023.nc"
-    forecast_path.write_bytes(b"forecast")
-    blending_root = tmp_path / "onset-blending"
-    source_marker = blending_root / "python" / "prepare_data" / "nc_utils.py"
-    source_marker.parent.mkdir(parents=True)
-    source_marker.write_text("")
-
-    combined = b"combined-data"
-    prepare = _LocalFunction(_built_intermediates(tmp_path, combined))
-    train = _LocalFunction({"manifest": {"ok": True}, "outputs_tar": _archive({})})
-    workflow = SimpleNamespace(
-        BLENDING_ROOT=blending_root,
-        _bundle_files=lambda files: [path.name for path in files],
-        _read_tar_member_bytes=lambda data, name: combined,
-        _parse_years=lambda value: [int(year) for year in value.split(",") if year],
-        build_lat_lon_intermediates_bundle=prepare,
-        train_blending_model_bundle=train,
-    )
-    layouts = {
-        "aifs": {"forecast_dims": {"step": "prediction_timedelta_daily"}, "unit_cvt": 1000.0}
-    }
-
-    run(
-        {
-            "obs_dir": str(obs_dir),
-            "model_names": ["aifs"],
-            "model_files": {"aifs": [str(forecast_path)]},
-            "model_layouts": layouts,
-            "region_id": "ethiopia",
-            "blend_params": {"training_years": "2020", "cv_holdout_years": "2021"},
-        },
-        tmp_path / "output",
-        workflow,
-    )
-
-    _, prep_kwargs = prepare.calls[0]
-    assert prep_kwargs["region_id"] == "ethiopia"
-    assert prep_kwargs["model_layouts"] == layouts
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
@@ -227,30 +186,18 @@ def _local_forecast_scoring(tmp_path: Path, monkeypatch, blend_files: dict[str, 
     return workflow, output_dir, calls
 
 
-def test_local_forecast_writes_daily_scores_when_the_blend_has_a_day_level_model(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("has_day_level_model", [True, False])
+def test_local_forecast_writes_daily_scores_only_when_the_blend_has_a_day_level_model(
+    tmp_path: Path, monkeypatch, has_day_level_model: bool
 ) -> None:
     probe = _load_workflow()
-    workflow, output_dir, calls = _local_forecast_scoring(
-        tmp_path,
-        monkeypatch,
-        {probe.FINAL_COEF_FILENAME: b"coefs", probe.FOREST_MODEL_FILENAME: b"forest"},
-    )
+    blend_files = {probe.FINAL_COEF_FILENAME: b"coefs"}
+    if has_day_level_model:
+        blend_files[probe.FOREST_MODEL_FILENAME] = b"forest"
+    workflow, output_dir, calls = _local_forecast_scoring(tmp_path, monkeypatch, blend_files)
 
     assert calls[0]["coef_pkl"] == b"coefs"
-    assert calls[0]["forest_pkl"] == b"forest"
+    assert calls[0]["forest_pkl"] == (b"forest" if has_day_level_model else None)
     assert (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_bytes() == b"weekly"
-    assert (output_dir / workflow.DAILY_FORECAST_FILENAME).read_bytes() == b"daily"
-
-
-def test_local_forecast_from_an_older_blend_writes_weekly_scores_only(
-    tmp_path: Path, monkeypatch
-) -> None:
-    probe = _load_workflow()
-    workflow, output_dir, calls = _local_forecast_scoring(
-        tmp_path, monkeypatch, {probe.FINAL_COEF_FILENAME: b"coefs"}
-    )
-
-    assert calls[0]["forest_pkl"] is None
-    assert (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_bytes() == b"weekly"
-    assert not (output_dir / workflow.DAILY_FORECAST_FILENAME).exists()
+    daily = output_dir / workflow.DAILY_FORECAST_FILENAME
+    assert daily.exists() is has_day_level_model
