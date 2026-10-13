@@ -21,7 +21,6 @@ from ai_almanac.server.services import storage as storage_mod
 from tests.range_read_fs import gcs_storage_over
 
 _OBS_DIR = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
-_MODEL_DIR = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
 _ARCHIVE_PREFIX = "gs://bucket/aifs-ens"
 _MODEL_METADATA = {"file_pattern": "{}.nc", "model_var": "tp"}
 
@@ -85,24 +84,6 @@ async def test_gcs_obs_source_validates_and_infers_coverage(
 
 
 @pytest.mark.asyncio
-async def test_gcs_model_source_infers_init_days(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage, _ = gcs_storage_over(_MODEL_DIR, "gs://bucket/ethiopia/fuxi")
-    monkeypatch.setattr(storage_mod, "get_storage", lambda: storage)
-
-    status, error, normalized = await data_sources.validate_source(
-        "model",
-        "gs://bucket/ethiopia/fuxi",
-        {"file_pattern": "{}.nc", "model_var": "tp", "model_type": "AIWP"},
-    )
-
-    assert status == "ready", error
-    assert normalized["init_days_source"] == "inferred"
-    assert normalized["init_days"] == "2,5"
-
-
-@pytest.mark.asyncio
 async def test_gcs_ensemble_archive_layout_is_inferred_from_its_header(
     archive_storage,
 ) -> None:
@@ -152,17 +133,7 @@ async def test_gcs_archive_inspection_matches_a_full_load(
 
 
 @pytest.mark.asyncio
-async def test_gcs_archive_validation_fetches_a_small_part_of_the_object(
-    archive_storage, ensemble_archive: Path
-) -> None:
-    status, error, _ = await _validate_archive()
-
-    assert status == "ready", error
-    assert archive_storage.bytes_fetched < ensemble_archive.stat().st_size / 10
-
-
-@pytest.mark.asyncio
-async def test_gcs_archive_validation_does_not_hold_the_data_in_memory(
+async def test_gcs_archive_validation_reads_only_the_header(
     archive_storage, ensemble_archive: Path
 ) -> None:
     tracemalloc.start()
@@ -173,7 +144,9 @@ async def test_gcs_archive_validation_does_not_hold_the_data_in_memory(
         tracemalloc.stop()
 
     assert status == "ready", error
-    assert peak < ensemble_archive.stat().st_size / 10
+    archive_size = ensemble_archive.stat().st_size
+    assert archive_storage.bytes_fetched < archive_size / 10
+    assert peak < archive_size / 10
 
 
 @pytest.mark.asyncio

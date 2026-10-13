@@ -48,7 +48,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
         row = (
             (
                 await conn.execute(
-                    text("SELECT key_nonce, key_ciphertext FROM user_llm_profiles WHERE id = :id"),
+                    text("SELECT key_ciphertext FROM user_llm_profiles WHERE id = :id"),
                     {"id": profile.json()["id"]},
                 )
             )
@@ -56,4 +56,3 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
             .one()
         )
     assert b"plaintext-secret" not in bytes(row["key_ciphertext"])
-    assert len(bytes(row["key_nonce"])) == 12

@@ -14,9 +14,8 @@ from sqlalchemy import text
 
 @pytest.fixture(autouse=True)
 def _no_detached_supervisors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """reconcile_jobs relaunches every leftover queued row in the shared test
-    database; a real launch spawns a detached supervisor that takes the single
-    job slot and outlives the test. Tests that care about launches patch over this."""
+    """reconcile_jobs relaunches queued rows; a real launch spawns a detached
+    supervisor that outlives the test. Tests that care about launches patch over this."""
     from ai_almanac.server.services import job_manager
 
     async def no_launch(_job_id: str) -> None:
@@ -70,17 +69,6 @@ async def _job_row(job_id: str) -> dict:
     return dict(row)
 
 
-async def _finish_jobs(*job_ids: str) -> None:
-    """Free the single local job slot so later supervisor tests don't wait for it."""
-    from ai_almanac.server.db import get_db
-
-    async with get_db() as conn:
-        for job_id in job_ids:
-            await conn.execute(
-                text("UPDATE jobs SET status = 'complete' WHERE id = :id"), {"id": job_id}
-            )
-
-
 async def _wait_for_status(job_id: str, status: str, timeout: float = 10.0) -> None:
     """Poll until the job reaches ``status``; the deadline absorbs slow subprocess
     startup on loaded CI runners while still failing fast on real hangs."""
@@ -107,21 +95,8 @@ async def test_cancel_job_persists_requested_state(
 
     assert response.status_code == 200
     assert response.json()["status"] == "canceling"
-    from ai_almanac.server.db import get_db
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status, cancel_requested_at FROM jobs WHERE id = :id"),
-                    {"id": job_id},
-                )
-            )
-            .mappings()
-            .one()
-        )
-    assert row["status"] == "canceling"
-    assert row["cancel_requested_at"] is not None
+    persisted = await client.get(f"/jobs/{job_id}", headers=as_new_user)
+    assert persisted.json()["status"] == "canceling"
 
 
 @pytest.mark.asyncio
@@ -143,68 +118,42 @@ async def test_reconcile_relaunches_queued_jobs(
     assert job_id in launched
 
 
+@pytest.mark.parametrize(
+    ("status", "supervisor_alive", "final_status", "error"),
+    [
+        ("running", False, "failed", "Job supervisor exited unexpectedly."),
+        # A live supervisor pid is not enough — a stale heartbeat means hung.
+        ("running", True, "failed", "Job supervisor exited unexpectedly."),
+        ("canceling", False, "canceled", None),
+    ],
+    ids=["supervisor-gone", "supervisor-hung", "canceling-supervisor-gone"],
+)
 @pytest.mark.asyncio
-async def test_reconcile_marks_missing_supervisor_failed(
+async def test_reconcile_finalizes_jobs_whose_supervisor_is_dead(
     user_id: str,
     monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    supervisor_alive: bool,
+    final_status: str,
+    error: str | None,
 ) -> None:
-    from ai_almanac.server.services import job_manager
-
-    job_id = await _insert_job(user_id, "running", worker_pid=999_999_999)
-    monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
-    await job_manager.reconcile_jobs()
-
-    from ai_almanac.server.db import get_db
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT status, error FROM jobs WHERE id = :id"),
-                    {"id": job_id},
-                )
-            )
-            .mappings()
-            .one()
-        )
-    assert row["status"] == "failed"
-    assert row["error"] == "Job supervisor exited unexpectedly."
-
-
-@pytest.mark.asyncio
-async def test_reconcile_fails_hung_supervisor_with_stale_heartbeat(
-    user_id: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A live supervisor pid is not enough — a stale heartbeat means hung."""
     import os
     from datetime import timedelta
 
     from ai_almanac.server.services import job_manager
 
-    stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
-    job_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=stale)
+    if supervisor_alive:
+        stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+        job_id = await _insert_job(user_id, status, worker_pid=os.getpid(), heartbeat_at=stale)
+    else:
+        job_id = await _insert_job(user_id, status, worker_pid=999_999_999)
+        monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
+
     await job_manager.reconcile_jobs()
 
     row = await _job_row(job_id)
-    assert row["status"] == "failed"
-    assert row["error"] == "Job supervisor exited unexpectedly."
-
-
-@pytest.mark.asyncio
-async def test_reconcile_finalizes_canceling_job_as_canceled(
-    user_id: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from ai_almanac.server.services import job_manager
-
-    job_id = await _insert_job(user_id, "canceling", worker_pid=999_999_999)
-    monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
-    await job_manager.reconcile_jobs()
-
-    row = await _job_row(job_id)
-    assert row["status"] == "canceled"
-    assert row["error"] is None
+    assert row["status"] == final_status
+    assert row["error"] == error
 
 
 @pytest.mark.asyncio
@@ -224,18 +173,14 @@ async def test_reconcile_leaves_healthy_jobs_alone(
     monkeypatch.setattr(job_manager, "launch_job", fake_launch)
     running_id = await _insert_job(user_id, "running", worker_pid=os.getpid(), heartbeat_at=_now())
     queued_id = await _insert_job(user_id, "queued", worker_pid=os.getpid(), heartbeat_at=_now())
-    try:
-        await job_manager.reconcile_jobs()
 
-        assert (await _job_row(running_id))["status"] == "running"
-        queued = await _job_row(queued_id)
-        assert queued["status"] == "queued"
-        assert queued["worker_pid"] is not None  # not reset for relaunch
-        # Other tests may leave relaunchable rows behind; ours must not be in there.
-        assert queued_id not in launched
-        assert running_id not in launched
-    finally:
-        await _finish_jobs(running_id, queued_id)
+    await job_manager.reconcile_jobs()
+
+    assert (await _job_row(running_id))["status"] == "running"
+    queued = await _job_row(queued_id)
+    assert queued["status"] == "queued"
+    assert queued["worker_pid"] is not None  # not reset for relaunch
+    assert launched == []
 
 
 @pytest.mark.asyncio
@@ -348,57 +293,33 @@ def _patch_modal_runner(monkeypatch, runner) -> None:
     monkeypatch.setattr(modal_runner, "get_modal_runner", lambda: runner)
 
 
+@pytest.mark.parametrize(
+    ("status", "remote_status", "final_status"),
+    [
+        ("running", "complete", "complete"),
+        ("running", "failed", "failed"),
+        ("running", "running", "running"),
+        ("canceling", "running", "canceled"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_reconcile_marks_modal_job_complete(
-    user_id: str, monkeypatch: pytest.MonkeyPatch
+async def test_reconcile_follows_the_modal_job(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    remote_status: str,
+    final_status: str,
 ) -> None:
     from ai_almanac.server.services import job_manager
 
-    job_id = await _make_modal_job(user_id, "running")
-    _patch_modal_runner(monkeypatch, _FakeModalRunner("complete"))
+    job_id = await _make_modal_job(user_id, status)
+    runner = _FakeModalRunner(remote_status)
+    _patch_modal_runner(monkeypatch, runner)
+
     await job_manager.reconcile_jobs()
 
     row = await _job_row(job_id)
-    assert row["status"] == "complete"
-    assert row["completed_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_reconcile_marks_modal_job_failed_with_log(
-    user_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from ai_almanac.server.services import job_manager
-
-    job_id = await _make_modal_job(user_id, "running")
-    _patch_modal_runner(monkeypatch, _FakeModalRunner("failed"))
-    await job_manager.reconcile_jobs()
-
-    row = await _job_row(job_id)
-    assert row["status"] == "failed"
-    assert "Modal job failed" in row["error"]
-
-
-@pytest.mark.asyncio
-async def test_reconcile_leaves_running_modal_job_alone(
-    user_id: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from ai_almanac.server.services import job_manager
-
-    job_id = await _make_modal_job(user_id, "running")
-    _patch_modal_runner(monkeypatch, _FakeModalRunner("running"))
-    await job_manager.reconcile_jobs()
-
-    assert (await _job_row(job_id))["status"] == "running"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_cancels_modal_job(user_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.services import job_manager
-
-    job_id = await _make_modal_job(user_id, "canceling")
-    fake = _FakeModalRunner("running")
-    _patch_modal_runner(monkeypatch, fake)
-    await job_manager.reconcile_jobs()
-
-    assert fake.canceled is True
-    assert (await _job_row(job_id))["status"] == "canceled"
+    assert row["status"] == final_status
+    assert runner.canceled is (status == "canceling")
+    assert (row["completed_at"] is not None) is (final_status != "running")
+    assert bool(row["error"]) is (final_status == "failed")

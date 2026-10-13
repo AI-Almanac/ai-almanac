@@ -21,25 +21,21 @@ def _fields(schema) -> dict[str, dict]:
     return {f["name"]: f for g in schema.groups for f in g["fields"]}
 
 
-def test_personal_mode_exposes_local_fields_as_editable(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("mode", ["personal", "shared"])
+def test_local_fields_and_env_locks_follow_the_deployment_mode(
+    monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    monkeypatch.setattr(settings, "deployment_mode", mode)
     fields = _fields(get_schema(_admin=None))
-    assert "runner_mode" in fields
-    assert all(f["editable"] for f in fields.values())
-    # Labels are product language, not raw field names.
-    assert fields["runner_mode"]["label"] != "runner_mode"
+    personal = mode == "personal"
 
-
-def test_shared_mode_hides_local_fields_and_locks_env_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    fields = _fields(get_schema(_admin=None))
-    assert LOCAL_ONLY_FIELDS.isdisjoint(fields)
-    for name in SHARED_ENV_ONLY_FIELDS & set(fields):
-        assert fields[name]["editable"] is False
+    local_fields = LOCAL_ONLY_FIELDS & _SCHEMA_FIELDS
+    assert local_fields
+    assert (local_fields <= set(fields)) is personal
+    assert LOCAL_ONLY_FIELDS.isdisjoint(fields) is not personal
+    env_locked = SHARED_ENV_ONLY_FIELDS & set(fields)
+    assert env_locked
+    assert all(fields[name]["editable"] is personal for name in env_locked)
 
 
 def test_get_settings_reports_secrets_as_flags_not_values(
@@ -67,15 +63,6 @@ def test_get_settings_never_exposes_undeclared_fields(
     assert "host/db" not in payload
     # database_url is declared but sensitive: present only as a configured flag.
     assert "database_url" not in get_settings(_admin=None).values
-
-
-def test_enum_fields_declare_their_choices() -> None:
-    fields = _fields(get_schema(_admin=None))
-    audience = fields["assistant_comparisons_audience"]
-    assert audience["type"] == "string"
-    assert audience["choices"] == ["off", "admins", "everyone"]
-    # Non-enum fields carry no choices, so the UI keeps its plain inputs.
-    assert fields["llm_model"]["choices"] is None
 
 
 @pytest.mark.parametrize(

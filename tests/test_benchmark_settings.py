@@ -200,13 +200,15 @@ async def test_chat_rerun_reports_invalid_override_without_creating_a_job(
     user_id: str,
     launched: list[str],
 ) -> None:
-    from ai_almanac.server.services import benchmark_domain
+    from ai_almanac.server.services import chat_tools
     from ai_almanac.server.services.benchmark_state import BenchmarkScope
 
     job_id = (await _submit(client, as_new_user, {"region": "ethiopia"})).json()["id"]
 
-    result = await benchmark_domain._exec_rerun_job(
-        {"job_id": job_id, "params_override": {"obs_var": f'RAINFALL"\n{CODE}'}},
+    result = await chat_tools.rerun_job(
+        chat_tools.RerunJobRequest(
+            job_id=job_id, params_override={"obs_var": f'RAINFALL"\n{CODE}'}
+        ),
         user_id,
         BenchmarkScope(kind="benchmark_setup", key="setup", title="Setup"),
     )

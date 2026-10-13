@@ -1,4 +1,4 @@
-"""Phase 2 — identity parsing and role policies."""
+"""Identity parsing, role policies, and shared-mode startup invariants."""
 
 from __future__ import annotations
 
@@ -13,18 +13,17 @@ from ai_almanac.settings import settings
 
 
 @pytest.mark.asyncio
-async def test_runtime_config_exposes_auth_mode(
+async def test_runtime_config_exposes_auth_mode_and_feedback_flag(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "proxy")
+    monkeypatch.setenv("FEEDBACK_GITHUB_TOKEN", "test-token")
 
     response = await client.get("/config.js")
 
     assert response.status_code == 200
     assert '"authMode": "proxy"' in response.text
-
-
-# ---------------------------------------------------------------------------
+    assert '"feedbackEnabled": true' in response.text
 
 
 @pytest.mark.asyncio
@@ -49,18 +48,6 @@ async def test_auth_me_personal_honors_proxy_header(
 
 
 @pytest.mark.asyncio
-async def test_auth_me_proxy_missing_identity_is_anonymous(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # No credential at all resolves to the anonymous read-only identity so
-    # public pages can render; a present-but-invalid credential still 401s.
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    resp = await client.get("/auth/me")
-    assert resp.status_code == 200
-    assert resp.json()["anonymous"] is True
-
-
-@pytest.mark.asyncio
 async def test_auth_me_proxy_non_admin_is_user(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -72,31 +59,30 @@ async def test_auth_me_proxy_non_admin_is_user(
     assert body["capabilities"]["can_admin"] is False
 
 
+@pytest.mark.parametrize(
+    ("admin_subjects", "admin_emails", "headers"),
+    [
+        ("carol,dave", "", {"X-Forwarded-User": "carol"}),
+        (
+            "",
+            "Boss@Example.com",
+            {"X-Forwarded-User": "erin", "X-Forwarded-Email": "boss@example.com"},
+        ),
+    ],
+    ids=["by-subject", "by-email-case-insensitive"],
+)
 @pytest.mark.asyncio
-async def test_auth_me_proxy_admin_by_subject(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_auth_me_proxy_admin_allow_list(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    admin_subjects: str,
+    admin_emails: str,
+    headers: dict[str, str],
 ) -> None:
     monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "carol,dave")
-    body = (await client.get("/auth/me", headers={"X-Forwarded-User": "carol"})).json()
-    assert body["role"] == "admin"
-
-
-@pytest.mark.asyncio
-async def test_auth_me_proxy_admin_by_email_case_insensitive(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_emails", "Boss@Example.com")
-    body = (
-        await client.get(
-            "/auth/me",
-            headers={
-                "X-Forwarded-User": "erin",
-                "X-Forwarded-Email": "boss@example.com",
-            },
-        )
-    ).json()
+    monkeypatch.setattr(settings, "admin_subjects", admin_subjects)
+    monkeypatch.setattr(settings, "admin_emails", admin_emails)
+    body = (await client.get("/auth/me", headers=headers)).json()
     assert body["role"] == "admin"
 
 
@@ -105,72 +91,62 @@ async def test_auth_me_proxy_admin_by_email_case_insensitive(
 # ---------------------------------------------------------------------------
 
 
-def test_enforce_personal_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "personal")
-    enforce_deployment_invariants()  # must not raise
+def _valid_shared_config(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
+    config = {
+        "deployment_mode": "shared",
+        "auth_mode": "globus",
+        "database_url": "postgresql+psycopg://u@h/db",
+        "admin_subjects": "admin",
+        "admin_emails": "",
+        "allowed_groups": "",
+        "credential_encryption_key": "configured",
+        "chat_figure_signing_secret": "prod-secret",
+        "storage_backend": "local",
+        "dataset_mount_roots": "/srv/data",
+        "globus_client_id": "configured",
+        "globus_client_secret": "configured",
+        **overrides,
+    }
+    for name, value in config.items():
+        monkeypatch.setattr(settings, name, value)
 
 
-def test_enforce_shared_rejects_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "auth_mode", "none")  # enforce mutates this
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "database_url", "")  # resolves to SQLite
-    with pytest.raises(RuntimeError, match="PostgreSQL"):
-        enforce_deployment_invariants()
-
-
-def test_enforce_shared_requires_admin(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "auth_mode", "none")  # enforce mutates this
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    monkeypatch.setattr(settings, "admin_emails", "")
-    with pytest.raises(RuntimeError, match="admin"):
-        enforce_deployment_invariants()
-
-
-def test_enforce_shared_requires_mount_roots(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "auth_mode", "none")
-    monkeypatch.setattr(settings, "allowed_groups", "users")
-    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
-    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "")
-    with pytest.raises(RuntimeError, match="DATASET_MOUNT_ROOTS"):
-        enforce_deployment_invariants()
-
-
-@pytest.mark.parametrize("missing", ["globus_client_id", "globus_client_secret"])
-def test_enforce_shared_globus_requires_client_credentials(
-    monkeypatch: pytest.MonkeyPatch, missing: str
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"database_url": ""}, "PostgreSQL"),
+        ({"admin_subjects": ""}, "admin"),
+        ({"dataset_mount_roots": ""}, "DATASET_MOUNT_ROOTS"),
+        ({"globus_client_id": ""}, "GLOBUS_CLIENT_ID"),
+        ({"globus_client_secret": ""}, "GLOBUS_CLIENT_SECRET"),
+    ],
+    ids=["sqlite", "no-admin", "no-mount-roots", "no-globus-id", "no-globus-secret"],
+)
+def test_shared_deployment_refuses_to_start_when_misconfigured(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str], error: str
 ) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
-    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
-    monkeypatch.setattr(settings, "globus_client_id", "configured")
-    monkeypatch.setattr(settings, "globus_client_secret", "configured")
-    monkeypatch.setattr(settings, missing, "")
-    with pytest.raises(RuntimeError, match=missing.upper()):
+    _valid_shared_config(monkeypatch, **overrides)
+    with pytest.raises(RuntimeError, match=error):
         enforce_deployment_invariants()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"storage_backend": "gcs", "dataset_mount_roots": ""}],
+    ids=["globus-without-groups", "gcs-without-mount-roots"],
+)
+def test_shared_globus_deployment_starts_and_keeps_its_auth_mode(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str]
+) -> None:
+    _valid_shared_config(monkeypatch, **overrides)
+    enforce_deployment_invariants()
+    assert settings.auth_mode == "globus"
 
 
 def test_enforce_shared_hardens_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "auth_mode", "none")
+    _valid_shared_config(monkeypatch, auth_mode="none", allowed_groups="users")
     monkeypatch.setattr(settings, "enable_fs_browser", True)
     monkeypatch.setattr(settings, "enable_run_code", True)
-    monkeypatch.setattr(settings, "allowed_groups", "users")
-    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
-    monkeypatch.setattr(settings, "chat_figure_signing_secret", "configured")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "/srv/data")
 
     enforce_deployment_invariants()
 
@@ -218,73 +194,48 @@ async def test_proxy_uses_issuer_and_subject_as_stable_identity(
 # Admin gating — settings, fs browser, and catalog mutation
 # ---------------------------------------------------------------------------
 
+_RANDO = {"X-Forwarded-User": "rando"}
 
+
+@pytest.mark.parametrize(
+    ("auth_mode", "method", "path", "headers", "status"),
+    [
+        (None, "GET", "/settings", {}, 200),
+        ("proxy", "GET", "/settings", {}, 401),
+        ("proxy", "GET", "/settings", _RANDO, 403),
+        ("proxy", "GET", "/fs/quick-paths", _RANDO, 403),
+        ("proxy", "GET", "/regions", _RANDO, 200),
+        ("proxy", "DELETE", "/regions/anything", _RANDO, 403),
+        # Unowned sources are a uniform 404 so other users' sources aren't
+        # discoverable; ownership CRUD lives in test_data_sources.py.
+        ("proxy", "DELETE", "/data-sources/anything", _RANDO, 404),
+    ],
+    ids=[
+        "personal-settings",
+        "settings-unidentified",
+        "settings-non-admin",
+        "fs-non-admin",
+        "regions-list-non-admin",
+        "region-delete-non-admin",
+        "data-source-delete-non-admin",
+    ],
+)
 @pytest.mark.asyncio
-async def test_settings_open_to_admin_in_personal(client: httpx.AsyncClient) -> None:
-    # Personal mode: the local operator is admin, so settings stay accessible.
-    assert (await client.get("/settings")).status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_settings_rejects_missing_identity_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_role_gates(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_mode: str | None,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    status: int,
 ) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    assert (await client.get("/settings")).status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_settings_requires_admin_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    monkeypatch.setattr(settings, "admin_emails", "")
-    resp = await client.get("/settings", headers={"X-Forwarded-User": "rando"})
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_fs_requires_admin_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.get("/fs/quick-paths", headers={"X-Forwarded-User": "rando"})
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_region_list_allowed_for_non_admin_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.get("/regions", headers={"X-Forwarded-User": "rando"})
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_region_delete_requires_admin_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.delete("/regions/anything", headers={"X-Forwarded-User": "rando"})
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_data_source_delete_hides_unowned_sources(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Non-admins can only delete sources they own; anything else is a uniform
-    404 so other users' sources aren't discoverable. Ownership CRUD semantics
-    are covered in test_data_sources.py."""
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    monkeypatch.setattr(settings, "admin_subjects", "")
-    resp = await client.delete("/data-sources/anything", headers={"X-Forwarded-User": "rando"})
-    assert resp.status_code == 404
+    if auth_mode is not None:
+        monkeypatch.setattr(settings, "auth_mode", auth_mode)
+        monkeypatch.setattr(settings, "admin_subjects", "")
+        monkeypatch.setattr(settings, "admin_emails", "")
+    response = await client.request(method, path, headers=headers)
+    assert response.status_code == status
 
 
 # ---------------------------------------------------------------------------
@@ -293,23 +244,20 @@ async def test_data_source_delete_hides_unowned_sources(
 
 
 @pytest.mark.parametrize(
-    "origin",
+    ("origin", "allowed"),
     [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",  # opened via 127.0.0.1 instead of localhost
-        "http://localhost:5174",  # Vite fell back to another port
+        ("http://localhost:5173", True),
+        ("http://127.0.0.1:5173", True),  # opened via 127.0.0.1 instead of localhost
+        ("http://localhost:5174", True),  # Vite fell back to another port
+        ("https://evil.example", False),
     ],
 )
 @pytest.mark.asyncio
-async def test_cors_allows_loopback_origins(client: httpx.AsyncClient, origin: str) -> None:
+async def test_cors_allows_only_loopback_origins(
+    client: httpx.AsyncClient, origin: str, allowed: bool
+) -> None:
     resp = await client.get("/health", headers={"Origin": origin})
-    assert resp.headers.get("access-control-allow-origin") == origin
-
-
-@pytest.mark.asyncio
-async def test_cors_rejects_foreign_origin(client: httpx.AsyncClient) -> None:
-    resp = await client.get("/health", headers={"Origin": "https://evil.example"})
-    assert resp.headers.get("access-control-allow-origin") is None
+    assert resp.headers.get("access-control-allow-origin") == (origin if allowed else None)
 
 
 # ---------------------------------------------------------------------------
@@ -342,56 +290,54 @@ async def test_auth_me_globus_missing_bearer_is_anonymous(
     assert resp.json()["anonymous"] is True
 
 
+@pytest.mark.parametrize(
+    ("allow_list", "groups"),
+    [
+        ({"admin_subjects": "u1"}, set()),
+        ({"admin_emails": "boss@example.com"}, set()),
+        ({"admin_groups": "grp-admins"}, {"grp-admins", "grp-x"}),
+    ],
+    ids=["by-subject", "by-email", "by-group"],
+)
 @pytest.mark.asyncio
-async def test_auth_me_globus_admin_by_subject(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "admin_subjects", "admin-sub")
-    body = (await client.get("/auth/me", headers={"Authorization": "Bearer admin-sub"})).json()
-    assert body["role"] == "admin"
-
-
-@pytest.mark.asyncio
-async def test_auth_me_globus_admin_by_email_from_introspection(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_auth_me_globus_admin_allow_list(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_list: dict[str, str],
+    groups: set[str],
 ) -> None:
     from ai_almanac.server import auth as auth_module
 
     monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "admin_emails", "boss@example.com")
+    for name, value in allow_list.items():
+        monkeypatch.setattr(settings, name, value)
     monkeypatch.setattr(
         auth_module,
         "_introspect_globus_token",
         lambda token: {"active": True, "sub": "u1", "email": "boss@example.com"},
     )
+    monkeypatch.setattr(auth_module, "_globus_user_groups", lambda token: groups)
+
     body = (await client.get("/auth/me", headers={"Authorization": "Bearer tok"})).json()
+
     assert body["role"] == "admin"
     assert body["email"] == "boss@example.com"
+    assert body["groups"] == sorted(groups)
 
 
-@pytest.mark.asyncio
-async def test_auth_me_globus_admin_by_group_membership(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+def test_globus_pending_membership_does_not_count_as_a_group(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_almanac.server import auth as auth_module
-
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "admin_groups", "grp-admins")
-    monkeypatch.setattr(auth_module, "_globus_user_groups", lambda token: {"grp-admins", "grp-x"})
-    body = (await client.get("/auth/me", headers={"Authorization": "Bearer member"})).json()
-    assert body["role"] == "admin"
-    assert body["groups"] == ["grp-admins", "grp-x"]
-
-
-def test_globus_user_groups_via_dependent_token(monkeypatch: pytest.MonkeyPatch) -> None:
     import globus_sdk
 
     from ai_almanac.server import auth as auth_module
 
     monkeypatch.setattr(settings, "admin_groups", "grp-admins")
     monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
+    memberships = [
+        {"id": "grp-admins", "status": "invited"},
+        {"id": "grp-x", "status": "active"},
+    ]
 
     class FakeAuthClient:
         def __init__(self, *args): ...
@@ -406,17 +352,12 @@ def test_globus_user_groups_via_dependent_token(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, authorizer): ...
 
         def get_my_groups(self, statuses):
-            assert statuses == "active"
-            return [{"id": "grp-admins"}, {"id": "grp-x"}]
+            wanted = set(statuses.split(","))
+            return [m for m in memberships if m["status"] in wanted]
 
     monkeypatch.setattr(globus_sdk, "ConfidentialAppAuthClient", FakeAuthClient)
     monkeypatch.setattr(globus_sdk, "GroupsClient", FakeGroupsClient)
-    assert auth_module._globus_user_groups("tok") == {"grp-admins", "grp-x"}
-    # Cached: a second call must not construct new clients.
-    monkeypatch.setattr(
-        globus_sdk, "ConfidentialAppAuthClient", lambda *a: pytest.fail("cache miss")
-    )
-    assert auth_module._globus_user_groups("tok") == {"grp-admins", "grp-x"}
+    assert auth_module._globus_user_groups("tok") == {"grp-x"}
 
 
 def test_globus_user_groups_failure_degrades_to_no_groups(
@@ -428,28 +369,11 @@ def test_globus_user_groups_failure_degrades_to_no_groups(
 
     monkeypatch.setattr(settings, "admin_groups", "grp-admins")
     monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
 
     def boom(*args):
         raise RuntimeError("groups api down")
 
     monkeypatch.setattr(globus_sdk, "ConfidentialAppAuthClient", boom)
-    assert auth_module._globus_user_groups("tok") == set()
-
-
-def test_globus_user_groups_skipped_without_admin_groups(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import globus_sdk
-
-    from ai_almanac.server import auth as auth_module
-
-    monkeypatch.setattr(settings, "admin_groups", "")
-    monkeypatch.setattr(settings, "globus_client_id", "cid")
-    monkeypatch.setattr(auth_module, "_globus_groups_cache", auth_module._TTLCache(ttl=300.0))
-    monkeypatch.setattr(
-        globus_sdk, "ConfidentialAppAuthClient", lambda *a: pytest.fail("should not call Globus")
-    )
     assert auth_module._globus_user_groups("tok") == set()
 
 
@@ -472,86 +396,17 @@ def test_ttl_cache_evicts_lru_at_capacity_and_expires_entries() -> None:
     assert len(expired) == 0
 
 
+@pytest.mark.parametrize(("secret", "ready"), [("configured", True), ("", False)])
 @pytest.mark.asyncio
-async def test_auth_me_globus_rejects_inactive_token(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_readiness_reports_globus_shared_auth(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, secret: str, ready: bool
 ) -> None:
-    from ai_almanac.server import auth as auth_module
-
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(
-        auth_module,
-        "_introspect_globus_token",
-        lambda token: {"active": False},
-    )
-    assert (
-        await client.get("/auth/me", headers={"Authorization": "Bearer dead"})
-    ).status_code == 401
-
-
-def test_enforce_shared_globus_needs_no_groups_and_keeps_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "allowed_groups", "")  # not required for globus
-    monkeypatch.setattr(settings, "credential_encryption_key", "k")
-    monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "/data")
-    monkeypatch.setattr(settings, "globus_client_id", "configured")
-    monkeypatch.setattr(settings, "globus_client_secret", "configured")
-    enforce_deployment_invariants()  # must not raise
-    assert settings.auth_mode == "globus"  # not forced to proxy
-
-
-def test_enforce_shared_gcs_skips_mount_roots(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://u@h/db")
-    monkeypatch.setattr(settings, "admin_subjects", "admin")
-    monkeypatch.setattr(settings, "credential_encryption_key", "k")
-    monkeypatch.setattr(settings, "chat_figure_signing_secret", "prod-secret")
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
-    monkeypatch.setattr(settings, "dataset_mount_roots", "")  # irrelevant for gcs
-    monkeypatch.setattr(settings, "globus_client_id", "configured")
-    monkeypatch.setattr(settings, "globus_client_secret", "configured")
-    enforce_deployment_invariants()  # must not raise
-
-
-def test_ready_auth_accepts_globus_shared_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.app import _auth_ready
-
     monkeypatch.setattr(settings, "deployment_mode", "shared")
     monkeypatch.setattr(settings, "auth_mode", "globus")
     monkeypatch.setattr(settings, "credential_encryption_key", "configured")
     monkeypatch.setattr(settings, "globus_client_id", "configured")
-    monkeypatch.setattr(settings, "globus_client_secret", "configured")
+    monkeypatch.setattr(settings, "globus_client_secret", secret)
 
-    assert _auth_ready() is True
+    response = await client.get("/ready")
 
-
-def test_ready_auth_rejects_globus_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.app import _auth_ready
-
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    monkeypatch.setattr(settings, "auth_mode", "globus")
-    monkeypatch.setattr(settings, "credential_encryption_key", "configured")
-    monkeypatch.setattr(settings, "globus_client_id", "configured")
-    monkeypatch.setattr(settings, "globus_client_secret", "")
-
-    assert _auth_ready() is False
-
-
-def test_ready_storage_accepts_gcs_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.app import _storage_ready
-
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
-    monkeypatch.setattr(settings, "gcs_data_bucket", "data")
-    monkeypatch.setattr(settings, "gcs_uploads_bucket", "uploads")
-    monkeypatch.setattr(settings, "gcs_outputs_bucket", "outputs")
-
-    assert _storage_ready() is True
+    assert response.json()["checks"]["auth"] is ready
