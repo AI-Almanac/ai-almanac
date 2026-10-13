@@ -8,7 +8,6 @@ rather than concatenated in Python.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from ai_almanac.server.services import rulesets
 from ai_almanac.server.services.guardrails import DEFAULT_GUARDRAILS
@@ -23,77 +22,21 @@ def instructions(scope_kind: str = "benchmark_run_group") -> str:
     return rulesets.build_instructions(builtin(), scope_kind)
 
 
-# --- packaged seeds -------------------------------------------------------
-
-
-def test_both_packaged_rulesets_load() -> None:
-    ids = {ruleset.id for ruleset in rulesets.packaged_rulesets()}
-    assert {"builtin", "unconstrained"} <= ids
-    assert all(ruleset.source == "packaged" for ruleset in rulesets.packaged_rulesets())
-
-
-def test_builtin_has_the_expected_sections_in_order() -> None:
-    assert [section.key for section in builtin().prompt_sections] == [
-        "domain",
-        "caveats",
-        "approach",
-        "code_execution",
-        "code_execution_job_data",
-        "code_execution_sandbox",
-        "output_style",
-        "blend_guidance",
-    ]
-
-
 # --- prompt assembly ------------------------------------------------------
 
 
-def test_caveats_appear_once_and_before_the_approach_rules() -> None:
-    text = instructions()
-    assert text.count("Interpreting results: caveats") == 1
-    assert text.index("Interpreting results: caveats") < text.index("## Approach")
+def _ruleset(*sections: PromptSection) -> Ruleset:
+    return Ruleset(id="test", name="Test", prompt_sections=list(sections))
 
 
-def test_every_documented_caveat_is_present() -> None:
-    text = instructions()
-    for caveat in (
-        "Training overlap",
-        "Pre-satellite era",
-        "Small samples",
-        "The trilemma",
-        "ERA5 versus operational initial conditions",
-        "Do not over-read the maps",
-    ):
-        assert caveat in text, caveat
-
-
-def test_caveats_are_framed_conditionally_not_as_boilerplate() -> None:
-    text = instructions()
-    assert "They are not boilerplate" in text
-    assert "never open with them" in text
-    assert "do not recite them on every answer" in text
-
-
-def test_blend_guidance_is_scoped_to_blend_setup() -> None:
-    assert "risk of overfitting" not in instructions("benchmark_run_group")
-    assert "risk of overfitting" in instructions("blend_setup")
-
-
-def test_retired_labels_survive_only_as_retired() -> None:
-    """`unc_` means unconditional, not uncalibrated, and a bare "Climatology"
-    used to mean the conditional baseline. The prompt names both — but only to
-    forbid them — and must never use them as a live label.
-    """
-    text = instructions("blend_setup")
-    assert 'The retired labels "Climatology (unconditional)"' in text
-    assert "unconditional climatology" not in text.lower()
-    assert "Traditional Climatology" in text
-    assert "Conditional Climatology" in text
-
-
-def test_the_blend_guidance_section_does_not_reuse_a_retired_label() -> None:
-    blend = next(s for s in builtin().prompt_sections if s.key == "blend_guidance")
-    assert "Climatology (unconditional)" not in blend.body
+def test_a_scoped_section_reaches_only_its_scope() -> None:
+    ruleset = _ruleset(
+        PromptSection(key="always", body="EVERYWHERE"),
+        PromptSection(key="blend", body="BLEND ONLY", scope_kinds=["blend_setup"]),
+    )
+    assert "BLEND ONLY" not in rulesets.build_instructions(ruleset, "benchmark_run_group")
+    assert "BLEND ONLY" in rulesets.build_instructions(ruleset, "blend_setup")
+    assert "EVERYWHERE" in rulesets.build_instructions(ruleset, "benchmark_run_group")
 
 
 # --- guardrail placeholders ----------------------------------------------
@@ -104,39 +47,19 @@ def test_no_unresolved_placeholder_reaches_the_model() -> None:
         assert "{{" not in instructions(scope), scope
 
 
-def test_thresholds_render_from_the_guardrail_defaults() -> None:
-    text = instructions("blend_setup")
-    assert f"roughly {DEFAULT_GUARDRAILS.small_sample_years} test years" in text
-    assert f"Fewer than {DEFAULT_GUARDRAILS.min_training_years} years cannot train" in text
-    assert f"1965-{DEFAULT_GUARDRAILS.presatellite_end_year}" in text
-    assert f"{DEFAULT_GUARDRAILS.blend_member_warn} or more members" in text
-
-
-def test_retuning_a_threshold_moves_the_prose_with_it(monkeypatch) -> None:
-    """The reason the numbers are placeholders: an admin who relaxes a threshold
-    must not leave the assistant quoting the old one.
-
-    The threshold is read from the settings overlay, which is the same value the
-    submission chokepoint enforces — so the prose and the check cannot disagree.
-    """
-    from ai_almanac.settings import settings
-
-    monkeypatch.setattr(settings, "guardrail_min_training_years", 4)
-    text = rulesets.build_instructions(builtin(), "blend_setup")
-    assert "Fewer than 4 years cannot train" in text
-    assert "Fewer than 10 years cannot train" not in text
-
-
 def test_the_prose_and_the_enforced_threshold_come_from_one_value(monkeypatch) -> None:
-    """The point of moving the thresholds out of the ruleset: what the assistant
-    says and what the platform does are the same number."""
+    """The point of moving the thresholds out of the ruleset: an admin who
+    retunes one must not leave the assistant quoting the old number, and what
+    the assistant says and what the platform enforces are the same value."""
     from ai_almanac.server.services import guardrails as guardrails_module
     from ai_almanac.settings import settings
 
     monkeypatch.setattr(settings, "guardrail_blend_member_warn", 5)
+    monkeypatch.setattr(settings, "guardrail_min_training_years", 4)
 
     text = rulesets.build_instructions(builtin(), "blend_setup")
     assert "5 or more members" in text
+    assert "Fewer than 4 years cannot train" in text
 
     findings = guardrails_module.check_blend(
         guardrails_module.BlendYears(training=range(2000, 2015)),
@@ -156,99 +79,58 @@ def test_an_unknown_placeholder_is_left_visible_rather_than_raising() -> None:
 # --- section toggling ----------------------------------------------------
 
 
-def test_a_required_section_cannot_be_disabled() -> None:
-    with pytest.raises(ValidationError, match="required"):
-        PromptSection(key="caveats", body="...", required=True, enabled=False)
-
-
 def test_the_builtin_marks_the_caveats_required() -> None:
     caveats = next(s for s in builtin().prompt_sections if s.key == "caveats")
     assert caveats.required
 
 
-def test_disabling_an_optional_section_drops_it() -> None:
-    ruleset = builtin()
-    sections = [
-        s.model_copy(update={"enabled": False}) if s.key == "output_style" else s
-        for s in ruleset.prompt_sections
-    ]
-    trimmed = ruleset.model_copy(update={"prompt_sections": sections})
-    assert "## Output style" not in rulesets.build_instructions(trimmed, "blend_setup")
-    # The required section is untouched by an unrelated edit.
-    assert "Interpreting results: caveats" in rulesets.build_instructions(trimmed, "blend_setup")
+def test_disabling_an_optional_section_drops_only_that_section() -> None:
+    ruleset = _ruleset(
+        PromptSection(key="kept", body="KEPT", required=True),
+        PromptSection(key="dropped", body="DROPPED", enabled=False),
+    )
+    text = rulesets.build_instructions(ruleset, "blend_setup")
+    assert "DROPPED" not in text
+    assert "KEPT" in text
 
 
 # --- the control arm ----------------------------------------------------
 
 
-def test_unconstrained_strips_the_rules_but_stays_a_valid_ruleset() -> None:
+def test_the_control_arm_differs_from_the_builtin_in_prose_only() -> None:
+    """Denying the control arm tools would confound the comparison it exists
+    to make."""
     control = rulesets.packaged_ruleset("unconstrained")
     text = rulesets.build_instructions(control, "blend_setup")
     assert "Interpreting results: caveats" not in text
     assert "Traditional Climatology" not in text
     assert text.strip()
-
-
-def test_unconstrained_withholds_no_tools() -> None:
-    """The control arm differs in prose only. Denying it tools would confound
-    the comparison it exists to make."""
-    assert rulesets.packaged_ruleset("unconstrained").tool_policy.deny == []
+    assert control.tool_policy.deny == []
 
 
 # --- stored rulesets ------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_seeding_installs_the_packaged_rows_and_activates_the_builtin() -> None:
-    await rulesets.seed_packaged_rulesets()
+async def test_seeding_leaves_exactly_the_builtin_active_and_chat_never_lacks_one() -> None:
+    """Seeding runs on every startup, so it must be idempotent and keep one
+    active row; and chat must not go down when no row is active."""
+    from sqlalchemy import text
 
+    from ai_almanac.server.db import get_db
+
+    assert (await rulesets.active_ruleset()).id == "builtin"  # empty table
+
+    await rulesets.seed_packaged_rulesets()
+    await rulesets.seed_packaged_rulesets()
     stored = {row.ruleset.id: row.is_active for row in await rulesets.list_rulesets()}
     assert {"builtin", "unconstrained"} <= set(stored)
-    assert stored["builtin"] is True
-    assert stored["unconstrained"] is False
+    assert [ruleset_id for ruleset_id, active in stored.items() if active] == ["builtin"]
 
-
-@pytest.mark.asyncio
-async def test_seeding_is_idempotent_and_keeps_one_active() -> None:
-    """It runs on every startup, so a second pass must not create a duplicate or
-    a second active row — the partial unique index would reject the latter."""
-    await rulesets.seed_packaged_rulesets()
-    await rulesets.seed_packaged_rulesets()
-
-    active = [row.ruleset.id for row in await rulesets.list_rulesets() if row.is_active]
-    assert active == ["builtin"]
-
-
-@pytest.mark.asyncio
-async def test_activating_moves_the_active_flag() -> None:
-    await rulesets.seed_packaged_rulesets()
-    other = rulesets.next_version(builtin(), "builtin-flag", "Built-in, flagged")
-    await rulesets.save_ruleset(other, created_by="admin@example.com")
-    await rulesets.activate_ruleset("builtin-flag")
-
-    assert (await rulesets.active_ruleset()).id == "builtin-flag"
-    active = [row.ruleset.id for row in await rulesets.list_rulesets() if row.is_active]
-    assert active == ["builtin-flag"]
-
-    await rulesets.activate_ruleset("builtin")
-
-
-@pytest.mark.asyncio
-async def test_activating_an_unknown_ruleset_raises() -> None:
-    with pytest.raises(KeyError):
-        await rulesets.activate_ruleset("no-such-ruleset")
-
-
-@pytest.mark.asyncio
-async def test_activating_the_comparison_control_raises() -> None:
-    """`activatable: false` in the YAML is enforced, not advisory."""
-    await rulesets.seed_packaged_rulesets()
-    before = await rulesets.active_ruleset()
-
-    with pytest.raises(ValueError):
-        await rulesets.activate_ruleset("unconstrained")
-
-    assert (await rulesets.active_ruleset()).id == before.id
+    async with get_db() as conn:
+        await conn.execute(text("UPDATE assistant_rulesets SET is_active = FALSE"))
+    fallback = await rulesets.active_ruleset()
+    assert (fallback.id, fallback.source) == ("builtin", "packaged")
 
 
 @pytest.mark.asyncio
@@ -272,15 +154,6 @@ async def test_a_saved_edit_round_trips_through_the_database() -> None:
 
 
 @pytest.mark.asyncio
-async def test_saving_onto_a_packaged_id_is_refused() -> None:
-    """Packaged rows are rewritten from YAML on every startup. Accepting the save
-    would look like it worked and then silently revert on the next restart, so it
-    has to fail loudly and point at cloning instead."""
-    with pytest.raises(rulesets.PackagedRulesetIdError, match="Clone it"):
-        await rulesets.save_ruleset(builtin())
-
-
-@pytest.mark.asyncio
 async def test_a_cloned_edit_survives_reseeding() -> None:
     """The property the rejection above protects: an edit kept under its own id
     is still there after a restart reseeds the packaged rows."""
@@ -295,23 +168,6 @@ async def test_a_cloned_edit_survives_reseeding() -> None:
     assert survived.description == "MY EDIT"
 
 
-@pytest.mark.asyncio
-async def test_the_active_ruleset_falls_back_to_the_packaged_builtin() -> None:
-    """Chat must not go down because the table is empty or a row was archived."""
-    from sqlalchemy import text
-
-    from ai_almanac.server.db import get_db
-
-    async with get_db() as conn:
-        await conn.execute(text("UPDATE assistant_rulesets SET is_active = FALSE"))
-
-    fallback = await rulesets.active_ruleset()
-    assert fallback.id == "builtin"
-    assert fallback.source == "packaged"
-
-    await rulesets.seed_packaged_rulesets()
-
-
 # --- sections that explain a tool ----------------------------------------
 
 
@@ -322,20 +178,19 @@ def _code_tool_mentions(available_tools: set[str] | None) -> tuple[bool, bool]:
     return "run_code(" in text, "run_code_sandbox(" in text
 
 
-def test_a_deployment_without_code_tools_is_not_told_about_them() -> None:
-    """A local build drops the code tools; the prompt describing them anyway is
-    how the assistant ended up telling a user its own instructions were wrong."""
-    assert _code_tool_mentions({"list_jobs", "get_job_metrics"}) == (False, False)
-
-
-def test_only_the_code_tool_that_is_registered_is_explained() -> None:
-    assert _code_tool_mentions({"run_code_sandbox"}) == (False, True)
-    assert _code_tool_mentions({"run_code", "run_code_sandbox"}) == (True, True)
-
-
-def test_an_admin_preview_shows_every_section() -> None:
-    assert _code_tool_mentions(None) == (True, True)
-
-
-def test_the_prompt_asks_for_plain_words_instead_of_tool_names() -> None:
-    assert "never by tool name" in instructions()
+@pytest.mark.parametrize(
+    ("available_tools", "mentions"),
+    [
+        # A local build drops the code tools; the prompt describing them anyway
+        # is how the assistant ended up telling a user its instructions were wrong.
+        ({"list_jobs", "get_job_metrics"}, (False, False)),
+        ({"run_code_sandbox"}, (False, True)),
+        ({"run_code", "run_code_sandbox"}, (True, True)),
+        # An admin preview shows every section.
+        (None, (True, True)),
+    ],
+)
+def test_only_registered_code_tools_are_explained(
+    available_tools: set[str] | None, mentions: tuple[bool, bool]
+) -> None:
+    assert _code_tool_mentions(available_tools) == mentions

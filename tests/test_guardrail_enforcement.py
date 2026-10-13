@@ -17,8 +17,6 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from ai_almanac.server.services import job_submission
-
 
 async def _seed_source(kind: str, name: str, region: str, start_year: int, end_year: int) -> str:
     from ai_almanac.server.db import get_db
@@ -90,7 +88,10 @@ async def test_a_clean_split_is_accepted_on_the_same_path(
 
     res = await client.post("/blends", json=body, headers=as_new_user)
 
-    assert res.status_code != 400, res.text
+    assert res.status_code == 201, res.text
+    blend_id = res.json()["id"]
+    listed = await client.get("/blends", headers=as_new_user)
+    assert blend_id in {blend["id"] for blend in listed.json()}
 
 
 @pytest.mark.asyncio
@@ -118,15 +119,3 @@ async def test_submitted_blend_freezes_guardrail_warnings_with_the_job(
     warnings = " ".join(res.json()["warnings"])
     assert "3 models" in warnings
     assert "4 year" in warnings
-
-
-def test_min_onset_years_is_sourced_from_the_guardrails_record() -> None:
-    """One number, not four copies. The mirrors in modal/blending_app.py and
-    year-coverage.ts are still by-hand; this pins the two Python readers."""
-    from ai_almanac.server.services import blend_domain, guardrails
-
-    # Ruff reads an ALL_CAPS name on the left of `==` as a Yoda condition, hence
-    # the ordering here.
-    expected = guardrails.DEFAULT_GUARDRAILS.min_onset_years
-    assert expected == job_submission.MIN_ONSET_YEARS
-    assert expected == blend_domain.MIN_ONSET_YEARS

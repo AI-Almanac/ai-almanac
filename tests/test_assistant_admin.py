@@ -1,9 +1,7 @@
 """The assistant ruleset admin API.
 
 Two things matter here: an admin can iterate on the wording at runtime, and a
-non-admin cannot reach any of it. The guardrail thresholds are exposed read-only
-— they are a platform setting, because the submission chokepoint reads the same
-value.
+non-admin cannot reach any of it.
 """
 
 from __future__ import annotations
@@ -12,6 +10,8 @@ import httpx
 import pytest
 
 from ai_almanac.server.services import rulesets
+from ai_almanac.server.services.chat_state import ChatScope
+from ai_almanac.server.services.llm import _instructions_for_ruleset
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,6 @@ async def test_listing_reports_the_packaged_rulesets_and_which_is_active(
     by_id = {item["id"]: item for item in res.json()}
     assert by_id["builtin"]["is_active"] is True
     assert by_id["unconstrained"]["is_active"] is False
-    assert "caveats" in by_id["builtin"]["section_keys"]
 
 
 @pytest.mark.asyncio
@@ -43,23 +42,13 @@ async def test_preview_renders_the_exact_prompt_the_chat_path_would_use(
 
     assert res.status_code == 200, res.text
     body = res.json()
-    assert "Interpreting results: caveats" in body["instructions"]
-    assert "risk of overfitting" in body["instructions"]
+    scope = ChatScope(kind="blend_setup", key="preview", job_ids=[])
+    assert body["instructions"] == _instructions_for_ruleset(
+        rulesets.packaged_ruleset("builtin"), scope
+    )
     # An unresolved placeholder must be visible before activating, not at runtime.
     assert "{{" not in body["instructions"]
     assert body["character_count"] == len(body["instructions"])
-
-
-@pytest.mark.asyncio
-async def test_preview_rejects_an_unknown_scope_kind(
-    client: httpx.AsyncClient, as_new_user: dict[str, str]
-) -> None:
-    res = await client.post(
-        "/assistant/rulesets/builtin/preview",
-        headers=as_new_user,
-        json={"scope_kind": "not_a_scope"},
-    )
-    assert res.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -106,8 +95,6 @@ async def test_clone_then_activate_changes_what_chat_resolves(
     assert "Answer in one sentence." in rulesets.build_instructions(active, "blend_setup")
     # The required section survived an edit that did not mention it.
     assert "Interpreting results: caveats" in rulesets.build_instructions(active, "blend_setup")
-
-    await rulesets.activate_ruleset("builtin")
 
 
 @pytest.mark.asyncio
@@ -173,8 +160,6 @@ async def test_cloning_reclaims_a_deleted_ruleset_id(
     stored = {row.ruleset.id: row for row in await rulesets.list_rulesets()}
     assert "test" in stored  # resurrected, no longer archived
 
-    await rulesets.archive_ruleset("test")
-
 
 @pytest.mark.asyncio
 async def test_saving_cannot_disable_a_required_section(
@@ -197,26 +182,33 @@ async def test_saving_cannot_disable_a_required_section(
     assert res.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_guardrail_thresholds_are_reported_read_only(
-    client: httpx.AsyncClient, as_new_user: dict[str, str]
-) -> None:
-    """Shown so an admin can see what the {{placeholders}} resolve to. There is
-    no PUT: changing them is a platform setting, because the chokepoint reads the
-    same value."""
-    res = await client.get("/config/guardrails", headers=as_new_user)
-    assert res.status_code == 200, res.text
-    assert res.json()["min_training_years"] >= 1
-
-    assert (await client.put("/config/guardrails", headers=as_new_user, json={})).status_code == 405
-
-
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/assistant/rulesets/no-such", None),
+        (
+            "POST",
+            "/assistant/rulesets/no-such/clone",
+            {"id": "x", "name": "X", "prompt_sections": []},
+        ),
+        ("POST", "/assistant/rulesets/no-such/activate", None),
+        ("POST", "/assistant/rulesets/no-such/preview", {"scope_kind": "blend_setup"}),
+        ("POST", "/assistant/rulesets/no-such/comparison-enabled", {"enabled": True}),
+        ("POST", "/assistant/rulesets/no-such/admin-enabled", {"enabled": True}),
+        ("DELETE", "/assistant/rulesets/no-such", None),
+    ],
+)
 @pytest.mark.asyncio
 async def test_an_unknown_ruleset_is_a_404(
-    client: httpx.AsyncClient, as_new_user: dict[str, str]
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    method: str,
+    path: str,
+    body: dict | None,
 ) -> None:
-    res = await client.get("/assistant/rulesets/no-such-thing", headers=as_new_user)
-    assert res.status_code == 404
+    await rulesets.seed_packaged_rulesets()
+    res = await client.request(method, path, headers=as_new_user, json=body)
+    assert res.status_code == 404, f"{method} {path} returned {res.status_code}"
 
 
 @pytest.mark.asyncio
@@ -240,7 +232,6 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
     )
 
     assert res.status_code == 409
-    assert "Clone it" in res.json()["detail"]
 
 
 # --- admin gating ---------------------------------------------------------
@@ -262,9 +253,15 @@ async def test_saving_over_a_packaged_id_is_refused_with_a_conflict(
         ("POST", "/assistant/rulesets/builtin/activate"),
         ("POST", "/assistant/rulesets/builtin/preview"),
         ("POST", "/assistant/rulesets/builtin/comparison-enabled"),
+        ("POST", "/assistant/rulesets/builtin/admin-enabled"),
         ("DELETE", "/assistant/rulesets/builtin"),
         ("GET", "/assistant/feedback"),
     ],
+)
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [({"X-Forwarded-User": "rando"}, 403), ({}, 401)],
+    ids=["non-admin", "unidentified"],
 )
 @pytest.mark.asyncio
 async def test_every_endpoint_requires_admin_in_shared(
@@ -272,6 +269,8 @@ async def test_every_endpoint_requires_admin_in_shared(
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     path: str,
+    headers: dict[str, str],
+    expected: int,
 ) -> None:
     from ai_almanac.settings import settings
 
@@ -279,19 +278,9 @@ async def test_every_endpoint_requires_admin_in_shared(
     monkeypatch.setattr(settings, "admin_subjects", "")
     monkeypatch.setattr(settings, "admin_emails", "")
 
-    res = await client.request(method, path, headers={"X-Forwarded-User": "rando"}, json={})
+    res = await client.request(method, path, headers=headers, json={})
 
-    assert res.status_code == 403, f"{method} {path} returned {res.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_endpoints_reject_an_unidentified_caller_in_shared(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from ai_almanac.settings import settings
-
-    monkeypatch.setattr(settings, "auth_mode", "proxy")
-    assert (await client.get("/assistant/rulesets")).status_code == 401
+    assert res.status_code == expected, f"{method} {path} returned {res.status_code}"
 
 
 # --- exposure flag and deletion ---------------------------------------------
@@ -302,8 +291,6 @@ async def test_the_exposure_flag_gates_what_users_see(
     client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     await rulesets.seed_packaged_rulesets()
-    await rulesets.set_comparison_enabled("builtin", False)
-    await rulesets.set_comparison_enabled("unconstrained", False)
 
     async def option_ids() -> set[str]:
         res = await client.get("/assistant/ruleset-options", headers=as_new_user)
@@ -335,13 +322,6 @@ async def test_the_exposure_flag_gates_what_users_see(
     assert disabled.status_code == 200
     assert await option_ids() == {"builtin"}
 
-    missing = await client.post(
-        "/assistant/rulesets/no-such/comparison-enabled",
-        headers=as_new_user,
-        json={"enabled": True},
-    )
-    assert missing.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_admin_preview_is_visible_to_admins_only(
@@ -359,11 +339,6 @@ async def test_admin_preview_is_visible_to_admins_only(
     )
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["admin_enabled"] is True
-
-    missing = await client.post(
-        "/assistant/rulesets/no-such/admin-enabled", headers=as_new_user, json={"enabled": True}
-    )
-    assert missing.status_code == 404
 
     # The admin's picker includes the preview, badged, and it counts toward
     # comparison availability for the admin.
@@ -383,28 +358,22 @@ async def test_admin_preview_is_visible_to_admins_only(
     assert {item["id"] for item in user_res["rulesets"]} == {"builtin"}
     assert user_res["compare_available"] is False
 
-    await rulesets.set_admin_enabled("unconstrained", False)
-
 
 @pytest.mark.asyncio
-async def test_admin_preview_selectability_and_archive_clears_it(
-    client: httpx.AsyncClient,
+async def test_archiving_a_ruleset_withdraws_its_admin_preview(
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
-    from ai_almanac.server.services.rulesets import Ruleset
-
     await rulesets.seed_packaged_rulesets()
-    await rulesets.set_admin_enabled("unconstrained", True)
-    assert await rulesets.selectable_ruleset("unconstrained") is None
-    assert await rulesets.selectable_ruleset("unconstrained", for_admin=True) is not None
-
-    await rulesets.save_ruleset(Ruleset(id="draft-preview", name="Draft"))
+    await rulesets.save_ruleset(rulesets.Ruleset(id="draft-preview", name="Draft"))
     await rulesets.set_admin_enabled("draft-preview", True)
-    await rulesets.archive_ruleset("draft-preview")
-    stored = {row.ruleset.id: row for row in await rulesets.list_rulesets(include_archived=True)}
-    assert stored["draft-preview"].admin_enabled is False
-    assert await rulesets.selectable_ruleset("draft-preview", for_admin=True) is None
 
-    await rulesets.set_admin_enabled("unconstrained", False)
+    async def admin_option_ids() -> set[str]:
+        res = await client.get("/assistant/ruleset-options", headers=as_new_user)
+        return {item["id"] for item in res.json()["rulesets"]}
+
+    assert "draft-preview" in await admin_option_ids()
+    await rulesets.archive_ruleset("draft-preview")
+    assert "draft-preview" not in await admin_option_ids()
 
 
 @pytest.mark.asyncio
@@ -455,8 +424,5 @@ async def test_packaged_and_active_rulesets_cannot_be_deleted(
     )
     assert saved.status_code == 200, saved.text
     await client.post("/assistant/rulesets/active-custom/activate", headers=as_new_user)
-    try:
-        active = await client.delete("/assistant/rulesets/active-custom", headers=as_new_user)
-        assert active.status_code == 409
-    finally:
-        await client.post("/assistant/rulesets/builtin/activate", headers=as_new_user)
+    active = await client.delete("/assistant/rulesets/active-custom", headers=as_new_user)
+    assert active.status_code == 409

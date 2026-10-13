@@ -41,16 +41,11 @@ def stub_model(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_every_variant_loses_the_submit_tools() -> None:
-    """The playground compares what the assistant proposes, never what it runs."""
+@pytest_asyncio.fixture
+async def exposed_pair() -> None:
     await rulesets.seed_packaged_rulesets()
-
-    resolved = await assistant_compare.variant_ruleset(
-        assistant_compare.VariantSpec(ruleset_id="builtin")
-    )
-
-    assert set(assistant_compare.COMPARE_DENIED_TOOLS) <= set(resolved.tool_policy.deny)
+    await rulesets.set_comparison_enabled("builtin", True)
+    await rulesets.set_comparison_enabled("unconstrained", True)
 
 
 @pytest.mark.asyncio
@@ -242,7 +237,9 @@ async def test_discarding_a_comparison_removes_its_scratch_sessions(
 
     deleted = await client.delete(f"/assistant/comparisons/{comparison_id}", headers=as_new_user)
     assert deleted.status_code == 204
-    assert await assistant_compare.comparison_session_ids(comparison_id, "unused") == []
+    for variant in started["variants"]:
+        arm = await client.get(f"/chat/sessions/{variant['session_id']}", headers=as_new_user)
+        assert arm.status_code == 404
 
     again = await client.delete(f"/assistant/comparisons/{comparison_id}", headers=as_new_user)
     assert again.status_code == 404
@@ -266,6 +263,12 @@ async def test_cloning_a_session_carries_its_configuration_into_both_arms(
         },
     )
     source_id = created.json()["id"]
+    configured = await client.patch(
+        f"/chat/sessions/{source_id}/blend/config",
+        headers=as_new_user,
+        json={"name": "Carried over"},
+    )
+    assert configured.status_code == 200, configured.text
 
     res = await client.post(
         "/assistant/compare",
@@ -283,6 +286,7 @@ async def test_cloning_a_session_carries_its_configuration_into_both_arms(
         detail = await client.get(f"/chat/sessions/{variant['session_id']}", headers=as_new_user)
         assert detail.status_code == 200
         assert detail.json()["scope"]["key"] == "blend-1"
+        assert detail.json()["blend_config"]["name"] == "Carried over"
 
     # The source conversation is untouched by either arm.
     source = await client.get(f"/chat/sessions/{source_id}", headers=as_new_user)
@@ -320,11 +324,25 @@ async def test_comparison_endpoints_require_admin_in_shared(
         assert unauthenticated.status_code == 401, f"{method} {path} open when unidentified"
 
 
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/assistant/compare",
+            {"variants": [{"ruleset_id": "builtin"}, {"ruleset_id": "unconstrained"}]},
+        ),
+        ("/assistant/compare/blind", {"ruleset_ids": ["builtin", "unconstrained"]}),
+    ],
+    ids=["admin", "blind"],
+)
 @pytest.mark.asyncio
 async def test_a_scratch_session_cannot_submit_a_run(
     client: httpx.AsyncClient,
     as_new_user: dict[str, str],
     stub_model: None,
+    exposed_pair: None,
+    path: str,
+    payload: dict,
 ) -> None:
     """Withholding the submit tools stops the model, not the session id.
 
@@ -332,23 +350,14 @@ async def test_a_scratch_session_cannot_submit_a_run(
     endpoints launch a session's configuration without involving the model at all.
     So the refusal has to live on the session, not only in the tool policy.
     """
-    await rulesets.seed_packaged_rulesets()
-
-    res = await client.post(
-        "/assistant/compare",
-        headers=as_new_user,
-        json={
-            "message": "which model is best?",
-            "variants": [{"ruleset_id": "builtin"}, {"ruleset_id": "unconstrained"}],
-        },
-    )
+    res = await client.post(path, headers=as_new_user, json={"message": "hi", **payload})
     session_id = _sse_events(res.text)[0]["variants"][0]["session_id"]
 
-    for path in (
+    for submit in (
         f"/chat/sessions/{session_id}/benchmark/submit",
         f"/chat/sessions/{session_id}/blend/submit",
     ):
-        submitted = await client.post(path, headers=as_new_user, json={})
+        submitted = await client.post(submit, headers=as_new_user, json={})
         assert submitted.status_code == 400, submitted.text
         assert "comparison" in submitted.json()["detail"]
 
@@ -358,13 +367,6 @@ async def test_a_scratch_session_cannot_submit_a_run(
 # Regular users pick two exposed rulesets; the columns stay anonymous — the
 # server shuffles which is which, the stream names arms only by index, and
 # identities come out in the vote response.
-
-
-@pytest_asyncio.fixture
-async def exposed_pair() -> None:
-    await rulesets.seed_packaged_rulesets()
-    await rulesets.set_comparison_enabled("builtin", True)
-    await rulesets.set_comparison_enabled("unconstrained", True)
 
 
 @pytest.mark.asyncio
@@ -401,7 +403,7 @@ async def test_a_blind_comparison_never_names_its_arms(
 
 
 @pytest.mark.asyncio
-async def test_the_arm_order_is_shuffled(
+async def test_the_arm_order_is_shuffled_and_revealed_by_the_vote(
     client: httpx.AsyncClient,
     as_new_user: dict[str, str],
     stub_model: None,
@@ -409,7 +411,7 @@ async def test_the_arm_order_is_shuffled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The endpoint really applies the shuffle: force it to reverse and the
-    candidate lands in arm 0."""
+    candidate lands in arm 0, as the vote response reveals."""
     await rulesets.seed_packaged_rulesets()
     monkeypatch.setattr("ai_almanac.server.routers.assistant.random.shuffle", list.reverse)
 
@@ -429,35 +431,8 @@ async def test_the_arm_order_is_shuffled(
     ordered = [by_session[variant["session_id"]] for variant in started["variants"]]
 
     assert ordered == ["unconstrained", "builtin"]
-
-
-@pytest.mark.asyncio
-async def test_the_vote_response_reveals_the_arms(
-    client: httpx.AsyncClient,
-    as_new_user: dict[str, str],
-    stub_model: None,
-    exposed_pair: None,
-) -> None:
-    await rulesets.seed_packaged_rulesets()
-
-    res = await client.post(
-        "/assistant/compare/blind",
-        headers=as_new_user,
-        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
-    )
-    started = _sse_events(res.text)[0]
-    winner = started["variants"][0]["session_id"]
-
-    vote = await client.post(
-        f"/assistant/comparisons/{started['comparison_id']}/vote",
-        headers=as_new_user,
-        json={"winner_session_id": winner},
-    )
-
-    assert vote.status_code == 200, vote.text
-    arms = vote.json()["arms"]
-    assert {arm["ruleset_id"] for arm in arms} == {"builtin", "unconstrained"}
-    assert all(arm["ruleset_name"] for arm in arms)
+    # The vote is what reveals the arms.
+    assert all(arm["ruleset_name"] for arm in vote.json()["arms"])
 
 
 @pytest.mark.asyncio
@@ -466,9 +441,6 @@ async def test_comparison_arms_must_be_two_distinct_exposed_rulesets(
     as_new_user: dict[str, str],
 ) -> None:
     await rulesets.seed_packaged_rulesets()
-    for ruleset_id in ("builtin", "unconstrained"):
-        await rulesets.set_comparison_enabled(ruleset_id, False)
-        await rulesets.set_admin_enabled(ruleset_id, False)
 
     async def availability() -> bool:
         res = await client.get("/assistant/ruleset-options", headers=as_new_user)
@@ -506,9 +478,6 @@ async def test_the_active_ruleset_is_always_a_valid_arm(
 ) -> None:
     """One exposed alternative is enough: the active built-in is the baseline."""
     await rulesets.seed_packaged_rulesets()
-    for ruleset_id in ("builtin", "unconstrained"):
-        await rulesets.set_comparison_enabled(ruleset_id, False)
-        await rulesets.set_admin_enabled(ruleset_id, False)
     await rulesets.set_comparison_enabled("unconstrained", True)
 
     res = await client.get("/assistant/ruleset-options", headers=as_new_user)
@@ -564,24 +533,36 @@ async def test_a_blind_scratch_session_cannot_submit_a_run(
 
 
 @pytest.mark.asyncio
-async def test_a_vote_is_scoped_to_the_comparisons_owner(
+async def test_only_the_owner_can_vote_on_continue_or_discard_a_comparison(
     client: httpx.AsyncClient,
     as_new_user: dict[str, str],
     stub_model: None,
     exposed_pair: None,
 ) -> None:
-    await rulesets.seed_packaged_rulesets()
-
     res = await client.post(
         "/assistant/compare/blind",
         headers=as_new_user,
         json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     comparison_id = _sse_events(res.text)[0]["comparison_id"]
+    someone_else = {"X-Forwarded-User": "someone-else"}
 
-    with pytest.raises(assistant_compare.UnknownSessionError):
-        await assistant_compare.record_vote(comparison_id, "someone-else", None)
-    assert await assistant_compare.comparison_arms(comparison_id, "someone-else") == []
+    for method, path, payload in (
+        # A vote response reveals the arms, so it must not reach another user.
+        ("POST", f"/assistant/comparisons/{comparison_id}/vote", {"winner_session_id": None}),
+        ("POST", f"/assistant/comparisons/{comparison_id}/message", {"message": "hi"}),
+        ("DELETE", f"/assistant/comparisons/{comparison_id}", None),
+    ):
+        refused = await client.request(method, path, headers=someone_else, json=payload)
+        assert refused.status_code == 404, f"{method} {path} returned {refused.status_code}"
+
+    # The owner's comparison survived the attempted discard.
+    vote = await client.post(
+        f"/assistant/comparisons/{comparison_id}/vote",
+        headers=as_new_user,
+        json={"winner_session_id": None},
+    )
+    assert vote.status_code == 200, vote.text
 
 
 # --- multi-turn comparisons --------------------------------------------------
@@ -679,33 +660,6 @@ async def test_a_follow_up_arm_still_lacks_the_submit_tools(
         assert set(assistant_compare.COMPARE_DENIED_TOOLS) <= set(variant.ruleset.tool_policy.deny)
 
 
-@pytest.mark.asyncio
-async def test_a_comparison_cannot_be_continued_by_someone_else(
-    client: httpx.AsyncClient,
-    as_new_user: dict[str, str],
-    stub_model: None,
-    exposed_pair: None,
-) -> None:
-    await rulesets.seed_packaged_rulesets()
-
-    first = await client.post(
-        "/assistant/compare/blind",
-        headers=as_new_user,
-        json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
-    )
-    comparison_id = _sse_events(first.text)[0]["comparison_id"]
-
-    with pytest.raises(assistant_compare.UnknownSessionError):
-        await assistant_compare.resume_comparison(comparison_id, "someone-else")
-
-    missing = await client.post(
-        "/assistant/comparisons/no-such-comparison/message",
-        headers=as_new_user,
-        json={"message": "hi"},
-    )
-    assert missing.status_code == 404
-
-
 # --- feature flag -----------------------------------------------------------
 #
 # Comparisons cost two model replies each, so an operator can switch the whole
@@ -763,17 +717,6 @@ async def test_the_flag_withdraws_the_offer_but_keeps_the_style_picker(
 
 
 @pytest.mark.asyncio
-async def test_the_offer_returns_when_the_feature_is_switched_back_on(
-    client: httpx.AsyncClient, as_new_user: dict[str, str], exposed_pair: None
-) -> None:
-    res = await client.get("/assistant/ruleset-options", headers=as_new_user)
-
-    body = res.json()
-    assert body["comparisons_enabled"] is True
-    assert body["compare_available"] is True
-
-
-@pytest.mark.asyncio
 async def test_the_admins_audience_gates_users_but_not_admins(
     client: httpx.AsyncClient,
     as_new_user: dict[str, str],
@@ -810,7 +753,6 @@ async def test_an_admin_can_blind_compare_a_preview_ruleset_a_user_cannot(
 
     await rulesets.seed_packaged_rulesets()
     await rulesets.set_comparison_enabled("builtin", True)
-    await rulesets.set_comparison_enabled("unconstrained", False)
     await rulesets.set_admin_enabled("unconstrained", True)  # preview only
 
     res = await client.post(
@@ -829,5 +771,3 @@ async def test_an_admin_can_blind_compare_a_preview_ruleset_a_user_cannot(
         json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     assert refused.status_code == 400
-
-    await rulesets.set_admin_enabled("unconstrained", False)

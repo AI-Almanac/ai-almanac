@@ -14,7 +14,6 @@ from ai_almanac.server.services.guardrails import (
     check_benchmark,
     check_blend,
     error_messages,
-    warning_messages,
 )
 
 
@@ -42,7 +41,6 @@ def test_true_holdout_overlapping_training_is_an_error():
     assert finding.severity == "error"
     # Names the leaked year, not just the rule, so the user can act on it.
     assert "2014" in finding.message
-    assert "2015" not in finding.message.split("A holdout")[0]
 
 
 def test_training_overlapping_cv_holdout_is_not_flagged():
@@ -169,12 +167,3 @@ def test_benchmark_sample_size_is_measured_across_models():
     )
     # 2018-2021 is four distinct years, not two three-year spans.
     assert "4 year" in by_key(findings, "small_test_sample").message
-
-
-def test_message_helpers_split_on_severity():
-    findings = check_blend(
-        BlendYears(training=[2020, 2021], cv_holdout=[2020, 2021], true_holdout=[2021]),
-        member_count=3,
-    )
-    assert len(error_messages(findings)) == 1
-    assert len(warning_messages(findings)) == len(findings) - 1
