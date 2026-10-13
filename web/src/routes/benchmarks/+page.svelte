@@ -907,9 +907,5 @@
 			padding-left: 1.3rem;
 			text-align: left;
 		}
-
-		.result-chat {
-			min-height: 34rem;
-		}
 	}
 </style>

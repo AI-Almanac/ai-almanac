@@ -1035,7 +1035,9 @@
 		flex: 1 1 50%;
 		min-width: 0;
 		display: flex;
-		min-height: 32rem;
+		position: sticky;
+		top: var(--workspace-pinned-top);
+		height: var(--workspace-screen-height);
 	}
 
 	.setup-chat :global(.chat-panel) {
@@ -1061,6 +1063,11 @@
 	@media (max-width: 60rem) {
 		.setup-layout.with-chat {
 			flex-direction: column;
+		}
+
+		/* Stacked above the form, a pinned chat would cover it while scrolling. */
+		.setup-chat {
+			position: static;
 		}
 	}
 
