@@ -81,7 +81,8 @@ def test_the_scope_suffix_is_not_ruleset_editable() -> None:
 
 def test_a_scopeless_session_gets_no_suffix() -> None:
     scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
-    assert instructions(scope) == rulesets.build_instructions(builtin(), scope.kind)
+    expected = rulesets.build_instructions(builtin(), scope.kind) + llm._TOPIC_BOUNDARY
+    assert instructions(scope) == expected
 
 
 # --- topic boundary ------------------------------------------------------
