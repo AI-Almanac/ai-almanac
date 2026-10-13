@@ -31,7 +31,7 @@ jobs:
 
       # The ai-almanac wheel force-includes web/build, so the editable install
       # that `pixi install` performs needs the SPA bundle to exist first.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -43,7 +43,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
           # Install the environments the check/test tasks resolve to: dev (ruff,
           # pytest) and default (node-backed web tasks). pixi.lock is committed,
