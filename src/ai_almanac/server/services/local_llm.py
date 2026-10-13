@@ -36,7 +36,7 @@ import httpx
 
 from ai_almanac.locking import file_lock, try_file_lock
 from ai_almanac.paths import data_root
-from ai_almanac.settings import settings
+from ai_almanac.settings import Settings, local_llm_model, settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,12 @@ LOADING_MESSAGE = "The assistant is starting up. Try again in a few minutes."
 # Forecast jobs this far into their lifecycle may be holding GPU memory.
 _GPU_JOB_STATUSES = ("starting", "running", "canceling")
 _FORBIDDEN_SERVE_FLAGS = ("--host", "--port")
+# Flags for a model outside local_llm_models.yaml when llm_serve_args is blank:
+# the Spark startup tuning only. Without a tool-call parser the assistant's
+# tools fail, so a custom model needs its parser set in llm_serve_args.
+_CUSTOM_MODEL_SERVE_ARGS = (
+    "--max-model-len 32768 --max-cudagraph-capture-size 32 --safetensors-load-strategy eager"
+)
 # Wake reloads the weights from the checkpoint: ~25 s for the default model on
 # the Spark with eager safetensors loading, ~2 min with vLLM's mmap default.
 # Generous so a slower disk or a larger model doesn't fail the wake.
@@ -190,8 +196,25 @@ def _kill_recorded() -> None:
 # ---------------------------------------------------------------------------
 
 
+def gpu_memory_utilization() -> float:
+    """The configured share, or the catalog model's own while it is unset."""
+    default = Settings.model_fields["llm_gpu_memory_utilization"].default
+    entry = local_llm_model(settings.llm_model)
+    if settings.llm_gpu_memory_utilization == default and entry is not None:
+        return float(entry["gpu_memory_utilization"])
+    return settings.llm_gpu_memory_utilization
+
+
+def model_serve_args() -> str:
+    """Model-specific `vllm serve` flags: llm_serve_args, else the catalog's."""
+    if settings.llm_serve_args.strip():
+        return settings.llm_serve_args
+    entry = local_llm_model(settings.llm_model)
+    return entry["serve_args"] if entry is not None else _CUSTOM_MODEL_SERVE_ARGS
+
+
 def serve_args() -> list[str]:
-    extra = shlex.split(settings.llm_serve_args)
+    extra = shlex.split(model_serve_args())
     for flag in extra:
         name = flag.split("=", 1)[0]
         if name in _FORBIDDEN_SERVE_FLAGS:
@@ -209,7 +232,7 @@ def serve_args() -> list[str]:
         str(settings.llm_port),
         "--enable-sleep-mode",
         "--gpu-memory-utilization",
-        str(settings.llm_gpu_memory_utilization),
+        str(gpu_memory_utilization()),
         *extra,
     ]
 
@@ -435,10 +458,18 @@ def ensure_awake() -> None:
     with _lock():
         if gpu_job_active():
             raise AssistantPaused()
-        if _live_pid() is None:
+        running = _live_pid()
+        if running is None:
             # Stopped by a failed park (or crashed). Bring it back; the load
             # takes minutes, so this turn cannot wait for it.
             _start_locked()
+            raise AssistantLoading()
+        identity = _launch_identity()
+        if {key: _read_record().get(key) for key in identity} != identity:
+            # The model or its flags changed in Settings since launch.
+            logger.info("restarting local model server with changed settings (pid %s)", running)
+            _terminate(running)
+            _start_locked(identity)
             raise AssistantLoading()
         if not _healthy():
             raise AssistantLoading()

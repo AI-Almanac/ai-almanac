@@ -133,6 +133,9 @@ def test_state_shape(client: TestClient, authed: dict) -> None:
     assert set(body["envs"].keys()) >= {"benchmark", "blending", "forecast"}
     assert "prepare" in body
     assert body["prepare"]["status"] == "idle"
+    models = {m["id"]: m for m in body["local_models"]}
+    assert models["nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"]["verified"] is True
+    assert all(isinstance(m["downloaded"], bool) for m in models.values())
 
 
 def test_state_gpu_monkeypatched(

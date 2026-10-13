@@ -3818,6 +3818,21 @@ export interface components {
             /** Error */
             error: string | null;
         };
+        /** LocalLlmModelOut */
+        LocalLlmModelOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description: string;
+            /** Weights Gb */
+            weights_gb: number;
+            /** Verified */
+            verified: boolean;
+            /** Downloaded */
+            downloaded: boolean;
+        };
         /** MessageIn */
         MessageIn: {
             /** Content */
@@ -4629,6 +4644,8 @@ export interface components {
             llm: {
                 [key: string]: unknown;
             };
+            /** Local Models */
+            local_models: components["schemas"]["LocalLlmModelOut"][];
             /** Envs */
             envs: {
                 [key: string]: unknown;

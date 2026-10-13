@@ -286,6 +286,24 @@ def save_storage(output_dir: str | None, dataset_mount_roots: list[str] | None) 
         reload_settings()
 
 
+def local_llm_models() -> list[dict]:
+    """The managed-LLM catalog, with whether each model's weights are cached."""
+    from ai_almanac.envs.manager import llm_model_cached
+    from ai_almanac.settings import get_local_llm_models
+
+    return [
+        {
+            "id": m["id"],
+            "label": m["label"],
+            "description": m["description"],
+            "weights_gb": m["weights_gb"],
+            "verified": m["verified"],
+            "downloaded": llm_model_cached(m["id"]),
+        }
+        for m in get_local_llm_models()
+    ]
+
+
 def save_llm(
     base_url: str,
     model: str,

@@ -136,10 +136,31 @@ This file owns the vLLM process and its state changes. Its functions:
 - New: `src/ai_almanac/envs/llm.pixi.toml`, `src/ai_almanac/server/services/local_llm.py`, and one test file.
 - Changed: `envs/manager.py`, `settings.py`, `server/services/job_manager.py`, `server/services/llm.py`, `server/app.py`, `server/services/setup.py`, `server/routers/setup.py`, `cli.py`, `server/services/job_workload.py`, `envs/forecast_entrypoint.py`, `web/src/routes/setup/LlmStep.svelte`, and the chat UI where the paused event is shown.
 
+## Model catalog
+`src/ai_almanac/server/config/local_llm_models.yaml` lists the models offered by
+the setup wizard, `ai-almanac init`, `ai-almanac llm models`, and the Settings
+model field. Each entry carries its own `vllm serve` flags and memory share,
+because tool-call and reasoning parsers differ by model family, and an 80 GB
+model needs more than 0.45 of the Spark. A blank `llm_serve_args` uses the
+entry's flags. `llm_gpu_memory_utilization` left at its default uses the
+entry's share. A model outside the catalog gets only the startup tuning, so
+its tool-call parser must be set by hand.
+
+Switching models (`ai-almanac llm use <id>`, or the Settings page) takes effect
+on the next chat turn. `ensure_awake` notices that the running server's
+recorded flags no longer match and restarts it.
+
+Only Nemotron 3.5 Lightning is `verified: true`. To verify another entry on a
+Spark:
+1. Run `ai-almanac llm use <id>`.
+2. Chat, and confirm a tool call parses.
+3. Submit a forecast, and confirm `/is_sleeping` and that the memory is freed.
+4. Chat again, and note the wake time.
+5. Flip the flag, and record the timings here.
+
 ## Deliberately skipped
 - Letting a small LLM run alongside a forecast when memory fits. We can add a memory-budget check later if someone wants that.
 - Parking for blend/ROMP jobs. They are CPU-bound and much smaller.
-- Choosing a model from a list in the UI. For now, one default plus `--llm-model`.
 - The cloud/shared deployment keeps using an external LLM.
 
 ## Verification

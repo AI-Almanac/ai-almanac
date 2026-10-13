@@ -33,6 +33,7 @@ _CONFIG_PKG = files("ai_almanac.server").joinpath("config")
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
 _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
+_LOCAL_LLM_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("local_llm_models.yaml")))
 
 
 # Model the managed local LLM serves unless one is chosen at setup. NVFP4 keeps
@@ -198,24 +199,17 @@ class Settings(BaseSettings):
     llm_port: int = 8766
     # Fraction of GPU memory vLLM claims (weights + KV cache). On unified-memory
     # hosts (DGX Spark) that is system RAM, so vLLM's 0.9 default would starve
-    # the rest of the machine.
+    # the rest of the machine. A catalog model's own share (a larger model needs
+    # more) applies while this is left at its default.
     llm_gpu_memory_utilization: float = 0.45
     # Put the managed model to sleep after this long without a chat turn; 0
     # keeps it loaded.
     llm_idle_sleep_minutes: float = 10
-    # Extra `vllm serve` flags. The defaults match DEFAULT_LOCAL_LLM_MODEL
-    # (Nemotron's XML tool calls and reasoning). Capturing CUDA graphs only up
-    # to batch 32 (vLLM's default is 512) cuts startup; a personal install
-    # never batches more than a few requests. Eager safetensors loading reads
-    # each shard up front instead of page-faulting it through mmap, which on
-    # the Spark cuts weight loading (and so every wake) from ~110 s to ~13 s.
-    # --host/--port are rejected: the server's dev endpoints are
-    # unauthenticated and must stay on loopback.
-    llm_serve_args: str = (
-        "--max-model-len 65536 --enable-auto-tool-choice "
-        "--tool-call-parser qwen3_coder --reasoning-parser nemotron_v3 "
-        "--max-cudagraph-capture-size 32 --safetensors-load-strategy eager"
-    )
+    # Extra `vllm serve` flags. Blank uses the flags local_llm_models.yaml
+    # lists for llm_model (tool-call/reasoning parsers differ by model family);
+    # a value replaces them wholesale. --host/--port are rejected: the
+    # server's dev endpoints are unauthenticated and must stay on loopback.
+    llm_serve_args: str = ""
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
@@ -701,6 +695,22 @@ def get_packaged_forecast_models() -> list[dict]:
     if _forecast_models_cache is None:
         _forecast_models_cache = yaml.safe_load(_FORECAST_MODELS_YAML.read_text())
     return _forecast_models_cache
+
+
+_local_llm_models_cache: list[dict] | None = None
+
+
+def get_local_llm_models() -> list[dict]:
+    """Models the managed local LLM offers, with the serve flags each needs."""
+    global _local_llm_models_cache
+    if _local_llm_models_cache is None:
+        _local_llm_models_cache = yaml.safe_load(_LOCAL_LLM_MODELS_YAML.read_text())["models"]
+    return _local_llm_models_cache
+
+
+def local_llm_model(model_id: str) -> dict | None:
+    """Catalog entry for a Hugging Face model id, or None for a custom model."""
+    return next((m for m in get_local_llm_models() if m["id"] == model_id), None)
 
 
 def blend_model_key(name: str) -> str:

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { SetupWizardState } from '$lib/setup/wizard.svelte';
 	import { testLlm, saveLlm } from '$lib/api/setup';
-	import type { LlmTestOut } from '$lib/api/setup';
+	import type { LlmTestOut, SetupState } from '$lib/api/setup';
 
 	interface Props {
 		wizard: SetupWizardState;
@@ -18,11 +18,17 @@
 	type GpuInfo = { name?: string } | null | undefined;
 	type PlatformInfo = { platform?: string } | undefined;
 
+	const CUSTOM = '__custom__';
+
 	// "managed": ai-almanac runs the model itself with a bundled vLLM.
 	let engine = $state<'external' | 'managed'>('external');
 	let baseUrl = $state('http://localhost:11434/v1');
 	let model = $state('');
-	let localModel = $state('');
+	// A catalog model id, or CUSTOM for any other Hugging Face id.
+	let localChoice = $state('');
+	let customModel = $state('');
+	const localModels = $derived<SetupState['local_models']>(wizard.state?.local_models ?? []);
+	const localModel = $derived(localChoice === CUSTOM ? customModel.trim() : localChoice);
 	let initialized = false;
 	$effect(() => {
 		if (!initialized) {
@@ -31,11 +37,16 @@
 			const platform = wizard.state?.platform as PlatformInfo;
 			const canRunLocal = Boolean(gpu) && (platform?.platform ?? '').startsWith('linux');
 			engine = llm?.configured ? (llm.engine ?? 'external') : canRunLocal ? 'managed' : 'external';
-			localModel = llm?.default_local_model ?? '';
-			if (llm?.engine === 'managed' && llm.model) localModel = llm.model;
+			let current = llm?.default_local_model ?? '';
+			if (llm?.engine === 'managed' && llm.model) current = llm.model;
 			else {
 				if (llm?.base_url) baseUrl = llm.base_url;
 				if (llm?.model) model = llm.model;
+			}
+			if (localModels.some((m) => m.id === current)) localChoice = current;
+			else {
+				localChoice = CUSTOM;
+				customModel = current;
 			}
 			initialized = true;
 		}
@@ -117,12 +128,44 @@
 	</div>
 
 	{#if engine === 'managed'}
-		<div class="fields">
-			<div class="field">
-				<label for="local-model">Hugging Face model id</label>
-				<input id="local-model" type="text" bind:value={localModel} />
-			</div>
+		<div class="choices" role="radiogroup" aria-label="Local model">
+			{#each localModels as m (m.id)}
+				<label class="choice">
+					<input type="radio" bind:group={localChoice} value={m.id} />
+					<span>
+						<strong>{m.label}</strong>
+						<span class="badge">{m.weights_gb.toFixed(0)} GB</span>
+						{#if m.downloaded}<span class="badge">downloaded</span>{/if}
+						{#if !m.verified}<span class="badge warn">not yet tested on a Spark</span>{/if}
+						<span class="desc">{m.description}</span>
+						<code class="desc">{m.id}</code>
+					</span>
+				</label>
+			{/each}
+			<label class="choice">
+				<input type="radio" bind:group={localChoice} value={CUSTOM} />
+				<span>
+					<strong>Other model</strong>
+					<span class="desc">
+						Any Hugging Face model vLLM can serve. Set its tool-call parser under Settings → AI
+						assistant → Local model server flags, or the assistant's tools won't work.
+					</span>
+				</span>
+			</label>
 		</div>
+		{#if localChoice === CUSTOM}
+			<div class="fields">
+				<div class="field">
+					<label for="local-model">Hugging Face model id</label>
+					<input
+						id="local-model"
+						type="text"
+						bind:value={customModel}
+						placeholder="org/model-name"
+					/>
+				</div>
+			</div>
+		{/if}
 	{:else}
 		<div class="fields">
 			<div class="field">
@@ -226,6 +269,21 @@
 		display: block;
 		font-size: 0.8rem;
 		color: var(--color-text-muted);
+	}
+	.choice code.desc {
+		font-size: 0.75rem;
+	}
+	.badge {
+		margin-left: 0.4rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 0.3rem;
+		border: 1px solid var(--color-border);
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+	}
+	.badge.warn {
+		border-color: var(--color-status-failed, #d93025);
+		color: var(--color-status-failed, #d93025);
 	}
 	.fields {
 		display: flex;

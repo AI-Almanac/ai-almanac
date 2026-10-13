@@ -83,6 +83,7 @@
 						<input
 							id={`f-${field.name}`}
 							type={inputType(field)}
+							list={field.suggestions?.length ? `s-${field.name}` : undefined}
 							value={String(settings.value(field.name) ?? '')}
 							disabled={!field.editable}
 							oninput={(e) => settings.setValue(field, e.currentTarget.value)}
@@ -92,6 +93,13 @@
 									: 'Not set — enter a key'
 								: String(field.default ?? '')}
 						/>
+						{#if field.suggestions?.length}
+							<datalist id={`s-${field.name}`}>
+								{#each field.suggestions as suggestion (suggestion)}
+									<option value={suggestion}></option>
+								{/each}
+							</datalist>
+						{/if}
 						{#if field.sensitive && field.editable && settings.configured[field.name]}
 							<button
 								type="button"

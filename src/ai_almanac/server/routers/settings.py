@@ -27,6 +27,7 @@ from ai_almanac.settings import (
     RESTART_REQUIRED_FIELDS,
     SENSITIVE_FIELDS,
     SHARED_ENV_ONLY_FIELDS,
+    get_local_llm_models,
     reload_settings,
     settings,
     write_settings_overlay,
@@ -79,7 +80,11 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "'openai-compatible' (vLLM, Ollama, OpenAI) or 'pydantic-ai' (provider-prefixed model strings)",
             ),
             ("llm_base_url", "Provider URL", "Base URL for OpenAI-compatible providers"),
-            ("llm_model", "Model", "Model identifier"),
+            (
+                "llm_model",
+                "Model",
+                "Model identifier; with the managed server, the Hugging Face id it serves",
+            ),
             (
                 "llm_api_key",
                 "API key",
@@ -104,7 +109,8 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             (
                 "llm_serve_args",
                 "Local model server flags",
-                "Extra `vllm serve` flags (tool-call parser, context length)",
+                "Extra `vllm serve` flags (tool-call parser, context length); blank uses "
+                "the flags tested for the chosen model",
             ),
             ("llm_timeout_seconds", "Request timeout (seconds)", "Per-request timeout"),
             (
@@ -247,6 +253,8 @@ class FieldSchema(BaseModel):
     multiline: bool
     # Set for enum-valued fields (Literal annotations); the UI renders a select.
     choices: list[str] | None = None
+    # Common values for a free-text field; the UI offers them while typing.
+    suggestions: list[str] | None = None
 
 
 class SettingsSchema(BaseModel):
@@ -277,6 +285,13 @@ def _choices(annotation) -> list[str] | None:
         values = get_args(annotation)
         if all(isinstance(value, str) for value in values):
             return list(values)
+    return None
+
+
+def _suggestions(field_name: str) -> list[str] | None:
+    if field_name == "llm_model":
+        # The models the managed local server has serve flags for.
+        return [m["id"] for m in get_local_llm_models()]
     return None
 
 
@@ -328,6 +343,7 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     editable=not (shared and field_name in SHARED_ENV_ONLY_FIELDS),
                     multiline=field_name in MULTILINE_FIELDS,
                     choices=_choices(info.annotation),
+                    suggestions=None if shared else _suggestions(field_name),
                 )
             )
         if rendered:

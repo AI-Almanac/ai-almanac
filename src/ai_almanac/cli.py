@@ -212,6 +212,114 @@ llm_app = typer.Typer(help="Manage the local assistant model server (vLLM).")
 app.add_typer(llm_app, name="llm")
 
 
+def _local_llm_model_lines() -> list[str]:
+    from ai_almanac.envs.manager import llm_model_cached
+    from ai_almanac.settings import get_local_llm_models
+
+    lines = []
+    for i, m in enumerate(get_local_llm_models(), start=1):
+        tags = [f"{m['weights_gb']:.0f} GB"]
+        if llm_model_cached(m["id"]):
+            tags.append("downloaded")
+        if not m["verified"]:
+            tags.append("not yet tested on a Spark")
+        lines.append(f"[{i}] {m['label']} ({', '.join(tags)})\n    {m['id']}")
+    return lines
+
+
+def _prompt_local_llm_model() -> str:
+    """Pick a catalog model by number, or type any other Hugging Face id."""
+    from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, get_local_llm_models
+
+    models = get_local_llm_models()
+    typer.echo("Local model:")
+    for line in _local_llm_model_lines():
+        typer.echo(f"  {line}")
+    typer.echo(f"  [{len(models) + 1}] Other Hugging Face model")
+    default = next(
+        (str(i) for i, m in enumerate(models, start=1) if m["id"] == DEFAULT_LOCAL_LLM_MODEL), "1"
+    )
+    choice = typer.prompt(
+        "Model",
+        default=default,
+        type=click.IntRange(1, len(models) + 1),
+    )
+    if choice <= len(models):
+        return models[choice - 1]["id"]
+    typer.secho(
+        "set its tool-call parser in llm_serve_args, or the assistant's tools won't work",
+        fg=typer.colors.YELLOW,
+    )
+    return typer.prompt("Hugging Face model id")
+
+
+@llm_app.command("models")
+def llm_models() -> None:
+    """List the models the local model server has tested serve flags for."""
+    from ai_almanac.settings import reload_settings, settings
+
+    reload_settings()
+    for line in _local_llm_model_lines():
+        typer.echo(line)
+    if settings.llm_engine == "managed":
+        typer.echo(f"\ncurrent: {settings.llm_model}")
+
+
+@llm_app.command("use")
+def llm_use(
+    model_id: Annotated[str, typer.Argument(help="Hugging Face model id (see `llm models`).")],
+    download: Annotated[
+        bool,
+        typer.Option(
+            "--download/--no-download",
+            help="Fetch the weights now (default). Otherwise vLLM fetches them on first start.",
+        ),
+    ] = True,
+) -> None:
+    """Switch the assistant to a model served on this machine.
+
+    A running `serve` picks the change up on the next chat turn, restarting the
+    local model server with the new model.
+    """
+    import subprocess
+
+    from ai_almanac.envs.manager import download_llm_model, llm_env_ready
+    from ai_almanac.server.services.setup import save_llm
+    from ai_almanac.settings import local_llm_model, reload_settings, settings
+
+    reload_settings()
+    entry = local_llm_model(model_id)
+    if entry is None and not settings.llm_serve_args.strip():
+        typer.secho(
+            f"{model_id} is not in `ai-almanac llm models`; set its tool-call parser in "
+            "llm_serve_args, or the assistant's tools won't work",
+            fg=typer.colors.YELLOW,
+        )
+    elif entry is not None and settings.llm_serve_args.strip():
+        typer.secho(
+            "llm_serve_args is set and replaces this model's tested flags; clear it in "
+            "Settings to use them",
+            fg=typer.colors.YELLOW,
+        )
+    if entry is not None and not entry["verified"]:
+        typer.secho(f"{model_id} has not been tested on a DGX Spark yet", fg=typer.colors.YELLOW)
+    if download:
+        if not llm_env_ready():
+            typer.secho(
+                "the local model server is not installed — run `ai-almanac env prepare`",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        try:
+            download_llm_model(model_id)
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+    save_llm("", model_id, None, engine="managed")
+    typer.echo(f"assistant will run {model_id} locally")
+
+
 @llm_app.command("status")
 def llm_status() -> None:
     """Show whether the local model server is off, loading, ready, or asleep."""
@@ -409,11 +517,7 @@ def init(
 
     if local_llm:
         if not model_val:
-            model_val = (
-                DEFAULT_LOCAL_LLM_MODEL
-                if yes
-                else typer.prompt("Hugging Face model id", default=DEFAULT_LOCAL_LLM_MODEL)
-            )
+            model_val = DEFAULT_LOCAL_LLM_MODEL if yes else _prompt_local_llm_model()
         # No connection test: the server is installed below and started by
         # `serve`, which reports when it's ready.
         save_llm("", model_val, None, engine="managed")

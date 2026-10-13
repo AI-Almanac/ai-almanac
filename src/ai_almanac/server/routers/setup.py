@@ -41,6 +41,17 @@ _SetupAuth = Annotated[None, Depends(require_setup_token)]
 # ---------------------------------------------------------------------------
 
 
+class LocalLlmModelOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    weights_gb: float
+    # Served, slept/woken, and tool-called on a DGX Spark with the pinned vLLM.
+    verified: bool
+    # Weights are already in the Hugging Face cache, so no download is needed.
+    downloaded: bool
+
+
 class SetupState(BaseModel):
     platform: dict
     gpu: dict | None
@@ -48,6 +59,8 @@ class SetupState(BaseModel):
     config_yaml_path: str
     dataset_mount_roots: list[str]
     llm: dict
+    # Models the "run a model on this machine" choice offers.
+    local_models: list[LocalLlmModelOut]
     envs: dict
     prepare: dict
 
@@ -117,6 +130,9 @@ async def get_state(_: _SetupAuth):
             "default_local_model": DEFAULT_LOCAL_LLM_MODEL,
             "status": await asyncio.to_thread(local_llm.status),
         },
+        local_models=[
+            LocalLlmModelOut(**m) for m in await asyncio.to_thread(setup_svc.local_llm_models)
+        ],
         envs=setup_svc.env_status(),
         prepare={
             "status": setup_svc.prepare_task.status,

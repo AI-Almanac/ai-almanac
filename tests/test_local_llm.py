@@ -72,7 +72,7 @@ def managed(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "llm_engine", "managed")
     monkeypatch.setattr(settings, "deployment_mode", "personal")
     monkeypatch.setattr(local_llm.time, "sleep", lambda _s: None)
-    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID}))
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID, **local_llm._launch_identity()}))
     alive = {"value": True}
     terminated: list[int] = []
 
@@ -238,6 +238,68 @@ def test_serve_args_bind_loopback_and_reject_host_overrides(monkeypatch) -> None
         local_llm.serve_args()
 
 
+def test_serve_args_follow_the_catalog_model(monkeypatch) -> None:
+    super_id = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", super_id)
+    args = local_llm.serve_args()
+    assert args[2] == super_id
+    assert args[args.index("--reasoning-parser") + 1] == "nemotron_v3"
+    # The 80 GB model brings its own memory share while the setting is default.
+    assert args[args.index("--gpu-memory-utilization") + 1] == "0.8"
+
+    monkeypatch.setattr(settings, "llm_model", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    args = local_llm.serve_args()
+    assert args[args.index("--reasoning-parser") + 1] == "qwen3"
+    assert args[args.index("--gpu-memory-utilization") + 1] == "0.45"
+
+
+def test_serve_settings_override_the_catalog(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_model", "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4")
+    monkeypatch.setattr(settings, "llm_serve_args", "--max-model-len 4096")
+    monkeypatch.setattr(settings, "llm_gpu_memory_utilization", 0.7)
+    args = local_llm.serve_args()
+    assert args[args.index("--gpu-memory-utilization") + 1] == "0.7"
+    assert args[-2:] == ["--max-model-len", "4096"]
+    assert "--reasoning-parser" not in args
+
+
+def test_custom_model_gets_only_the_startup_tuning(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "someone/custom-model")
+    args = local_llm.serve_args()
+    assert "--safetensors-load-strategy" in args
+    assert "--tool-call-parser" not in args
+
+
+def test_ensure_awake_restarts_when_the_model_changed(managed, monkeypatch, clean_jobs) -> None:
+    use, terminated = managed
+    use(FakeVllm())
+    started: list[dict] = []
+    monkeypatch.setattr(local_llm, "_start_locked", lambda identity=None: started.append(identity))
+    monkeypatch.setattr(settings, "llm_model", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+
+    with pytest.raises(local_llm.AssistantLoading):
+        local_llm.ensure_awake()
+    assert terminated == [_FAKE_PID]
+    assert started[0]["args"][2] == "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+
+
+def test_llm_model_cached_needs_every_shard(monkeypatch, tmp_path) -> None:
+    from ai_almanac.envs.manager import llm_model_cached
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    snapshot = tmp_path / "models--org--m" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    assert not llm_model_cached("org/m")
+    shards = {"a": "model-1.safetensors", "b": "model-2.safetensors"}
+    (snapshot / "model.safetensors.index.json").write_text(json.dumps({"weight_map": shards}))
+    (snapshot / "model-1.safetensors").write_bytes(b"")
+    assert not llm_model_cached("org/m")
+    (snapshot / "model-2.safetensors").write_bytes(b"")
+    assert llm_model_cached("org/m")
+
+
 def test_managed_engine_derives_base_url(monkeypatch) -> None:
     monkeypatch.setenv("LLM_ENGINE", "managed")
     monkeypatch.setenv("LLM_PORT", "9123")
@@ -344,7 +406,8 @@ def test_start_replaces_a_server_with_changed_flags(launchable, monkeypatch) -> 
 
 def test_start_replaces_a_server_from_before_identities_were_recorded(launchable) -> None:
     use, terminated, launched = launchable
-    use(FakeVllm())  # the fixture's pid file carries only the pid
+    use(FakeVllm())
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID}))
 
     local_llm.start()
 

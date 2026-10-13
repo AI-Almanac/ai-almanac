@@ -26,6 +26,9 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _apply_migrations()
     reload_settings()
     yield
+    # Restore the env first so the reload doesn't leave this test's data dir
+    # and unset SETUP_COMPLETE in the settings singleton for later modules.
+    monkeypatch.undo()
     reload_settings()
 
 
@@ -275,3 +278,38 @@ def test_interactive_llm_choice_prompt(mock_llm, mock_gpu, mock_platform, tmp_pa
     reload_settings()
     assert settings.llm_engine == "external"
     assert settings.llm_model == "llama3"
+
+
+@patch("ai_almanac.server.services.setup.detect_platform")
+@patch("ai_almanac.server.services.setup.probe_gpu")
+def test_interactive_local_model_picks_from_the_catalog(
+    mock_gpu, mock_platform, tmp_path: Path
+) -> None:
+    mock_gpu.return_value = {"name": "NVIDIA GB10", "memory_total_mb": 128000}
+    mock_platform.return_value = {"platform": "linux-aarch64", "machine": "aarch64"}
+    # Re-run confirmation, output dir, mount roots, assistant choice "1" (this
+    # machine), then catalog entry 2.
+    answers = "y\n\n\n1\n2\n"
+    result = runner.invoke(app, ["init", "--no-prepare-envs"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert "Other Hugging Face model" in result.output
+    reload_settings()
+    assert settings.llm_engine == "managed"
+    assert settings.llm_model == "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+
+
+def test_llm_use_switches_model_without_downloading(tmp_path: Path) -> None:
+    with patch("ai_almanac.envs.manager.download_llm_model") as mock_download:
+        result = runner.invoke(app, ["llm", "use", "nvidia/Qwen3.8-27B-NVFP4", "--no-download"])
+    assert result.exit_code == 0, result.output
+    mock_download.assert_not_called()
+    assert "not been tested" in result.output
+    reload_settings()
+    assert settings.llm_engine == "managed"
+    assert settings.llm_model == "nvidia/Qwen3.8-27B-NVFP4"
+
+
+def test_llm_models_lists_the_catalog(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["llm", "models"])
+    assert result.exit_code == 0, result.output
+    assert DEFAULT_LOCAL_LLM_MODEL in result.output

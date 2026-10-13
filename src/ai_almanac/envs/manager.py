@@ -333,6 +333,41 @@ def download_llm_model(model_id: str, progress: ProgressCallback | None = None) 
     )
 
 
+def _hf_hub_cache() -> Path:
+    # Same resolution order as huggingface_hub, which `hf download` and vLLM use.
+    if cache := os.environ.get("HF_HUB_CACHE"):
+        return Path(cache)
+    hf_home = os.environ.get("HF_HOME") or Path(
+        os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache", "huggingface"
+    )
+    return Path(hf_home) / "hub"
+
+
+def llm_model_cached(model_id: str) -> bool:
+    """True when every weight shard of the model is in the Hugging Face cache.
+
+    Reads only the local cache. A snapshot with the config but missing shards
+    (an interrupted download) does not count.
+    """
+    import json
+
+    snapshots = _hf_hub_cache() / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    for snapshot in snapshots.iterdir():
+        index = snapshot / "model.safetensors.index.json"
+        if index.is_file():
+            try:
+                shards = set(json.loads(index.read_text())["weight_map"].values())
+            except (OSError, ValueError, KeyError):
+                continue
+            if shards and all((snapshot / shard).is_file() for shard in shards):
+                return True
+        elif (snapshot / "model.safetensors").is_file():
+            return True
+    return False
+
+
 def ensure_env(
     progress: ProgressCallback | None = None,
     include_forecast: bool = True,

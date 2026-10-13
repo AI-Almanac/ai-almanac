@@ -13,6 +13,8 @@ export interface SettingsField {
 	multiline: boolean;
 	/** Present for enum-valued fields; the form renders a select. */
 	choices: string[] | null;
+	/** Common values for a free-text field; the input offers them while typing. */
+	suggestions?: string[] | null;
 }
 
 export interface SettingsGroup {
