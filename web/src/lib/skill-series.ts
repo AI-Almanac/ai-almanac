@@ -55,7 +55,7 @@ export function collectLeadBins(responses: JobSkillScores[]): LeadBin[] {
  * A model appears in at most one window per bin, so a later window cannot
  * clobber an earlier one's values.
  */
-export function binsByLabel(response: JobSkillScores): Map<string, SkillBin> {
+function binsByLabel(response: JobSkillScores): Map<string, SkillBin> {
 	const map = new Map<string, SkillBin>();
 	for (const window of response.windows) {
 		for (const bin of window.bins) {

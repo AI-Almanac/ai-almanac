@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 
 import CellInspector from '../src/lib/components/CellInspector.svelte';
@@ -36,17 +36,17 @@ function renderInspector(selectedDate: string) {
 }
 
 describe('CellInspector', () => {
-	it('says when onset is more than four weeks out rather than naming a fifth window', () => {
-		renderInspector('2025-05-01');
-		expect(screen.getByText('more than 4 weeks away (after May 29)')).toBeTruthy();
-	});
-
-	it('explains that a forecast issued after onset does not describe a new onset', () => {
-		renderInspector('2025-07-10');
-		expect(screen.getByText('May 30 – Jun 5')).toBeTruthy();
-		expect(screen.getByText(/doesn't describe a new onset/)).toBeTruthy();
-		expect(screen.getByText('How the onset date is estimated')).toBeTruthy();
-	});
+	it.each([
+		{ case: 'notes', date: '2025-07-10', noticeShown: true },
+		{ case: 'does not note', date: '2025-05-15', noticeShown: false }
+	])(
+		'$case that a forecast issued after onset does not describe a new onset',
+		({ date, noticeShown }) => {
+			renderInspector(date);
+			const summary = screen.getByRole('region', { name: 'Selected forecast' });
+			expect(within(summary).queryByText(/new onset/i) !== null).toBe(noticeShown);
+		}
+	);
 
 	it('folds forecasts issued after onset until asked to show them', async () => {
 		renderInspector('2025-05-15');

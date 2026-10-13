@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
@@ -30,6 +30,11 @@ async function openGetStarted() {
 }
 
 describe('Get started dialog', () => {
+	afterEach(() => {
+		account.account = null;
+		account.setViewingAsUser(false);
+	});
+
 	it('offers every workflow, including blends and forecasts', async () => {
 		setForecasting(true);
 		await openGetStarted();

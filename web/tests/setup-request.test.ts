@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { goto, page } = vi.hoisted(() => ({ goto: vi.fn(), page: { url: new URL('http://x/') } }));
 vi.mock('$app/navigation', () => ({ goto }));
@@ -7,6 +7,10 @@ vi.mock('$app/state', () => ({ page }));
 import { takeSetupRequest } from '../src/lib/setup-request';
 
 describe('takeSetupRequest', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	it('removes the flag from the URL and keeps the other params', () => {
 		vi.useFakeTimers();
 		page.url = new URL('http://x/benchmarks?group=g1&manual=1');

@@ -10,23 +10,31 @@ import {
 const PAGE = 1920;
 
 describe('assistant panel width', () => {
-	it('honours a dragged width between the bounds', () => {
-		expect(clampAside(520, PAGE)).toBe(520);
-	});
-
-	it('refuses to shrink below a readable width', () => {
-		expect(clampAside(10, PAGE)).toBe(MIN_ASIDE_PX);
-		expect(clampAside(-500, PAGE)).toBe(MIN_ASIDE_PX);
-	});
-
-	it('keeps the results dominant', () => {
+	it.each([
+		{
+			case: 'honours a dragged width between the bounds',
+			width: 520,
+			container: PAGE,
+			expected: 520
+		},
+		{
+			case: 'refuses to shrink below a readable width',
+			width: 10,
+			container: PAGE,
+			expected: MIN_ASIDE_PX
+		},
+		{ case: 'refuses a negative width', width: -500, container: PAGE, expected: MIN_ASIDE_PX },
 		// 60% of the page is the most the assistant may take.
-		expect(clampAside(5000, PAGE)).toBe(1152);
-	});
-
-	it('still yields a usable width in a narrow container', () => {
+		{ case: 'keeps the results dominant', width: 5000, container: PAGE, expected: 1152 },
 		// The floor wins over the fraction, so the panel never collapses to nothing.
-		expect(clampAside(300, 500)).toBe(MIN_ASIDE_PX);
+		{
+			case: 'still yields a usable width in a narrow container',
+			width: 300,
+			container: 500,
+			expected: MIN_ASIDE_PX
+		}
+	])('$case', ({ width, container, expected }) => {
+		expect(clampAside(width, container)).toBe(expected);
 	});
 
 	it('gives an open comparison its own floor without saving it', () => {
