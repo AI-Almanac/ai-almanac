@@ -33,6 +33,8 @@ jobs:
       github.event.sender.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      MAX_TURNS: 50
     permissions:
       contents: read
       pull-requests: write
@@ -43,15 +45,42 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The checkout is a detached merge commit, so a bare `gh pr diff` can't
+      # find the PR, and a large diff overflows one tool result. Writing it to
+      # files lets the reviewer page through it instead of improvising
+      # (rejected) shell workarounds that burn turns.
+      - name: Write the PR diff for the reviewer
+        run: |
+          mkdir -p .pr-review
+          git diff --stat=200 HEAD^1 HEAD > .pr-review/stat.txt
+          git diff HEAD^1 HEAD > .pr-review/pr.diff
+
       - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # use_sticky_comment is broken in prompt mode (action issue #1108);
           # the prompt instructs gh pr comment instead (one comment per run).
           prompt: |
-            Review this pull request for ai-almanac. Read CLAUDE.md first for
-            project conventions, then review the diff (gh pr diff) with the
-            surrounding code for context.
+            Review pull request #${{ github.event.pull_request.number }} for
+            ai-almanac. CLAUDE.md is already in your context; do not re-read it.
+
+            How to work here (each rejected tool call still costs a turn):
+            - The checkout is the PR merged into its base, so HEAD^1..HEAD is
+              exactly the PR's change. .pr-review/stat.txt lists the changed
+              files; .pr-review/pr.diff is the full diff. For a large diff,
+              Grep pr.diff for "^diff --git" and Read it in slices with
+              offset/limit rather than all at once.
+            - Your tools are Read, Grep, Glob, and these commands only:
+              gh pr view, git log, git diff, git show, git blame,
+              and the gh pr comment below. Run one command per call: pipes,
+              redirects, chained commands, cd, and anything else are rejected.
+            - You cannot run tests, install packages, or execute project code.
+              Reason from the source.
+            - You have ${{ env.MAX_TURNS }} turns. Investigate the riskiest
+              changes first and leave turns to post: a review that covers the
+              important parts and posts beats a complete one that never does.
+
+            Review the diff with the surrounding code for context.
 
             Focus on, in order of importance:
             1. Correctness of changed behavior and adequacy of test coverage.
@@ -80,5 +109,12 @@ jobs:
             edit existing comments; each review posts its own):
               gh pr comment ${{ github.event.pull_request.number }} --body "..."
           claude_args: >-
-            --max-turns 50
-            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),mcp__github_inline_comment__create_inline_comment"
+            --model claude-sonnet-5-5
+            --max-turns ${{ env.MAX_TURNS }}
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git blame:*),mcp__github_inline_comment__create_inline_comment"
+
+      # show_full_output would publish the whole transcript on this public
+      # repo; the rejected calls alone show where turns are being wasted.
+      - name: Summarize rejected tool calls
+        if: always()
+        run: scripts/summarize-rejected-tool-calls.sh "$RUNNER_TEMP/claude-execution-output.json" >> "$GITHUB_STEP_SUMMARY"
