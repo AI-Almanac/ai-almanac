@@ -1,9 +1,10 @@
 """Prompt assembly at the llm.py boundary.
 
 Prompt *content* invariants moved to test_rulesets.py when the wording became
-ruleset data. What stays here is what llm.py still owns: the scope suffix and
-the sanitizing of scope ids, the tool docstrings, and the rule that the
-assistant is never handed a tool that could reach its own configuration.
+ruleset data. What stays here is what llm.py still owns: the topic boundary,
+the scope suffix and the sanitizing of scope ids, the tool docstrings, and the
+rule that the assistant is never handed a tool that could reach its own
+configuration.
 """
 
 from __future__ import annotations
@@ -95,6 +96,40 @@ def test_the_scope_suffix_is_not_ruleset_editable() -> None:
 def test_a_scopeless_session_gets_no_suffix() -> None:
     scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
     assert "Only use these job IDs" not in instructions(scope)
+
+
+# --- topic boundary ------------------------------------------------------
+
+
+@pytest.mark.parametrize("ruleset", rulesets.packaged_rulesets(), ids=lambda r: r.id)
+def test_every_packaged_ruleset_keeps_the_assistant_on_topic(ruleset: rulesets.Ruleset) -> None:
+    """Including the comparison control arm, which has no other instructions:
+    a side-by-side comparison must not let one arm discuss politics."""
+    scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
+    text = llm._instructions_for_ruleset(ruleset, scope)
+    assert "## What you help with" in text
+    assert "Never give opinions on politics" in text
+
+
+def test_the_topic_boundary_is_not_ruleset_editable() -> None:
+    scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
+    empty = rulesets.Ruleset(id="empty", name="Empty", prompt_sections=[])
+    assert "## What you help with" in llm._instructions_for_ruleset(empty, scope)
+
+
+def test_no_ruleset_section_follows_the_topic_boundary() -> None:
+    """Later instructions win ties, so a ruleset section placed after the
+    boundary could quietly widen it."""
+    scope = ChatScope(kind="blend_setup", key="setup", job_ids=[])
+    text = instructions(scope)
+    assert text.index("## What you help with") > text.index("## Output style")
+
+
+def test_the_topic_boundary_keeps_mixed_questions_answerable() -> None:
+    """A classifier-style refusal of anything naming a conflict would block a
+    fair question about observation coverage."""
+    text = instructions(ChatScope(kind="benchmark_setup", key="setup", job_ids=[]))
+    assert "answer only the weather and climate part" in text
 
 
 # --- untrusted tool output -----------------------------------------------
