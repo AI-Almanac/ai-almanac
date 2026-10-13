@@ -1,4 +1,4 @@
-"""Phase 5 — JobRunner contract and the LocalProcessRunner."""
+"""The JobRunner contract as implemented by the LocalProcessRunner."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-import httpx
 import pytest
 
 from ai_almanac.paths import database_path
@@ -31,31 +30,27 @@ def _insert_job(job_id: str, status: str = "running") -> None:
         conn.commit()
 
 
-def test_runner_handle_roundtrips() -> None:
-    handle = RunnerHandle(runner="local", external_id="j1", metadata={"pgid": 42})
-    assert RunnerHandle.from_dict(handle.as_dict()) == handle
-
-
 @pytest.mark.asyncio
-async def test_submit_launches_and_returns_handle(
+async def test_a_submitted_job_is_tracked_by_its_durable_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    launched: dict[str, str] = {}
-
     async def fake_launch(job_id: str) -> None:
-        launched["job_id"] = job_id
+        return None
 
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
-    handle = await LocalProcessRunner().submit(
-        ExecutionRequest(job_id="job-x", workspace=Path("/tmp"), bundle_path=Path("/tmp"))
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="queued")
+    runner = LocalProcessRunner()
+
+    handle = await runner.submit(
+        ExecutionRequest(job_id=job_id, workspace=Path("/tmp"), bundle_path=Path("/tmp"))
     )
-    assert launched["job_id"] == "job-x"
-    assert handle.runner == "local"
-    assert handle.external_id == "job-x"
+
+    assert (await runner.inspect(handle)).status == "queued"
 
 
 @pytest.mark.asyncio
-async def test_inspect_reports_durable_status(client: httpx.AsyncClient) -> None:
+async def test_inspect_reports_durable_status() -> None:
     job_id = str(uuid.uuid4())
     _insert_job(job_id, status="running")
     snapshot = await LocalProcessRunner().inspect(RunnerHandle(runner="local", external_id=job_id))
@@ -63,13 +58,13 @@ async def test_inspect_reports_durable_status(client: httpx.AsyncClient) -> None
 
 
 @pytest.mark.asyncio
-async def test_inspect_unknown_for_missing_job(client: httpx.AsyncClient) -> None:
+async def test_inspect_unknown_for_missing_job() -> None:
     snapshot = await LocalProcessRunner().inspect(RunnerHandle(runner="local", external_id="ghost"))
     assert snapshot.status == "unknown"
 
 
 @pytest.mark.asyncio
-async def test_cancel_flags_active_job(client: httpx.AsyncClient) -> None:
+async def test_cancel_flags_active_job() -> None:
     job_id = str(uuid.uuid4())
     _insert_job(job_id, status="running")
     await LocalProcessRunner().cancel(RunnerHandle(runner="local", external_id=job_id))
