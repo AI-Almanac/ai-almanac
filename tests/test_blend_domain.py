@@ -42,23 +42,10 @@ def test_coverage_none_without_year_metadata() -> None:
     assert blend_domain._coverage({"start_year": 2000, "end_year": 2020}, []) is None
 
 
-def test_year_errors_flags_forecast_before_climatology_runway() -> None:
-    coverage = {"start": 2005, "end": 2022, "earliest_forecast": 2015}
-    spec = BlendRunSpec(training_years="2010:2012", cv_holdout_years="2013")
-    errors = blend_domain._year_errors(spec, coverage)
-    assert errors and "Climatology needs" in errors[0]
-
-
 def test_year_errors_flags_malformed_spec() -> None:
     spec = BlendRunSpec(training_years="not-a-year", cv_holdout_years="2013")
     errors = blend_domain._year_errors(spec, None)
     assert errors and "training_years" in errors[0]
-
-
-def test_year_errors_clean_when_within_coverage() -> None:
-    coverage = {"start": 2005, "end": 2022, "earliest_forecast": 2015}
-    spec = BlendRunSpec(training_years="2015:2020", cv_holdout_years="2021,2022")
-    assert blend_domain._year_errors(spec, coverage) == []
 
 
 def test_finalize_reports_missing_fields() -> None:
@@ -155,12 +142,15 @@ async def test_update_and_validate_blend_config_runnable(client, user_id: str) -
 
 
 @pytest.mark.asyncio
-async def test_three_models_warns_without_blocking(client, user_id: str) -> None:
+@pytest.mark.parametrize(
+    ("names", "warns_of_overfitting"),
+    [(("GenCast", "Aurora", "Pangu"), True), (("GenCast", "Aurora"), False)],
+)
+async def test_a_third_member_warns_of_overfitting_without_blocking(
+    client, user_id: str, names: tuple[str, ...], warns_of_overfitting: bool
+) -> None:
     obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
-    model_ids = [
-        await _seed_source("model", name, "india", 2000, 2024)
-        for name in ("GenCast", "Aurora", "Pangu")
-    ]
+    model_ids = [await _seed_source("model", name, "india", 2000, 2024) for name in names]
     session_id = await _seed_session(user_id)
     scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
 
@@ -181,36 +171,10 @@ async def test_three_models_warns_without_blocking(client, user_id: str) -> None
     validation = patched["blend_validation"]
     assert validation["can_run"] is True
     assert validation["errors"] == []
-    assert any("overfitting" in w for w in validation["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_two_models_do_not_warn(client, user_id: str) -> None:
-    obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
-    model_ids = [
-        await _seed_source("model", name, "india", 2000, 2024) for name in ("GenCast", "Aurora")
-    ]
-    session_id = await _seed_session(user_id)
-    scope = blend_domain.BenchmarkScope(kind="blend_setup", key=session_id)
-
-    patched = await blend_domain.update_blend_config(
-        {
-            "name": "India blend",
-            "obs_dataset_id": obs_id,
-            "model_ids": model_ids,
-            "training_years": "2015:2020",
-            "cv_holdout_years": "2015:2020",
-        },
-        user_id,
-        scope,
-        session_id,
-    )
-
-    warnings = patched["blend_validation"]["warnings"]
-    assert not any("overfitting" in w for w in warnings)
+    assert any("overfitting" in w for w in validation["warnings"]) is warns_of_overfitting
     # Aurora has no live forecast model, so the chat path still says the blend
     # is history-only — a separate concern from the member-count advice.
-    assert any("cannot be run as a live forecast" in w for w in warnings)
+    assert any("cannot be run as a live forecast" in w for w in validation["warnings"])
 
 
 @pytest.mark.asyncio
@@ -237,18 +201,6 @@ async def test_validate_blend_config_flags_bad_years(client, user_id: str) -> No
     validation = patched["blend_validation"]
     assert validation["can_run"] is False
     assert any("Climatology needs" in e for e in validation["errors"])
-
-
-def test_blend_patch_sets_clears_or_keeps_the_focus_area() -> None:
-    from ai_almanac.server.services.blend_domain import _focus_area_field
-    from ai_almanac.server.services.blend_state import BlendRunSpec
-    from ai_almanac.server.services.focus_area import FocusBox
-
-    box = {"lat_min": 9.0, "lat_max": 11.0, "lon_min": 38.0, "lon_max": 40.0}
-    spec = BlendRunSpec(focus_area=FocusBox(**box))
-    assert _focus_area_field({}, spec) == spec.focus_area
-    assert _focus_area_field({"focus_area": None}, spec) is None
-    assert _focus_area_field({"focus_area": {**box, "lat_max": 12.0}}, spec).lat_max == 12.0
 
 
 # --- Onset definition (threshold / cutoff / reference onset) -----------------

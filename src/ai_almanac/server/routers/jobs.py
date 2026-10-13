@@ -359,10 +359,10 @@ async def get_result_file(job_id: str, kind: str, filename: str, job: ReadableJo
         raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
     _require_complete(job)
     storage = get_storage()
-    local_path = storage.result_file_path(job_id, kind, filename)
 
-    if local_path is not None:
-        if not local_path.is_file():
+    if storage.is_local:
+        local_path = storage.result_file_path(job_id, kind, filename)
+        if local_path is None or not local_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
         from fastapi.responses import FileResponse
 

@@ -7,7 +7,6 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
@@ -28,16 +27,6 @@ def _encryption_key(monkeypatch) -> None:
         "credential_encryption_key",
         base64.urlsafe_b64encode(b"x" * 32).decode(),
     )
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def _clean_llm_tables():
-    # The engine is session-scoped, so wipe LLM state between tests.
-    yield
-    async with get_db() as conn:
-        await conn.execute(text("DELETE FROM user_llm_profiles"))
-        await conn.execute(text("DELETE FROM llm_providers"))
-        await conn.execute(text("UPDATE users SET llm_preference = 'auto'"))
 
 
 def _now() -> str:

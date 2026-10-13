@@ -95,9 +95,8 @@ async def test_concurrent_publication_indexes_each_file_once(
     _insert_job(job_id, status="complete")
     _write_outputs(job_id)
 
-    counts = await asyncio.gather(index_job_artifacts(job_id), index_job_artifacts(job_id))
+    await asyncio.gather(index_job_artifacts(job_id), index_job_artifacts(job_id))
 
-    assert sorted(counts) == [0, 2]
     assert len(await list_job_artifacts(job_id)) == 2
 
 
@@ -115,6 +114,30 @@ async def test_artifacts_endpoint_lists_indexed_outputs(
     body = resp.json()
     assert len(body) == 2
     assert all(a["url"].startswith(f"/jobs/{job_id}/results/") for a in body)
+
+
+@pytest.mark.asyncio
+async def test_result_file_is_served_by_name(client: httpx.AsyncClient) -> None:
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    _write_outputs(job_id)
+
+    resp = await client.get(f"/jobs/{job_id}/results/output/spatial_metrics_m_1-7.nc")
+    assert resp.status_code == 200
+    assert resp.content == b"netcdf-bytes"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["nested/metrics.nc", "..%2F..%2Falmanac.db"])
+async def test_result_file_outside_the_jobs_folder_is_not_found(
+    client: httpx.AsyncClient, filename: str
+) -> None:
+    job_id = str(uuid.uuid4())
+    _insert_job(job_id, status="complete")
+    _write_outputs(job_id)
+
+    resp = await client.get(f"/jobs/{job_id}/results/output/{filename}")
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

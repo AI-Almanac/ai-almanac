@@ -1,5 +1,5 @@
-import { render } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/lib/api', async (importOriginal) => ({
 	...(await importOriginal<typeof import('../src/lib/api')>()),
@@ -30,13 +30,12 @@ function setAccount(canAdmin: boolean) {
 	account.setViewingAsUser(false);
 }
 
-async function flush() {
-	// The demote path awaits one API call per job; give the microtask queue
-	// enough turns to drain the whole chain.
-	for (let i = 0; i < 8; i++) await Promise.resolve();
-}
-
 describe('ExampleActions', () => {
+	afterEach(() => {
+		account.account = null;
+		account.setViewingAsUser(false);
+	});
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -44,10 +43,10 @@ describe('ExampleActions', () => {
 
 	it('renders nothing for non-admins', () => {
 		setAccount(false);
-		const { container } = render(ExampleActions, {
+		const { queryByRole } = render(ExampleActions, {
 			props: { promoteId: 'job-1', demoteIds: ['job-1'], isExample: false, onChanged: () => {} }
 		});
-		expect(container.querySelector('button')).toBeNull();
+		expect(queryByRole('button')).toBeNull();
 	});
 
 	it('promotes a completed job after confirmation', async () => {
@@ -59,10 +58,8 @@ describe('ExampleActions', () => {
 
 		const button = getByRole('button', { name: 'Feature as example' });
 		button.click();
-		await flush();
-
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
 		expect(promoteJobToExample).toHaveBeenCalledWith('job-1');
-		expect(onChanged).toHaveBeenCalled();
 	});
 
 	it('demotes every job in the group', async () => {
@@ -73,12 +70,10 @@ describe('ExampleActions', () => {
 		});
 
 		getByRole('button', { name: 'Stop featuring' }).click();
-		await flush();
-
+		await waitFor(() => expect(onChanged).toHaveBeenCalled());
 		expect(unshareJob).toHaveBeenCalledTimes(2);
 		expect(unshareJob).toHaveBeenCalledWith('job-1');
 		expect(unshareJob).toHaveBeenCalledWith('job-2');
-		expect(onChanged).toHaveBeenCalled();
 	});
 
 	it('does nothing when the confirmation is declined', async () => {
@@ -90,8 +85,6 @@ describe('ExampleActions', () => {
 		});
 
 		getByRole('button', { name: 'Feature as example' }).click();
-		await flush();
-
 		expect(promoteJobToExample).not.toHaveBeenCalled();
 		expect(onChanged).not.toHaveBeenCalled();
 	});

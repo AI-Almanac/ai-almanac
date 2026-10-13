@@ -121,23 +121,61 @@ def test_materialize_is_a_no_op_without_a_focus_area(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_area_of_interest_and_a_custom_mask_cannot_both_be_set() -> None:
-    from fastapi import HTTPException
+async def test_an_area_of_interest_and_a_custom_mask_cannot_both_be_set(
+    client, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia"
+    obs = await client.post(
+        "/data-sources",
+        json={
+            "kind": "obs",
+            "name": "Ethiopia observations",
+            "path": str(root / "obs"),
+            "region": "ethiopia",
+            "metadata": {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"},
+        },
+    )
+    model = await client.post(
+        "/data-sources",
+        json={
+            "kind": "model",
+            "name": "Ethiopia forecast",
+            "path": str(root / "fuxi"),
+            "region": "ethiopia",
+            "metadata": {"file_pattern": "{}.nc", "model_var": "tp", "model_type": "AIWP"},
+        },
+    )
 
-    from ai_almanac.server.services.job_submission import _with_unit_outlines
+    async def fake_launch(job_id: str) -> None:
+        return None
 
-    with pytest.raises(HTTPException) as caught:
-        await _with_unit_outlines({"focus_area": BOX, "nc_mask": "/data/mask.nc"}, None)
-    assert caught.value.status_code == 400
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
+    response = await client.post(
+        "/jobs",
+        headers=as_new_user,
+        json={
+            "dataset_id": obs.json()["id"],
+            "model_name": model.json()["id"],
+            "params": {"region": "ethiopia", "focus_area": BOX, "nc_mask": str(root / "obs")},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "mask" in response.json()["detail"]
 
 
-def test_states_can_be_picked_as_well_as_districts() -> None:
-    states = parse_focus_area({"level": "adm1", "units": ["Kerala", "Tamil Nādu"]})
-
-    assert isinstance(states, FocusUnits)
-    assert states.level == "adm1"
-
-
-def test_subdistricts_are_not_pickable() -> None:
-    with pytest.raises(ValidationError):
-        parse_focus_area({"level": "adm3", "units": ["Kozhikode"]})
+@pytest.mark.parametrize(
+    ("level", "pickable"),
+    [("adm1", True), ("adm2", True), ("adm3", False)],
+)
+def test_states_and_districts_can_be_picked_but_subdistricts_cannot(
+    level: str, pickable: bool
+) -> None:
+    area = {"level": level, "units": ["Kerala"]}
+    if not pickable:
+        with pytest.raises(ValidationError):
+            parse_focus_area(area)
+        return
+    picked = parse_focus_area(area)
+    assert isinstance(picked, FocusUnits)
+    assert picked.level == level

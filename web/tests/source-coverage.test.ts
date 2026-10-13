@@ -29,16 +29,27 @@ describe('describeSourceCoverage', () => {
 });
 
 describe('gridsMatch', () => {
-	it('matches equal grid steps', () => {
-		expect(gridsMatch(0.25, 0.25)).toBe(true);
-	});
-
-	it('rejects a model on a different grid than the observations', () => {
-		expect(gridsMatch(0.25, 2)).toBe(false);
-	});
-
-	it('does not rule out a source whose grid step was never recorded', () => {
-		expect(gridsMatch(null, 2)).toBe(true);
-		expect(gridsMatch(0.25, undefined)).toBe(true);
+	it.each([
+		{ case: 'matches equal grid steps', model: 0.25, obs: 0.25, matches: true },
+		{
+			case: 'rejects a model on a different grid than the observations',
+			model: 0.25,
+			obs: 2,
+			matches: false
+		},
+		{
+			case: 'does not rule out a source with no recorded model grid',
+			model: null,
+			obs: 2,
+			matches: true
+		},
+		{
+			case: 'does not rule out a source with no recorded observation grid',
+			model: 0.25,
+			obs: undefined,
+			matches: true
+		}
+	])('$case', ({ model, obs, matches }) => {
+		expect(gridsMatch(model, obs)).toBe(matches);
 	});
 });

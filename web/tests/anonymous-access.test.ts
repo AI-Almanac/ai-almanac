@@ -28,7 +28,6 @@ describe('isAnonRoute', () => {
 
 describe('request without a token', () => {
 	beforeEach(() => {
-		vi.restoreAllMocks();
 		authMocks.authHeaders.mockReturnValue({});
 		authMocks.refreshAuthTokens.mockClear();
 		authMocks.login.mockClear();

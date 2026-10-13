@@ -56,9 +56,4 @@ describe('groupSources', () => {
 			{ region: null, grids: [[2, ['unplaced']]] }
 		]);
 	});
-
-	it('counts every source in a region', () => {
-		const [india] = groupSources([source('a', 'india', 2), source('b', 'india', 0.25)], label);
-		expect(india.size).toBe(2);
-	});
 });

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from ai_almanac.server.services import job_workload
 from ai_almanac.server.services.romp import render_romp_config, romp_safe_model_name
@@ -60,58 +63,35 @@ def test_render_romp_config_propagates_job_inputs() -> None:
     assert namespace["plot_spatial_far_mr_mae"] is False
 
 
-def test_romp_safe_model_name_collapses_whitespace() -> None:
-    # ROMP rejects model names with spaces; display names like "AIFS Single v2" must be sanitized.
-    assert romp_safe_model_name("AIFS Single v2") == "AIFS_Single_v2"
-    assert romp_safe_model_name("AIFS   Ensemble\tv2") == "AIFS_Ensemble_v2"
-    assert romp_safe_model_name("  fuxi  ") == "fuxi"
-    assert romp_safe_model_name("graphcast") == "graphcast"
+@pytest.mark.parametrize(
+    ("display_name", "safe"),
+    [
+        # ROMP rejects model names with spaces.
+        ("AIFS Single v2", "AIFS_Single_v2"),
+        ("AIFS   Ensemble\tv2", "AIFS_Ensemble_v2"),
+        ("  fuxi  ", "fuxi"),
+        ("graphcast", "graphcast"),
+        ("GraphCast (v2.1)", "GraphCast_v2.1"),
+        # The name is written into an exec'd config, so nothing else survives.
+        ('fuxi",)\n__import__("os")#', "fuxi___import___os"),
+        ("()", "model"),
+    ],
+)
+def test_romp_safe_model_name_keeps_only_name_characters(display_name: str, safe: str) -> None:
+    assert romp_safe_model_name(display_name) == safe
 
 
-def test_pixi_workload_writes_config_and_invokes_momp(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    output_dir = tmp_path / "job" / "output"
-    figure_dir = tmp_path / "job" / "figure"
-    output_dir.mkdir(parents=True)
-    figure_dir.mkdir()
-    commands: list[list[str]] = []
+class _Process:
+    def __init__(self, exit_code: int = 0) -> None:
+        self.stdout = iter(["workload output\n"])
+        self.args = ["pixi", "run"]
+        self._exit_code = exit_code
 
-    class Storage:
-        def job_output_uri(self, job_id: str) -> tuple[str, str]:
-            return str(output_dir), str(figure_dir)
-
-    class Process:
-        stdout = iter(["ROMP output\n"])
-        args = ["pixi", "run"]
-
-        def wait(self) -> int:
-            return 0
-
-    def fake_pixi_run(command: list[str], env=None) -> subprocess.Popen:
-        commands.append(command)
-        return Process()
-
-    monkeypatch.setattr(job_workload, "get_storage", lambda: Storage())
-    monkeypatch.setattr(job_workload, "pixi_run", fake_pixi_run)
-
-    job_workload._run_pixi("job-1", _job_config())
-
-    config_path = tmp_path / "job" / "romp-config.in"
-    assert config_path.exists()
-    assert commands == [["momp-run", "-p", str(config_path)]]
+    def wait(self) -> int:
+        return self._exit_code
 
 
-def test_blend_workload_invokes_managed_blending_environment(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    output_dir = tmp_path / "job" / "output"
-    figure_dir = tmp_path / "job" / "figure"
-    commands: list[list[str]] = []
-    environments: list[dict[str, str]] = []
-
+def _local_storage(output_dir: Path, figure_dir: Path):
     class Storage:
         is_local = True
 
@@ -120,67 +100,101 @@ def test_blend_workload_invokes_managed_blending_environment(
             figure_dir.mkdir(parents=True, exist_ok=True)
             return str(output_dir), str(figure_dir)
 
-    class Process:
-        stdout = iter(["blend output\n"])
-        args = ["pixi", "run"]
+    return Storage()
 
-        def wait(self) -> int:
-            return 0
 
-    def fake_blending_run(command: list[str], env=None) -> subprocess.Popen:
+def test_benchmark_workload_hands_romp_a_config_of_the_job_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "job" / "output"
+    commands: list[list[str]] = []
+
+    def fake_pixi_run(command: list[str], env=None) -> _Process:
         commands.append(command)
-        environments.append(env)
-        return Process()
+        return _Process()
 
-    monkeypatch.setattr(job_workload, "get_storage", lambda: Storage())
+    monkeypatch.setattr(
+        job_workload, "get_storage", lambda: _local_storage(output_dir, tmp_path / "job" / "fig")
+    )
+    monkeypatch.setattr(job_workload, "pixi_run", fake_pixi_run)
+
+    job_workload._run_pixi("job-1", _job_config())
+
+    (command,) = commands
+    config_path = next(Path(arg) for arg in command if arg.endswith(".in"))
+    namespace: dict = {}
+    exec(config_path.read_text(), {}, namespace)
+    assert namespace["model_list"] == ("fuxi",)
+    assert namespace["obs_dir"] == "/data/observations with spaces"
+
+
+@pytest.mark.parametrize("workload", ["benchmark", "blend"])
+def test_a_workload_that_exits_nonzero_fails_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workload: str
+) -> None:
+    def failing_run(command: list[str], env=None) -> _Process:
+        return _Process(exit_code=2)
+
+    monkeypatch.setattr(
+        job_workload, "get_storage", lambda: _local_storage(tmp_path / "out", tmp_path / "fig")
+    )
+    monkeypatch.setattr(job_workload, "pixi_run", failing_run)
+    monkeypatch.setattr(job_workload, "blending_pixi_run", failing_run)
+    monkeypatch.setattr(job_workload, "blending_env_dir", lambda: tmp_path / "blend-env")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        if workload == "benchmark":
+            job_workload._run_pixi("job-1", _job_config())
+        else:
+            job_workload._run_blend("job-1", {"job_type": "blend", "model_names": ["aifs"]})
+
+
+def test_blend_workload_runs_in_the_managed_blending_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "job" / "output"
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_blending_run(command: list[str], env=None) -> _Process:
+        calls.append((command, env))
+        return _Process()
+
+    monkeypatch.setattr(
+        job_workload, "get_storage", lambda: _local_storage(output_dir, tmp_path / "job" / "fig")
+    )
     monkeypatch.setattr(job_workload, "blending_pixi_run", fake_blending_run)
     monkeypatch.setattr(job_workload, "blending_env_dir", lambda: tmp_path / "blend-env")
 
-    config = {"job_type": "blend", "model_names": ["aifs"]}
-    job_workload._run_blend("job-1", config)
+    job_workload._run_blend("job-1", {"job_type": "blend", "model_names": ["aifs"]})
 
-    config_path = tmp_path / "job" / "blend-config.json"
-    assert config_path.exists()
-    assert commands[0][0] == "python"
-    assert commands[0][2:] == [
-        "--config",
-        str(config_path),
-        "--output-dir",
-        str(output_dir),
-    ]
-    assert environments[0]["ALMANAC_BLENDING_ROOT"] == str(
-        tmp_path / "blend-env" / "onset-blending"
-    )
+    ((command, env),) = calls
+    config_path = Path(command[command.index("--config") + 1])
+    assert json.loads(config_path.read_text())["model_names"] == ["aifs"]
+    assert command[command.index("--output-dir") + 1] == str(output_dir)
+    assert env["ALMANAC_BLENDING_ROOT"] == str(tmp_path / "blend-env" / "onset-blending")
 
 
-def test_romp_safe_model_name_keeps_only_name_characters() -> None:
-    assert romp_safe_model_name('fuxi",)\n__import__("os")#') == "fuxi___import___os"
-    assert romp_safe_model_name("GraphCast (v2.1)") == "GraphCast_v2.1"
-    assert romp_safe_model_name("()") == "model"
-
-
-def test_render_romp_config_evaluates_only_the_listed_years() -> None:
+@pytest.mark.parametrize(
+    ("year_lists", "expected"),
+    [
+        (
+            {"years": [2012, 2014], "years_clim": [2010, 2011, 2012, 2014]},
+            ((2012, 2014), (2010, 2011, 2012, 2014)),
+        ),
+        # Without lists ROMP evaluates the full date range.
+        ({}, (None, None)),
+    ],
+)
+def test_render_romp_config_evaluates_only_the_listed_years(
+    year_lists: dict, expected: tuple
+) -> None:
     config = _job_config()
-    config["romp_params"] = {
-        **config["romp_params"],
-        "years": [2012, 2014],
-        "years_clim": [2010, 2011, 2012, 2014],
-    }
+    config["romp_params"] = {**config["romp_params"], **year_lists}
     namespace: dict = {}
 
     exec(render_romp_config(config, Path("/tmp/out"), Path("/tmp/fig")), {}, namespace)
 
-    assert namespace["years"] == (2012, 2014)
-    assert namespace["years_clim"] == (2010, 2011, 2012, 2014)
-
-
-def test_render_romp_config_without_year_lists_lets_romp_use_the_full_range() -> None:
-    namespace: dict = {}
-
-    exec(render_romp_config(_job_config(), Path("/tmp/out"), Path("/tmp/fig")), {}, namespace)
-
-    assert namespace["years"] is None
-    assert namespace["years_clim"] is None
+    assert (namespace["years"], namespace["years_clim"]) == expected
 
 
 def test_render_romp_config_names_the_model_files_dims_for_romp() -> None:
@@ -199,7 +213,6 @@ def test_render_romp_config_names_the_model_files_dims_for_romp() -> None:
 
 
 def test_render_romp_config_rejects_dim_names_that_are_not_plain_names() -> None:
-    import pytest
     from pydantic import ValidationError
 
     config = _job_config()

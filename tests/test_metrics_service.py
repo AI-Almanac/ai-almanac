@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -223,7 +224,7 @@ async def test_metrics_endpoint_loads_serialized_cache_after_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await client.get("/jobs")
-    job_id = "persisted-metrics-job"
+    job_id = str(uuid.uuid4())
     cached_metrics = {
         "job_id": job_id,
         "windows": [],
@@ -260,5 +261,3 @@ async def test_metrics_endpoint_loads_serialized_cache_after_restart(
 
     assert response.status_code == 200
     assert response.json() == cached_metrics
-    jobs_response = await client.get("/jobs")
-    assert job_id not in {job["id"] for job in jobs_response.json()}

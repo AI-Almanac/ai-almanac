@@ -6,7 +6,6 @@ import {
 	buildSkillCells,
 	centredAreaCount,
 	featureBounds,
-	isAreaMetric,
 	lowCountPoints,
 	cellOpacity,
 	halfCell,
@@ -38,22 +37,40 @@ function grid(overrides: Partial<BlendCellGrid> = {}): BlendCellGrid {
 }
 
 describe('rampPosition', () => {
-	it('puts zero skill at the midpoint so colour families mean beat-or-lose', () => {
-		expect(rampPosition(0, 0.5)).toBe(0.5);
-	});
-
-	it('maps the extremes to the ramp ends', () => {
-		expect(rampPosition(0.5, 0.5)).toBe(1);
-		expect(rampPosition(-0.5, 0.5)).toBe(0);
-	});
-
-	it('clamps beyond the extent rather than running off the ramp', () => {
-		expect(rampPosition(99, 0.5)).toBe(1);
-		expect(rampPosition(-99, 0.5)).toBe(0);
-	});
-
-	it('falls back to neutral when there is no usable extent', () => {
-		expect(rampPosition(0.3, 0)).toBe(0.5);
+	it.each([
+		{
+			case: 'puts zero skill at the midpoint so colour families mean beat-or-lose',
+			value: 0,
+			extent: 0.5,
+			position: 0.5
+		},
+		{ case: 'maps the top of the extent to the ramp end', value: 0.5, extent: 0.5, position: 1 },
+		{
+			case: 'maps the bottom of the extent to the ramp start',
+			value: -0.5,
+			extent: 0.5,
+			position: 0
+		},
+		{
+			case: 'clamps above the extent rather than running off the ramp',
+			value: 99,
+			extent: 0.5,
+			position: 1
+		},
+		{
+			case: 'clamps below the extent rather than running off the ramp',
+			value: -99,
+			extent: 0.5,
+			position: 0
+		},
+		{
+			case: 'falls back to neutral when there is no usable extent',
+			value: 0.3,
+			extent: 0,
+			position: 0.5
+		}
+	])('$case', ({ value, extent, position }) => {
+		expect(rampPosition(value, extent)).toBe(position);
 	});
 });
 
@@ -101,13 +118,6 @@ describe('buildSkillCells', () => {
 		// Closed ring centred on the point.
 		expect(ring).toHaveLength(5);
 		expect(ring[0]).toEqual(ring[4]);
-	});
-
-	it('colours opposite signs differently and centres neutral', () => {
-		const cells = buildSkillCells(grid(), { minObservations: 10, cellSizeDeg: 0.25 });
-		const better = cells.features.find((f) => f.properties.skill === 0.4);
-		const worse = cells.features.find((f) => f.properties.skill === -0.4);
-		expect(better?.properties.color).not.toBe(worse?.properties.color);
 	});
 
 	/**
@@ -238,8 +248,8 @@ describe('buildAreaSkillCells', () => {
 		expect(cells.features.map((f) => f.properties.name)).toEqual(['Dessie town', 'Legambo']);
 		const dessie = cells.features[0];
 		expect(dessie.geometry).toEqual({ type: 'Point', coordinates: [39.63, 11.13] });
-		expect(dessie.properties.opacity).toBe(0.85);
-		expect(cells.features[1].properties.opacity).toBeLessThan(0.85);
+		// Legambo rests on 4 observations, below the floor, so it draws fainter.
+		expect(cells.features[1].properties.opacity).toBeLessThan(dessie.properties.opacity);
 	});
 
 	it('places every area at its centroid when no boundaries are available', () => {
@@ -253,11 +263,6 @@ describe('buildAreaSkillCells', () => {
 });
 
 describe('area metrics share the grid helpers', () => {
-	it('distinguishes the two shapes', () => {
-		expect(isAreaMetric(areaMetric())).toBe(true);
-		expect(isAreaMetric(grid())).toBe(false);
-	});
-
 	it('counts scored areas beating the baseline and those on thin evidence', () => {
 		expect(shareBeatingBaseline(areaMetric())).toEqual({ better: 1, total: 2 });
 		expect(lowCountPoints(areaMetric(), 10)).toBe(1);

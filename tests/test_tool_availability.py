@@ -7,23 +7,13 @@ from ai_almanac.settings import settings
 
 
 @pytest.mark.parametrize("tool", ["run_code", "run_code_sandbox"])
-def test_enabled_with_modal_runner_is_available(monkeypatch: pytest.MonkeyPatch, tool: str) -> None:
-    monkeypatch.setattr(settings, f"enable_{tool}", True)
-    monkeypatch.setattr(settings, "job_runner", "modal")
-    assert is_tool_available(tool) is True
-
-
-@pytest.mark.parametrize("tool", ["run_code", "run_code_sandbox"])
-def test_enabled_without_remote_backend_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, tool: str
+@pytest.mark.parametrize(
+    ("enabled", "runner", "available"),
+    [(True, "modal", True), (True, "local", False), (False, "modal", False)],
+)
+def test_code_tools_need_both_the_setting_and_a_remote_runner(
+    monkeypatch: pytest.MonkeyPatch, tool: str, enabled: bool, runner: str, available: bool
 ) -> None:
-    monkeypatch.setattr(settings, f"enable_{tool}", True)
-    monkeypatch.setattr(settings, "job_runner", "local")
-    assert is_tool_available(tool) is False
-
-
-@pytest.mark.parametrize("tool", ["run_code", "run_code_sandbox"])
-def test_disabled_is_unavailable(monkeypatch: pytest.MonkeyPatch, tool: str) -> None:
-    monkeypatch.setattr(settings, f"enable_{tool}", False)
-    monkeypatch.setattr(settings, "job_runner", "modal")
-    assert is_tool_available(tool) is False
+    monkeypatch.setattr(settings, f"enable_{tool}", enabled)
+    monkeypatch.setattr(settings, "job_runner", runner)
+    assert is_tool_available(tool) is available

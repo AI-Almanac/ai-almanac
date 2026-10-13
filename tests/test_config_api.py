@@ -17,7 +17,7 @@ async def test_capabilities_report_chat_unavailable_without_llm(
     response = await client.get("/config/capabilities")
 
     assert response.status_code == 200
-    assert response.json() == {"chat": False}
+    assert response.json()["chat"] is False
 
 
 def _spa_is_built() -> bool:
@@ -40,17 +40,3 @@ async def test_spa_entrypoint_is_not_cached(client: httpx.AsyncClient) -> None:
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-
-
-@pytest.mark.asyncio
-async def test_api_works_without_a_built_spa(client: httpx.AsyncClient) -> None:
-    """The API must not depend on the frontend having been built.
-
-    `pixi run dev` serves the UI from Vite and never touches web/build, and
-    web/build/ now exists-but-empty on a fresh clone. Probing for index.html
-    rather than the directory keeps that case from either shadowing the packaged
-    bundle or raising on a missing file.
-    """
-    response = await client.get("/config/capabilities")
-
-    assert response.status_code == 200

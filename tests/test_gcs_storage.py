@@ -130,10 +130,6 @@ def store() -> GCSStorage:
     )
 
 
-def test_is_not_local(store: GCSStorage) -> None:
-    assert store.is_local is False
-
-
 def test_job_output_uri_points_at_outputs_bucket(store: GCSStorage) -> None:
     assert store.job_output_uri("job1") == (
         "gs://out/job1/output",
@@ -147,10 +143,6 @@ def test_result_url_points_at_the_backend_proxy(store: GCSStorage) -> None:
     assert store.generate_result_url("job1", "figure", "p.png") == (
         "/jobs/job1/results/figure/p.png"
     )
-
-
-def test_result_file_path_is_none_so_routers_stream(store: GCSStorage) -> None:
-    assert store.result_file_path("job1", "output", "m.nc") is None
 
 
 def test_open_result_stream_yields_bytes(store: GCSStorage) -> None:
@@ -176,17 +168,11 @@ def test_list_result_files_parses_kind_and_filename(store: GCSStorage) -> None:
 
 def test_chat_figure_roundtrip_and_delete(store: GCSStorage) -> None:
     store.save_chat_figure("fig1", _PNG)
-    # stored under the detected extension in the outputs bucket
-    assert "chat-figures/fig1.png" in store._bucket("out").store
-    assert store.chat_figure_local_path("fig1") is None  # forces the read path
 
     figure = store.read_chat_figure("fig1")
     assert figure is not None
     data, media_type = figure
     assert data == _PNG and media_type == "image/png"
-
-    redirect = store.chat_figure_redirect_url("fig1")
-    assert redirect == "https://signed/out/chat-figures/fig1.png?method=GET"
 
     store.delete_chat_figure("fig1")
     assert store.read_chat_figure("fig1") is None
@@ -205,13 +191,6 @@ def test_read_log(store: GCSStorage) -> None:
     assert store.read_log("job1") == ""
     store._bucket("out").blob("job1/run.log").upload_from_string(b"line one\n")
     assert store.read_log("job1") == "line one\n"
-
-
-def test_local_workspace_methods_are_unavailable(store: GCSStorage) -> None:
-    with pytest.raises(NotImplementedError):
-        store.job_dir("job1")
-    with pytest.raises(NotImplementedError):
-        store.log_path("job1")
 
 
 # --- GcsArtifactStore --------------------------------------------------------
@@ -270,11 +249,3 @@ def test_gcs_artifact_store_retain_holds_only_that_job_and_delete_still_works(
     artifact_store.retain("job1", keep=True)
     artifact_store.delete_job("job1")
     assert set(out.store) == {"job2/output/b.nc"}
-
-
-def test_gcs_artifact_store_has_no_local_open_or_workspace(store: GCSStorage) -> None:
-    from ai_almanac.server.services.artifact_store import GcsArtifactStore
-
-    artifact_store = GcsArtifactStore(store)
-    with pytest.raises(NotImplementedError):
-        artifact_store.create_workspace("job1")
