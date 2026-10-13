@@ -377,6 +377,29 @@ def test_globus_user_groups_failure_degrades_to_no_groups(
     assert auth_module._globus_user_groups("tok") == set()
 
 
+@pytest.mark.parametrize(("admin_groups", "lookups"), [("grp-admins", 1), ("", 0)])
+def test_globus_groups_are_looked_up_at_most_once_per_token(
+    monkeypatch: pytest.MonkeyPatch, admin_groups: str, lookups: int
+) -> None:
+    import globus_sdk
+
+    from ai_almanac.server import auth as auth_module
+
+    monkeypatch.setattr(settings, "admin_groups", admin_groups)
+    monkeypatch.setattr(settings, "globus_client_id", "cid")
+    calls: list[str] = []
+
+    def unreachable_groups_api(*args):
+        calls.append("lookup")
+        raise RuntimeError("groups api down")
+
+    monkeypatch.setattr(globus_sdk, "ConfidentialAppAuthClient", unreachable_groups_api)
+    for _ in range(3):
+        auth_module._globus_user_groups("tok")
+
+    assert len(calls) == lookups
+
+
 def test_ttl_cache_evicts_lru_at_capacity_and_expires_entries() -> None:
     from ai_almanac.server.auth import _TTLCache
 
