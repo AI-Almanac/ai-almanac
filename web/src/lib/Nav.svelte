@@ -6,9 +6,16 @@
 	import { activeTour } from '$lib/tour.svelte';
 
 	let logoFailed = $state(false);
+	let navHeight = $state(0);
+
+	// The nav wraps at narrow widths, so pages that fill the screen below it
+	// read its real height instead of guessing.
+	$effect(() => {
+		document.documentElement.style.setProperty('--nav-height', `${navHeight}px`);
+	});
 </script>
 
-<nav class="site-nav">
+<nav class="site-nav" bind:offsetHeight={navHeight}>
 	<div class="nav-inner">
 		<div class="logo-row">
 			<a href="/" class="brand">
