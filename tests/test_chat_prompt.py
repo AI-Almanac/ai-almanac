@@ -145,6 +145,7 @@ def _all_tool_names() -> set[str]:
         llm._job_toolset(),
         llm._metrics_toolset(),
         llm._analysis_toolset(),
+        llm._handoff_toolset(),
     ]
     return {name for toolset in toolsets for name in toolset.tools}
 
@@ -200,3 +201,53 @@ async def test_a_denied_tool_is_absent_from_the_schema_entirely() -> None:
 
     assert "submit_blend" not in offered
     assert {"submit_benchmark", "get_blend_results"} <= offered
+
+
+@pytest.mark.asyncio
+async def test_a_general_chat_hands_setup_off_instead_of_building_a_config() -> None:
+    """A general conversation has no setup form to show a config, so it can look
+    things up and offer the setup page, but never build or submit a run itself."""
+    scope = ChatScope(kind="general", key="assistant", job_ids=[])
+
+    offered = await _tools_offered_to_the_model(scope, builtin())
+
+    assert {"open_setup", "list_regions", "list_blend_models", "list_jobs"} <= offered
+    assert offered.isdisjoint(llm._SETUP_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_a_setup_chat_is_not_offered_the_handoff() -> None:
+    scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
+
+    offered = await _tools_offered_to_the_model(scope, builtin())
+
+    assert "open_setup" not in offered
+    assert "update_benchmark_config" in offered
+
+
+@pytest.mark.asyncio
+async def test_open_setup_carries_the_request_to_the_setup_page() -> None:
+    from pydantic_ai.models.test import TestModel
+
+    scope = ChatScope(kind="general", key="assistant", job_ids=[])
+    model = TestModel(call_tools=["open_setup"], custom_output_text="ok")
+    agent = llm._build_agent(scope, builtin(), model)
+
+    result = await agent.run("hello", deps=llm.ChatDeps(user_id="u", session_id="s", scope=scope))
+
+    [handoff] = [
+        part.content
+        for message in result.all_messages()
+        for part in message.parts
+        if getattr(part, "tool_name", None) == "open_setup" and part.part_kind == "tool-return"
+    ]
+    assert handoff["setup_handoff"]["workflow"] in {"benchmark", "blend"}
+    assert handoff["setup_handoff"]["request"]
+
+
+def test_only_a_general_chat_is_told_how_to_hand_off_setup() -> None:
+    general = instructions(ChatScope(kind="general", key="assistant", job_ids=[]))
+    setup = instructions(ChatScope(kind="benchmark_setup", key="setup", job_ids=[]))
+
+    assert "open_setup" in general
+    assert "open_setup" not in setup

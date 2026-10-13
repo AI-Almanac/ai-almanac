@@ -18,8 +18,10 @@ from asyncio import Lock, Semaphore
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass, replace
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_ai import (
     Agent,
     AgentRunResultEvent,
@@ -521,6 +523,15 @@ def _analysis_toolset() -> FunctionToolset[ChatDeps]:
 SELF_CONFIGURATION_TOOL_PATTERNS = ("ruleset", "guardrail", "setting", "prompt", "user_")
 
 
+def _without_tools(
+    toolsets: list[FunctionToolset[ChatDeps]], names: Collection[str]
+) -> list[FunctionToolset[ChatDeps]]:
+    for toolset in toolsets:
+        for name in set(names) & set(toolset.tools):
+            del toolset.tools[name]
+    return toolsets
+
+
 def _apply_tool_policy(
     toolsets: list[FunctionToolset[ChatDeps]], ruleset: Ruleset
 ) -> list[FunctionToolset[ChatDeps]]:
@@ -530,35 +541,70 @@ def _apply_tool_policy(
     the model to attempt and nothing to explain in the prompt — the same approach
     ``_analysis_toolset`` already takes for tools the deployment cannot run.
     """
-    denied = set(ruleset.tool_policy.deny)
-    if not denied:
-        return toolsets
-    for toolset in toolsets:
-        for name in denied & set(toolset.tools):
-            del toolset.tools[name]
+    return _without_tools(toolsets, ruleset.tool_policy.deny)
+
+
+def _handoff_toolset() -> FunctionToolset[ChatDeps]:
+    toolset = FunctionToolset[ChatDeps](id="handoff")
+
+    @toolset.tool_plain
+    def open_setup(
+        workflow: Literal["benchmark", "blend"],
+        request: Annotated[str, Field(min_length=1, max_length=1000)],
+    ) -> dict:
+        """Show the user a link to the benchmark or blend setup page.
+
+        `request` is what the user wants set up, written as they would ask for it,
+        in the first person, with every detail agreed so far: region, season or
+        event, models, years, area of interest. The setup assistant starts from
+        it alone, without this conversation."""
+        return {"setup_handoff": {"workflow": workflow, "request": request.strip()}}
+
+    return toolset
+
+
+# Tools that build or run a config held on the session. A general conversation
+# has no setup form to show that config, so it hands off to a page that does.
+_SETUP_TOOLS = frozenset(
+    {
+        "get_benchmark_config",
+        "update_benchmark_config",
+        "validate_benchmark_config",
+        "submit_benchmark",
+        "get_blend_config",
+        "update_blend_config",
+        "validate_blend_config",
+        "submit_blend",
+    }
+)
+
+
+def _toolsets_for_scope(scope_kind: str) -> list[FunctionToolset[ChatDeps]]:
+    toolsets = [
+        _benchmark_toolset(),
+        _blend_toolset(),
+        _job_toolset(),
+        _metrics_toolset(),
+        _analysis_toolset(),
+    ]
+    if scope_kind == "general":
+        return [*_without_tools(toolsets, _SETUP_TOOLS), _handoff_toolset()]
     return toolsets
 
 
-def _offered_toolsets(ruleset: Ruleset) -> list[FunctionToolset[ChatDeps]]:
-    return _apply_tool_policy(
-        [
-            _benchmark_toolset(),
-            _blend_toolset(),
-            _job_toolset(),
-            _metrics_toolset(),
-            _analysis_toolset(),
-        ],
-        ruleset,
+def _offered_toolsets(ruleset: Ruleset, scope_kind: str) -> list[FunctionToolset[ChatDeps]]:
+    return _apply_tool_policy(_toolsets_for_scope(scope_kind), ruleset)
+
+
+def offered_tool_names(ruleset: Ruleset, scope_kind: str) -> list[str]:
+    """Every tool the assistant is given under this ruleset, in this scope, in this deployment."""
+    return sorted(
+        name for toolset in _offered_toolsets(ruleset, scope_kind) for name in toolset.tools
     )
 
 
-def offered_tool_names(ruleset: Ruleset) -> list[str]:
-    """Every tool the assistant is given under this ruleset in this deployment."""
-    return sorted(name for toolset in _offered_toolsets(ruleset) for name in toolset.tools)
-
-
 def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
-    toolsets = _offered_toolsets(ruleset)
+    toolsets = _offered_toolsets(ruleset, scope.kind)
     tool_names = {name for toolset in toolsets for name in toolset.tools}
     return Agent(
         model or _build_model(),
@@ -794,7 +840,7 @@ async def _stream_response_unlimited(
         record.turn_id = turn.id
         record.ruleset_id = ruleset.id
         record.ruleset_version = ruleset.version
-        record.offered_tools = offered_tool_names(ruleset)
+        record.offered_tools = offered_tool_names(ruleset, session_scope.kind)
         record.model_name = getattr(model, "model_name", None) or (
             model if isinstance(model, str) else settings.llm_model
         )

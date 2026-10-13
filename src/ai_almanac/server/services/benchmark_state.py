@@ -43,7 +43,7 @@ class BenchmarkValidation(BaseModel):
 
 
 class BenchmarkScope(BaseModel):
-    kind: Literal["benchmark_setup", "benchmark_run_group", "blend_setup", "job_set"] = (
+    kind: Literal["general", "benchmark_setup", "benchmark_run_group", "blend_setup", "job_set"] = (
         "benchmark_run_group"
     )
     key: str

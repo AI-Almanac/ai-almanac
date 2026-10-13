@@ -1,20 +1,25 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { login } from './auth';
 
 	interface Props {
 		message?: string;
+		/** Where sign-in lands; defaults to this page as it is now. */
+		returnTo?: string;
+		children?: Snippet;
 	}
 
-	let { message = 'Sign in to continue.' }: Props = $props();
+	let { message = 'Sign in to continue.', returnTo, children }: Props = $props();
 
 	function handleLogin() {
-		login(window.location.pathname + window.location.search);
+		login(returnTo ?? window.location.pathname + window.location.search);
 	}
 </script>
 
 <section class="login-prompt">
 	<p>{message}</p>
 	<button type="button" onclick={handleLogin}>Sign in with Globus</button>
+	{@render children?.()}
 </section>
 
 <style>
@@ -47,5 +52,16 @@
 
 	button:hover {
 		filter: brightness(0.95);
+	}
+
+	/* A way onward without signing in, passed in by the page. */
+	.login-prompt :global(.secondary-action) {
+		border: 0;
+		background: none;
+		color: var(--color-accent);
+		cursor: pointer;
+		font: inherit;
+		padding: 0;
+		text-decoration: underline;
 	}
 </style>

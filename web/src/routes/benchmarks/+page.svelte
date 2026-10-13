@@ -8,6 +8,7 @@
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
+	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { goToBlend } from '$lib/blend-nav';
 	import {
 		getDatasets,
@@ -43,6 +44,10 @@
 	let initialized = $state(false);
 	const manualSetupRequested = takeSetupRequest('manual');
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
+	// The manual flag is dropped from the URL on load, so sign-in is sent back with it.
+	const setupReturnTo = manualSetupRequested
+		? '/benchmarks?manual=1'
+		: $page.url.pathname + $page.url.search;
 	const promptSetupActive = $derived(Boolean(initialPrompt) && !promptSetupFinished);
 	const inSetupMode = $derived(store.showForm || promptSetupActive);
 	const resultsTourActive = $derived(
@@ -91,6 +96,12 @@
 		promptSetupFinished = true;
 		store.showForm = true;
 		store.selectedGroupKey = null;
+		history.replaceState(null, '', '/benchmarks');
+	}
+
+	function leaveSetup() {
+		promptSetupFinished = true;
+		store.showForm = false;
 		history.replaceState(null, '', '/benchmarks');
 	}
 
@@ -198,7 +209,16 @@
 		<BenchmarkSidebar {store} onNewBenchmark={startNew} onSelectGroup={selectGroup} />
 	{/if}
 	<div class="workspace-main">
-		{#if inSetupMode}
+		{#if inSetupMode && account.isAnonymous}
+			<LoginPrompt
+				message="Sign in to set up a benchmark. The example results are open to everyone."
+				returnTo={setupReturnTo}
+			>
+				<button type="button" class="secondary-action" onclick={leaveSetup}>
+					See the example results
+				</button>
+			</LoginPrompt>
+		{:else if inSetupMode}
 			<BenchmarkForm
 				{store}
 				{regions}
