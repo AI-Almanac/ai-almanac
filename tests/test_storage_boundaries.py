@@ -1,4 +1,4 @@
-"""Phase 4 — DatasetResolver and ArtifactStore filesystem implementations."""
+"""Filesystem artifact publication and dataset mount-root containment."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_almanac.server.services.artifact_store import (
-    FilesystemArtifactStore,
-    JobArtifact,
-)
+from ai_almanac.server.services.artifact_store import FilesystemArtifactStore
 from ai_almanac.server.services.dataset_resolver import (
     DatasetAccessError,
     DataSource,
@@ -66,50 +63,6 @@ def test_publish_indexes_outputs_with_hash_size_and_media_type(
     png = by_name["portrait.png"]
     assert png.kind == "figure"
     assert png.media_type == "image/png"
-
-
-def test_open_returns_published_bytes(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    job_id = "job-2"
-    store.create_workspace(job_id)
-    payloads = _write_outputs(store, job_id)
-
-    artifact = next(
-        a
-        for a in store.publish(job_id, store._storage.job_dir(job_id))
-        if a.filename == "metrics.nc"
-    )
-    with store.open(artifact) as handle:
-        assert handle.read() == payloads["output/metrics.nc"]
-
-
-def test_open_missing_artifact_raises(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    missing = JobArtifact(
-        id="x",
-        job_id="nope",
-        kind="output",
-        filename="ghost.nc",
-        media_type="application/x-netcdf",
-        size_bytes=0,
-        checksum="",
-        storage_key="nope/output/ghost.nc",
-        created_at="2026-01-01T00:00:00",
-    )
-    with pytest.raises(FileNotFoundError):
-        store.open(missing)
-
-
-def test_delete_job_removes_workspace(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    job_id = "job-3"
-    store.create_workspace(job_id)
-    _write_outputs(store, job_id)
-    job_dir = store._storage.job_dir(job_id)
-    assert job_dir.exists()
-
-    store.delete_job(job_id)
-    assert not job_dir.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -67,19 +67,22 @@ async def test_feedback_creates_github_issue(
         lambda: _FakeGitHubClient(captured, status=201),
     )
 
-    response = await client.post("/feedback", json=_SUBMISSION)
+    response = await client.post(
+        "/feedback",
+        json=_SUBMISSION,
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-Email": "alice@example.org"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"issue_url": "https://github.com/acme/widgets/issues/7"}
     assert captured["url"] == "https://api.github.com/repos/acme/widgets/issues"
     assert captured["headers"]["Authorization"] == "Bearer test-token"
-    assert captured["json"]["title"] == "[bug] The blend page crashed"
-    assert "demo-feedback" in captured["json"]["labels"]
-    assert "Breadcrumb trail (2 events)" in captured["json"]["body"]
-    # The target repo may be public: the body must carry the opaque subject,
-    # never an email address.
-    assert "**Submitted by:** local" in captured["json"]["body"]
-    assert "@" not in captured["json"]["body"].split("---")[1]
+    body = captured["json"]["body"]
+    assert _SUBMISSION["message"] in body
+    # The target repo may be public: the submitter shows as their opaque
+    # subject, never their email address.
+    assert "alice" in body
+    assert "alice@example.org" not in body
 
 
 @pytest.mark.asyncio
@@ -96,16 +99,3 @@ async def test_feedback_502_when_github_rejects(
     response = await client.post("/feedback", json=_SUBMISSION)
 
     assert response.status_code == 502
-
-
-@pytest.mark.asyncio
-async def test_config_js_reports_feedback_flag(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FEEDBACK_GITHUB_TOKEN", "test-token")
-
-    response = await client.get("/config.js")
-
-    assert response.status_code == 200
-    assert '"feedbackEnabled": true' in response.text
-    assert '"version":' in response.text

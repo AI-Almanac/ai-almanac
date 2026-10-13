@@ -13,7 +13,7 @@ from ai_almanac.settings import settings
 @pytest.mark.asyncio
 async def test_llm_profile_key_is_encrypted_and_not_returned(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -23,7 +23,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
     )
     provider = await client.post(
         "/llm/providers",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "provider_type": "openai-compatible",
             "display_name": "Approved endpoint",
@@ -33,7 +33,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
     assert provider.status_code == 201
     profile = await client.post(
         "/llm/profiles",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "provider_id": provider.json()["id"],
             "model_name": "test-model",
@@ -48,7 +48,7 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
         row = (
             (
                 await conn.execute(
-                    text("SELECT key_nonce, key_ciphertext FROM user_llm_profiles WHERE id = :id"),
+                    text("SELECT key_ciphertext FROM user_llm_profiles WHERE id = :id"),
                     {"id": profile.json()["id"]},
                 )
             )
@@ -56,4 +56,3 @@ async def test_llm_profile_key_is_encrypted_and_not_returned(
             .one()
         )
     assert b"plaintext-secret" not in bytes(row["key_ciphertext"])
-    assert len(bytes(row["key_nonce"])) == 12

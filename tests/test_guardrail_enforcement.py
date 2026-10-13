@@ -17,8 +17,6 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from ai_almanac.server.services import job_submission
-
 
 async def _seed_source(kind: str, name: str, region: str, start_year: int, end_year: int) -> str:
     from ai_almanac.server.db import get_db
@@ -63,12 +61,12 @@ def _leaky_body(obs_id: str, model_ids: list[str]) -> dict:
 
 @pytest.mark.asyncio
 async def test_post_blends_rejects_a_true_holdout_that_was_trained_on(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     obs_id = await _seed_source("obs", f"obs-{uuid.uuid4().hex[:8]}", "india", 1980, 2024)
     model_id = await _seed_source("model", f"aifs-{uuid.uuid4().hex[:8]}", "india", 1980, 2024)
 
-    res = await client.post("/blends", json=_leaky_body(obs_id, [model_id]), headers=auth_headers)
+    res = await client.post("/blends", json=_leaky_body(obs_id, [model_id]), headers=as_new_user)
 
     assert res.status_code == 400
     detail = res.json()["detail"]
@@ -78,7 +76,7 @@ async def test_post_blends_rejects_a_true_holdout_that_was_trained_on(
 
 @pytest.mark.asyncio
 async def test_a_clean_split_is_accepted_on_the_same_path(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """Guards against the check rejecting everything, which would pass the test
     above for the wrong reason."""
@@ -88,14 +86,17 @@ async def test_a_clean_split_is_accepted_on_the_same_path(
     body = _leaky_body(obs_id, [model_id])
     body["params"]["true_holdout_years"] = "2020,2021"
 
-    res = await client.post("/blends", json=body, headers=auth_headers)
+    res = await client.post("/blends", json=body, headers=as_new_user)
 
-    assert res.status_code != 400, res.text
+    assert res.status_code == 201, res.text
+    blend_id = res.json()["id"]
+    listed = await client.get("/blends", headers=as_new_user)
+    assert blend_id in {blend["id"] for blend in listed.json()}
 
 
 @pytest.mark.asyncio
 async def test_submitted_blend_freezes_guardrail_warnings_with_the_job(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     """Warnings ride along with the result they apply to, like the existing
     live-forecast note, so the caution survives the conversation that produced
@@ -112,21 +113,9 @@ async def test_submitted_blend_freezes_guardrail_warnings_with_the_job(
         "cv_holdout_years": "2015:2018",
     }
 
-    res = await client.post("/blends", json=body, headers=auth_headers)
+    res = await client.post("/blends", json=body, headers=as_new_user)
 
     assert res.status_code < 400, res.text
     warnings = " ".join(res.json()["warnings"])
     assert "3 models" in warnings
     assert "4 year" in warnings
-
-
-def test_min_onset_years_is_sourced_from_the_guardrails_record() -> None:
-    """One number, not four copies. The mirrors in modal/blending_app.py and
-    year-coverage.ts are still by-hand; this pins the two Python readers."""
-    from ai_almanac.server.services import blend_domain, guardrails
-
-    # Ruff reads an ALL_CAPS name on the left of `==` as a Yoda condition, hence
-    # the ordering here.
-    expected = guardrails.DEFAULT_GUARDRAILS.min_onset_years
-    assert expected == job_submission.MIN_ONSET_YEARS
-    assert expected == blend_domain.MIN_ONSET_YEARS

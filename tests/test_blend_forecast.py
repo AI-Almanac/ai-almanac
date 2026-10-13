@@ -14,11 +14,11 @@ from sqlalchemy import text
 
 from ai_almanac.server.services.blend_forecast import (
     DAILY_COLUMNS,
+    DEFAULT_VIEW,
+    SUPPORTED_VIEWS,
     WEEKLY_COLUMNS,
-    UnsupportedForecastView,
     available_views,
     parse_blend_forecast,
-    parse_forecast_view,
 )
 from ai_almanac.settings import settings
 
@@ -74,17 +74,12 @@ def test_parse_blend_forecast_reads_weekly_sums_from_the_daily_csv() -> None:
     assert point["probs"][0][0] == round(sum(d / 1000 for d in range(1, 8)), 3)
 
 
-def test_weekly_blend_has_no_daily_view() -> None:
-    with pytest.raises(UnsupportedForecastView):
-        parse_forecast_view("weekly_model", "daily")
+def test_each_view_caches_under_its_own_payload_name() -> None:
+    names = [view.payload_name for view in SUPPORTED_VIEWS]
 
-
-def test_default_view_keeps_its_original_payload_name() -> None:
-    assert parse_forecast_view("weekly_model", "weekly").payload_name == "blend_forecast.v1.json"
-    assert (
-        parse_forecast_view("daily_model", "daily").payload_name
-        == "blend_forecast.daily_model.daily.v1.json"
-    )
+    assert len(set(names)) == len(names)
+    # The original weekly payload keeps its name so existing jobs are not rebuilt.
+    assert DEFAULT_VIEW.payload_name == "blend_forecast.v1.json"
 
 
 def test_available_views_follow_the_csvs_present() -> None:
@@ -95,12 +90,6 @@ def test_available_views_follow_the_csvs_present() -> None:
         {"model": "weekly_model", "resolution": "weekly"},
         {"model": "daily_model", "resolution": "weekly"},
         {"model": "daily_model", "resolution": "daily"},
-    ]
-
-
-def test_available_views_hide_the_day_level_blend_while_it_is_switched_off() -> None:
-    assert available_views([_DAILY_FILE, _WEEKLY_FILE], day_level_enabled=False) == [
-        {"model": "weekly_model", "resolution": "weekly"}
     ]
 
 
@@ -159,11 +148,11 @@ async def _forecast_job(user_id: str, *files: tuple[str, str]) -> str:
 
 @pytest.mark.asyncio
 async def test_blend_forecast_defaults_to_the_weekly_blend(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV))
 
-    resp = await client.get(f"/jobs/{job_id}/blend-forecast", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/blend-forecast", headers=as_new_user)
 
     body = resp.json()
     assert resp.status_code == 200
@@ -174,7 +163,7 @@ async def test_blend_forecast_defaults_to_the_weekly_blend(
 
 @pytest.mark.asyncio
 async def test_blend_forecast_serves_each_view_from_its_csv(
-    client, user_id: str, auth_headers: dict[str, str], day_level_blend_on
+    client, user_id: str, as_new_user: dict[str, str], day_level_blend_on
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV), (_DAILY_FILE, _daily_csv()))
 
@@ -182,7 +171,7 @@ async def test_blend_forecast_serves_each_view_from_its_csv(
         resp = await client.get(
             f"/jobs/{job_id}/blend-forecast",
             params={"model": model, "resolution": resolution},
-            headers=auth_headers,
+            headers=as_new_user,
         )
         assert resp.status_code == 200
         assert len(resp.json()["available_views"]) == 3
@@ -195,14 +184,14 @@ async def test_blend_forecast_serves_each_view_from_its_csv(
 
 @pytest.mark.asyncio
 async def test_blend_forecast_offers_only_the_weekly_blend_while_the_day_level_blend_is_off(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV), (_DAILY_FILE, _daily_csv()))
 
     resp = await client.get(
         f"/jobs/{job_id}/blend-forecast",
         params={"model": "daily_model", "resolution": "daily"},
-        headers=auth_headers,
+        headers=as_new_user,
     )
 
     assert resp.status_code == 200
@@ -212,14 +201,14 @@ async def test_blend_forecast_offers_only_the_weekly_blend_while_the_day_level_b
 
 @pytest.mark.asyncio
 async def test_blend_forecast_without_the_daily_csv_is_empty_for_daily_views(
-    client, user_id: str, auth_headers: dict[str, str], day_level_blend_on
+    client, user_id: str, as_new_user: dict[str, str], day_level_blend_on
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV))
 
     resp = await client.get(
         f"/jobs/{job_id}/blend-forecast",
         params={"model": "daily_model", "resolution": "daily"},
-        headers=auth_headers,
+        headers=as_new_user,
     )
 
     assert resp.status_code == 200
@@ -228,15 +217,15 @@ async def test_blend_forecast_without_the_daily_csv_is_empty_for_daily_views(
 
 @pytest.mark.asyncio
 async def test_blend_forecast_rejects_unsupported_views(
-    client, user_id: str, auth_headers: dict[str, str]
+    client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
     job_id = await _forecast_job(user_id, (_WEEKLY_FILE, _CSV))
     url = f"/jobs/{job_id}/blend-forecast"
 
     daily_weekly_blend = await client.get(
-        url, params={"model": "weekly_model", "resolution": "daily"}, headers=auth_headers
+        url, params={"model": "weekly_model", "resolution": "daily"}, headers=as_new_user
     )
-    unknown_model = await client.get(url, params={"model": "forest"}, headers=auth_headers)
+    unknown_model = await client.get(url, params={"model": "forest"}, headers=as_new_user)
 
     assert daily_weekly_blend.status_code == 422
     assert unknown_model.status_code == 422

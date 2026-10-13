@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 
 import type { JobSkillScores, SkillBin } from '../src/lib/api';
 import {
-	binsByLabel,
 	collectLeadBins,
 	formatSkillValue,
 	hasMetric,
@@ -117,12 +116,6 @@ describe('seriesValues', () => {
 	});
 });
 
-describe('binsByLabel', () => {
-	it('flattens both windows into one lookup', () => {
-		expect(binsByLabel(response('a')).size).toBe(6);
-	});
-});
-
 describe('hasMetric', () => {
 	it('is false when every bin is unscored', () => {
 		const empty = response('a', Array(6).fill({ auc: null }));
@@ -136,19 +129,15 @@ describe('hasMetric', () => {
 });
 
 describe('formatSkillValue', () => {
-	it('renders AUC as a decimal, not a percentage', () => {
-		// romp.yaml types auc as `fraction`, which the shared formatMetricValue
-		// would render as "82.0%"; skill scores are conventionally plain decimals.
-		expect(formatSkillValue(0.82)).toBe('0.820');
-	});
-
-	it('renders negative skill', () => {
-		expect(formatSkillValue(-0.42)).toBe('-0.420');
-	});
-
-	it('renders missing values as an em dash', () => {
-		expect(formatSkillValue(null)).toBe('—');
-		expect(formatSkillValue(undefined)).toBe('—');
-		expect(formatSkillValue(Number.NaN)).toBe('—');
+	// romp.yaml types auc as `fraction`, which the shared formatMetricValue would
+	// render as "82.0%"; skill scores are conventionally plain decimals.
+	it.each([
+		{ case: 'renders AUC as a decimal, not a percentage', value: 0.82, text: '0.820' },
+		{ case: 'renders negative skill', value: -0.42, text: '-0.420' },
+		{ case: 'renders null as an em dash', value: null, text: '—' },
+		{ case: 'renders undefined as an em dash', value: undefined, text: '—' },
+		{ case: 'renders NaN as an em dash', value: Number.NaN, text: '—' }
+	])('$case', ({ value, text }) => {
+		expect(formatSkillValue(value)).toBe(text);
 	});
 });

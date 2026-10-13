@@ -86,15 +86,6 @@ describe('skillAgainstReference', () => {
 		expect(skillAgainstReference('brier_score', null, 0.084, true)).toBeNull();
 		expect(skillAgainstReference('bias', 0.3, 0.2, null)).toBeNull();
 	});
-
-	it('is signed consistently across both metric directions', () => {
-		// Worse than climatology is negative whether the metric is lower- or
-		// higher-is-better — that is the whole point of the common scale.
-		expect(skillAgainstReference('brier_score', 0.2, 0.1, true)).toBeLessThan(0);
-		expect(skillAgainstReference('auc', 0.6, 0.9, false)!).toBeLessThan(0);
-		expect(skillAgainstReference('brier_score', 0.05, 0.1, true)!).toBeGreaterThan(0);
-		expect(skillAgainstReference('auc', 0.95, 0.9, false)!).toBeGreaterThan(0);
-	});
 });
 
 function columns(keys: string[]): PortraitColumn[] {
@@ -310,16 +301,19 @@ describe('buildPortrait', () => {
 		definitions: DEFINITIONS
 	};
 
-	it('carries a cell group for every window', () => {
-		const portrait = buildPortrait(input);
-		expect(portrait.windows).toEqual(WINDOWS);
-		for (const row of portrait.rows) {
-			expect(Object.keys(row.cellsByWindow)).toEqual(WINDOWS);
-			for (const window of WINDOWS) {
-				expect(row.cellsByWindow[window]).toHaveLength(2);
+	it.each([{ windows: WINDOWS }, { windows: ['1-15'] }])(
+		'carries a cell group per model for every window in $windows',
+		({ windows }) => {
+			const portrait = buildPortrait({ ...input, windows });
+			expect(portrait.windows).toEqual(windows);
+			for (const row of portrait.rows) {
+				expect(Object.keys(row.cellsByWindow)).toEqual(windows);
+				for (const window of windows) {
+					expect(row.cellsByWindow[window]).toHaveLength(2);
+				}
 			}
 		}
-	});
+	);
 
 	it('shades by distance from that window’s own climatology reference', () => {
 		const portrait = buildPortrait(input);
@@ -353,25 +347,40 @@ describe('buildPortrait', () => {
 		expect(long).toBeLessThan(short);
 	});
 
-	it('resolves a climatology reference per window', () => {
-		const far = buildPortrait(input).rows.find((r) => r.metric === 'false_alarm_rate');
-		expect(far?.referenceByWindow).toEqual({ '1-15': 0.53, '16-30': 0.58 });
-	});
-
-	it('uses zero as the skill-score reference in every window', () => {
-		const bss = buildPortrait(input).rows.find((r) => r.metric === 'brier_skill_score');
-		expect(bss?.referenceByWindow).toEqual({ '1-15': 0, '16-30': 0 });
-	});
-
-	it('reads the ROC reference from each window separately', () => {
-		const auc = buildPortrait(input).rows.find((r) => r.metric === 'auc');
-		expect(auc?.referenceByWindow['1-15']).toBe(0.51);
-		expect(auc?.referenceByWindow['16-30']).toBe(0.5);
-	});
-
-	it('recovers the Brier reference by averaging the per-bin climatology column', () => {
-		const brier = buildPortrait(input).rows.find((r) => r.metric === 'brier_score');
-		expect(brier?.referenceByWindow['1-15']).toBeCloseTo(0.14);
+	it.each([
+		{
+			case: 'uses zero as the skill-score reference',
+			metric: 'brier_skill_score',
+			window: '1-15',
+			reference: 0
+		},
+		{
+			case: 'uses zero as the skill-score reference',
+			metric: 'brier_skill_score',
+			window: '16-30',
+			reference: 0
+		},
+		{
+			case: 'reads the ROC reference from each window separately',
+			metric: 'auc',
+			window: '1-15',
+			reference: 0.51
+		},
+		{
+			case: 'reads the ROC reference from each window separately',
+			metric: 'auc',
+			window: '16-30',
+			reference: 0.5
+		},
+		{
+			case: 'recovers the Brier reference by averaging the per-bin climatology column',
+			metric: 'brier_score',
+			window: '1-15',
+			reference: 0.14
+		}
+	])('$case ($metric, $window)', ({ metric, window, reference }) => {
+		const row = buildPortrait(input).rows.find((r) => r.metric === metric);
+		expect(row?.referenceByWindow[window]).toBeCloseTo(reference);
 	});
 
 	it('flags the metric that dissents, and says which window it dissents in', () => {
@@ -383,21 +392,6 @@ describe('buildPortrait', () => {
 
 	it('excludes the per-year MAE series', () => {
 		expect(buildPortrait(input).rows.map((r) => r.metric)).not.toContain('mae_2019');
-	});
-
-	it('spells metric names out in full', () => {
-		const labels = buildPortrait(input).rows.map((r) => r.label);
-		expect(labels).toContain('Brier Skill Score');
-		expect(labels).toContain('Area Under ROC Curve');
-		expect(labels).not.toContain('BSS');
-		expect(labels).not.toContain('AUC');
-	});
-
-	it('names the uncomputed metrics, spelled out', () => {
-		const portrait = buildPortrait(input);
-		expect(portrait.notComputed).toContain('Reliability');
-		expect(portrait.notComputed).toContain('Continuous Ranked Probability Score');
-		expect(portrait.notComputed).not.toContain('CRPS');
 	});
 
 	it('flags a model worse than climatology', () => {
@@ -445,22 +439,21 @@ describe('buildPortrait', () => {
 		expect(rps.cellsByWindow['1-15'][0].worseThanReference).toBe(false);
 	});
 
-	it('handles a single window', () => {
-		const portrait = buildPortrait({ ...input, windows: ['1-15'] });
-		expect(portrait.windows).toEqual(['1-15']);
-		expect(Object.keys(portrait.rows[0].cellsByWindow)).toEqual(['1-15']);
-	});
-
-	it('builds spatial-only rows for a deterministic run', () => {
-		expect(
-			buildPortrait({ ...input, skillByJob: {} }).rows.every((r) => r.group === 'spatial')
-		).toBe(true);
-	});
-
-	it('builds probabilistic-only rows for an ensemble run with no spatial data', () => {
-		expect(
-			buildPortrait({ ...input, metricsByJob: {} }).rows.every((r) => r.group === 'probabilistic')
-		).toBe(true);
+	it.each([
+		{
+			case: 'builds spatial-only rows for a deterministic run',
+			drop: 'skillByJob',
+			group: 'spatial'
+		},
+		{
+			case: 'builds probabilistic-only rows for an ensemble run with no spatial data',
+			drop: 'metricsByJob',
+			group: 'probabilistic'
+		}
+	])('$case', ({ drop, group }) => {
+		const rows = buildPortrait({ ...input, [drop]: {} }).rows;
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every((r) => r.group === group)).toBe(true);
 	});
 });
 

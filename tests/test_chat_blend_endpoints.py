@@ -50,14 +50,14 @@ def _blend_scope() -> dict:
 
 @pytest.mark.asyncio
 async def test_patch_blend_config_validates_and_surfaces_on_session(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     obs_id = await _seed_source("obs", "ERA5 India", "india", 1990, 2024)
     gencast_id = await _seed_source("model", "GenCast", "india", 2000, 2024)
 
     created = await client.post(
         "/chat/sessions",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"title": "Blend", "scope": _blend_scope()},
     )
     assert created.status_code == 201
@@ -65,7 +65,7 @@ async def test_patch_blend_config_validates_and_surfaces_on_session(
 
     patched = await client.patch(
         f"/chat/sessions/{session_id}/blend/config",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "name": "India blend",
             "obs_dataset_id": obs_id,
@@ -81,40 +81,40 @@ async def test_patch_blend_config_validates_and_surfaces_on_session(
     assert body["blend_validation"]["can_run"] is True
 
     # The persisted blend config is surfaced on a fresh session read.
-    fetched = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    fetched = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
     assert fetched.status_code == 200
     assert fetched.json()["blend_config"]["name"] == "India blend"
 
 
 @pytest.mark.asyncio
 async def test_patch_blend_config_clears_the_area_of_interest_on_null(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     created = await client.post(
-        "/chat/sessions", headers=auth_headers, json={"title": "Blend", "scope": _blend_scope()}
+        "/chat/sessions", headers=as_new_user, json={"title": "Blend", "scope": _blend_scope()}
     )
     url = f"/chat/sessions/{created.json()['id']}/blend/config"
     box = {"lat_min": 9.0, "lat_max": 11.0, "lon_min": 38.0, "lon_max": 40.0}
 
-    set_box = await client.patch(url, headers=auth_headers, json={"focus_area": box})
+    set_box = await client.patch(url, headers=as_new_user, json={"focus_area": box})
     assert set_box.json()["blend_config"]["focus_area"] == box
-    kept = await client.patch(url, headers=auth_headers, json={"name": "Renamed"})
+    kept = await client.patch(url, headers=as_new_user, json={"name": "Renamed"})
     assert kept.json()["blend_config"]["focus_area"] == box
-    cleared = await client.patch(url, headers=auth_headers, json={"focus_area": None})
+    cleared = await client.patch(url, headers=as_new_user, json={"focus_area": None})
     assert cleared.json()["blend_config"]["focus_area"] is None
 
 
 @pytest.mark.asyncio
 async def test_patch_blend_config_rejects_a_malformed_area_as_bad_request(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
 ) -> None:
     created = await client.post(
-        "/chat/sessions", headers=auth_headers, json={"title": "Blend", "scope": _blend_scope()}
+        "/chat/sessions", headers=as_new_user, json={"title": "Blend", "scope": _blend_scope()}
     )
     reversed_box = {"lat_min": 11.0, "lat_max": 9.0, "lon_min": 38.0, "lon_max": 40.0}
     patched = await client.patch(
         f"/chat/sessions/{created.json()['id']}/blend/config",
-        headers=auth_headers,
+        headers=as_new_user,
         json={"focus_area": reversed_box},
     )
     assert patched.status_code == 400

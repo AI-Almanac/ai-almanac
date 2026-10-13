@@ -70,39 +70,34 @@ def _example_job(job_type: str = "benchmark", run_id: str | None = None) -> tupl
     return job_id, f"owner-{owner_uid}"
 
 
+@pytest.mark.parametrize(
+    "headers", [{"X-Forwarded-User": "newcomer"}, {}], ids=["signed-in", "anonymous"]
+)
 @pytest.mark.asyncio
-async def test_example_appears_in_every_users_lists(client: httpx.AsyncClient, proxy) -> None:
+async def test_lists_show_every_example_and_no_one_elses_private_or_shared_jobs(
+    client: httpx.AsyncClient, proxy, headers: dict[str, str]
+) -> None:
     bench_id, _ = _example_job("benchmark")
     blend_id, _ = _example_job("blend")
     forecast_id, _ = _example_job("forecast")
-    headers = {"X-Forwarded-User": "newcomer"}
+    owner_uid = str(uuid.uuid4())
+    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
+    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
 
     jobs = await client.get("/jobs", headers=headers)
-    assert bench_id in {j["id"] for j in jobs.json()}
-    listed = next(j for j in jobs.json() if j["id"] == bench_id)
-    assert listed["is_owner"] is False
-    assert listed["visibility"] == "example"
+    assert jobs.status_code == 200
+    listed = {j["id"]: j for j in jobs.json()}
+    assert listed[bench_id]["is_owner"] is False
+    assert listed[bench_id]["visibility"] == "example"
+    assert private_id not in listed
+    assert shared_id not in listed
 
     blends = await client.get("/blends", headers=headers)
     assert blend_id in {b["id"] for b in blends.json()}
 
     forecasts = await client.get("/forecasts", headers=headers)
     assert forecast_id in {f["id"] for f in forecasts.json()}
-
-
-@pytest.mark.asyncio
-async def test_private_and_shared_jobs_stay_out_of_other_lists(
-    client: httpx.AsyncClient, proxy
-) -> None:
-    owner_uid = str(uuid.uuid4())
-    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
-    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
-    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
-
-    jobs = await client.get("/jobs", headers={"X-Forwarded-User": "newcomer"})
-    ids = {j["id"] for j in jobs.json()}
-    assert private_id not in ids
-    assert shared_id not in ids
 
 
 @pytest.mark.asyncio
@@ -250,69 +245,32 @@ async def test_promotion_rolls_back_when_outputs_cannot_be_retained(
     assert _job_row(job_id)[1] == "private"
 
 
+@pytest.mark.parametrize(
+    ("visibility", "usable"),
+    [("example", True), ("shared", True), ("private", False)],
+)
 @pytest.mark.asyncio
-async def test_example_readable_by_non_owner(client: httpx.AsyncClient, proxy) -> None:
-    job_id, _ = _example_job("benchmark")
-    resp = await client.get(f"/jobs/{job_id}", headers={"X-Forwarded-User": "reader"})
-    assert resp.status_code == 200
-    assert resp.json()["is_owner"] is False
+async def test_another_users_blend_is_a_forecast_parent_only_if_published(
+    client: httpx.AsyncClient, proxy, visibility: str, usable: bool
+) -> None:
+    from fastapi import HTTPException
 
-
-@pytest.mark.asyncio
-async def test_example_blend_usable_as_parent(client: httpx.AsyncClient, proxy) -> None:
     from ai_almanac.server.services.job_submission import _resolve_parent_blend
 
-    blend_id, _ = _example_job("blend")
-    row = await _resolve_parent_blend(blend_id, "some-other-user-id")
-    assert row["id"] == blend_id
+    owner_uid, blend_id = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert(f"owner-{owner_uid}", owner_uid, blend_id, visibility=visibility, job_type="blend")
+
+    if usable:
+        assert (await _resolve_parent_blend(blend_id, "some-other-user-id"))["id"] == blend_id
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await _resolve_parent_blend(blend_id, "some-other-user-id")
+        assert exc.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
 # Anonymous viewing (no credential presented at all)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_anonymous_lists_examples_only(client: httpx.AsyncClient, proxy) -> None:
-    bench_id, _ = _example_job("benchmark")
-    blend_id, _ = _example_job("blend")
-    forecast_id, _ = _example_job("forecast")
-    owner_uid = str(uuid.uuid4())
-    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
-    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
-    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
-
-    jobs = await client.get("/jobs")
-    assert jobs.status_code == 200
-    listed = {j["id"]: j for j in jobs.json()}
-    assert bench_id in listed
-    assert listed[bench_id]["is_owner"] is False
-    assert private_id not in listed
-    assert shared_id not in listed
-
-    blends = await client.get("/blends")
-    assert blend_id in {b["id"] for b in blends.json()}
-
-    forecasts = await client.get("/forecasts")
-    assert forecast_id in {f["id"] for f in forecasts.json()}
-
-
-@pytest.mark.asyncio
-async def test_anonymous_reads_example_but_not_private_or_shared(
-    client: httpx.AsyncClient, proxy
-) -> None:
-    example_id, _ = _example_job("benchmark")
-    owner_uid = str(uuid.uuid4())
-    private_id, shared_id = str(uuid.uuid4()), str(uuid.uuid4())
-    _insert("someone", owner_uid, private_id, visibility="private", run_id=str(uuid.uuid4()))
-    _insert("someone", owner_uid, shared_id, visibility="shared", run_id=str(uuid.uuid4()))
-
-    resp = await client.get(f"/jobs/{example_id}")
-    assert resp.status_code == 200
-    assert resp.json()["is_owner"] is False
-    assert (await client.get(f"/jobs/{private_id}")).status_code == 404
-    # 'shared' means shared with authenticated users, not the public.
-    assert (await client.get(f"/jobs/{shared_id}")).status_code == 404
 
 
 @pytest.mark.asyncio

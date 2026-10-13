@@ -4,13 +4,13 @@ import datetime as dt
 
 import pytest
 
-from ai_almanac.server.db import engine, get_or_create_user
+from ai_almanac.server.db import get_db, get_or_create_user
 from ai_almanac.server.services import trajectory_sets as ts
 
 
 @pytest.mark.asyncio
 async def test_create_or_get_is_idempotent_and_gates_on_coverage():
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="traj-test-user")
         uid = user["id"]
         key = dict(model_name="fuxi", init_source="gfs", season="2026")
@@ -59,7 +59,7 @@ async def test_mark_coverage_from_config_completes_and_satisfies_gate():
     }
     key = dict(model_name="fuxi", init_source="gfs", season="2024")
 
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="traj-cover-user")
         await ts.create_or_get_set(
             conn,
@@ -80,7 +80,7 @@ async def test_mark_coverage_from_config_completes_and_satisfies_gate():
 
 @pytest.mark.asyncio
 async def test_unknown_set_is_never_ready():
-    async with engine.begin() as conn:
+    async with get_db() as conn:
         ready = await ts.set_is_ready(
             conn,
             model_name="nope",
