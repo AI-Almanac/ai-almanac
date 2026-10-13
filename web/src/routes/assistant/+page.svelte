@@ -69,7 +69,8 @@
 		display: flex;
 		flex-direction: column;
 		width: min(100%, 56rem);
-		height: calc(100dvh - 9rem);
+		/* Fills the screen below the nav, so the input stays in view however long the conversation gets. */
+		height: calc(100dvh - var(--nav-height, 0rem));
 		margin: 0 auto;
 		padding: 1rem;
 		box-sizing: border-box;
