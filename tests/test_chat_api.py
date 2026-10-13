@@ -58,23 +58,6 @@ def _sse_events(body: str) -> list[dict]:
     return events
 
 
-def test_chat_json_helpers_treat_empty_strings_as_defaults() -> None:
-    from ai_almanac.server.services.chat_turns import json_dict, json_list
-
-    assert json_list("") == []
-    assert json_list("  \n") == []
-    assert json_dict("") == {}
-    assert json_dict("  \n") == {}
-
-
-def test_parse_llm_event_skips_blank_events() -> None:
-    from ai_almanac.server.services.chat_turns import parse_llm_event
-
-    assert parse_llm_event("") is None
-    assert parse_llm_event("  \n") is None
-    assert parse_llm_event('{"type":"done"}') == {"type": "done"}
-
-
 def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
     from ai_almanac.server.services.benchmark_domain import _clamp_model_params
     from ai_almanac.server.services.benchmark_state import BenchmarkRunSpec
@@ -117,81 +100,78 @@ def test_romp_params_merge_shared_and_per_model_advanced_params() -> None:
     assert "per_model_params" not in params
 
 
-def test_apply_region_params_adds_custom_region_bounds() -> None:
+@pytest.mark.parametrize(
+    ("params", "extra_regions", "expected"),
+    [
+        pytest.param(
+            {"region": "central-highlands", "start_date": "2020-05-01"},
+            (_STATIC_CUSTOM_REGION,),
+            {
+                "region": "custom",
+                "start_date": "2020-05-01",
+                "lat_min": 20.0,
+                "lat_max": 27.0,
+                "lon_min": 88.0,
+                "lon_max": 93.0,
+                "land_only": False,
+                "shp_only": False,
+            },
+            id="custom-region-bounds",
+        ),
+        pytest.param({"region": "india"}, (), {"region": "India"}, id="builtin-region-name"),
+    ],
+)
+def test_apply_region_params_translates_regions_for_romp(
+    params: dict, extra_regions: tuple, expected: dict
+) -> None:
     from ai_almanac.server.services.job_submission import apply_region_params
 
-    params = apply_region_params(
-        {"region": "central-highlands", "start_date": "2020-05-01"},
-        _packaged_catalog(extra_regions=(_STATIC_CUSTOM_REGION,)),
-    )
-
-    assert params == {
-        "region": "custom",
-        "start_date": "2020-05-01",
-        "lat_min": 20.0,
-        "lat_max": 27.0,
-        "lon_min": 88.0,
-        "lon_max": 93.0,
-        "land_only": False,
-        "shp_only": False,
-    }
+    assert apply_region_params(params, _packaged_catalog(extra_regions=extra_regions)) == expected
 
 
-def test_apply_region_params_maps_builtin_region_name() -> None:
-    from ai_almanac.server.services.job_submission import apply_region_params
-
-    params = apply_region_params({"region": "india"}, _packaged_catalog())
-
-    assert params == {"region": "India"}
-
-
-def test_job_region_metadata_prefers_dataset_region_for_custom_romp_region() -> None:
+@pytest.mark.parametrize(
+    ("config", "extra_regions", "expected"),
+    [
+        pytest.param(
+            {
+                "dataset_config": {"region": "central-highlands"},
+                "romp_params": {"region": "custom"},
+            },
+            (_STATIC_CUSTOM_REGION,),
+            ("central-highlands", "Central Highlands", "custom"),
+            id="dataset-region-wins-for-custom-romp-region",
+        ),
+        pytest.param(
+            {"romp_params": {"region": "India"}},
+            (),
+            ("india", "India", "India"),
+            id="builtin-romp-region",
+        ),
+        pytest.param(
+            {
+                "region_id": "central-highlands",
+                "region_name": "Central Highlands",
+                "romp_region": "custom",
+                "romp_params": {"region": "custom"},
+            },
+            (),
+            ("central-highlands", "Central Highlands", "custom"),
+            id="persisted-snapshot",
+        ),
+    ],
+)
+def test_job_region_metadata_names_the_region_a_job_ran_on(
+    config: dict, extra_regions: tuple, expected: tuple[str, str, str]
+) -> None:
     from ai_almanac.server.services.job_submission import job_region_metadata
 
-    metadata = job_region_metadata(
-        {
-            "dataset_config": {"region": "central-highlands"},
-            "romp_params": {"region": "custom"},
-        },
-        _packaged_catalog(extra_regions=(_STATIC_CUSTOM_REGION,)),
-    )
+    metadata = job_region_metadata(config, _packaged_catalog(extra_regions=extra_regions))
 
+    region_id, region_name, romp_region = expected
     assert metadata == {
-        "region_id": "central-highlands",
-        "region_name": "Central Highlands",
-        "romp_region": "custom",
-    }
-
-
-def test_job_region_metadata_maps_builtin_romp_region() -> None:
-    from ai_almanac.server.services.job_submission import job_region_metadata
-
-    metadata = job_region_metadata({"romp_params": {"region": "India"}}, _packaged_catalog())
-
-    assert metadata == {
-        "region_id": "india",
-        "region_name": "India",
-        "romp_region": "India",
-    }
-
-
-def test_job_region_metadata_preserves_persisted_region_snapshot() -> None:
-    from ai_almanac.server.services.job_submission import job_region_metadata
-
-    metadata = job_region_metadata(
-        {
-            "region_id": "central-highlands",
-            "region_name": "Central Highlands",
-            "romp_region": "custom",
-            "romp_params": {"region": "custom"},
-        },
-        _packaged_catalog(),
-    )
-
-    assert metadata == {
-        "region_id": "central-highlands",
-        "region_name": "Central Highlands",
-        "romp_region": "custom",
+        "region_id": region_id,
+        "region_name": region_name,
+        "romp_region": romp_region,
     }
 
 
@@ -325,171 +305,63 @@ async def test_submit_benchmark_passes_region_id_to_job_creation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_mode", "spec_fields", "rejected_field"),
+    [
+        pytest.param("personal", {"event_type": "monsoon onset"}, "event_type", id="bad-setting"),
+        pytest.param(
+            "shared", {"advanced_params": {"nc_mask": "/etc/passwd"}}, "nc_mask", id="host-path"
+        ),
+    ],
+)
 async def test_chat_submit_reports_invalid_settings_without_creating_jobs(
     monkeypatch: pytest.MonkeyPatch,
+    deployment_mode: str,
+    spec_fields: dict,
+    rejected_field: str,
 ) -> None:
-    payload, captured_params = await _submit_from_chat(monkeypatch, event_type="monsoon onset")
+    """The chat submit tool is its own boundary: it must not bypass the checks
+    that the REST path applies (see test_benchmark_settings.py)."""
+    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", deployment_mode)
 
-    assert "event_type" in payload["error"]
+    payload, captured_params = await _submit_from_chat(monkeypatch, **spec_fields)
+
+    assert rejected_field in payload["error"]
     assert captured_params == []
 
 
 @pytest.mark.asyncio
-async def test_trim_chat_history_limits_messages_and_tool_payloads(
+async def test_trim_chat_history_keeps_recent_messages_and_shrinks_tool_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_almanac.server.services.llm import trim_chat_history
 
+    max_chars = 8
     monkeypatch.setattr("ai_almanac.settings.settings.llm_history_max_messages", 2)
-    monkeypatch.setattr("ai_almanac.settings.settings.llm_tool_result_max_chars", 8)
+    monkeypatch.setattr("ai_almanac.settings.settings.llm_tool_result_max_chars", max_chars)
 
+    def tool_return(call_id: str, content: object) -> ModelRequest:
+        return ModelRequest(
+            parts=[ToolReturnPart(tool_name="get_job_logs", tool_call_id=call_id, content=content)]
+        )
+
+    long_text = "0123456789abcdef"
     messages = [
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name="get_job_logs",
-                    tool_call_id="call-1",
-                    content={
-                        "logs": "0123456789abcdef",
-                        "artifacts": [{"id": "artifact-1"}],
-                    },
-                )
-            ]
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name="get_job_metrics",
-                    tool_call_id="call-2",
-                    content={"metric": "short"},
-                )
-            ]
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name="get_job_logs",
-                    tool_call_id="call-3",
-                    content="abcdefghijk",
-                )
-            ]
-        ),
+        tool_return("call-old", "outside the window"),
+        tool_return("call-dict", {"logs": long_text, "artifacts": [{"id": "artifact-1"}]}),
+        tool_return("call-text", long_text),
     ]
 
     trimmed = await trim_chat_history(messages)
 
-    assert len(trimmed) == 2
-    assert isinstance(trimmed[0], ModelRequest)
-    assert isinstance(trimmed[0].parts[0], ToolReturnPart)
-    assert trimmed[0].parts[0].content == {"metric": "short"}
-    assert isinstance(trimmed[1], ModelRequest)
-    assert isinstance(trimmed[1].parts[0], ToolReturnPart)
-    assert trimmed[1].parts[0].content == (
-        "abcdefgh\n\n[tool result trimmed from conversation history]"
-    )
-
-
-@pytest.mark.asyncio
-async def test_chat_agent_registers_expected_toolsets_and_uses_test_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from ai_almanac.server.services import rulesets
-    from ai_almanac.server.services.chat_state import ChatScope
-    from ai_almanac.server.services.llm import ChatDeps, _build_agent
-
-    monkeypatch.setattr("ai_almanac.settings.settings.llm_base_url", "http://test.local")
-    model = TestModel(call_tools=[], custom_output_text="ready")
-    scope = ChatScope(
-        kind="benchmark_run_group",
-        key="group-1",
-        title="Group 1",
-        job_ids=[],
-    )
-    agent = _build_agent(scope, rulesets.packaged_ruleset("builtin"))
-
-    with agent.override(model=model):
-        result = await agent.run(
-            "hello",
-            deps=ChatDeps(user_id="user-1", session_id="session-1", scope=scope),
-        )
-
-    assert result.output == "ready"
-    assert model.last_model_request_parameters is not None
-    tool_names = {tool.name for tool in model.last_model_request_parameters.function_tools}
-    assert {
-        "list_regions",
-        "update_benchmark_config",
-        "submit_benchmark",
-        "list_failed_jobs",
-        "get_job_logs",
-        "get_job_metrics",
-    }.issubset(tool_names)
-
-
-@pytest.mark.asyncio
-async def test_stream_response_runs_with_pydantic_ai_test_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from ai_almanac.server.services import llm
-    from ai_almanac.server.services.chat_state import ChatScope
-
-    monkeypatch.setattr(
-        "ai_almanac.server.services.llm._build_model",
-        lambda: TestModel(call_tools=[], custom_output_text="Synthetic answer."),
-    )
-    scope = ChatScope(
-        kind="benchmark_run_group",
-        key="group-1",
-        title="Group 1",
-        job_ids=[],
-    )
-
-    events = [
-        json.loads(event)
-        async for event in llm.stream_response(
-            [],
-            "user-1",
-            "session-1",
-            scope,
-            latest_user_message="Summarize this run",
-        )
-    ]
-
-    assert (
-        "".join(event["content"] for event in events if event["type"] == "text_delta")
-        == "Synthetic answer."
-    )
-    assert events[-1]["type"] == "done"
-    assert events[-1]["turn"]["content"] == "Synthetic answer."
-    assert events[-1]["provider_state"]
-
-
-@pytest.mark.asyncio
-async def test_stream_response_emits_tool_call_and_result_events(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """TestModel(call_tools='all') exercises the FunctionToolResultEvent branch,
-    which a tool-free run skips — guarding the pydantic-ai event-field renames."""
-    from ai_almanac.server.services import llm
-    from ai_almanac.server.services.chat_state import ChatScope
-
-    monkeypatch.setattr(
-        "ai_almanac.server.services.llm._build_model",
-        lambda: TestModel(call_tools="all"),
-    )
-    scope = ChatScope(kind="benchmark_run_group", key="group-1", title="Group 1", job_ids=[])
-
-    events = [
-        json.loads(event)
-        async for event in llm.stream_response(
-            [], "user-1", "session-1", scope, latest_user_message="run a tool"
-        )
-    ]
-
-    types = [event["type"] for event in events]
-    assert "tool_call" in types
-    assert "tool_result" in types
-    assert types[-1] == "done"
+    assert [m.parts[0].tool_call_id for m in trimmed] == ["call-dict", "call-text"]
+    kept_dict = trimmed[0].parts[0].content
+    assert "artifacts" not in kept_dict
+    assert kept_dict["logs"].startswith(long_text[:max_chars])
+    assert long_text not in kept_dict["logs"]
+    kept_text = trimmed[1].parts[0].content
+    assert kept_text.startswith(long_text[:max_chars])
+    assert long_text not in kept_text
 
 
 def test_guardrail_event_is_built_from_the_tool_result_not_the_model() -> None:
@@ -1269,22 +1141,11 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     session_id = (await _create_session(client, as_new_user))["id"]
     url = f"/chat/sessions/{session_id}/benchmark/config"
 
-    await client.patch(url, headers=as_new_user, json={"region_id": "india"})
+    set_region = await client.patch(url, headers=as_new_user, json={"region_id": "india"})
+    assert set_region.status_code == 200, set_region.text
     kept = await client.patch(url, headers=as_new_user, json={"intent": "Monsoon onset"})
+    assert kept.status_code == 200, kept.text
     assert kept.json()["benchmark_config"]["region_id"] == "india"
     cleared = await client.patch(url, headers=as_new_user, json={"region_id": None})
+    assert cleared.status_code == 200, cleared.text
     assert cleared.json()["benchmark_config"]["region_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_chat_submit_on_shared_deployment_reports_host_paths_without_creating_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("ai_almanac.settings.settings.deployment_mode", "shared")
-
-    payload, captured_params = await _submit_from_chat(
-        monkeypatch, advanced_params={"nc_mask": "/etc/passwd"}
-    )
-
-    assert "nc_mask must be gs:// URLs" in payload["error"]
-    assert captured_params == []

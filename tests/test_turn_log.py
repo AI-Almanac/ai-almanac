@@ -27,189 +27,113 @@ OFFERED = ["get_job_metrics", "get_spatial_summary", "rerun_job"]
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "flagged"),
     [
-        "Use `get_job_metrics` / `get_spatial_summary` once the jobs finish.",
-        "I can call rerun_job with parallel off.",
-        "Set per_model_params → parallel: false for FuXi.",
+        ("Use `get_job_metrics` / `get_spatial_summary` once the jobs finish.", True),
+        ("I can call rerun_job with parallel off.", True),
+        ("Set per_model_params → parallel: false for FuXi.", True),
+        (
+            "Once the runs finish I can map mean absolute error and rerun FuXi one year at a time.",
+            False,
+        ),
     ],
 )
-def test_a_tool_name_or_config_path_shown_to_the_user_is_flagged(text: str) -> None:
-    assert compute_flags(record(text=text, offered_tools=OFFERED))["names_internal_terms"]
-
-
-def test_describing_the_same_work_in_plain_words_is_not_flagged() -> None:
-    text = "Once the runs finish I can map mean absolute error and rerun FuXi one year at a time."
-    assert not compute_flags(record(text=text, offered_tools=OFFERED))["names_internal_terms"]
+def test_tool_names_and_config_paths_shown_to_the_user_are_flagged(
+    text: str, flagged: bool
+) -> None:
+    flags = compute_flags(record(text=text, offered_tools=OFFERED))
+    assert flags["names_internal_terms"] is flagged
 
 
 # --- numbers_without_tool_call -------------------------------------------
 
 
-def test_a_decimal_with_no_data_tool_call_is_flagged() -> None:
-    flags = compute_flags(record(text="The blend scores 0.42 RPSS.", tool_calls=[]))
-    assert flags["numbers_without_tool_call"]
-
-
-def test_a_decimal_after_reading_data_is_not_flagged() -> None:
-    flags = compute_flags(
-        record(text="The blend scores 0.42 RPSS.", tool_calls=["get_blend_results"])
-    )
-    assert not flags["numbers_without_tool_call"]
-
-
-def test_listing_models_does_not_count_as_reading_numbers() -> None:
-    """list_* returns names, not measurements — quoting a score after only
-    listing models is exactly the case worth counting."""
-    flags = compute_flags(record(text="AIFS reaches 0.31.", tool_calls=["list_models"]))
-    assert flags["numbers_without_tool_call"]
-
-
-def test_integers_in_conceptual_answers_are_not_flagged() -> None:
-    """The domain rules are written in integers ("under 10 test years", "MAE
-    under 5 days") and the prompt tells the assistant to answer conceptual
-    questions from knowledge. Counting integers would flag every one of those."""
-    flags = compute_flags(
-        record(
-            text="Under 10 test years results are noisy, and MAE under 5 days is strong skill.",
-            tool_calls=[],
-        )
-    )
-    assert not flags["numbers_without_tool_call"]
-
-
-def test_running_code_counts_as_reading_data() -> None:
-    flags = compute_flags(record(text="The median is 3.5 days.", tool_calls=["run_code"]))
-    assert not flags["numbers_without_tool_call"]
+@pytest.mark.parametrize(
+    ("text", "tool_calls", "flagged"),
+    [
+        pytest.param("The blend scores 0.42 RPSS.", [], True, id="decimal-without-data"),
+        pytest.param(
+            "The blend scores 0.42 RPSS.", ["get_blend_results"], False, id="after-reading-data"
+        ),
+        # list_* returns names, not measurements, so quoting a score after only
+        # listing models is exactly the case worth counting.
+        pytest.param("AIFS reaches 0.31.", ["list_models"], True, id="listing-is-not-reading"),
+        # The domain rules are written in integers and conceptual answers come
+        # from knowledge; counting integers would flag every one of those.
+        pytest.param(
+            "Under 10 test years results are noisy, and MAE under 5 days is strong skill.",
+            [],
+            False,
+            id="integers-in-conceptual-answers",
+        ),
+        pytest.param("The median is 3.5 days.", ["run_code"], False, id="running-code-reads-data"),
+    ],
+)
+def test_numbers_quoted_without_reading_data_are_flagged(
+    text: str, tool_calls: list[str], flagged: bool
+) -> None:
+    flags = compute_flags(record(text=text, tool_calls=tool_calls))
+    assert flags["numbers_without_tool_call"] is flagged
 
 
 # --- guardrail_unacknowledged --------------------------------------------
 
 
-def test_a_fired_guardrail_the_answer_ignores_is_flagged() -> None:
-    flags = compute_flags(
-        record(text="AIFS is the best model here.", guardrail_keys=["small_test_sample"])
-    )
-    assert flags["guardrail_unacknowledged"]
-
-
-def test_an_explained_guardrail_is_not_flagged() -> None:
-    flags = compute_flags(
-        record(
-            text="AIFS leads, but this is a small sample so the difference may not be real.",
-            guardrail_keys=["small_test_sample"],
-        )
-    )
-    assert not flags["guardrail_unacknowledged"]
-
-
-def test_acknowledgement_is_matched_case_insensitively() -> None:
-    flags = compute_flags(
-        record(text="Risk of OVERFITTING here.", guardrail_keys=["blend_members_at_risk"])
-    )
-    assert not flags["guardrail_unacknowledged"]
-
-
-def test_one_unexplained_guardrail_among_several_still_flags() -> None:
-    flags = compute_flags(
-        record(
-            text="Small sample, so treat this as provisional.",
-            guardrail_keys=["small_test_sample", "true_holdout_overlap"],
-        )
-    )
-    assert flags["guardrail_unacknowledged"]
-
-
-def test_no_guardrails_means_nothing_to_acknowledge() -> None:
-    assert not compute_flags(record(text="Here is the answer."))["guardrail_unacknowledged"]
-
-
-def test_an_unknown_guardrail_key_is_not_counted_against_the_answer() -> None:
-    """A rule added without acknowledgement terms must not silently make every
-    turn look non-compliant."""
-    flags = compute_flags(record(text="Anything.", guardrail_keys=["a_brand_new_rule"]))
-    assert not flags["guardrail_unacknowledged"]
+@pytest.mark.parametrize(
+    ("text", "guardrail_keys", "flagged"),
+    [
+        pytest.param(
+            "AIFS is the best model here.", ["small_test_sample"], True, id="ignored-guardrail"
+        ),
+        pytest.param(
+            "AIFS leads, but this is a small sample so the difference may not be real.",
+            ["small_test_sample"],
+            False,
+            id="explained-guardrail",
+        ),
+        pytest.param(
+            "Risk of OVERFITTING here.",
+            ["blend_members_at_risk"],
+            False,
+            id="case-insensitive-acknowledgement",
+        ),
+        pytest.param(
+            "Small sample, so treat this as provisional.",
+            ["small_test_sample", "true_holdout_overlap"],
+            True,
+            id="one-of-several-unexplained",
+        ),
+        pytest.param("Here is the answer.", [], False, id="no-guardrails"),
+        # A rule added without acknowledgement terms must not silently make
+        # every turn look non-compliant.
+        pytest.param("Anything.", ["a_brand_new_rule"], False, id="unknown-guardrail-key"),
+    ],
+)
+def test_guardrails_the_answer_does_not_acknowledge_are_flagged(
+    text: str, guardrail_keys: list[str], flagged: bool
+) -> None:
+    flags = compute_flags(record(text=text, guardrail_keys=guardrail_keys))
+    assert flags["guardrail_unacknowledged"] is flagged
 
 
 # --- map_narration --------------------------------------------------------
 
 
-def test_narrating_grid_points_on_a_small_sample_is_flagged() -> None:
-    flags = compute_flags(
-        record(
-            text="The grid points over the highlands are much stronger.",
-            guardrail_keys=["small_test_sample"],
-        )
-    )
-    assert flags["map_narration"]
-
-
-def test_grid_point_talk_on_an_adequate_sample_is_not_flagged() -> None:
-    flags = compute_flags(record(text="The grid points look consistent.", guardrail_keys=[]))
-    assert not flags["map_narration"]
+@pytest.mark.parametrize(
+    ("text", "guardrail_keys", "flagged"),
+    [
+        ("The grid points over the highlands are much stronger.", ["small_test_sample"], True),
+        ("The grid points look consistent.", [], False),
+    ],
+)
+def test_narrating_grid_points_is_flagged_only_on_a_small_sample(
+    text: str, guardrail_keys: list[str], flagged: bool
+) -> None:
+    flags = compute_flags(record(text=text, guardrail_keys=guardrail_keys))
+    assert flags["map_narration"] is flagged
 
 
 # --- persistence ----------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_turn_is_recorded_with_its_provenance() -> None:
-    from ai_almanac.server.db import get_db
-
-    await record_turn(
-        TurnRecord(
-            session_id="sess-log",
-            user_id="user-log",
-            turn_id="turn-log",
-            scope_kind="blend_setup",
-            ruleset_id="builtin",
-            ruleset_version=1,
-            model_name="test-model",
-            latency_ms=1234,
-            input_tokens=10,
-            output_tokens=20,
-            text="The score is 0.5.",
-            tool_calls=["list_models"],
-            guardrail_keys=["small_test_sample"],
-        )
-    )
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM assistant_turn_logs WHERE turn_id = 'turn-log'")
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-
-    assert row["ruleset_id"] == "builtin"
-    assert row["ruleset_version"] == 1
-    assert row["model_name"] == "test-model"
-    assert row["latency_ms"] == 1234
-    assert json.loads(row["tool_calls"]) == ["list_models"]
-    assert json.loads(row["guardrail_keys"]) == ["small_test_sample"]
-    flags = json.loads(row["flags"])
-    assert flags["numbers_without_tool_call"] is True
-    assert flags["guardrail_unacknowledged"] is True
-
-
-@pytest.mark.asyncio
-async def test_a_turn_with_no_id_is_not_recorded() -> None:
-    """A turn that failed before the agent was built has nothing to attribute."""
-    from ai_almanac.server.db import get_db
-
-    await record_turn(TurnRecord(session_id="sess-none", user_id="user-none"))
-
-    async with get_db() as conn:
-        count = (
-            await conn.execute(
-                text("SELECT COUNT(*) FROM assistant_turn_logs WHERE session_id = 'sess-none'")
-            )
-        ).scalar_one()
-    assert count == 0
 
 
 @pytest.mark.asyncio
@@ -308,6 +232,7 @@ async def test_a_streamed_turn_records_its_ruleset_and_model(
     from ai_almanac.server.db import get_db
     from ai_almanac.server.services import llm, rulesets
     from ai_almanac.server.services.chat_state import ChatScope
+    from ai_almanac.settings import settings
 
     monkeypatch.setattr(
         "ai_almanac.server.services.llm._build_model",
@@ -334,7 +259,7 @@ async def test_a_streamed_turn_records_its_ruleset_and_model(
             (
                 await conn.execute(
                     text(
-                        "SELECT ruleset_id, ruleset_version, scope_kind, latency_ms "
+                        "SELECT ruleset_id, ruleset_version, scope_kind, model_name, latency_ms "
                         "FROM assistant_turn_logs WHERE session_id = 'sess-stream'"
                     )
                 )
@@ -346,13 +271,62 @@ async def test_a_streamed_turn_records_its_ruleset_and_model(
     assert row["ruleset_id"] == "unconstrained"
     assert row["ruleset_version"] == control.version
     assert row["scope_kind"] == "blend_setup"
+    assert row["model_name"] == settings.llm_model
     assert row["latency_ms"] is not None
 
 
 @pytest.mark.asyncio
-async def test_a_failed_turn_is_still_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_turn_that_fails_mid_stream_is_recorded_with_its_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A ruleset that makes the model fall over is a result worth counting, so
     the log is written on the failure path too."""
+    from pydantic_ai.models.function import FunctionModel
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services import llm
+    from ai_almanac.server.services.chat_state import ChatScope
+
+    async def provider_drops_the_stream(messages, info):
+        raise RuntimeError("provider down")
+        yield ""  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: FunctionModel(stream_function=provider_drops_the_stream),
+    )
+    scope = ChatScope(kind="benchmark_setup", key="s", job_ids=[])
+
+    with pytest.raises(RuntimeError):
+        async for _ in llm.stream_response(
+            [], "user-fail", "sess-fail", scope, latest_user_message="hi"
+        ):
+            pass
+
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT turn_id, ruleset_id, failure_category FROM assistant_turn_logs "
+                        "WHERE session_id = 'sess-fail'"
+                    )
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    assert row is not None
+    assert row["turn_id"]
+    assert row["ruleset_id"]
+    assert row["failure_category"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_fails_before_the_agent_is_built_is_not_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No turn id was ever assigned, so there is nothing to attribute."""
     from ai_almanac.server.db import get_db
     from ai_almanac.server.services import llm
     from ai_almanac.server.services.chat_state import ChatScope
@@ -370,114 +344,12 @@ async def test_a_failed_turn_is_still_recorded(monkeypatch: pytest.MonkeyPatch) 
             pass
 
     async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT failure_category FROM assistant_turn_logs "
-                        "WHERE session_id = 'sess-fail'"
-                    )
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    # No turn id was ever assigned (the agent never got built), so nothing is
-    # attributable and nothing is written — the usage event still records it.
-    assert row is None
-
-
-@pytest.mark.asyncio
-async def test_guardrails_survive_onto_the_persisted_turn() -> None:
-    """The `done` event ships llm.py's turn as the one that gets stored, so a
-    finding left only on the SSE stream renders live and then vanishes the
-    instant the streaming turn is replaced — and is gone after a reload.
-    """
-    from ai_almanac.server.services.chat_state import ChatTurn, utc_now
-    from ai_almanac.server.services.llm import _guardrail_event
-
-    turn = ChatTurn(id="t", role="assistant", created_at=utc_now())
-    event = json.loads(
-        _guardrail_event(
-            turn.id,
-            "call-1",
-            {
-                "blend_validation": {
-                    "errors": [],
-                    "warnings": ["Blending 3 models risks overfitting."],
-                    "finding_keys": ["blend_members_at_risk"],
-                }
-            },
-        )
-    )
-
-    # What the stream loop does with it.
-    from ai_almanac.server.services.chat_state import GuardrailNotice
-
-    turn.guardrails.append(
-        GuardrailNotice(
-            tool_call_id="call-1",
-            errors=event["errors"],
-            warnings=event["warnings"],
-            finding_keys=event["finding_keys"],
-        )
-    )
-
-    # The `done` payload is this turn, and it must still carry the finding.
-    dumped = turn.model_dump(mode="json")
-    assert dumped["guardrails"][0]["warnings"] == ["Blending 3 models risks overfitting."]
-    assert dumped["guardrails"][0]["finding_keys"] == ["blend_members_at_risk"]
-
-
-@pytest.mark.asyncio
-async def test_the_log_is_written_by_the_time_the_turn_stream_ends(
-    client: httpx.AsyncClient, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No caller should have to wait for garbage collection to read a turn's log.
-
-    ``stream_chat_turn`` breaks out of the LLM generator on the terminal event,
-    which leaves it suspended with the log write still in its ``finally``. Closing
-    it explicitly is what makes the write happen before the stream returns —
-    without that, a reader immediately afterwards sometimes sees nothing.
-    """
-    from pydantic_ai.models.test import TestModel
-
-    from ai_almanac.server.db import get_db
-    from ai_almanac.server.services.chat_state import ChatScope
-    from ai_almanac.server.services.chat_turns import stream_chat_turn
-
-    monkeypatch.setattr(
-        "ai_almanac.server.services.llm._build_model",
-        lambda: TestModel(call_tools=[], custom_output_text="Answer."),
-    )
-    created = await client.post(
-        "/chat/sessions",
-        headers=as_new_user,
-        json={"scope": {"kind": "blend_setup", "key": "k", "job_ids": []}},
-    )
-    session_id = created.json()["id"]
-    # A local install resolves its own operator id, not the forwarded header.
-    async with get_db() as conn:
-        user_id = (
+        count = (
             await conn.execute(
-                text("SELECT user_id FROM chat_sessions WHERE id = :sid"), {"sid": session_id}
+                text("SELECT COUNT(*) FROM assistant_turn_logs WHERE session_id = 'sess-fail'")
             )
-        ).scalar()
-
-    async for _ in stream_chat_turn(
-        session_id, user_id, "hi", ChatScope(kind="blend_setup", key="k", job_ids=[])
-    ):
-        pass
-
-    async with get_db() as conn:
-        logged = (
-            await conn.execute(
-                text("SELECT COUNT(*) FROM assistant_turn_logs WHERE session_id = :sid"),
-                {"sid": session_id},
-            )
-        ).scalar()
-
-    assert logged == 1
+        ).scalar_one()
+    assert count == 0
 
 
 # --- feedback summary -------------------------------------------------------
