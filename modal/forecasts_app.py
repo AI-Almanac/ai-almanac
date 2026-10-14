@@ -14,24 +14,22 @@ To try a season end-to-end with this checkout before deploying (see
 smoke_season_forecast):
     modal run --env staging modal/forecasts_app.py::smoke_season_forecast --reset
 
-Runs one or more AI weather models (from server/config/forecast_models.yaml)
-against the latest GFS initial conditions via earth2studio, renders each
-variable/lead-hour combination as a Cloud-Optimized GeoTIFF, and publishes
-them to gs://{outputs_bucket}/{job_id}/output/{model_id}/ — the same output
-contract run_benchmark/run_blend use, so job_artifacts indexes them the same
-way.
+run_forecast executes a forecast job's season plan: each blend member's AI
+weather model (from server/config/forecast_models.yaml) is rolled out with
+earth2studio across its planned issue dates, and the season is scored against
+the trained blend by the almanac-blending app.
 
 Shares the (job_id, config, outputs_bucket) signature with run_benchmark and
 run_blend so the platform's ModalRunner dispatches it identically.
 
-This file is intentionally thin: the actual earth2studio inference, season
-looping, and COG rendering logic lives in
+This file is intentionally thin: the planning, earth2studio inference, store,
+and season assembly logic lives in
 `ai_almanac.server.services.forecast_pipeline` (a self-contained module with
 no Modal dependency), bundled into the image as a single file and imported
 directly. The exact same module also runs inside the local `forecast` pixi
 environment (see envs/forecast_entrypoint.py) — this file only adds the
-Modal-specific plumbing: GPU/image selection, Volume scratch space for the
-GPU->CPU handoff, GCS staging/upload, secrets, and cross-app calls.
+Modal-specific plumbing: GPU/image selection, the CPU/GPU split, the weights
+Volume, GCS credentials, and cross-app calls.
 
 Secrets required:
     modal secret create gcp-service-account SERVICE_ACCOUNT_JSON="$(cat key.json)"
@@ -60,10 +58,8 @@ FORECAST_PIPELINE_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_pip
 app = modal.App(APP_NAME)
 
 # Two unrelated things share this volume, at different subtrees:
-#  - /cache/runs/{job_id}/{model_id}: scratch space for passing the raw
-#    earth2studio zarr output between the GPU inference function and the CPU
-#    render function (different containers). Cleaned up per job+model once
-#    rendering finishes — see _cleanup_volume_scratch.
+#  - /cache/season-forecasts: the trajectory store for jobs that name no GCS
+#    bucket — in practice only smoke tests (see _VOLUME_STORE).
 #  - /cache/earth2studio: downloaded model weights (EARTH2STUDIO_CACHE below).
 #    A few GB per model, well under Modal's per-volume soft limit, and never
 #    cleaned up — see warm_model_weights. Baking weights into the image was
@@ -194,33 +190,6 @@ def _write_gcp_credentials_from_secret() -> None:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
 
 
-def _upload_output_dir_to_gcs(
-    client, outputs_bucket: str, job_id: str, model_id: str, local_dir: Path
-) -> None:
-    from google.cloud.storage import transfer_manager
-
-    if not outputs_bucket:
-        raise ValueError("outputs_bucket is required for Modal production runs")
-    files = [str(p.relative_to(local_dir)) for p in sorted(local_dir.rglob("*")) if p.is_file()]
-    if not files:
-        return
-    prefix = f"{job_id}/output/{model_id}/"
-    print(f"==> Uploading {len(files)} files to gs://{outputs_bucket}/{prefix}")
-    bucket = client.bucket(outputs_bucket)
-    results = transfer_manager.upload_many_from_filenames(
-        bucket,
-        files,
-        source_directory=str(local_dir),
-        blob_name_prefix=prefix,
-        worker_type="thread",
-    )
-    for name, result in zip(files, results, strict=True):
-        if isinstance(result, Exception):
-            print(f"  upload FAILED: {prefix}{name}: {result}")
-        else:
-            print(f"  uploaded: {prefix}{name}")
-
-
 def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) -> None:
     if not text or not outputs_bucket:
         return
@@ -235,51 +204,9 @@ def _load_model_registry() -> dict:
     return yaml.safe_load(Path("/almanac/forecast_models.yaml").read_text())
 
 
-def _registry_entry(config: dict, member: str) -> dict:
-    """Registry entry a blend member runs: the id the server linked it to in
-    `forecast_models`. Used only by the map-render functions; season runs
-    read their model from the job's season plan."""
-    model_id = (config.get("forecast_models") or {}).get(member, member)
-    for entry in _load_model_registry().get("models") or []:
-        if entry["id"] == model_id:
-            return entry
-    raise KeyError(f"Unknown forecast model id: {model_id!r}")
-
-
-_VOLUME_RUNS_ROOT = Path("/cache/runs")
-
-
-def _zarr_volume_path(job_id: str, model_id: str) -> Path:
-    return _VOLUME_RUNS_ROOT / job_id / model_id / "forecast.zarr"
-
-
-def _cleanup_volume_scratch(job_id: str, model_id: str) -> None:
-    import shutil
-
-    shutil.rmtree(_VOLUME_RUNS_ROOT / job_id / model_id, ignore_errors=True)
-    forecast_volume.commit()
-
-
 # ---------------------------------------------------------------------------
 # Modal functions
 # ---------------------------------------------------------------------------
-
-
-def _forecast_inference_impl(job_id: str, model_id: str, config: dict) -> dict:
-    """Run one AI weather model against the latest GFS conditions; write its
-    raw output to scratch volume space for render_forecast_products to read."""
-    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
-    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
-
-    pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    zarr_path = _zarr_volume_path(job_id, model_id)
-    run_info = pipeline.run_forecast_inference(config, model_entry, zarr_path)
-    print("==> Committing volume (uploads any newly-downloaded model weights)")
-    t0 = time.perf_counter()
-    forecast_volume.commit()
-    print(f"==> Volume commit done in {time.perf_counter() - t0:.1f}s")
-    return run_info
 
 
 def _warm_model_weights_impl(env_name: str) -> None:
@@ -300,26 +227,12 @@ def _warm_model_weights_impl(env_name: str) -> None:
     print(f"==> Weight cache warmed; volume commit took {time.perf_counter() - t0:.1f}s")
 
 
-# Per-env inference and weight-warming functions, one pair per image. Defined
-# in a module-level loop rather than a factory: Modal requires @app.function
-# targets in global scope (a def inside a module-level for loop qualifies; one
-# inside a helper function does not). Callers dispatch by registered name —
-# the server via Function.from_name, warming via `modal run ...::warm_model_
-# weights_<env>` — so nothing needs the Python handles.
+# Per-env weight-warming functions, one per image. Defined in a module-level
+# loop rather than a factory: Modal requires @app.function targets in global
+# scope (a def inside a module-level for loop qualifies; one inside a helper
+# function does not). Warming dispatches by registered name, via `modal run
+# ...::warm_model_weights_<env>`, so nothing needs the Python handles.
 for _env, _image in INFERENCE_IMAGES.items():
-
-    @app.function(
-        name=f"run_forecast_inference_{_env}",
-        image=_image,
-        gpu="A100-80GB",
-        cpu=(8, 16),
-        memory=(32768, 65536),
-        timeout=7200,
-        secrets=[gcp_secret],
-        volumes={"/cache": forecast_volume},
-    )
-    def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
-        return _forecast_inference_impl(job_id, model_id, config)
 
     @app.function(
         name=f"warm_model_weights_{_env}",
@@ -332,38 +245,6 @@ for _env, _image in INFERENCE_IMAGES.items():
     )
     def warm_model_weights(env_name: str = _env) -> None:
         _warm_model_weights_impl(env_name)
-
-
-@app.function(
-    image=render_image,
-    cpu=(4, 8),
-    memory=(16384, 32768),
-    timeout=3600,
-    secrets=[gcp_secret],
-    volumes={"/cache": forecast_volume},
-)
-def render_forecast_products(
-    job_id: str, model_id: str, config: dict, run_info: dict, outputs_bucket: str
-) -> None:
-    """Render COGs + manifest.json for one model's forecast and publish them
-    to gs://{outputs_bucket}/{job_id}/output/{model_id}/, then free the
-    scratch volume space run_forecast_inference wrote."""
-    from google.cloud import storage as gcs
-
-    _write_gcp_credentials_from_secret()
-    client = gcs.Client()
-    pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    zarr_path = _zarr_volume_path(job_id, model_id)
-
-    with tempfile.TemporaryDirectory(prefix=f"forecast-products-{job_id}-{model_id}-") as tmp:
-        root = Path(tmp)
-        pipeline.render_forecast_products(
-            {**config, "job_id": job_id}, model_id, model_entry, run_info, zarr_path, root
-        )
-        _upload_output_dir_to_gcs(client, outputs_bucket, job_id, model_id, root)
-
-    _cleanup_volume_scratch(job_id, model_id)
 
 
 # Volume-backed trajectory store, used when a job names no GCS bucket. Deployed
@@ -435,6 +316,17 @@ for _env, _image in INFERENCE_IMAGES.items():
     SEASON_ROLLOUT_FNS[_env] = run_season_rollouts
 
 
+def _rollout_function(run):
+    """The GPU rollout function for the image a run's model needs."""
+    try:
+        return SEASON_ROLLOUT_FNS[run.model.env]
+    except KeyError:
+        raise ValueError(
+            f"{run.member} runs in environment {run.model.env!r}, which has no rollout "
+            f"image; known: {sorted(SEASON_ROLLOUT_FNS)}"
+        ) from None
+
+
 @app.function(
     image=render_image,
     cpu=(1, 2),
@@ -465,7 +357,7 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
         flush=True,
     )
     if missing:
-        SEASON_ROLLOUT_FNS[run.model.env].remote(member, config, [d.isoformat() for d in missing])
+        _rollout_function(run).remote(member, config, [d.isoformat() for d in missing])
         # Pick up trajectories the GPU container committed to a volume-backed store.
         forecast_volume.reload()
 

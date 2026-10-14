@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -481,3 +482,27 @@ def test_short_horizon_rollout_runs_and_stores_only_that_horizon(tmp_path, monke
     assert horizons == [2]
     assert forecast_pipeline.stored_issue_dates(tmp_path, smoke_key) == {MAY_4}
     assert forecast_pipeline.stored_issue_dates(tmp_path, FUXI_GFS) == set()
+
+
+def test_gcs_store_sweep_lists_the_key_prefix_once_and_reads_dates_from_names(monkeypatch):
+    from ai_almanac.server.services import forecast_pipeline
+
+    listings: list[tuple[str, str]] = []
+
+    class _Client:
+        def list_blobs(self, bucket, prefix):
+            listings.append((bucket, prefix))
+            return [
+                SimpleNamespace(name=f"{prefix}2026-05-04.nc"),
+                SimpleNamespace(name=f"{prefix}2026-05-11.nc"),
+                SimpleNamespace(name=f"{prefix}notes.txt"),
+            ]
+
+    monkeypatch.setattr(forecast_pipeline, "_gcs_client", lambda: _Client())
+
+    missing = forecast_pipeline.unstored_issue_dates(
+        "gs://data-bucket/season-forecasts/", AIFS_GFS, [MAY_4, MAY_7, MAY_11]
+    )
+
+    assert missing == [MAY_7]
+    assert listings == [("data-bucket", "season-forecasts/aifs/gfs/v1/lead45d/")]

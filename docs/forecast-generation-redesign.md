@@ -25,8 +25,8 @@ Problems observed:
 - Every run rebuilds the whole season from scratch even though most init dates
   never change.
 
-The key enabling fact: the season trajectory cache
-(`forecast_pipeline.cached_trajectory`) is **model-scoped, native-grid, and
+The key enabling fact: the season trajectory store
+(keyed by `forecast_pipeline.TrajectoryKey`) is **model-scoped, native-grid, and
 deterministic** — a rollout from an archived past init date never changes, and one
 entry serves any blend or region. The expensive GPU work is therefore a *shared,
 cacheable, blend-independent asset*, not a per-user cost. This document reorganizes
