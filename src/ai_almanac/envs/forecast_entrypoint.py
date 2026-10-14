@@ -60,7 +60,7 @@ def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path
         season_params,
         scratch_root,
         out_path,
-        cache_dir=cache_dir() / "season-forecasts",
+        store=cache_dir() / "season-forecasts",
     )
 
 

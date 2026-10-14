@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ai_almanac.server.services.forecast_models import live_forecast_compatibility
-from ai_almanac.server.services.job_submission import forecast_generation_gpus
+from ai_almanac.server.services.job_submission import ForecastParams, forecast_generation_gpus
 from ai_almanac.settings import member_forecast_model_id
 
 
@@ -20,6 +20,17 @@ def test_only_a_missing_or_stale_trajectory_set_needs_a_gpu(
     readiness: dict[str, bool], gpus: int
 ) -> None:
     assert forecast_generation_gpus(readiness) == gpus
+
+
+def test_forecast_params_accept_a_known_init_source_in_any_case() -> None:
+    assert ForecastParams(init_source=" IFS ").init_source == "ifs"
+
+
+@pytest.mark.parametrize("init_source", ["era5", "../../other-model", ""])
+def test_forecast_params_refuse_an_unknown_init_source(init_source: str) -> None:
+    # It names a trajectory-store directory, so it must be a known source.
+    with pytest.raises(ValueError, match="Unknown init source"):
+        ForecastParams(init_source=init_source)
 
 
 class TestLiveForecastCompatibility:

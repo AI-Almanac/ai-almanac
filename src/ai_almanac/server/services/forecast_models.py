@@ -147,6 +147,16 @@ async def load_forecast_model_registry() -> list[dict]:
     ]
 
 
+def parse_init_source(value: str) -> str:
+    """The canonical id of a selectable init source. It names a directory in
+    the shared trajectory store, so anything outside INIT_SOURCES is refused
+    before it reaches a path or the readiness gate."""
+    source_id = value.strip().lower()
+    if source_id not in INIT_SOURCES:
+        raise ValueError(f"Unknown init source {value!r}; choose one of {sorted(INIT_SOURCES)}")
+    return source_id
+
+
 def load_init_sources() -> list[dict]:
     """Selectable initialization data sources for the forecast run form,
     ordered alphabetically by display name so the list is easy to scan."""

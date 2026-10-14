@@ -23,7 +23,7 @@ async def test_refresh_replays_original_params(monkeypatch):
             "job_type": "forecast",
             "blend_id": "blend-123",
             "forecast_model_ids": ["fuxi"],
-            "init_source": "era5",
+            "init_source": "ifs",
             "init_time": "2026-05-01T00:00:00",
             "max_issue_dates": 3,
             "lead_hours": [24, 48],
@@ -61,7 +61,7 @@ async def test_refresh_replays_original_params(monkeypatch):
     body = captured["body"]
     assert body.blend_id == "blend-123"
     assert body.forecast_model_ids == ["fuxi"]
-    assert body.params.init_source == "era5"
+    assert body.params.init_source == "ifs"
     assert body.params.init_time == "2026-05-01T00:00:00"
     assert body.params.max_issue_dates == 3
 

@@ -10,6 +10,10 @@ for the download inline (each has its own image — see INFERENCE_IMAGES):
     modal run modal/forecasts_app.py::warm_model_weights_aifs2
     modal run modal/forecasts_app.py::warm_model_weights_aifs2ens
 
+To try a season end-to-end with this checkout before deploying (see
+smoke_season_forecast):
+    modal run --env staging modal/forecasts_app.py::smoke_season_forecast --reset
+
 Runs one or more AI weather models (from server/config/forecast_models.yaml)
 against the latest GFS initial conditions via earth2studio, renders each
 variable/lead-hour combination as a Cloud-Optimized GeoTIFF, and publishes
@@ -123,9 +127,13 @@ render_image = (
         "proj-bin",
     )
     .pip_install(
+        "dask",
         "google-cloud-storage",
         "gcsfs",
         "h5netcdf",
+        # Same pin as earth2studio, so season assembly picks the same netCDF
+        # engine here as it did in the inference image.
+        "netCDF4<1.7.3",
         "numpy",
         "rasterio",
         "xarray<2026.0.0",
@@ -353,48 +361,64 @@ def render_forecast_products(
     _cleanup_volume_scratch(job_id, model_id)
 
 
-def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params: dict) -> bytes:
-    """Loop one model across the current season's issue dates and return a
-    tar.gz bundle containing one NetCDF matching the historical `{year}.nc`
-    schema, the same bundle shape run_blend's forecast_bundles expect."""
-    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
-    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
+# Volume-backed trajectory store, used when a job names no GCS bucket. Deployed
+# jobs always name one, so in practice this holds only smoke-test rollouts.
+_VOLUME_STORE = Path("/cache/season-forecasts")
 
+
+def _trajectory_store(config: dict) -> str:
+    """Root of the shared trajectory store: the GCS data bucket when the job
+    names one, otherwise this app's Volume."""
     cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
     if cache_bucket:
         _write_gcp_credentials_from_secret()
-        cache_dir = f"gs://{cache_bucket}/season-forecasts"
-    else:
-        cache_dir = Path("/cache/season-forecasts")
+        return f"gs://{cache_bucket}/season-forecasts"
+    return str(_VOLUME_STORE)
+
+
+def _trajectory_key(pipeline, config: dict, model_id: str, lead_day: int | None):
+    """Store key for a member's rollouts. `lead_day` shortens the horizon for
+    smoke tests only; real jobs never pass it and get the canonical horizon."""
+    registry_id = _registry_entry(config, model_id)["id"]
+    init_source = config.get("init_source", "gfs")
+    if lead_day is None:
+        return pipeline.TrajectoryKey(registry_id, init_source)
+    return pipeline.TrajectoryKey(registry_id, init_source, lead_day)
+
+
+def _season_rollouts_impl(
+    model_id: str, config: dict, issue_dates: list[str], lead_day: int | None
+) -> None:
+    """Roll one model out for the given issue dates, writing each trajectory to
+    the store. The only season step that needs a GPU."""
+    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
+    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
+    # Data-source temp downloads go to container disk, not the weights Volume.
+    os.environ.setdefault("EARTH2STUDIO_DATA_CACHE", "/tmp/earth2studio-data")
 
     pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    year = datetime.now(UTC).year
-    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{model_id}-"))
-    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{job_id}-{model_id}-"))
-    out_path = stage_root / f"{year}.nc"
-    pipeline.generate_season_forecast_netcdf(
-        model_entry,
-        config,
-        season_params,
+    store = _trajectory_store(config)
+    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{model_id}-"))
+    pipeline.roll_out_issue_dates(
+        _registry_entry(config, model_id),
+        _trajectory_key(pipeline, config, model_id, lead_day),
+        [datetime.fromisoformat(d).date() for d in issue_dates],
         scratch_root,
-        out_path,
-        cache_dir=cache_dir,
+        store,
     )
-    print(f"==> [{model_id}] Committing volume (model weight cache)")
+    print(f"==> [{model_id}] Committing volume (model weights, volume-backed store)")
     t0 = time.perf_counter()
     forecast_volume.commit()
     print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")
-    return pipeline.bundle_files([out_path])
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
-# inference/warm functions above; the orchestrator spawns these by env.
-SEASON_BUNDLE_FNS = {}
+# inference/warm functions above; run_season_forecast_bundle calls these by env.
+SEASON_ROLLOUT_FNS = {}
 for _env, _image in INFERENCE_IMAGES.items():
 
     @app.function(
-        name=f"run_season_forecast_bundle_{_env}",
+        name=f"run_season_rollouts_{_env}",
         image=_image,
         gpu="A100-80GB",
         cpu=(8, 16),
@@ -405,12 +429,65 @@ for _env, _image in INFERENCE_IMAGES.items():
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
-    def run_season_forecast_bundle(
-        job_id: str, model_id: str, config: dict, season_params: dict
-    ) -> bytes:
-        return _season_bundle_impl(job_id, model_id, config, season_params)
+    def run_season_rollouts(
+        model_id: str, config: dict, issue_dates: list[str], lead_day: int | None = None
+    ) -> None:
+        _season_rollouts_impl(model_id, config, issue_dates, lead_day)
 
-    SEASON_BUNDLE_FNS[_env] = run_season_forecast_bundle
+    SEASON_ROLLOUT_FNS[_env] = run_season_rollouts
+
+
+@app.function(
+    image=render_image,
+    cpu=(1, 2),
+    memory=(4096, 16384),
+    # Waits on the GPU rollouts, so it needs at least their ceiling.
+    timeout=21600,
+    secrets=[gcp_secret],
+    volumes={"/cache": forecast_volume},
+)
+def run_season_forecast_bundle(
+    job_id: str,
+    model_id: str,
+    config: dict,
+    season_params: dict,
+    lead_day: int | None = None,
+) -> bytes:
+    """One model's season as a tar.gz bundle holding one NetCDF in the
+    historical `{year}.nc` schema — the bundle shape run_blend's
+    forecast_bundles expect.
+
+    Runs on CPU: sweeps the trajectory store once, starts a GPU container only
+    for the issue dates it is missing, then assembles the season from the store.
+    A fully stored season never touches a GPU.
+    """
+    pipeline = _load_pipeline()
+    store = _trajectory_store(config)
+    key = _trajectory_key(pipeline, config, model_id, lead_day)
+    issue_dates = pipeline.model_issue_dates(config, season_params)
+    missing = pipeline.unstored_issue_dates(store, key, issue_dates)
+    print(
+        f"==> [{model_id}] {len(issue_dates) - len(missing)}/{len(issue_dates)} "
+        "issue date(s) already stored",
+        flush=True,
+    )
+    if missing:
+        SEASON_ROLLOUT_FNS[_model_env(config, model_id)].remote(
+            model_id, config, [d.isoformat() for d in missing], lead_day
+        )
+        # Pick up trajectories the GPU container committed to a volume-backed store.
+        forecast_volume.reload()
+
+    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{model_id}-"))
+    out_path = pipeline.assemble_season_netcdf(
+        store,
+        key,
+        issue_dates,
+        season_params,
+        stage_root / "slices",
+        stage_root / f"{datetime.now(UTC).year}.nc",
+    )
+    return pipeline.bundle_files([out_path])
 
 
 @app.function(
@@ -462,7 +539,7 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             season_model_ids = list(model_ids)
             print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
             season_calls = {
-                model_id: SEASON_BUNDLE_FNS[_model_env(config, model_id)].spawn(
+                model_id: run_season_forecast_bundle.spawn(
                     job_id, model_id, config, season_model_params.get(model_id) or {}
                 )
                 for model_id in season_model_ids
@@ -506,3 +583,119 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             f"Forecast job {job_id} failed for model(s) {sorted(failures)}; "
             f"see run.log for details: {failures}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Smoke test: run the season pipeline from a laptop before deploying.
+# ---------------------------------------------------------------------------
+
+# The local entrypoint needs nothing beyond the modal client, so it runs from a
+# standalone `modal` install; registry checks happen inside the containers.
+
+# Ethiopia's bbox from server/config/regions.yaml (lat_min,lat_max,lon_min,
+# lon_max) — small enough that the returned bundle stays a few MB.
+_SMOKE_BOUNDS = "3,15,33,48"
+
+
+@app.function(image=render_image, timeout=600, volumes={"/cache": forecast_volume})
+def reset_volume_store(model_id: str, init_source: str) -> None:
+    """Delete one model's volume-backed trajectories so the next smoke run
+    starts cold. Never touches the GCS store deployed jobs use."""
+    import shutil
+
+    registry_ids = {entry["id"] for entry in _load_model_registry().get("models") or []}
+    if model_id not in registry_ids:
+        raise ValueError(f"Unknown model {model_id!r}; choose one of {sorted(registry_ids)}")
+    init_sources = _load_pipeline().INIT_SOURCES
+    if init_source not in init_sources:
+        raise ValueError(
+            f"Unknown init source {init_source!r}; choose one of {sorted(init_sources)}"
+        )
+    shutil.rmtree(_VOLUME_STORE / model_id / init_source, ignore_errors=True)
+    forecast_volume.commit()
+
+
+@app.function(image=render_image, cpu=1, memory=4096, timeout=600)
+def describe_season_bundle(bundle: bytes) -> dict:
+    """Shape and value range of a season bundle's NetCDF, for eyeballing."""
+    import tarfile
+
+    import xarray as xr
+
+    with tempfile.TemporaryDirectory(prefix="season-bundle-") as tmp:
+        with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
+            tar.extractall(tmp, filter="data")
+        (path,) = Path(tmp).glob("*.nc")
+        with xr.open_dataset(path) as ds:
+            tp = ds["tp"].load()
+    return {
+        "file": path.name,
+        "dims": dict(tp.sizes),
+        "issue_dates": [str(t)[:10] for t in tp["time"].values],
+        "min": float(tp.min()),
+        "max": float(tp.max()),
+        "nan_fraction": float(tp.isnull().mean()),
+    }
+
+
+def _parse_bounds(bounds: str) -> dict:
+    keys = ("lat_min", "lat_max", "lon_min", "lon_max")
+    values = [float(part) for part in bounds.split(",")]
+    if len(values) != len(keys):
+        raise SystemExit(f"--bounds needs {','.join(keys)}; got {bounds!r}")
+    return dict(zip(keys, values, strict=True))
+
+
+@app.local_entrypoint()
+def smoke_season_forecast(
+    model: str = "fuxi",
+    bounds: str = _SMOKE_BOUNDS,
+    max_issue_dates: int = 2,
+    lead_days: int = 2,
+    init_source: str = "gfs",
+    init_days: str = "0,3",
+    season_start: str = "05-01",
+    gcs_bucket: str = "",
+    reset: bool = False,
+) -> None:
+    """Run one model's season through the store sweep, GPU rollouts, and CPU
+    assembly with this checkout's code (an ephemeral app, no deploy needed).
+
+    Without --gcs-bucket the trajectories go to the Volume store, so the shared
+    GCS store is untouched. Run it twice: the second run should report every
+    issue date as stored and never start run_season_rollouts_*. --reset clears
+    the Volume store for this model first, to exercise the cold path again.
+
+    --lead-days keeps rollouts short (2 days is 8 steps for a 6-hourly model).
+    Short rollouts are stored under their own `lead{N}d` key, so they are never
+    served as full-length trajectories; --lead-days 45 runs the real horizon.
+
+        modal run --env staging modal/forecasts_app.py::smoke_season_forecast \\
+            --model fuxi --max-issue-dates 2 --lead-days 2 --reset
+    """
+    spatial_bounds = _parse_bounds(bounds)
+    if reset:
+        print(f"==> Clearing the Volume store for {model}/{init_source}")
+        reset_volume_store.remote(model, init_source)
+
+    config = {
+        "forecast_model_ids": [model],
+        "forecast_models": {model: model},
+        "season": str(datetime.now(UTC).year),
+        "season_start_month_day": season_start,
+        "init_source": init_source,
+        "max_issue_dates": max_issue_dates,
+        "gcs_cache_bucket": gcs_bucket,
+    }
+    season_params = {
+        "init_days": init_days,
+        "unit_cvt": 1.0,
+        "spatial_bounds": spatial_bounds,
+    }
+    t0 = time.perf_counter()
+    bundle = run_season_forecast_bundle.remote(
+        f"smoke-{int(time.time())}", model, config, season_params, lead_days
+    )
+    print(f"==> Season bundle ({len(bundle) / 1e6:.1f} MB) in {time.perf_counter() - t0:.0f}s")
+    for key, value in describe_season_bundle.remote(bundle).items():
+        print(f"    {key}: {value}")

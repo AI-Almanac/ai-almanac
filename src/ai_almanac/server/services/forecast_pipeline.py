@@ -25,6 +25,7 @@ import os
 import tarfile
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +83,10 @@ def resolve_data_source(init_source: str):
         )
     import earth2studio.data as e2s_data
 
-    return getattr(e2s_data, entry["earth2studio_class"])()
+    # No disk cache: every init date is fetched once (the trajectory store is
+    # the cache), and on Modal the default cache root is the weights Volume, so
+    # cached init data would be uploaded on every commit.
+    return getattr(e2s_data, entry["earth2studio_class"])(cache=False)
 
 
 def load_model(model_class: str):
@@ -248,27 +252,40 @@ def shared_issue_schedule(season_model_params: dict[str, dict]) -> dict[str, dic
     return {name: {**p, "init_month_days": union} for name, p in season_model_params.items()}
 
 
+def model_issue_dates(config: dict, season_params: dict) -> list[dt.date]:
+    """Issue dates one model's season rollout covers, from a forecast job config
+    and that model's entry in its `season_model_params`.
+
+    `max_issue_dates` is a smoke-test knob: keep only the most recent N dates to
+    validate the pipeline end-to-end without paying for a full season.
+    """
+    season = int(config.get("season") or dt.datetime.now(UTC).year)
+    weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
+    dates = season_issue_dates(
+        config.get("season_start_month_day") or "05-01",
+        weekdays,
+        season,
+        season_params.get("init_month_days"),
+    )
+    max_issue_dates = config.get("max_issue_dates")
+    return dates[-int(max_issue_dates) :] if max_issue_dates else dates
+
+
 def season_covered_dates(config: dict) -> dict[str, list[str]]:
     """Init dates each model's season rollout covers, from a forecast job config.
 
     Single source of truth for the submit-time readiness gate and the two
     coverage-marking paths (local subprocess and Modal reconciler). The gate and
     the markers MUST compute identical dates — otherwise a completed set never
-    satisfies `set_is_ready` and every run re-triggers a GPU rollout.
+    satisfies `set_is_ready` and every run re-triggers a GPU rollout. The
+    rollout itself uses the same `model_issue_dates`, so it agrees by
+    construction.
     """
-    season = int(config.get("season") or dt.datetime.now(UTC).year)
-    season_start = config.get("season_start_month_day") or "05-01"
     season_params = config.get("season_model_params") or {}
-    max_issue_dates = config.get("max_issue_dates")
-    out: dict[str, list[str]] = {}
-    for name in config.get("forecast_model_ids") or []:
-        params = season_params.get(name) or {}
-        weekdays = [int(d) for d in str(params.get("init_days") or "0,3").split(",")]
-        dates = season_issue_dates(season_start, weekdays, season, params.get("init_month_days"))
-        if max_issue_dates:
-            dates = dates[-int(max_issue_dates) :]
-        out[name] = [d.isoformat() for d in dates]
-    return out
+    return {
+        name: [d.isoformat() for d in model_issue_dates(config, season_params.get(name) or {})]
+        for name in config.get("forecast_model_ids") or []
+    }
 
 
 def _daily_precip_trajectory(
@@ -373,8 +390,8 @@ def _split_gs_uri(uri: str) -> tuple[str, str]:
     return bucket, key
 
 
-def _gcs_blob(gs_uri: str):
-    """Resolve a gs:// URI to a google-cloud-storage Blob, reusing one client.
+def _gcs_client():
+    """One shared google-cloud-storage client.
 
     Uses the synchronous google-cloud-storage client on purpose rather than
     gcsfs: gcsfs runs a background asyncio loop with aiohttp sessions and DNS
@@ -387,172 +404,264 @@ def _gcs_blob(gs_uri: str):
 
     if _gcs_client_singleton is None:
         _gcs_client_singleton = storage.Client()
+    return _gcs_client_singleton
+
+
+def _gcs_blob(gs_uri: str):
     bucket_name, key = _split_gs_uri(gs_uri)
-    return _gcs_client_singleton.bucket(bucket_name).blob(key)
+    return _gcs_client().bucket(bucket_name).blob(key)
 
 
-def cached_trajectory(
-    cache_dir: Path | str | None,
-    model_id: str,
-    init_source: str,
-    issue_date: dt.date,
-    compute,
-):
-    """Read-through cache for one issue date's daily-precip trajectory.
+# ---------------------------------------------------------------------------
+# Trajectory store.
+#
+# A rollout initialized from a past date is deterministic (fixed weights,
+# archived init conditions), so its reduced trajectory never changes — store it
+# and every later forecast job skips that GPU run. Stored at the model's native
+# grid and units (unit_cvt/bounds are applied at assembly), so one entry serves
+# any blend using the model.
+#
+# The store root may be a local directory or a gs:// URI.
+# ---------------------------------------------------------------------------
 
-    A rollout initialized from a past date is deterministic (fixed weights,
-    archived init conditions), so its reduced trajectory never changes — cache
-    it and every later forecast job skips that GPU run. Cached at the model's
-    native grid and units (unit_cvt/bounds are applied downstream), so one
-    entry serves any blend using the model.
+_TRAJECTORY_ENCODING = {"tp": {"zlib": True, "complevel": 1}}
 
-    The key is hardened per D4: it carries the init source (a GFS rollout is a
-    different asset than the same date from ERA5), a reduction/schema version
-    so bumps invalidate stale entries, and the fixed canonical `lead45d`
-    horizon so shorter windows never split the same rollout across keys.
 
-    cache_dir may be a local Path or a gs:// URI for durable cloud storage.
+@dataclass(frozen=True)
+class TrajectoryKey:
+    """Which stored trajectories a rollout produces and a season reads.
+
+    Hardened per D4: the init source (a GFS rollout is a different asset than
+    the same date from IFS), a reduction/schema version so bumps invalidate
+    stale entries, and the rollout horizon. Real forecasts always use the
+    canonical 45-day horizon; a shorter one exists only for smoke tests and
+    lands under its own `lead{N}d` prefix, so it can never be served as a
+    full-length trajectory.
     """
-    import uuid
 
+    model_id: str
+    init_source: str
+    lead_day: int = CANONICAL_LEAD_DAY
+
+    def __post_init__(self) -> None:
+        if self.lead_day < 1:
+            raise ValueError(f"lead_day must be at least 1, got {self.lead_day}")
+
+    def prefix(self, store: Path | str) -> str:
+        return (
+            f"{str(store).rstrip('/')}/{self.model_id}/{self.init_source}"
+            f"/v{TRAJECTORY_CACHE_VERSION}/lead{self.lead_day}d"
+        )
+
+    def uri(self, store: Path | str, issue_date: dt.date) -> str:
+        return f"{self.prefix(store)}/{issue_date.isoformat()}.nc"
+
+
+def _issue_date_from_name(name: str) -> dt.date | None:
+    stem = name.rsplit("/", 1)[-1].removesuffix(".nc")
+    try:
+        return dt.date.fromisoformat(stem)
+    except ValueError:
+        return None
+
+
+def stored_issue_dates(store: Path | str, key: TrajectoryKey) -> set[dt.date]:
+    """Issue dates the store already holds for a key, from a single listing of
+    its prefix rather than one lookup per date."""
+    prefix = key.prefix(store)
+    if prefix.startswith("gs://"):
+        bucket, blob_prefix = _split_gs_uri(prefix)
+        names = [b.name for b in _gcs_client().list_blobs(bucket, prefix=f"{blob_prefix}/")]
+    else:
+        names = [path.name for path in Path(prefix).glob("*.nc")]
+    return {date for date in map(_issue_date_from_name, names) if date is not None}
+
+
+def unstored_issue_dates(
+    store: Path | str, key: TrajectoryKey, issue_dates: list[dt.date]
+) -> list[dt.date]:
+    """The issue dates that still need a GPU rollout, in their original order."""
+    stored = stored_issue_dates(store, key)
+    return [date for date in issue_dates if date not in stored]
+
+
+def read_stored_trajectory(store: Path | str, key: TrajectoryKey, issue_date: dt.date):
     import xarray as xr
 
-    if cache_dir is None:
-        return compute(), False
+    uri = key.uri(store, issue_date)
+    if not uri.startswith("gs://"):
+        with xr.open_dataarray(uri) as da:
+            return da.load()
+    with tempfile.TemporaryDirectory(prefix="trajectory-") as tmp:
+        local_path = Path(tmp) / "trajectory.nc"
+        _gcs_blob(uri).download_to_filename(str(local_path))
+        with xr.open_dataarray(local_path, engine="h5netcdf") as da:
+            return da.load()
 
-    cache_uri = str(cache_dir)
-    rel = (
-        f"{model_id}/{init_source}/v{TRAJECTORY_CACHE_VERSION}"
-        f"/lead{CANONICAL_LEAD_DAY}d/{issue_date.isoformat()}.nc"
-    )
 
-    if cache_uri.startswith("gs://"):
-        blob = _gcs_blob(f"{cache_uri.rstrip('/')}/{rel}")
-        # ponytail: no eviction — a season accumulates at most ~26 entries per
+def write_stored_trajectory(
+    store: Path | str, key: TrajectoryKey, issue_date: dt.date, trajectory
+) -> None:
+    import uuid
+
+    uri = key.uri(store, issue_date)
+    if uri.startswith("gs://"):
+        # ponytail: no eviction — a season accumulates at most ~50 entries per
         # model; add cleanup if the bucket grows unbounded at season boundaries.
-        if blob.exists():
-            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                blob.download_to_filename(str(tmp_path))
-                with xr.open_dataarray(tmp_path, engine="h5netcdf") as da:
-                    return da.load(), True
-            finally:
-                tmp_path.unlink(missing_ok=True)
-        trajectory = compute()
-        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        try:
-            trajectory.rename("tp").to_netcdf(
-                tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}}
-            )
-            blob.upload_from_filename(str(tmp_path))
-        finally:
-            tmp_path.unlink(missing_ok=True)
-        return trajectory, False
-
-    # Local path branch — atomic rename avoids partial reads on cache miss.
-    cache_file = Path(cache_dir) / rel
-    if cache_file.exists():
-        return xr.open_dataarray(cache_file).load(), True
-    trajectory = compute()
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
-    trajectory.rename("tp").to_netcdf(tmp_path, encoding={"tp": {"zlib": True, "complevel": 1}})
-    os.replace(tmp_path, cache_file)
-    return trajectory, False
+        with tempfile.TemporaryDirectory(prefix="trajectory-") as tmp:
+            local_path = Path(tmp) / "trajectory.nc"
+            trajectory.rename("tp").to_netcdf(local_path, encoding=_TRAJECTORY_ENCODING)
+            _gcs_blob(uri).upload_from_filename(str(local_path))
+        return
+    # Atomic rename so a concurrent reader never sees a partial file.
+    target = Path(uri)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    trajectory.rename("tp").to_netcdf(tmp_path, encoding=_TRAJECTORY_ENCODING)
+    os.replace(tmp_path, target)
 
 
-def generate_season_forecast_netcdf(
+# ---------------------------------------------------------------------------
+# Season rollouts (GPU) and assembly (CPU).
+#
+# Split so the GPU only ever runs rollouts: the caller sweeps the store once
+# (unstored_issue_dates), rolls out just the missing dates, then assembles the
+# season from the store. Modal runs the sweep and assembly in a CPU container
+# and starts a GPU container only when something is missing.
+# ---------------------------------------------------------------------------
+
+
+def _request_key(time, variable) -> tuple:
+    import numpy as np
+
+    times = np.atleast_1d(np.asarray(time, dtype="datetime64[ns]"))
+    return tuple(times.astype("int64").tolist()), tuple(str(v) for v in np.atleast_1d(variable))
+
+
+class PrefetchingSource:
+    """earth2studio data source that fetches known requests ahead of time on a
+    background thread, so the next issue date's init conditions download while
+    the current one rolls out on the GPU.
+
+    Every fetch — prefetched or not — runs on the one worker thread: an
+    earth2studio source is not safe to call concurrently (an uncached GFS
+    deletes its temp download directory after each call).
+    """
+
+    def __init__(self, source):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._source = source
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="init-prefetch")
+        self._pending: dict[tuple, Any] = {}
+
+    def prefetch(self, requests: list[tuple]) -> None:
+        for when, variable in requests:
+            key = _request_key(when, variable)
+            if key not in self._pending:
+                self._pending[key] = self._executor.submit(self._source, when, variable)
+
+    def discard(self, requests: list[tuple]) -> int:
+        """Drop prefetched requests that were never consumed; returns how many.
+        A non-zero count means the rollout asked for something else, so the
+        prefetch is not saving anything for this model."""
+        dropped = [self._pending.pop(_request_key(t, v), None) for t, v in requests]
+        for future in dropped:
+            if future is not None:
+                future.cancel()
+        return sum(future is not None for future in dropped)
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._pending.clear()
+
+    def __call__(self, time, variable):
+        future = self._pending.pop(_request_key(time, variable), None)
+        if future is None:
+            future = self._executor.submit(self._source, time, variable)
+        return future.result()
+
+
+def init_requests(model, issue_date: dt.date) -> list[tuple]:
+    """The (time, variable) calls earth2studio's workflows make to a data source
+    to initialize `model` at `issue_date` — one per input lead time (see
+    earth2studio.data.fetch_data)."""
+    import numpy as np
+
+    coords = model.input_coords()
+    init_time = np.datetime64(issue_date, "ns")
+    return [
+        (np.array([init_time + lead], dtype="datetime64[ns]"), coords["variable"])
+        for lead in coords["lead_time"]
+    ]
+
+
+def roll_out_issue_dates(
     model_entry: dict,
-    config: dict,
+    key: TrajectoryKey,
+    issue_dates: list[dt.date],
+    scratch_root: Path,
+    store: Path | str,
+) -> None:
+    """Roll one model out to the key's horizon for each issue date and write
+    each trajectory to the store as soon as it finishes, so a failed run keeps
+    the dates it paid for."""
+    if not issue_dates:
+        return
+    model_class = model_entry["earth2studio_class"]
+    _, step_hours = lead_steps([key.lead_day * 24], model_class)
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    print(
+        f"==> Rolling out {len(issue_dates)} issue date(s) "
+        f"({issue_dates[0]}..{issue_dates[-1]}), {(key.lead_day * 24) // step_hours} "
+        f"steps ({step_hours}h each) per issue date",
+        flush=True,
+    )
+    model = load_model(model_class)
+    data = PrefetchingSource(resolve_data_source(key.init_source))
+    try:
+        for i, issue_date in enumerate(issue_dates):
+            for upcoming in issue_dates[i : i + 2]:
+                data.prefetch(init_requests(model, upcoming))
+            t0 = time.perf_counter()
+            print(f"  [{i + 1}/{len(issue_dates)}] issue date {issue_date}", flush=True)
+            trajectory = _daily_precip_trajectory(
+                model, data, issue_date, key.lead_day, step_hours, scratch_root, model_entry
+            )
+            write_stored_trajectory(store, key, issue_date, trajectory)
+            if data.discard(init_requests(model, issue_date)):
+                print("    warning: prefetched init data went unused", flush=True)
+            print(f"  [{i + 1}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s")
+            del trajectory
+            gc.collect()
+    finally:
+        data.close()
+
+
+def assemble_season_netcdf(
+    store: Path | str,
+    key: TrajectoryKey,
+    issue_dates: list[dt.date],
     season_params: dict,
     scratch_root: Path,
     out_path: Path,
-    cache_dir: Path | str | None = None,
 ) -> Path:
-    """Loop one model across the current season's issue dates and write
-    out_path as a NetCDF matching the historical `{year}.nc` schema (time x
-    day x lat x lon, variable tp). Caller decides scratch_root/out_path —
-    Modal mode uses container-local temp dirs, local mode plain temp dirs.
-    With cache_dir set, past issue dates are served from cache and only new
-    ones are rolled out (see cached_trajectory). cache_dir may be a local
-    Path or a gs:// URI.
-    """
+    """Write out_path as a NetCDF matching the historical `{year}.nc` schema
+    (time x day x lat x lon, variable tp) from stored trajectories, applying the
+    archive's unit conversion and spatial bounds."""
+    import dask
     import numpy as np
     import xarray as xr
 
-    model_class = model_entry["earth2studio_class"]
-    # D4: the store always holds the full canonical 45-day trajectory, so shorter
-    # windows never split the same rollout across cache keys. The max_lead_day
-    # knob is retired for the season path; use max_issue_dates to trim smoke cost.
-    lead_day = CANONICAL_LEAD_DAY
-    init_source = config.get("init_source", "gfs")
-    init_weekdays = [int(d) for d in str(season_params.get("init_days") or "0,3").split(",")]
-    schedule_month_days = season_params.get("init_month_days")
+    if not issue_dates:
+        raise ValueError("No issue dates for this season yet")
     unit_cvt = float(season_params.get("unit_cvt", 1.0))
     bounds = season_params.get("spatial_bounds")
-
-    year = dt.datetime.now(UTC).year
-    issue_dates = season_issue_dates(
-        config.get("season_start_month_day") or "05-01",
-        init_weekdays,
-        year,
-        schedule_month_days,
-    )
-    if not issue_dates:
-        raise ValueError(f"No issue dates for season {year} yet")
-    max_issue_dates = config.get("max_issue_dates")
-    if max_issue_dates:
-        # Smoke-test knob: score against only the most recent N issue dates
-        # instead of the whole season-to-date, to validate the pipeline
-        # end-to-end without paying for a full season's worth of rollouts.
-        issue_dates = issue_dates[-int(max_issue_dates) :]
-
-    _, step_hours = lead_steps([lead_day * 24], model_class)
-    nsteps = (lead_day * 24) // step_hours
     scratch_root.mkdir(parents=True, exist_ok=True)
 
-    # Loading model weights is expensive; defer until the first cache miss so
-    # a fully cached season never touches the GPU.
-    loaded: dict[str, Any] = {}
-
-    def _rollout(issue_date: dt.date):
-        if not loaded:
-            loaded["model"] = load_model(model_class)
-            loaded["data"] = resolve_data_source(init_source)
-        return _daily_precip_trajectory(
-            loaded["model"],
-            loaded["data"],
-            issue_date,
-            lead_day,
-            step_hours,
-            scratch_root,
-            model_entry,
-        )
-
-    print(
-        f"==> Season loop: {len(issue_dates)} issue date(s) "
-        f"({issue_dates[0]}..{issue_dates[-1]}), {nsteps} rollout steps "
-        f"({step_hours}h each) per issue date",
-        flush=True,
-    )
     slice_paths: list[Path] = []
     for i, issue_date in enumerate(issue_dates, start=1):
-        t0 = time.perf_counter()
-        print(f"  [{i}/{len(issue_dates)}] season inference: issue date {issue_date}", flush=True)
-        trajectory, from_cache = cached_trajectory(
-            cache_dir,
-            model_entry["id"],
-            init_source,
-            issue_date,
-            lambda date=issue_date: _rollout(date),
-        )
-        print(
-            f"  [{i}/{len(issue_dates)}] "
-            f"{'cached' if from_cache else f'done in {time.perf_counter() - t0:.1f}s'}",
-            flush=True,
-        )
+        trajectory = read_stored_trajectory(store, key, issue_date)
         # Write each slice to scratch immediately and release the in-memory
         # array — accumulating all N trajectories before xr.concat causes OOM
         # on long seasons. open_mfdataset reassembles lazily via dask below.
@@ -565,21 +674,36 @@ def generate_season_forecast_netcdf(
         del trajectory, traj
         gc.collect()
 
-    import dask
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # HDF5/h5py is not thread-safe; open_mfdataset + to_netcdf under dask's
     # default threaded scheduler deadlocks reading the slices while writing the
     # output (hangs indefinitely, no error). Force the single-threaded scheduler
     # — the write still streams slice-by-slice, so memory stays flat.
-    # ponytail: single-threaded reassembly, revisit if a full season's write
-    # becomes a wall-clock bottleneck (it's I/O-bound on tiny regional slices).
     with (
         dask.config.set(scheduler="single-threaded"),
         xr.open_mfdataset(slice_paths, concat_dim="time", combine="nested") as ds,
     ):
         ds.to_netcdf(out_path)
     return out_path
+
+
+def generate_season_forecast_netcdf(
+    model_entry: dict,
+    config: dict,
+    season_params: dict,
+    scratch_root: Path,
+    out_path: Path,
+    store: Path | str,
+) -> Path:
+    """In-process season pipeline (local runner): sweep the store, roll out only
+    the missing issue dates, then assemble the season NetCDF. Modal runs the
+    same three steps across CPU and GPU containers (modal/forecasts_app.py)."""
+    key = TrajectoryKey(model_entry["id"], config.get("init_source", "gfs"))
+    issue_dates = model_issue_dates(config, season_params)
+    missing = unstored_issue_dates(store, key, issue_dates)
+    print(f"==> {len(issue_dates) - len(missing)}/{len(issue_dates)} issue date(s) stored")
+    roll_out_issue_dates(model_entry, key, missing, scratch_root / "rollouts", store)
+    return assemble_season_netcdf(store, key, issue_dates, season_params, scratch_root, out_path)
 
 
 def bundle_files(files: list[Path]) -> bytes:

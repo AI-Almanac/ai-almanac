@@ -14,11 +14,18 @@ import re
 import uuid
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
-from typing import NamedTuple
+from typing import Annotated, NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    FiniteFloat,
+    ValidationError,
+    model_validator,
+)
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -30,6 +37,7 @@ from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     linked_forecast_model_id,
     live_forecast_compatibility,
+    parse_init_source,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
@@ -989,7 +997,7 @@ class ForecastParams(BaseModel):
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
     # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: str = "gfs"
+    init_source: Annotated[str, AfterValidator(parse_init_source)] = "gfs"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
     max_issue_dates: int | None = None
@@ -1173,7 +1181,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
     # when cold) and every later run scores against the cache for free.
-    init_source = body.params.init_source or "gfs"
+    init_source = body.params.init_source
     season = str(datetime.now(UTC).year)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
