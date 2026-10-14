@@ -33,6 +33,13 @@ reads the old shape. If a migration itself is the failure, do not roll
 traffic back blindly — check whether the old code can read the current
 schema first.
 
+The same applies to seeded rows. Packaged regions are re-seeded on every
+`GET /regions`, so removing a region from `regions.yaml` and deleting its
+row in one release lets old revisions re-insert it mid-rollout (migration
+0015's delete was undone this way; 0028 redid it). Drop the region from `regions.yaml`
+first; delete its row in a later release, once no deployed revision
+packages it.
+
 ## Fix-forward (preferred when the fix is obvious)
 
 Small, verified fix → PR to `develop` → staging soak → merge to `main`.
