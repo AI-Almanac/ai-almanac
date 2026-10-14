@@ -58,6 +58,15 @@ jobs:
           git diff --stat=200 HEAD^1 HEAD > .pr-review/stat.txt
           git diff HEAD^1 HEAD > .pr-review/pr.diff
 
+      # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB requires bubblewrap, which the action
+      # installs only when allowed_non_write_users is set. Ubuntu 24.04 blocks
+      # the unprivileged user namespaces bubblewrap needs unless relaxed.
+      - name: Install subprocess isolation dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
