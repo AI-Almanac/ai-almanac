@@ -113,16 +113,9 @@ def _inference_image(extras: list[str]) -> modal.Image:
 
 INFERENCE_IMAGES = {env: _inference_image(extras) for env, extras in _INFERENCE_EXTRAS.items()}
 
-render_image = (
+# CPU work: orchestration, the store sweep, and season assembly.
+cpu_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install(
-        "libexpat1",
-        "libgdal-dev",
-        "libgeos-dev",
-        "libproj-dev",
-        "proj-data",
-        "proj-bin",
-    )
     .pip_install(
         "dask",
         "google-cloud-storage",
@@ -132,7 +125,6 @@ render_image = (
         # engine here as it did in the inference image.
         "netCDF4<1.7.3",
         "numpy",
-        "rasterio",
         "xarray<2026.0.0",
         "zarr",
         "pyyaml",
@@ -328,7 +320,7 @@ def _rollout_function(run):
 
 
 @app.function(
-    image=render_image,
+    image=cpu_image,
     cpu=(1, 2),
     memory=(4096, 16384),
     # Waits on the GPU rollouts, so it needs at least their ceiling.
@@ -358,8 +350,9 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     )
     if missing:
         _rollout_function(run).remote(member, config, [d.isoformat() for d in missing])
-        # Pick up trajectories the GPU container committed to a volume-backed store.
-        forecast_volume.reload()
+        if not store.startswith("gs://"):
+            # Pick up the trajectories the GPU container committed to the Volume.
+            forecast_volume.reload()
 
     stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{member}-"))
     out_path = pipeline.assemble_season_netcdf(
@@ -369,7 +362,7 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
 
 
 @app.function(
-    image=render_image,
+    image=cpu_image,
     cpu=(0.25, 1),
     memory=1024,
     timeout=10800,
@@ -477,7 +470,7 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
 _SMOKE_BOUNDS = "3,15,33,48"
 
 
-@app.function(image=render_image, timeout=600, volumes={"/cache": forecast_volume})
+@app.function(image=cpu_image, timeout=600, volumes={"/cache": forecast_volume})
 def reset_volume_store(model_id: str, init_source: str) -> None:
     """Delete one model's volume-backed trajectories so the next smoke run
     starts cold. Never touches the GCS store deployed jobs use."""
@@ -495,7 +488,7 @@ def reset_volume_store(model_id: str, init_source: str) -> None:
     forecast_volume.commit()
 
 
-@app.function(image=render_image, timeout=600)
+@app.function(image=cpu_image, timeout=600)
 def plan_smoke_season(
     model_id: str,
     archive_metadata: dict,
@@ -530,7 +523,7 @@ def plan_smoke_season(
     return plan.to_dict()
 
 
-@app.function(image=render_image, cpu=1, memory=4096, timeout=600)
+@app.function(image=cpu_image, cpu=1, memory=4096, timeout=600)
 def describe_season_bundle(bundle: bytes) -> dict:
     """Shape and value range of a season bundle's NetCDF, for eyeballing."""
     import tarfile

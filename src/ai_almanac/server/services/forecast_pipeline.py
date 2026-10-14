@@ -1,12 +1,13 @@
-"""Live AI weather forecast generation — earth2studio inference + rendering.
+"""Live AI weather forecast generation — season planning, earth2studio
+rollouts, the trajectory store, and season assembly.
 
 Deliberately self-contained: only stdlib and scientific-stack imports
-(earth2studio, xarray, numpy, rasterio), never anything else from
+(earth2studio, xarray, numpy), never anything else from
 `ai_almanac` — this is what lets the exact same file run in two places:
 
   - Bundled as a single file into the Modal image (see modal/forecasts_app.py,
     which is a thin wrapper handling only Modal-specific plumbing: GPU/image
-    selection, Volume scratch space, GCS staging/upload, cross-app calls).
+    selection, the CPU/GPU split, the weights Volume, cross-app calls).
   - Imported normally inside the local `forecast` pixi environment (see
     envs/forecast_entrypoint.py), which has no Modal dependency at all.
 
@@ -20,7 +21,6 @@ from __future__ import annotations
 import datetime as dt
 import gc
 import io
-import json
 import os
 import tarfile
 import tempfile
@@ -29,8 +29,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-UTC = dt.UTC
 
 # Bump when the reduction logic, units, or on-disk schema of a cached
 # trajectory changes so stale entries become misses instead of being served
@@ -126,6 +124,10 @@ def ensemble_config(model_entry: dict) -> EnsembleSpec | None:
     # Members run in batches to bound VRAM — a global-resolution member is large,
     # so default to one at a time and let a model override it.
     batch_size = int(model_entry.get("nensemble_batch") or 1)
+    if members < 1 or batch_size < 1:
+        raise ValueError(
+            f"nensemble and nensemble_batch must be at least 1, got {members}, {batch_size}"
+        )
     return EnsembleSpec(members=members, batch_size=min(batch_size, members))
 
 
@@ -155,39 +157,9 @@ def run_rollout(
     )
 
 
-def select_latest_init_time(config: dict) -> list[str]:
-    if config.get("init_time"):
-        return [config["init_time"]]
-    # earth2studio data sources generally align operational inputs to synoptic
-    # hours. GFS publication lags the nominal cycle, so back off one full
-    # synoptic cycle so an automatic run doesn't select an index NOAA hasn't
-    # published yet.
-    now = dt.datetime.now(UTC) - dt.timedelta(hours=6)
-    hour = (now.hour // 6) * 6
-    rounded = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-    return [rounded.strftime("%Y-%m-%dT%H:%M:%S")]
-
-
 def lead_steps(lead_hours: list[int], model_class: str) -> tuple[int, int]:
     step_hours = 12 if model_class == "GenCastMini" else 6
     return max(lead_hours) // step_hours, step_hours
-
-
-def run_forecast_inference(config: dict, model_entry: dict, zarr_path: Path) -> dict:
-    """Run one AI weather model against the configured init conditions; write
-    its raw output to zarr_path (a plain local path — Modal mode points this at
-    Volume-backed scratch space, local mode at a plain temp dir)."""
-    from earth2studio.io import ZarrBackend
-
-    model_class = model_entry["earth2studio_class"]
-    model = load_model(model_class)
-    data = resolve_data_source(config.get("init_source", "gfs"))
-    init_time = select_latest_init_time(config)
-    nsteps, step_hours = lead_steps(config["lead_hours"], model_class)
-    zarr_path.parent.mkdir(parents=True, exist_ok=True)
-    io_backend = ZarrBackend(str(zarr_path))
-    run_rollout(model, data, init_time, nsteps, io_backend, ensemble_config(model_entry))
-    return {"init_time": init_time[0], "native_step_hours": step_hours}
 
 
 # ---------------------------------------------------------------------------
@@ -944,7 +916,7 @@ def bundle_files(files: list[Path]) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Variable extraction + COG rendering (map-visualization deliverable)
+# Variable selection in earth2studio output
 # ---------------------------------------------------------------------------
 
 
@@ -965,20 +937,6 @@ def variable_candidates(variable: str) -> tuple[str, ...]:
         "tp": ("tp06", "tp12", "tp"),
     }
     return known.get(variable, (variable,))
-
-
-def variable_unit(variable: str) -> str:
-    return {
-        "t2m": "K",
-        "wind10m": "m/s",
-        "wind850m": "m/s",
-        "tcwv": "kg/m²",
-        "msl": "Pa",
-        "u850": "m/s",
-        "v850": "m/s",
-        "q850": "kg/kg",
-        "z500": "m²/s²",
-    }.get(variable, "")
 
 
 def array_with_variable_coord(dataset):
@@ -1008,215 +966,9 @@ def select_variable(dataset, variable: str):
     raise KeyError(f"None of {candidates} found in forecast arrays {available[:12]}")
 
 
-def select_lead(data_array, lead_hour: int):
-    import numpy as np
-
-    if "lead_time" not in data_array.coords:
-        return data_array
-    target = np.timedelta64(lead_hour, "h")
-    return data_array.sel(lead_time=target, method="nearest")
-
-
 def lat_lon_names(data_array) -> tuple[str, str]:
     lat_name = next((n for n in ("lat", "latitude", "y") if n in data_array.coords), None)
     lon_name = next((n for n in ("lon", "longitude", "x") if n in data_array.coords), None)
     if lat_name is None or lon_name is None:
         raise KeyError("Forecast output is missing latitude/longitude coordinates")
     return lat_name, lon_name
-
-
-def field_for_frame(dataset, variable: str, lead_hour: int):
-    import numpy as np
-
-    if variable == "wind10m":
-        u = select_lead(select_variable(dataset, "u10"), lead_hour)
-        v = select_lead(select_variable(dataset, "v10"), lead_hour)
-        return np.sqrt(u.squeeze() ** 2 + v.squeeze() ** 2)
-    if variable == "wind850m":
-        u = select_lead(select_variable(dataset, "u850"), lead_hour)
-        v = select_lead(select_variable(dataset, "v850"), lead_hour)
-        return np.sqrt(u.squeeze() ** 2 + v.squeeze() ** 2)
-    return select_lead(select_variable(dataset, variable), lead_hour).squeeze()
-
-
-def grid_values(field, max_lat: int = 360, max_lon: int = 720):
-    import numpy as np
-
-    lat_name, lon_name = lat_lon_names(field)
-    grid = field.squeeze()
-    for dim in list(grid.dims):
-        if dim in {lat_name, lon_name}:
-            continue
-        # Average ensemble members; take the first index of any other stray dim.
-        grid = grid.mean(dim) if dim == "ensemble" else grid.isel({dim: 0})
-    grid = grid.transpose(lat_name, lon_name)
-    lat_step = max(1, int(np.ceil(grid.sizes[lat_name] / max_lat)))
-    lon_step = max(1, int(np.ceil(grid.sizes[lon_name] / max_lon)))
-    grid = grid.isel({lat_name: slice(None, None, lat_step), lon_name: slice(None, None, lon_step)})
-    values = np.asarray(grid.values, dtype="<f4")
-    lats = np.asarray(grid[lat_name].values, dtype=float)
-    lons = np.asarray(grid[lon_name].values, dtype=float)
-    normalized_lons = ((lons + 180.0) % 360.0) - 180.0
-    lon_order = np.argsort(normalized_lons)
-    values = values[:, lon_order]
-    lons = normalized_lons[lon_order]
-    if lats[0] < lats[-1]:
-        values = values[::-1, :]
-        lats = lats[::-1]
-    return values, lats, lons
-
-
-def write_cog(values, bounds_lonlat: tuple[float, float, float, float], cog_path: Path):
-    import numpy as np
-    import rasterio
-    from rasterio.crs import CRS
-    from rasterio.transform import from_bounds
-    from rasterio.warp import Resampling, calculate_default_transform, reproject
-
-    west, south, east, north = bounds_lonlat
-    height, width = values.shape
-    src_transform = from_bounds(west, south, east, north, width, height)
-    src_crs = CRS.from_epsg(4326)
-    dst_crs = CRS.from_epsg(3857)
-    dst_transform, dst_width, dst_height = calculate_default_transform(
-        src_crs, dst_crs, width, height, west, south, east, north
-    )
-    dst = np.full((dst_height, dst_width), np.nan, dtype="float32")
-    reproject(
-        values.astype("float32"),
-        dst,
-        src_transform=src_transform,
-        src_crs=src_crs,
-        dst_transform=dst_transform,
-        dst_crs=dst_crs,
-        src_nodata=np.nan,
-        dst_nodata=np.nan,
-        resampling=Resampling.bilinear,
-    )
-
-    cog_path.parent.mkdir(parents=True, exist_ok=True)
-    with rasterio.open(
-        cog_path,
-        "w",
-        driver="GTiff",
-        height=dst_height,
-        width=dst_width,
-        count=1,
-        dtype="float32",
-        crs=dst_crs,
-        transform=dst_transform,
-        nodata=np.nan,
-        tiled=True,
-        blockxsize=256,
-        blockysize=256,
-        compress="DEFLATE",
-        predictor=3,
-        BIGTIFF="IF_SAFER",
-    ) as dataset:
-        dataset.write(dst, 1)
-        dataset.build_overviews([2, 4, 8, 16], Resampling.average)
-        dataset.update_tags(ns="rio_overview", resampling="average")
-    return cog_path
-
-
-def _render_variable_products(
-    dataset, variable: str, lead_hours: list[int], product_root: Path
-) -> dict[str, dict] | None:
-    import logging
-
-    import numpy as np
-
-    logger = logging.getLogger(__name__)
-    fields: dict[int, tuple] = {}
-    mins: list[float] = []
-    maxes: list[float] = []
-
-    for lead_hour in lead_hours:
-        try:
-            values, lats, lons = grid_values(field_for_frame(dataset, variable, lead_hour))
-        except Exception as exc:
-            logger.warning("Skipping %s at lead %dh: %s", variable, lead_hour, exc)
-            continue
-        finite = values[np.isfinite(values)]
-        if finite.size:
-            p2, p98 = np.percentile(finite, [2, 98])
-            mins.append(float(p2))
-            maxes.append(float(p98))
-        bounds_lonlat = (
-            float(np.nanmin(lons)),
-            float(max(np.nanmin(lats), -85.05112878)),
-            float(np.nanmax(lons)),
-            float(min(np.nanmax(lats), 85.05112878)),
-        )
-        fields[lead_hour] = (values, bounds_lonlat)
-
-    if not mins or not maxes or not fields:
-        return None
-
-    minimum = min(mins)
-    maximum = max(maxes)
-    products: dict[str, dict] = {}
-
-    for lead_hour, (values, bounds_lonlat) in fields.items():
-        cog_path = product_root / "rasters" / variable / f"{lead_hour}.tif"
-        write_cog(values, bounds_lonlat, cog_path)
-        products[str(lead_hour)] = {
-            "unit": variable_unit(variable),
-            "crs": "EPSG:3857",
-            "cog": f"rasters/{variable}/{lead_hour}.tif",
-            "bounds_lonlat": list(bounds_lonlat),
-            "min": minimum,
-            "max": maximum,
-        }
-
-    return products
-
-
-def write_map_products(config: dict, zarr_path: Path, product_root: Path) -> dict:
-    """One COG per (variable, lead_hour). TiTiler serves tiles from these at request time."""
-    import logging
-
-    import xarray as xr
-
-    logger = logging.getLogger(__name__)
-    dataset = xr.open_zarr(zarr_path)
-    products: dict[str, dict[str, dict]] = {}
-
-    for variable in config["variables"]:
-        variable_products = _render_variable_products(
-            dataset, variable, config["lead_hours"], product_root
-        )
-        if variable_products is not None:
-            products[variable] = variable_products
-        else:
-            logger.warning("No products rendered for variable %s — skipping", variable)
-
-    return products
-
-
-def render_forecast_products(
-    config: dict,
-    model_id: str,
-    model_entry: dict,
-    run_info: dict,
-    zarr_path: Path,
-    product_root: Path,
-) -> dict[str, Any]:
-    """Render COGs + manifest.json for one model's forecast into product_root
-    (a plain local dir — caller uploads/copies it wherever job outputs live)."""
-    manifest = {
-        "job_id": config.get("job_id"),
-        "model_id": model_id,
-        "model_name": model_entry["display_name"],
-        "init_time": run_info.get("init_time"),
-        "native_step_hours": run_info.get("native_step_hours"),
-        "variables": config["variables"],
-        "lead_hours": config["lead_hours"],
-        "data_source": INIT_SOURCES.get(config.get("init_source", "gfs"), {}).get(
-            "display_name", "GFS"
-        ),
-        "created_at": dt.datetime.now(UTC).isoformat(),
-    }
-    manifest["map_products"] = write_map_products(config, zarr_path, product_root)
-    (product_root / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    return manifest

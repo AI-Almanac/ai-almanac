@@ -91,6 +91,14 @@ def _trajectory():
     )
 
 
+class _FakeVolume:
+    def __init__(self):
+        self.reloads = 0
+
+    def reload(self):
+        self.reloads += 1
+
+
 @pytest.fixture
 def season_bundle(forecasts_app, monkeypatch, tmp_path):
     """run_season_forecast_bundle against a Volume-style store in tmp_path, with
@@ -107,9 +115,8 @@ def season_bundle(forecasts_app, monkeypatch, tmp_path):
 
     monkeypatch.setattr(forecasts_app, "_VOLUME_STORE", tmp_path)
     monkeypatch.setattr(forecasts_app, "SEASON_ROLLOUT_FNS", {"base": rollouts})
-    monkeypatch.setattr(
-        forecasts_app, "forecast_volume", type("V", (), {"reload": lambda s: None})()
-    )
+    volume = _FakeVolume()
+    monkeypatch.setattr(forecasts_app, "forecast_volume", volume)
     monkeypatch.setattr(pipeline, "assemble_season_netcdf", fake_assemble)
 
     def run(env: str = "base") -> bytes:
@@ -131,7 +138,9 @@ def season_bundle(forecasts_app, monkeypatch, tmp_path):
         for issue_date in issue_dates:
             pipeline.write_stored_trajectory(tmp_path, key, issue_date, _trajectory())
 
-    return SimpleNamespace(run=run, store=store, rollouts=rollouts, assembled=assembled)
+    return SimpleNamespace(
+        run=run, store=store, rollouts=rollouts, assembled=assembled, volume=volume
+    )
 
 
 def test_a_fully_stored_season_never_calls_the_gpu(season_bundle):
@@ -140,6 +149,7 @@ def test_a_fully_stored_season_never_calls_the_gpu(season_bundle):
     bundle = season_bundle.run()
 
     assert season_bundle.rollouts.calls == []
+    assert season_bundle.volume.reloads == 0
     assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
     assert bundle  # a tar.gz of the assembled season
 
@@ -150,6 +160,8 @@ def test_the_gpu_rolls_out_only_the_dates_the_store_is_missing(season_bundle):
     season_bundle.run()
 
     assert season_bundle.rollouts.calls == [("fuxi", ["2020-05-04", "2020-05-11"])]
+    # The Volume-backed store is reloaded to see what the GPU container wrote.
+    assert season_bundle.volume.reloads == 1
     assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
 
 
