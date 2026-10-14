@@ -336,6 +336,10 @@ class ForecastModel:
             )
         except KeyError as exc:
             raise PlanError(f"forecast model entry is missing {exc}") from exc
+        except (TypeError, ValueError) as exc:
+            raise PlanError(
+                f"forecast model {entry.get('id')!r} has unusable settings: {exc}"
+            ) from exc
 
     def to_dict(self) -> dict:
         out = {

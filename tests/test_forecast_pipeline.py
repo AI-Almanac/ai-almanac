@@ -155,6 +155,18 @@ def test_a_corrupt_plan_is_refused_with_what_is_wrong(corrupt, message):
         SeasonPlan.parse(raw)
 
 
+def test_a_registry_model_with_unusable_ensemble_settings_is_refused():
+    with pytest.raises(PlanError, match="unusable settings"):
+        ForecastModel.parse(
+            {
+                "id": "aifsens",
+                "earth2studio_class": "AIFSENS",
+                "ensemble": True,
+                "nensemble": "eight",
+            }
+        )
+
+
 def test_a_job_without_a_plan_is_refused():
     with pytest.raises(PlanError, match="no season plan"):
         SeasonPlan.parse(None)
