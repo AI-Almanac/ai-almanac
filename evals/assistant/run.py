@@ -307,7 +307,7 @@ def _task(fx: Fixtures, ruleset: rulesets.Ruleset):
     async def run_case(inputs: Inputs) -> Turn:
         session_id, scope = await _scratch_session(fx, inputs.blend)
         before = await _job_count(fx.user_id)
-        turn = Turn(offered_tools=llm.offered_tool_names(ruleset))
+        turn = Turn(offered_tools=llm.offered_tool_names(ruleset, scope.kind))
 
         try:
             async for raw in llm.stream_response(
