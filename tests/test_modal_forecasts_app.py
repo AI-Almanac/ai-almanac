@@ -153,7 +153,7 @@ def test_a_fully_stored_season_never_calls_the_gpu(season_bundle):
     bundle = season_bundle.run()
 
     assert season_bundle.rollouts.calls == []
-    assert season_bundle.volume.reloads == 0
+    assert season_bundle.volume.reloads == 1  # before the sweep, never after
     assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
     assert bundle  # a tar.gz of the assembled season
 
@@ -164,8 +164,8 @@ def test_the_gpu_rolls_out_only_the_dates_the_store_is_missing(season_bundle):
     season_bundle.run()
 
     assert season_bundle.rollouts.calls == [("fuxi", ["2020-05-04", "2020-05-11"])]
-    # The Volume-backed store is reloaded to see what the GPU container wrote.
-    assert season_bundle.volume.reloads == 1
+    # Reloaded before the sweep, then again to see what the GPU container wrote.
+    assert season_bundle.volume.reloads == 2
     assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
 
 
@@ -205,3 +205,37 @@ def test_a_failed_rollout_still_commits_what_it_wrote_to_the_volume(
         )
 
     assert volume.commits == 1
+
+
+def test_a_failed_volume_commit_does_not_hide_the_rollout_error(
+    forecasts_app, monkeypatch, tmp_path
+):
+    pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+
+    class _BrokenVolume:
+        def commit(self):
+            raise OSError("volume unavailable")
+
+    def fail_midway(*_args):
+        raise RuntimeError("GPU fell over on the second date")
+
+    monkeypatch.setattr(forecasts_app, "_VOLUME_STORE", tmp_path)
+    monkeypatch.setattr(forecasts_app, "forecast_volume", _BrokenVolume())
+    monkeypatch.setattr(pipeline, "roll_out_issue_dates", fail_midway)
+    plan = pipeline.plan_season(
+        {
+            "fuxi": (
+                pipeline.ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"}),
+                pipeline.ArchiveLayout.parse({"init_days": "0,3"}),
+            )
+        },
+        season=2020,
+        season_start_month_day="05-01",
+        init_source="gfs",
+        today=MAY_11,
+    )
+
+    with pytest.raises(RuntimeError, match="fell over"):
+        forecasts_app._season_rollouts_impl(
+            "fuxi", {"season_plan": plan.to_dict()}, ["2020-05-04", "2020-05-07"]
+        )

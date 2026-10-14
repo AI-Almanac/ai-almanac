@@ -44,6 +44,7 @@ import os
 import sys
 import tempfile
 import time
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -273,7 +274,8 @@ def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> 
     trajectory to the store. The only season step that needs a GPU."""
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
-    # Data-source temp downloads go to container disk, not the weights Volume.
+    # Data-source temp downloads go to container disk, not the weights Volume
+    # (earth2studio.data.utils.datasource_cache_root reads this variable).
     os.environ.setdefault("EARTH2STUDIO_DATA_CACHE", "/tmp/earth2studio-data")
 
     pipeline = _load_pipeline()
@@ -288,12 +290,22 @@ def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> 
             scratch_root,
             _trajectory_store(config),
         )
-    finally:
-        # Also on failure: a Volume-backed store keeps the dates already rolled out.
-        print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
-        t0 = time.perf_counter()
-        forecast_volume.commit()
-        print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
+    except BaseException:
+        # Keep the dates already rolled out on a Volume-backed store, without
+        # letting a failed commit replace the rollout's own error.
+        try:
+            _commit_volume(member)
+        except Exception:
+            traceback.print_exc()
+        raise
+    _commit_volume(member)
+
+
+def _commit_volume(member: str) -> None:
+    print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
+    t0 = time.perf_counter()
+    forecast_volume.commit()
+    print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
@@ -328,6 +340,13 @@ def _rollout_function(run):
         ) from None
 
 
+def _refresh_volume_store(store: str) -> None:
+    """See the Volume as other containers last committed it, when it holds the
+    store: a reused warm container otherwise sweeps a stale view."""
+    if not store.startswith("gs://"):
+        forecast_volume.reload()
+
+
 @app.function(
     image=cpu_image,
     cpu=(1, 2),
@@ -350,6 +369,7 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     run = plan.run(member)
     key = plan.key(run)
     store = _trajectory_store(config)
+    _refresh_volume_store(store)
     missing = pipeline.unstored_issue_dates(store, key, list(run.issue_dates))
     print(
         f"==> [{member}] {len(run.issue_dates) - len(missing)}/{len(run.issue_dates)} "
@@ -358,9 +378,7 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     )
     if missing:
         _rollout_function(run).remote(member, config, [d.isoformat() for d in missing])
-        if not store.startswith("gs://"):
-            # Pick up the trajectories the GPU container committed to the Volume.
-            forecast_volume.reload()
+        _refresh_volume_store(store)
 
     stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{member}-"))
     out_path = pipeline.assemble_season_netcdf(
@@ -389,7 +407,6 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
     and run_blend so the platform's ModalRunner dispatches it the same way.
     """
     import sys
-    import traceback
     from contextlib import redirect_stderr, redirect_stdout
 
     from google.cloud import storage as gcs
