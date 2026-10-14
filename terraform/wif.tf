@@ -1,12 +1,21 @@
 # ---------------------------------------------------------------------------
 # Workload Identity Federation — keyless GitHub Actions auth.
 # Deploy workflows impersonate almanac-ci via OIDC instead of a long-lived
-# JSON key. Trust is pinned to the repository *id* (survives renames/moves).
+# JSON key. The github-oidc provider accepts only the deploy workflows, each
+# run from its deploy branch: every other workflow in the repo (PR checks, the
+# Claude agents) may request an OIDC token but cannot exchange it here.
+# job_workflow_ref carries the repository *name*, so a rename or transfer
+# fails closed until deploy_workflow_refs is updated.
 # ---------------------------------------------------------------------------
 
 locals {
   github_repository_id      = "1200599198" # AI-Almanac/ai-almanac
   romp_github_repository_id = "1209562774" # hholb/ROMP
+
+  deploy_workflow_refs = [
+    "AI-Almanac/ai-almanac/.github/workflows/deploy-prod.yml@refs/heads/main",
+    "AI-Almanac/ai-almanac/.github/workflows/deploy-staging.yml@refs/heads/develop",
+  ]
 }
 
 resource "google_iam_workload_identity_pool" "github" {
@@ -29,7 +38,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository_id" = "assertion.repository_id"
   }
 
-  attribute_condition = "assertion.repository_id == \"${local.github_repository_id}\""
+  attribute_condition = join(" && ", [
+    "assertion.repository_id == \"${local.github_repository_id}\"",
+    "assertion.job_workflow_ref in ${jsonencode(local.deploy_workflow_refs)}",
+  ])
 }
 
 resource "google_service_account_iam_member" "ci_workload_identity" {
