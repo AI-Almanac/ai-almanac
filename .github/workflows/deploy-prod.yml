@@ -122,7 +122,7 @@ jobs:
   # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
   # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
   # live in the script). Shorter soak than staging: changes have already
-  # soaked there. On failure, Claude triages into the workflow summary.
+  # soaked there.
   verify:
     needs: deploy
     runs-on: ubuntu-latest
@@ -146,15 +146,47 @@ jobs:
       - name: Smoke test and log soak
         run: ./scripts/post_deploy_check.sh "$SERVICE" "$REGION" "https://ai-almanac.org" 120
 
-      - name: AI triage on failure
+      # Only the triage job reads this; the full logs stay in Cloud Logging.
+      - name: Upload captured errors for triage
         if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: post-deploy-errors
+          path: post-deploy-errors.txt
+          retention-days: 1
+
+  # On verification failure, Claude triages the captured errors against the
+  # deployed diff into the workflow summary. It runs in its own job so the
+  # agent, whose input includes attacker-influenced log lines, never shares a
+  # runner with GCP credentials, an OIDC token, or environment secrets.
+  triage:
+    needs: verify
+    if: failure() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: post-deploy-errors
+
+      - name: AI triage
         uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             The PRODUCTION deploy of commit ${{ github.sha }} failed
-            post-deploy verification. Captured error logs (if the check
-            reached the log scan) are in post-deploy-errors.txt. Inspect
+            post-deploy verification. Captured error logs are in
+            post-deploy-errors.txt (empty if the check failed before the
+            log scan, i.e. on revision readiness or a smoke test). Inspect
             them and the recently deployed changes (git log/diff) and
             produce a concise triage: most likely root cause, the specific
             commit/change implicated if identifiable, and a recommendation —

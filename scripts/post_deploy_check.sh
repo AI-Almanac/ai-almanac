@@ -10,7 +10,8 @@
 #
 # All cloud-specific commands live HERE, not in the workflows: an AWS
 # migration rewrites this script and nothing else. Captured errors go to
-# post-deploy-errors.txt for the AI triage step.
+# post-deploy-errors.txt for the AI triage job; it is created empty up front so
+# the triage artifact exists even when the check fails before the log scan.
 
 set -euo pipefail
 
@@ -20,6 +21,7 @@ BASE_URL=${3:?base url required}
 SOAK=${4:-300}
 ERRFILE="post-deploy-errors.txt"
 START_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+: >"$ERRFILE"
 
 fail() {
   echo "post-deploy-check: FAIL — $*" >&2
