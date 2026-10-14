@@ -39,6 +39,13 @@ from ai_almanac.server.services.forecast_models import (
     live_forecast_compatibility,
     parse_init_source,
 )
+from ai_almanac.server.services.forecast_pipeline import (
+    ArchiveLayout,
+    ForecastModel,
+    PlanError,
+    SeasonPlan,
+    plan_season,
+)
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import (
@@ -58,6 +65,7 @@ from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
     blend_model_key,
+    forecast_model_by_id,
     get_packaged_forecast_models,
     settings,
 )
@@ -1000,7 +1008,55 @@ class ForecastParams(BaseModel):
     init_source: Annotated[str, AfterValidator(parse_init_source)] = "gfs"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
-    max_issue_dates: int | None = None
+    max_issue_dates: Annotated[int, Field(ge=1)] | None = None
+
+
+def utc_today() -> date:
+    """The date a forecast is planned against; the one clock read in planning."""
+    return datetime.now(UTC).date()
+
+
+def plan_live_season(
+    members: list[str],
+    sources_by_name: Mapping[str, dict | None],
+    registry: dict,
+    blend_config: dict,
+    params: ForecastParams,
+    *,
+    today: date,
+) -> SeasonPlan:
+    """The frozen season plan a forecast job executes (see SeasonPlan).
+
+    Each member runs the registry model its archive links to, laid out like that
+    archive — cadence, units, extent — so the live season has the shape the
+    blend was trained on. Issue dates start at the blend's monsoon cutoff.
+    """
+    try:
+        inputs = {
+            name: (
+                _member_forecast_model(name, sources_by_name.get(name) or {}, registry),
+                ArchiveLayout.parse((sources_by_name.get(name) or {}).get("metadata") or {}),
+            )
+            for name in members
+        }
+        return plan_season(
+            inputs,
+            season=today.year,
+            season_start_month_day=(blend_config.get("blend_params") or {}).get("cutoff_month_day")
+            or "05-01",
+            init_source=params.init_source,
+            today=today,
+            max_issue_dates=params.max_issue_dates,
+        )
+    except PlanError as exc:
+        raise HTTPException(status_code=409, detail=f"This forecast can't run: {exc}") from exc
+
+
+def _member_forecast_model(member: str, source: dict, registry: dict) -> ForecastModel:
+    entry = forecast_model_by_id(registry, linked_forecast_model_id(source))
+    if entry is None:
+        raise PlanError(f"{member} isn't linked to a live forecast model")
+    return ForecastModel.parse(entry)
 
 
 def forecast_generation_gpus(model_ready: dict[str, bool]) -> int:
@@ -1149,58 +1205,28 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         )
     lead_hours = body.params.lead_hours or list(registry.get("default_lead_hours") or [])
 
-    # The season-long scoring loop (run_season_forecast) needs each model's
-    # archived issue-day cadence, unit conversion, and spatial extent so its
-    # output matches the shape/units the blend was trained against — these
-    # live on the original archived data source, not the live registry.
-    from ai_almanac.server.services.forecast_pipeline import (
-        season_covered_dates,
-        shared_issue_schedule,
+    plan = plan_live_season(
+        forecast_model_ids,
+        sources_by_name,
+        registry,
+        blend_config,
+        body.params,
+        today=utc_today(),
     )
-
-    season_model_params: dict[str, dict] = {}
-    for name in forecast_model_ids:
-        metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
-        season_model_params[name] = {
-            "init_days": metadata.get("init_days") or "0,3",
-            # The archive's fixed calendar (MM-DD) issue-date schedule, when
-            # inferred at registration. Preferred over init_days weekdays so a
-            # live rollout reproduces the training dates (see season_issue_dates).
-            "init_month_days": metadata.get("init_month_days"),
-            "unit_cvt": metadata.get("unit_cvt", 1.0),
-            "spatial_bounds": metadata.get("spatial_bounds"),
-        }
-    season_model_params = shared_issue_schedule(season_model_params)
-
-    # The season loop must start counting issue dates from the same monsoon
-    # cutoff the blend was trained against, not an unrelated hardcoded date.
-    season_start_month_day = (blend_config.get("blend_params") or {}).get(
-        "cutoff_month_day"
-    ) or "05-01"
 
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
-    # when cold) and every later run scores against the cache for free.
-    init_source = body.params.init_source
-    season = str(datetime.now(UTC).year)
+    # when cold) and every later run scores against the cache for free. The
+    # coverage markers record the same plan, so a set they mark complete
+    # satisfies this gate on the next run.
+    init_source = plan.init_source
+    season = str(plan.season)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
         if settings.gcs_data_bucket
         else "season-forecasts"
     )
-
-    # Same computation the completion markers use, so a set the rollout marks
-    # complete actually satisfies this gate on the next run (see
-    # season_covered_dates).
-    needed = season_covered_dates(
-        {
-            "season": season,
-            "season_start_month_day": season_start_month_day,
-            "season_model_params": season_model_params,
-            "forecast_model_ids": forecast_model_ids,
-            "max_issue_dates": body.params.max_issue_dates,
-        }
-    )
+    needed = plan.covered_dates()
     async with get_db() as conn:
         model_ready = {
             name: await trajectory_sets.set_is_ready(
@@ -1225,15 +1251,10 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         # retroactively change a forecast job already queued.
         "blend_config_snapshot": blend_config,
         "forecast_model_ids": forecast_model_ids,
-        # Member name → registry id the runners execute for it.
-        "forecast_models": {
-            name: linked_forecast_model_id(sources_by_name[name] or {})
-            for name in forecast_model_ids
-        },
-        "season_model_params": season_model_params,
-        "season_start_month_day": season_start_month_day,
+        # What the runners execute and the coverage markers record. The fields
+        # beside it are the request as submitted, kept for display and re-runs.
+        "season_plan": plan.to_dict(),
         "init_source": init_source,
-        "season": season,
         "max_issue_dates": body.params.max_issue_dates,
         "region_id": blend_config.get("region_id"),
         "init_time": body.params.init_time,

@@ -237,18 +237,13 @@ def _load_model_registry() -> dict:
 
 def _registry_entry(config: dict, member: str) -> dict:
     """Registry entry a blend member runs: the id the server linked it to in
-    `forecast_models`. Mirrors settings.member_forecast_model_id (this app runs
-    standalone in its image and doesn't import ai_almanac)."""
+    `forecast_models`. Used only by the map-render functions; season runs
+    read their model from the job's season plan."""
     model_id = (config.get("forecast_models") or {}).get(member, member)
     for entry in _load_model_registry().get("models") or []:
         if entry["id"] == model_id:
             return entry
     raise KeyError(f"Unknown forecast model id: {model_id!r}")
-
-
-def _model_env(config: dict, member: str) -> str:
-    """Execution-environment name for a member's model (base/aifs2/aifs2ens)."""
-    return _registry_entry(config, member).get("env", "base")
 
 
 _VOLUME_RUNS_ROOT = Path("/cache/runs")
@@ -386,40 +381,35 @@ def _trajectory_store(config: dict) -> str:
     return str(_VOLUME_STORE)
 
 
-def _trajectory_key(pipeline, config: dict, model_id: str, lead_day: int | None):
-    """Store key for a member's rollouts. `lead_day` shortens the horizon for
-    smoke tests only; real jobs never pass it and get the canonical horizon."""
-    registry_id = _registry_entry(config, model_id)["id"]
-    init_source = config.get("init_source", "gfs")
-    if lead_day is None:
-        return pipeline.TrajectoryKey(registry_id, init_source)
-    return pipeline.TrajectoryKey(registry_id, init_source, lead_day)
+def _season_plan(pipeline, config: dict):
+    """The job's frozen season plan (see forecast_pipeline.SeasonPlan): which
+    model each member runs, on which issue dates, to which horizon."""
+    return pipeline.SeasonPlan.parse(config.get("season_plan"))
 
 
-def _season_rollouts_impl(
-    model_id: str, config: dict, issue_dates: list[str], lead_day: int | None
-) -> None:
-    """Roll one model out for the given issue dates, writing each trajectory to
-    the store. The only season step that needs a GPU."""
+def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> None:
+    """Roll one member's model out for the given issue dates, writing each
+    trajectory to the store. The only season step that needs a GPU."""
     os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
     os.environ.setdefault("XDG_CACHE_HOME", "/cache")
     # Data-source temp downloads go to container disk, not the weights Volume.
     os.environ.setdefault("EARTH2STUDIO_DATA_CACHE", "/tmp/earth2studio-data")
 
     pipeline = _load_pipeline()
-    store = _trajectory_store(config)
-    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{model_id}-"))
+    plan = _season_plan(pipeline, config)
+    run = plan.run(member)
+    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{member}-"))
     pipeline.roll_out_issue_dates(
-        _registry_entry(config, model_id),
-        _trajectory_key(pipeline, config, model_id, lead_day),
+        run,
+        plan.key(run),
         [datetime.fromisoformat(d).date() for d in issue_dates],
         scratch_root,
-        store,
+        _trajectory_store(config),
     )
-    print(f"==> [{model_id}] Committing volume (model weights, volume-backed store)")
+    print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
     t0 = time.perf_counter()
     forecast_volume.commit()
-    print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")
+    print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
@@ -439,10 +429,8 @@ for _env, _image in INFERENCE_IMAGES.items():
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
-    def run_season_rollouts(
-        model_id: str, config: dict, issue_dates: list[str], lead_day: int | None = None
-    ) -> None:
-        _season_rollouts_impl(model_id, config, issue_dates, lead_day)
+    def run_season_rollouts(member: str, config: dict, issue_dates: list[str]) -> None:
+        _season_rollouts_impl(member, config, issue_dates)
 
     SEASON_ROLLOUT_FNS[_env] = run_season_rollouts
 
@@ -456,46 +444,34 @@ for _env, _image in INFERENCE_IMAGES.items():
     secrets=[gcp_secret],
     volumes={"/cache": forecast_volume},
 )
-def run_season_forecast_bundle(
-    job_id: str,
-    model_id: str,
-    config: dict,
-    season_params: dict,
-    lead_day: int | None = None,
-) -> bytes:
-    """One model's season as a tar.gz bundle holding one NetCDF in the
+def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
+    """One member's season as a tar.gz bundle holding one NetCDF in the
     historical `{year}.nc` schema — the bundle shape run_blend's
     forecast_bundles expect.
 
     Runs on CPU: sweeps the trajectory store once, starts a GPU container only
-    for the issue dates it is missing, then assembles the season from the store.
-    A fully stored season never touches a GPU.
+    for the planned issue dates it is missing, then assembles the season from
+    the store. A fully stored season never touches a GPU.
     """
     pipeline = _load_pipeline()
+    plan = _season_plan(pipeline, config)
+    run = plan.run(member)
+    key = plan.key(run)
     store = _trajectory_store(config)
-    key = _trajectory_key(pipeline, config, model_id, lead_day)
-    issue_dates = pipeline.model_issue_dates(config, season_params)
-    missing = pipeline.unstored_issue_dates(store, key, issue_dates)
+    missing = pipeline.unstored_issue_dates(store, key, list(run.issue_dates))
     print(
-        f"==> [{model_id}] {len(issue_dates) - len(missing)}/{len(issue_dates)} "
+        f"==> [{member}] {len(run.issue_dates) - len(missing)}/{len(run.issue_dates)} "
         "issue date(s) already stored",
         flush=True,
     )
     if missing:
-        SEASON_ROLLOUT_FNS[_model_env(config, model_id)].remote(
-            model_id, config, [d.isoformat() for d in missing], lead_day
-        )
+        SEASON_ROLLOUT_FNS[run.model.env].remote(member, config, [d.isoformat() for d in missing])
         # Pick up trajectories the GPU container committed to a volume-backed store.
         forecast_volume.reload()
 
-    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{model_id}-"))
+    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{member}-"))
     out_path = pipeline.assemble_season_netcdf(
-        store,
-        key,
-        issue_dates,
-        season_params,
-        stage_root / "slices",
-        stage_root / f"{datetime.now(UTC).year}.nc",
+        store, key, run, stage_root / "slices", stage_root / f"{plan.season}.nc"
     )
     return pipeline.bundle_files([out_path])
 
@@ -538,35 +514,37 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         except Exception:
             traceback.print_exc()
 
-        model_ids = config["forecast_model_ids"]
         failures: dict[str, str] = {}
+        plan = None
+        try:
+            plan = _season_plan(_load_pipeline(), config)
+        except ValueError as exc:
+            failures["season_plan"] = str(exc)
+            traceback.print_exc()
 
         # The raw short-lead map deliverable was dropped (D1): its rollout is
         # already contained in the season loop's latest issue date.
         blend_config = config.get("blend_config_snapshot")
-        season_model_params = config.get("season_model_params") or {}
-        if blend_config:
-            season_model_ids = list(model_ids)
-            print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
+        if blend_config and plan is not None:
+            members = [run.member for run in plan.runs]
+            print(f"==> Running season-long inference for blend scoring: {members}")
             season_calls = {
-                model_id: run_season_forecast_bundle.spawn(
-                    job_id, model_id, config, season_model_params.get(model_id) or {}
-                )
-                for model_id in season_model_ids
+                member: run_season_forecast_bundle.spawn(job_id, member, config)
+                for member in members
             }
             live_forecast_bundles: dict[str, bytes] = {}
-            for model_id, call in season_calls.items():
+            for member, call in season_calls.items():
                 try:
-                    live_forecast_bundles[model_id] = call.get()
+                    live_forecast_bundles[member] = call.get()
                 except Exception as exc:
-                    failures[f"{model_id} (season)"] = str(exc)
+                    failures[f"{member} (season)"] = str(exc)
                     traceback.print_exc()
 
-            missing = [name for name in model_ids if name not in live_forecast_bundles]
+            missing = [member for member in members if member not in live_forecast_bundles]
             if not missing:
                 try:
                     print("==> Scoring live season against the trained blend")
-                    live_year = datetime.now(UTC).year
+                    live_year = plan.season
                     modal.Function.from_name(
                         "almanac-blending", "score_live_forecast_bundle"
                     ).remote(
@@ -623,6 +601,41 @@ def reset_volume_store(model_id: str, init_source: str) -> None:
         )
     shutil.rmtree(_VOLUME_STORE / model_id / init_source, ignore_errors=True)
     forecast_volume.commit()
+
+
+@app.function(image=render_image, timeout=600)
+def plan_smoke_season(
+    model_id: str,
+    archive_metadata: dict,
+    season_start: str,
+    init_source: str,
+    max_issue_dates: int,
+    lead_days: int,
+) -> dict:
+    """A one-member season plan built the way submission builds one, from the
+    bundled registry and archive metadata given on the command line."""
+    pipeline = _load_pipeline()
+    entry = next(
+        (e for e in _load_model_registry().get("models") or [] if e["id"] == model_id), None
+    )
+    if entry is None:
+        raise pipeline.PlanError(f"Unknown forecast model id: {model_id!r}")
+    today = datetime.now(UTC).date()
+    plan = pipeline.plan_season(
+        {
+            model_id: (
+                pipeline.ForecastModel.parse(entry),
+                pipeline.ArchiveLayout.parse(archive_metadata),
+            )
+        },
+        season=today.year,
+        season_start_month_day=season_start,
+        init_source=init_source,
+        today=today,
+        max_issue_dates=max_issue_dates,
+        lead_day=lead_days,
+    )
+    return plan.to_dict()
 
 
 @app.function(image=render_image, cpu=1, memory=4096, timeout=600)
@@ -683,29 +696,18 @@ def smoke_season_forecast(
         modal run --env staging modal/forecasts_app.py::smoke_season_forecast \\
             --model fuxi --max-issue-dates 2 --lead-days 2 --reset
     """
-    spatial_bounds = _parse_bounds(bounds)
+    archive_metadata = {"init_days": init_days, "spatial_bounds": _parse_bounds(bounds)}
+    plan = plan_smoke_season.remote(
+        model, archive_metadata, season_start, init_source, max_issue_dates, lead_days
+    )
+    print(f"==> Planned issue dates: {plan['runs'][0]['issue_dates']}")
     if reset:
         print(f"==> Clearing the Volume store for {model}/{init_source}")
         reset_volume_store.remote(model, init_source)
 
-    config = {
-        "forecast_model_ids": [model],
-        "forecast_models": {model: model},
-        "season": str(datetime.now(UTC).year),
-        "season_start_month_day": season_start,
-        "init_source": init_source,
-        "max_issue_dates": max_issue_dates,
-        "gcs_cache_bucket": gcs_bucket,
-    }
-    season_params = {
-        "init_days": init_days,
-        "unit_cvt": 1.0,
-        "spatial_bounds": spatial_bounds,
-    }
+    config = {"season_plan": plan, "gcs_cache_bucket": gcs_bucket}
     t0 = time.perf_counter()
-    bundle = run_season_forecast_bundle.remote(
-        f"smoke-{int(time.time())}", model, config, season_params, lead_days
-    )
+    bundle = run_season_forecast_bundle.remote(f"smoke-{int(time.time())}", model, config)
     print(f"==> Season bundle ({len(bundle) / 1e6:.1f} MB) in {time.perf_counter() - t0:.0f}s")
     for key, value in describe_season_bundle.remote(bundle).items():
         print(f"    {key}: {value}")

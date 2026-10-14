@@ -4,7 +4,6 @@ import pytest
 
 from ai_almanac.server.services.forecast_models import live_forecast_compatibility
 from ai_almanac.server.services.job_submission import ForecastParams, forecast_generation_gpus
-from ai_almanac.settings import member_forecast_model_id
 
 
 @pytest.mark.parametrize(
@@ -59,17 +58,3 @@ class TestLiveForecastCompatibility:
     )
     def test_an_unlinked_or_unregistered_archive_is_unavailable(self, model_id, grid_step):
         assert live_forecast_compatibility(model_id, grid_step).status == "unavailable"
-
-
-@pytest.mark.parametrize(
-    ("config", "member", "expected"),
-    [
-        ({"forecast_models": {"aifs_v2_india_0_25": "aifs2"}}, "aifs_v2_india_0_25", "aifs2"),
-        # A job queued before members were linked runs the member's own name.
-        ({}, "fuxi", "fuxi"),
-    ],
-)
-def test_runners_execute_the_model_each_member_is_linked_to(
-    config: dict, member: str, expected: str
-) -> None:
-    assert member_forecast_model_id(config, member) == expected

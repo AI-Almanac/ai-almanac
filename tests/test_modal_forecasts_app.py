@@ -33,6 +33,24 @@ def test_the_bundled_pipeline_builds_store_keys_when_loaded_by_path(forecasts_ap
     )
 
 
+def test_the_bundled_pipeline_plans_a_season_when_loaded_by_path(forecasts_app):
+    pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    plan = pipeline.plan_season(
+        {
+            "fuxi": (
+                pipeline.ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"}),
+                pipeline.ArchiveLayout.parse({"init_days": "0,3"}),
+            )
+        },
+        season=2020,
+        season_start_month_day="05-01",
+        init_source="gfs",
+        today=dt.date(2020, 5, 12),
+    )
+
+    assert pipeline.SeasonPlan.parse(plan.to_dict()) == plan
+
+
 def test_every_season_function_the_runner_calls_is_registered(forecasts_app):
     functions = set(forecasts_app.app.registered_functions)
 

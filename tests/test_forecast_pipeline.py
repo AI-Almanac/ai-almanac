@@ -1,35 +1,173 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import pytest
 
 from ai_almanac.server.services.forecast_pipeline import (
+    ArchiveLayout,
+    Bounds,
+    EnsembleSpec,
+    ForecastModel,
+    ModelRun,
+    PlanError,
+    SeasonPlan,
     TrajectoryKey,
     ensemble_config,
+    plan_season,
     season_issue_dates,
-    shared_issue_schedule,
 )
 
+FUXI = ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"})
+AIFS2 = ForecastModel.parse({"id": "aifs2", "earth2studio_class": "AIFS2", "env": "aifs2"})
+END_OF_2020 = dt.date(2020, 12, 31)
 
-def test_shared_issue_schedule_unions_archives_so_no_model_gates_the_others():
+
+def _plan(members: dict, *, today=END_OF_2020, **overrides) -> SeasonPlan:
+    return plan_season(
+        members,
+        season=today.year,
+        season_start_month_day=overrides.pop("season_start_month_day", "05-01"),
+        init_source=overrides.pop("init_source", "gfs"),
+        today=today,
+        **overrides,
+    )
+
+
+def test_every_member_rolls_out_on_the_union_of_archive_calendars():
     # FuXi and AIFS-single-v2 archives were built on different calendars; the
     # blend inner-joins on issue date, so each must roll out on the other's too.
-    params = {
-        "fuxi": {"init_month_days": ["05-02", "05-09", "05-13"], "unit_cvt": 1.0},
-        "aifs_single_v2": {"init_month_days": ["05-01", "05-09", "05-13"], "unit_cvt": 1000.0},
-    }
-    shared = shared_issue_schedule(params)
-    assert shared["fuxi"]["init_month_days"] == ["05-01", "05-02", "05-09", "05-13"]
-    assert shared["aifs_single_v2"]["init_month_days"] == shared["fuxi"]["init_month_days"]
-    assert shared["aifs_single_v2"]["unit_cvt"] == 1000.0
-    assert params["fuxi"]["init_month_days"] == ["05-02", "05-09", "05-13"]  # input untouched
+    plan = _plan(
+        {
+            "fuxi": (FUXI, ArchiveLayout.parse({"init_month_days": ["05-02", "05-09", "05-13"]})),
+            "aifs_single_v2": (
+                AIFS2,
+                ArchiveLayout.parse({"init_month_days": ["05-01", "05-09"], "unit_cvt": 1000}),
+            ),
+        }
+    )
+
+    union = tuple(dt.date(2020, 5, day) for day in (1, 2, 9, 13))
+    assert plan.run("fuxi").issue_dates == union
+    assert plan.run("aifs_single_v2").issue_dates == union
+    assert plan.run("aifs_single_v2").unit_cvt == 1000.0
 
 
-def test_shared_issue_schedule_keeps_weekday_fallback_when_no_archive_has_one():
-    params = {"fuxi": {"init_month_days": None, "init_days": "0,3"}}
-    assert shared_issue_schedule(params) == params
+def test_members_keep_their_weekdays_when_no_archive_has_a_calendar():
+    plan = _plan(
+        {
+            "fuxi": (FUXI, ArchiveLayout.parse({"init_days": "0,3"})),
+            "aifs2": (AIFS2, ArchiveLayout.parse({"init_days": "1"})),
+        },
+        today=dt.date(2020, 5, 12),
+    )
+
+    assert plan.run("fuxi").issue_dates == (
+        dt.date(2020, 5, 4),
+        dt.date(2020, 5, 7),
+        dt.date(2020, 5, 11),
+    )
+    assert plan.run("aifs2").issue_dates == (dt.date(2020, 5, 5), dt.date(2020, 5, 12))
+
+
+def test_plan_covers_the_season_up_to_today_and_trims_to_the_latest_dates():
+    plan = _plan(
+        {"fuxi": (FUXI, ArchiveLayout.parse({"init_days": "0,3"}))},
+        today=dt.date(2020, 5, 12),
+        max_issue_dates=2,
+    )
+
+    assert plan.run("fuxi").issue_dates == (dt.date(2020, 5, 7), dt.date(2020, 5, 11))
+    assert plan.covered_dates() == {"fuxi": ["2020-05-07", "2020-05-11"]}
+
+
+def test_plan_refuses_a_season_that_has_no_issue_dates_yet():
+    with pytest.raises(PlanError, match="No issue dates for fuxi"):
+        _plan(
+            {"fuxi": (FUXI, ArchiveLayout.parse({}))},
+            today=dt.date(2020, 4, 20),
+        )
+
+
+def test_plan_reads_back_unchanged_from_the_job_config():
+    ensemble_model = ForecastModel.parse(
+        {"id": "aifsens", "earth2studio_class": "AIFSENS", "ensemble": True, "nensemble": 4}
+    )
+    bounds = {"lat_min": 3, "lat_max": 15, "lon_min": 33, "lon_max": 48}
+    plan = _plan(
+        {
+            "aifsens": (ensemble_model, ArchiveLayout.parse({"spatial_bounds": bounds})),
+            "fuxi": (FUXI, ArchiveLayout.parse({"unit_cvt": "1000"})),
+        },
+        init_source="ifs",
+        lead_day=2,
+    )
+
+    stored = json.loads(json.dumps(plan.to_dict()))
+
+    assert SeasonPlan.parse(stored) == plan
+    assert plan.run("aifsens").model.ensemble == EnsembleSpec(members=4, batch_size=1)
+    assert plan.run("aifsens").spatial_bounds == Bounds(3.0, 15.0, 33.0, 48.0)
+
+
+def test_plan_keys_trajectories_by_the_registry_model_not_the_member():
+    plan = _plan({"aifs_v2_india_0_25": (AIFS2, ArchiveLayout.parse({}))})
+
+    assert plan.key(plan.run("aifs_v2_india_0_25")) == TrajectoryKey("aifs2", "gfs")
+
+
+def _stored_plan() -> dict:
+    return _plan({"fuxi": (FUXI, ArchiveLayout.parse({}))}).to_dict()
+
+
+@pytest.mark.parametrize(
+    ("corrupt", "message"),
+    [
+        (lambda raw: raw.pop("runs"), "Malformed season plan"),
+        (lambda raw: raw["runs"][0].update(issue_dates=["not-a-date"]), "Malformed"),
+        (lambda raw: raw["runs"][0].update(issue_dates=[]), "No issue dates for fuxi"),
+        (lambda raw: raw.update(init_source="era5"), "Unknown init source"),
+        (lambda raw: raw.update(lead_day=0), "lead_day"),
+        (lambda raw: raw["runs"].append(raw["runs"][0]), "member twice"),
+        (lambda raw: raw["runs"][0]["model"].pop("earth2studio_class"), "missing"),
+    ],
+)
+def test_a_corrupt_plan_is_refused_with_what_is_wrong(corrupt, message):
+    raw = _stored_plan()
+    corrupt(raw)
+
+    with pytest.raises(PlanError, match=message):
+        SeasonPlan.parse(raw)
+
+
+def test_a_job_without_a_plan_is_refused():
+    with pytest.raises(PlanError, match="no season plan"):
+        SeasonPlan.parse(None)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"init_days": "0,9"},
+        {"init_days": "mon,thu"},
+        {"init_month_days": ["13-01"]},
+        {"unit_cvt": "lots"},
+        {"spatial_bounds": {"lat_min": "north", "lat_max": 1, "lon_min": 0, "lon_max": 1}},
+    ],
+)
+def test_archive_layout_refuses_unusable_metadata(metadata):
+    with pytest.raises(PlanError):
+        ArchiveLayout.parse(metadata)
+
+
+def test_archive_layout_keeps_a_season_global_when_bounds_are_incomplete():
+    layout = ArchiveLayout.parse({"spatial_bounds": {"lat_min": 3, "lat_max": 15}})
+
+    assert layout.spatial_bounds is None
+    assert layout.init_weekdays == (0, 3)
+    assert layout.unit_cvt == 1.0
 
 
 @pytest.mark.parametrize(
@@ -37,26 +175,30 @@ def test_shared_issue_schedule_keeps_weekday_fallback_when_no_archive_has_one():
     [
         ({"id": "aifs"}, None),
         ({"id": "aifs", "ensemble": False}, None),
-        ({"id": "aifsens", "ensemble": True}, {"nensemble": 8, "batch_size": 1}),
+        ({"id": "aifsens", "ensemble": True}, EnsembleSpec(members=8, batch_size=1)),
         # batch_size never exceeds the member count.
         (
             {"id": "x", "ensemble": True, "nensemble": 2, "nensemble_batch": 16},
-            {"nensemble": 2, "batch_size": 2},
+            EnsembleSpec(members=2, batch_size=2),
         ),
     ],
 )
-def test_ensemble_config(model: dict, expected: dict | None):
+def test_ensemble_config(model: dict, expected: EnsembleSpec | None):
     assert ensemble_config(model) == expected
 
 
 def test_season_issue_dates_matches_weekday_cadence():
-    # A past year's season end is capped at Dec 31 regardless of "now", so
-    # this is fully deterministic without needing to fake the clock.
-    dates = season_issue_dates("05-01", init_weekdays=[0, 3], year=2020)
+    dates = season_issue_dates("05-01", init_weekdays=[0, 3], year=2020, today=END_OF_2020)
 
     assert dates[:3] == [dt.date(2020, 5, 4), dt.date(2020, 5, 7), dt.date(2020, 5, 11)]
     assert all(d.weekday() in (0, 3) for d in dates)
     assert dates[-1] == dt.date(2020, 12, 31)
+
+
+def test_season_issue_dates_stops_at_today():
+    dates = season_issue_dates("05-01", init_weekdays=[0, 3], year=2020, today=dt.date(2020, 5, 8))
+
+    assert dates == [dt.date(2020, 5, 4), dt.date(2020, 5, 7)]
 
 
 def test_season_issue_dates_follows_calendar_schedule_over_weekday():
@@ -65,7 +207,7 @@ def test_season_issue_dates_follows_calendar_schedule_over_weekday():
     # With a schedule present, the exact month-days win regardless of weekday.
     schedule = ["04-01", "04-04", "04-08", "05-02", "05-06"]
     dates = season_issue_dates(
-        "01-01", init_weekdays=[0, 3], year=2020, schedule_month_days=schedule
+        "01-01", init_weekdays=[0, 3], year=2020, schedule_month_days=schedule, today=END_OF_2020
     )
     assert dates == [
         dt.date(2020, 4, 1),
@@ -78,14 +220,20 @@ def test_season_issue_dates_follows_calendar_schedule_over_weekday():
 
 def test_season_issue_dates_schedule_respects_season_start_window():
     schedule = ["04-01", "04-04", "05-02", "05-06"]
-    dates = season_issue_dates("05-01", init_weekdays=[6], year=2020, schedule_month_days=schedule)
+    dates = season_issue_dates(
+        "05-01", init_weekdays=[6], year=2020, schedule_month_days=schedule, today=END_OF_2020
+    )
     assert dates == [dt.date(2020, 5, 2), dt.date(2020, 5, 6)]  # Apr dates trimmed
 
 
 def test_season_issue_dates_schedule_skips_dates_absent_in_year():
     # 2021 is not a leap year, so 02-29 has no calendar date and is dropped.
     dates = season_issue_dates(
-        "01-01", init_weekdays=[0], year=2021, schedule_month_days=["02-29", "03-01"]
+        "01-01",
+        init_weekdays=[0],
+        year=2021,
+        schedule_month_days=["02-29", "03-01"],
+        today=dt.date(2021, 12, 31),
     )
     assert dates == [dt.date(2021, 3, 1)]
 
@@ -105,6 +253,7 @@ def _trajectory():
 MAY_4, MAY_7, MAY_11 = dt.date(2026, 5, 4), dt.date(2026, 5, 7), dt.date(2026, 5, 11)
 AIFS_GFS = TrajectoryKey("aifs", "gfs")
 FUXI_GFS = TrajectoryKey("fuxi", "gfs")
+FUXI_RUN = ModelRun("fuxi", FUXI, 1.0, None, (MAY_4, MAY_7))
 
 
 def test_stored_trajectory_reads_back_what_was_written(tmp_path):
@@ -243,9 +392,7 @@ def test_roll_out_writes_every_date_to_the_store_fetching_each_init_once(tmp_pat
     source = _RecordingSource()
     rolled_out = _fake_rollout_env(monkeypatch, source)
 
-    forecast_pipeline.roll_out_issue_dates(
-        {"id": "fuxi", "earth2studio_class": "FuXi"}, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path
-    )
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path)
 
     assert rolled_out == [MAY_4, MAY_7]
     assert forecast_pipeline.stored_issue_dates(tmp_path, FUXI_GFS) == {MAY_4, MAY_7}
@@ -267,9 +414,7 @@ def test_roll_out_fetches_next_init_while_current_date_rolls_out(tmp_path, monke
 
     _fake_rollout_env(monkeypatch, source, during_rollout)
 
-    forecast_pipeline.roll_out_issue_dates(
-        {"id": "fuxi", "earth2studio_class": "FuXi"}, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path
-    )
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path)
 
     assert prefetched_during == {MAY_4: True}
 
@@ -282,9 +427,7 @@ def test_roll_out_without_missing_dates_never_loads_the_model(tmp_path, monkeypa
 
     monkeypatch.setattr(forecast_pipeline, "load_model", fail)
 
-    forecast_pipeline.roll_out_issue_dates(
-        {"id": "fuxi", "earth2studio_class": "FuXi"}, FUXI_GFS, [], tmp_path, tmp_path
-    )
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, FUXI_GFS, [], tmp_path, tmp_path)
 
 
 def test_prefetching_source_fetches_unplanned_requests_directly():
@@ -304,26 +447,6 @@ def test_prefetching_source_fetches_unplanned_requests_directly():
     source.close()
 
 
-def test_model_issue_dates_agrees_with_season_covered_dates():
-    from ai_almanac.server.services.forecast_pipeline import (
-        model_issue_dates,
-        season_covered_dates,
-    )
-
-    params = {"init_month_days": ["05-02", "05-09", "05-13", "05-20"]}
-    config = {
-        "season": "2020",
-        "season_start_month_day": "05-01",
-        "season_model_params": {"fuxi": params},
-        "forecast_model_ids": ["fuxi"],
-        "max_issue_dates": 2,
-    }
-
-    dates = model_issue_dates(config, params)
-    assert dates == [dt.date(2020, 5, 13), dt.date(2020, 5, 20)]
-    assert season_covered_dates(config) == {"fuxi": [d.isoformat() for d in dates]}
-
-
 def test_short_horizon_rollout_runs_and_stores_only_that_horizon(tmp_path, monkeypatch):
     from ai_almanac.server.services import forecast_pipeline
 
@@ -338,9 +461,7 @@ def test_short_horizon_rollout_runs_and_stores_only_that_horizon(tmp_path, monke
     monkeypatch.setattr(forecast_pipeline, "_daily_precip_trajectory", recording_rollout)
     smoke_key = TrajectoryKey("fuxi", "gfs", lead_day=2)
 
-    forecast_pipeline.roll_out_issue_dates(
-        {"id": "fuxi", "earth2studio_class": "FuXi"}, smoke_key, [MAY_4], tmp_path, tmp_path
-    )
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, smoke_key, [MAY_4], tmp_path, tmp_path)
 
     assert horizons == [2]
     assert forecast_pipeline.stored_issue_dates(tmp_path, smoke_key) == {MAY_4}

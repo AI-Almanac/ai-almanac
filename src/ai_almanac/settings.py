@@ -597,12 +597,3 @@ def forecast_model_by_id(registry: dict, model_id: str | None) -> dict | None:
         (entry for entry in registry.get("models") or [] if entry["id"] == model_id),
         None,
     )
-
-
-def member_forecast_model_id(config: dict, member: str) -> str:
-    """Registry id a forecast job runs for one blend member.
-
-    Mirrored by modal/forecasts_app.py. Jobs queued before the explicit link
-    carry no `forecast_models` map, so their member name is tried as the id.
-    """
-    return (config.get("forecast_models") or {}).get(member, member)
