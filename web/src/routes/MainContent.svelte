@@ -54,7 +54,7 @@
 			popover: {
 				title: 'Ask the assistant',
 				description:
-					'Not sure where to start? Describe what you want in plain language and the assistant will set up the workflow for you, or answer questions about the platform. Try one of the example prompts.',
+					'Not sure where to start? Ask about the models, regions and data in plain language. When you know what you want to run, the assistant takes you to the right setup. Try one of the example prompts.',
 				side: 'bottom',
 				align: 'center'
 			}
@@ -129,12 +129,12 @@
 		<h1>Laude AI Almanac</h1>
 		<p class="lede">Human-centric Climate Insights using the latest AI Weather Prediction Models</p>
 
-		<form class="search-box" action="/benchmarks" method="GET" data-tour="ask">
+		<form class="search-box" action="/assistant" method="GET" data-tour="ask">
 			<input
 				name="q"
 				bind:value={prompt}
 				placeholder="Which forecasts beat climatology for monsoon onset, and how far ahead?"
-				aria-label="Benchmark question"
+				aria-label="Ask the assistant"
 			/>
 			<button type="submit" disabled={!prompt.trim()}>Ask</button>
 		</form>

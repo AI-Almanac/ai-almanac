@@ -2,6 +2,8 @@
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
+	import { account } from '$lib/account.svelte';
+	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import {
 		listBlends,
 		createBlend,
@@ -62,6 +64,9 @@
 	let chatComparing = $state(false);
 	let splitEl = $state<HTMLElement | null>(null);
 	const blendSetupKey = crypto.randomUUID();
+	const initialPrompt = $page.url.searchParams.get('q')?.trim() ?? '';
+	// The new flag is dropped from the URL on load, so sign-in is sent back with it.
+	const setupReturnTo = initialPrompt ? $page.url.pathname + $page.url.search : '/blends?new=1';
 
 	// A chat session that follows the user into a blend: either started here in
 	// setup, or carried over from the benchmark flow that launched the blend.
@@ -92,7 +97,7 @@
 		const scopeKind = asScopeKind(params.get('scopeKind'));
 		const scopeKey = params.get('scopeKey');
 		if (blendId) selectedId = blendId;
-		else if (takeSetupRequest('new')) startNew();
+		else if (takeSetupRequest('new') || initialPrompt) startNew();
 		if (chatId && scopeKind && scopeKey) {
 			continuedSessionId = chatId;
 			continuedScope = { kind: scopeKind, key: scopeKey };
@@ -582,7 +587,16 @@
 	{/if}
 
 	<div class="workspace-main">
-		{#if creating}
+		{#if creating && account.isAnonymous}
+			<LoginPrompt
+				message="Sign in to train a blend. The example blends are open to everyone."
+				returnTo={setupReturnTo}
+			>
+				<button type="button" class="secondary-action" onclick={() => (creating = false)}>
+					See the example blends
+				</button>
+			</LoginPrompt>
+		{:else if creating}
 			<div class="setup-layout" class:with-chat={chatAvailable} class:is-comparing={chatComparing}>
 				{#if chatAvailable}
 					<div class="setup-chat" data-tour="setup-chat">
@@ -591,6 +605,7 @@
 							scopeKind="blend_setup"
 							scopeKey={blendSetupKey}
 							title="Blend setup"
+							initialMessage={initialPrompt}
 							emptyMessage="Describe the blend you want, or ask which models to combine based on your benchmark results."
 							placeholder="Ask for the blend you want, or a question…"
 							suggestions={[
