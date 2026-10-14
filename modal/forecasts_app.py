@@ -351,7 +351,9 @@ def _refresh_volume_store(store: str) -> None:
 @app.function(
     image=cpu_image,
     cpu=(1, 2),
-    memory=(4096, 16384),
+    # Assembly streams one slice at a time, but a season with no bounds reads
+    # global native-grid trajectories (~190 MB each at 0.25 deg).
+    memory=(4096, 32768),
     timeout=SEASON_BUNDLE_TIMEOUT_S,
     secrets=[gcp_secret],
     volumes={"/cache": forecast_volume},
@@ -509,6 +511,7 @@ def reset_volume_store(model_id: str, init_source: str) -> None:
         raise ValueError(
             f"Unknown init source {init_source!r}; choose one of {sorted(init_sources)}"
         )
+    forecast_volume.reload()
     shutil.rmtree(_VOLUME_STORE / model_id / init_source, ignore_errors=True)
     forecast_volume.commit()
 

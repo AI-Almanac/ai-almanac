@@ -179,6 +179,7 @@ def test_a_job_without_a_plan_is_refused():
         {"init_month_days": ["13-01"]},
         {"unit_cvt": "lots"},
         {"spatial_bounds": {"lat_min": "north", "lat_max": 1, "lon_min": 0, "lon_max": 1}},
+        {"spatial_bounds": {"lat_min": 3, "lat_max": 15}},
     ],
 )
 def test_archive_layout_refuses_unusable_metadata(metadata):
@@ -186,8 +187,8 @@ def test_archive_layout_refuses_unusable_metadata(metadata):
         ArchiveLayout.parse(metadata)
 
 
-def test_archive_layout_keeps_a_season_global_when_bounds_are_incomplete():
-    layout = ArchiveLayout.parse({"spatial_bounds": {"lat_min": 3, "lat_max": 15}})
+def test_archive_layout_without_bounds_keeps_the_season_global_with_defaults():
+    layout = ArchiveLayout.parse({})
 
     assert layout.spatial_bounds is None
     assert layout.init_weekdays == (0, 3)

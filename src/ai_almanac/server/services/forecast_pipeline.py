@@ -272,10 +272,16 @@ class Bounds:
 
     @classmethod
     def parse(cls, raw: dict | None) -> Bounds | None:
-        """None when absent or incomplete, which keeps the season global."""
+        """None when absent, which keeps the season global. Partial bounds are
+        refused: a global season has a different shape than the bounded
+        archive the blend was trained on."""
         values = [(raw or {}).get(name) for name in ("lat_min", "lat_max", "lon_min", "lon_max")]
-        if any(value is None for value in values):
+        if all(value is None for value in values):
             return None
+        if any(value is None for value in values):
+            raise PlanError(
+                f"spatial_bounds needs lat_min, lat_max, lon_min and lon_max, got {raw!r}"
+            )
         try:
             return cls(*(float(value) for value in values))
         except (TypeError, ValueError) as exc:
