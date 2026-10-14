@@ -43,6 +43,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -145,15 +146,24 @@ render_image = (
 )
 
 
-def _load_pipeline():
-    """Load the bundled forecast_pipeline.py module by explicit path — the
-    container has no `ai_almanac` package installed, only this one file.
+def _load_pipeline(path: Path = Path("/almanac/forecast_pipeline.py")):
+    """Load forecast_pipeline.py by explicit path — the container has no
+    `ai_almanac` package installed, only this one file, bundled at `path`.
+
+    The module is registered in sys.modules before it runs: dataclasses resolve
+    its string annotations through sys.modules, so an unregistered module fails
+    on its first @dataclass.
     """
-    spec = importlib.util.spec_from_file_location(
-        "forecast_pipeline", "/almanac/forecast_pipeline.py"
-    )
+    if (loaded := sys.modules.get("forecast_pipeline")) is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location("forecast_pipeline", path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[spec.name]
+        raise
     return module
 
 
