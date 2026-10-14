@@ -187,8 +187,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             The PRODUCTION deploy of commit ${{ github.sha }} failed
-            post-deploy verification. Captured error logs are in
-            post-deploy-errors.txt (absent if verification failed before the
+            post-deploy verification. An excerpt of the captured error logs
+            is in post-deploy-errors.txt (absent if verification failed before the
             log scan, e.g. on revision readiness or a smoke test). Inspect
             them and the recently deployed changes (git log/diff) and
             produce a concise triage: most likely root cause, the specific
