@@ -43,6 +43,32 @@ def test_partial_ownership_migration_resumes(tmp_path: Path, monkeypatch) -> Non
     command.upgrade(config, "head")
 
 
+def test_reseeded_vestigial_regions_are_dropped(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_ALMANAC_DATA_DIR", str(tmp_path))
+    config = _alembic_config()
+    command.upgrade(config, "0027")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO regions (id, display_name, description, land_only, shp_only, "
+            "is_builtin, created_at, updated_at) VALUES "
+            "('bangladesh', 'Bangladesh', '', 0, 0, 1, 'now', 'now'), "
+            "('custom', 'Custom coverage', '', 0, 0, 1, 'now', 'now'), "
+            "('ethiopia', 'Ethiopia', '', 0, 0, 1, 'now', 'now'), "
+            "('horn', 'Horn', '', 0, 0, 0, 'now', 'now')"
+        )
+    engine.dispose()
+
+    command.upgrade(config, "0028")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    with engine.connect() as connection:
+        region_ids = {row[0] for row in connection.exec_driver_sql("SELECT id FROM regions")}
+    engine.dispose()
+    assert region_ids == {"ethiopia", "horn"}
+
+
 def test_sync_database_url_uses_psycopg3() -> None:
     url = "postgresql+asyncpg://almanac:secret@postgres/almanac"
 
