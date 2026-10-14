@@ -810,8 +810,9 @@ def roll_out_issue_dates(
     store: Path | str,
 ) -> None:
     """Roll one member's model out to the key's horizon for each issue date and
-    write each trajectory to the store as soon as it finishes, so a failed run
-    keeps the dates it paid for."""
+    write each trajectory to the store as soon as it finishes, so a run that
+    fails partway keeps the dates it paid for (a Volume-backed store also needs
+    the caller's commit, which a hard kill skips)."""
     if not issue_dates:
         return
     model_class = run.model.earth2studio_class
@@ -825,18 +826,19 @@ def roll_out_issue_dates(
     )
     model = load_model(model_class)
     data = PrefetchingSource(resolve_data_source(key.init_source))
+    predicted = _predicted_init_requests(model, issue_dates)
     unused_prefetches = 0
     try:
         for i, issue_date in enumerate(issue_dates):
             for upcoming in issue_dates[i : i + 2]:
-                data.prefetch(init_requests(model, upcoming))
+                data.prefetch(predicted.get(upcoming, []))
             t0 = time.perf_counter()
             print(f"  [{i + 1}/{len(issue_dates)}] issue date {issue_date}", flush=True)
             trajectory = _daily_precip_trajectory(
                 model, data, issue_date, key.lead_day, step_hours, scratch_root, run.model.ensemble
             )
             write_stored_trajectory(store, key, issue_date, trajectory)
-            if data.discard(init_requests(model, issue_date)):
+            if data.discard(predicted.get(issue_date, [])):
                 unused_prefetches += 1
                 print("    warning: prefetched init data went unused", flush=True)
             print(f"  [{i + 1}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s")
@@ -847,8 +849,20 @@ def roll_out_issue_dates(
     # A miss means the model asks earth2studio for different init data than
     # init_requests predicts: results are unaffected, but the GPU waits on the
     # download for that date.
-    served = len(issue_dates) - unused_prefetches
-    print(f"==> Prefetched init data served {served}/{len(issue_dates)} issue date(s)")
+    if predicted:
+        served = len(issue_dates) - unused_prefetches
+        print(f"==> Prefetched init data served {served}/{len(issue_dates)} issue date(s)")
+
+
+def _predicted_init_requests(model, issue_dates: list[dt.date]) -> dict[dt.date, list[tuple]]:
+    """Each date's predicted init-data requests, or {} when the model's inputs
+    can't be predicted. Prefetching only saves GPU time, so a model it can't
+    predict rolls out without it rather than failing."""
+    try:
+        return {issue_date: init_requests(model, issue_date) for issue_date in issue_dates}
+    except Exception as exc:  # noqa: BLE001
+        print(f"==> Not prefetching init data: {exc!r}", flush=True)
+        return {}
 
 
 def assemble_season_netcdf(

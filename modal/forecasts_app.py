@@ -292,7 +292,8 @@ def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> 
         )
     except BaseException:
         # Keep the dates already rolled out on a Volume-backed store, without
-        # letting a failed commit replace the rollout's own error.
+        # letting a failed commit replace the rollout's own error. A hard kill
+        # (timeout, preemption) skips this; the GCS store is durable per date.
         try:
             _commit_volume(member)
         except Exception:

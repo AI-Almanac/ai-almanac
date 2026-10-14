@@ -552,3 +552,31 @@ def test_roll_out_reports_dates_whose_prefetch_went_unused(tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert out.count("prefetched init data went unused") == 2
     assert "Prefetched init data served 0/2 issue date(s)" in out
+
+
+def test_roll_out_carries_on_without_prefetch_when_inputs_cannot_be_predicted(
+    tmp_path, monkeypatch, capsys
+):
+    import numpy as np
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    source = _RecordingSource()
+
+    class _OpaqueModel:
+        def input_coords(self):
+            raise AttributeError("no lead_time coordinate")
+
+    def rollout_fetching_one_input(model, data, issue_date, *_args):
+        data(np.array([np.datetime64(issue_date, "ns")]), np.array(["t2m"]))
+        return _trajectory()
+
+    monkeypatch.setattr(forecast_pipeline, "load_model", lambda _cls: _OpaqueModel())
+    monkeypatch.setattr(forecast_pipeline, "resolve_data_source", lambda _name: source)
+    monkeypatch.setattr(forecast_pipeline, "_daily_precip_trajectory", rollout_fetching_one_input)
+
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path)
+
+    assert forecast_pipeline.stored_issue_dates(tmp_path, FUXI_GFS) == {MAY_4, MAY_7}
+    assert len(source.calls) == 2  # each date fetched directly, once
+    assert "Not prefetching init data" in capsys.readouterr().out
