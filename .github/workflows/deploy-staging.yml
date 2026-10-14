@@ -121,8 +121,7 @@ jobs:
 
   # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
   # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
-  # live in the script). On failure, Claude triages the captured errors
-  # against the deployed diff into the workflow summary.
+  # live in the script).
   verify:
     needs: deploy
     runs-on: ubuntu-latest
@@ -146,15 +145,54 @@ jobs:
       - name: Smoke test and log soak
         run: ./scripts/post_deploy_check.sh "$SERVICE" "$REGION" "https://staging.ai-almanac.org" 300
 
-      - name: AI triage on failure
+      # Only the triage job reads this; the full logs stay in Cloud Logging.
+      - name: Upload captured errors for triage
         if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: post-deploy-errors-${{ github.run_attempt }}
+          path: post-deploy-errors.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # On verification failure, Claude triages the captured errors against the
+  # deployed diff into the workflow summary. It runs in its own job so the
+  # agent, whose input includes attacker-influenced log lines, never shares a
+  # runner with GCP credentials, an OIDC token, or environment secrets.
+  # Without an environment it only sees repo-level secrets, so
+  # CLAUDE_CODE_OAUTH_TOKEN must stay one.
+  triage:
+    needs: verify
+    if: failure() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Absent when verify failed before the check reached the log scan.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: post-deploy-errors-${{ github.run_attempt }}
+
+      - name: AI triage
         uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             The staging deploy of commit ${{ github.sha }} failed post-deploy
-            verification. Captured error logs (if the check reached the log
-            scan) are in post-deploy-errors.txt. Inspect them and the
+            verification. post-deploy-errors.txt holds the first captured
+            error log lines; it is truncated, so the root cause may lie
+            beyond it in Cloud Logging for this revision, and it is absent if
+            verification failed before the log scan (e.g. on revision
+            readiness or a smoke test). Inspect it and the
             recently deployed changes (git log/diff of the last few commits)
             and produce a concise triage: most likely root cause, the
             specific commit/change implicated if identifiable, and a
