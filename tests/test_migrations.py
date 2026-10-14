@@ -54,9 +54,18 @@ def test_reseeded_vestigial_regions_are_dropped(tmp_path: Path, monkeypatch) -> 
             "INSERT INTO regions (id, display_name, description, land_only, shp_only, "
             "is_builtin, created_at, updated_at) VALUES "
             "('bangladesh', 'Bangladesh', '', 0, 0, 1, 'now', 'now'), "
-            "('custom', 'Custom coverage', '', 0, 0, 1, 'now', 'now'), "
-            "('ethiopia', 'Ethiopia', '', 0, 0, 1, 'now', 'now'), "
-            "('horn', 'Horn', '', 0, 0, 0, 'now', 'now')"
+            "('custom', 'Custom', '', 0, 0, 0, 'now', 'now'), "
+            "('ethiopia', 'Ethiopia', '', 0, 0, 1, 'now', 'now')"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO data_sources (id, kind, name, path, region, metadata, "
+            "location_type, status, created_at, updated_at) VALUES "
+            "('bangladesh-obs', 'obs', 'b', '/b', 'bangladesh', '{}', 'local', 'ready', "
+            "'now', 'now'), "
+            "('user-custom-obs', 'obs', 'c', '/c', 'custom', '{}', 'local', 'ready', "
+            "'now', 'now'), "
+            "('ethiopia-obs', 'obs', 'e', '/e', 'ethiopia', '{}', 'local', 'ready', "
+            "'now', 'now')"
         )
     engine.dispose()
 
@@ -65,8 +74,10 @@ def test_reseeded_vestigial_regions_are_dropped(tmp_path: Path, monkeypatch) -> 
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
     with engine.connect() as connection:
         region_ids = {row[0] for row in connection.exec_driver_sql("SELECT id FROM regions")}
+        source_ids = {row[0] for row in connection.exec_driver_sql("SELECT id FROM data_sources")}
     engine.dispose()
-    assert region_ids == {"ethiopia", "horn"}
+    assert region_ids == {"custom", "ethiopia"}
+    assert source_ids == {"user-custom-obs", "ethiopia-obs"}
 
 
 def test_sync_database_url_uses_psycopg3() -> None:
