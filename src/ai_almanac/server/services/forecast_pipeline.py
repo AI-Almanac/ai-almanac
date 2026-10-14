@@ -24,6 +24,7 @@ import datetime as dt
 import gc
 import io
 import os
+import re
 import tarfile
 import tempfile
 import time
@@ -357,6 +358,9 @@ class ArchiveLayout:
         )
 
 
+_SAFE_MEMBER_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+
+
 @dataclass(frozen=True)
 class ModelRun:
     """One blend member's season rollout."""
@@ -368,6 +372,9 @@ class ModelRun:
     issue_dates: tuple[dt.date, ...]
 
     def __post_init__(self) -> None:
+        # Member names become file and temp-dir names in the runners.
+        if not _SAFE_MEMBER_NAME.fullmatch(self.member):
+            raise PlanError(f"Member name {self.member!r} isn't a plain identifier")
         if not self.issue_dates:
             raise PlanError(
                 f"No issue dates for {self.member} this season yet. The blend scores "
