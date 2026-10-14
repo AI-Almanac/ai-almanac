@@ -77,6 +77,30 @@ async def test_builtin_regions_are_protected(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_retired_builtin_regions_are_pruned(client: httpx.AsyncClient) -> None:
+    from sqlalchemy import text
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.region_catalog import prune_retired_builtin_regions
+
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO regions (id, display_name, description, land_only, shp_only, "
+                "is_builtin, created_at, updated_at) "
+                "VALUES ('bangladesh', 'Bangladesh', '', FALSE, FALSE, TRUE, 'now', 'now')"
+            )
+        )
+    created = (await client.post("/regions", json=region_body())).json()
+
+    await prune_retired_builtin_regions()
+
+    region_ids = {item["id"] for item in (await client.get("/regions")).json()}
+    assert "bangladesh" not in region_ids
+    assert {"ethiopia", "india", created["id"]} <= region_ids
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "patch",
     [

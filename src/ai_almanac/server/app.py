@@ -135,12 +135,18 @@ def _enforce_deployment() -> None:
 
 
 async def _seed_regions() -> None:
-    from ai_almanac.server.services.region_catalog import seed_packaged_regions
+    from ai_almanac.server.services.region_catalog import (
+        prune_retired_builtin_regions,
+        seed_packaged_regions,
+    )
 
     try:
         count = await seed_packaged_regions()
         if count:
             logger.info("seeded %d packaged region(s)", count)
+        pruned = await prune_retired_builtin_regions()
+        if pruned:
+            logger.info("pruned %d retired built-in region(s)", pruned)
     except Exception as e:  # noqa: BLE001
         logger.warning("region seeding failed: %s", e)
 

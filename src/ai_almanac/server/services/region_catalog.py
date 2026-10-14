@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from ai_almanac.server.db import get_db
 from ai_almanac.settings import get_packaged_regions
@@ -60,6 +60,24 @@ async def seed_packaged_regions() -> int:
             )
             inserted += result.rowcount
     return inserted
+
+
+async def prune_retired_builtin_regions() -> int:
+    """Delete built-in rows whose definition is no longer packaged.
+
+    Seeding is insert-only and also runs per request, so an instance still on
+    an older release can re-insert a retired region after a one-shot migration
+    removed it. Pruning at every startup converges once old instances drain.
+    """
+    packaged_ids = [region["id"] for region in get_packaged_regions()]
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("DELETE FROM regions WHERE is_builtin AND id NOT IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": packaged_ids},
+        )
+        return result.rowcount
 
 
 async def list_regions() -> list[dict]:
