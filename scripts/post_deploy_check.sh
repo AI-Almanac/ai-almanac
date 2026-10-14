@@ -22,6 +22,7 @@ SOAK=${4:-300}
 ERRFILE="post-deploy-errors.txt"
 EXCERPT_LINES=50
 ALL_ERRORS=$(mktemp)
+trap 'rm -f "$ALL_ERRORS"' EXIT
 START_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 fail() {
