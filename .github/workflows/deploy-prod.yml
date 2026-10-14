@@ -151,7 +151,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: post-deploy-errors
+          name: post-deploy-errors-${{ github.run_attempt }}
           path: post-deploy-errors.txt
           if-no-files-found: ignore
           retention-days: 1
@@ -180,7 +180,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         continue-on-error: true
         with:
-          name: post-deploy-errors
+          name: post-deploy-errors-${{ github.run_attempt }}
 
       - name: AI triage
         uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
@@ -193,12 +193,13 @@ jobs:
             captured error log lines; it is truncated, so the root cause
             may lie beyond it in Cloud Logging for this revision, and it is
             absent if verification failed before the log scan (e.g. on
-            revision readiness or a smoke test). Inspect it and the recently deployed changes (git log/diff) and
-            produce a concise triage: most likely root cause, the specific
-            commit/change implicated if identifiable, and a recommendation —
-            rollback (see docs/sdlc/rollback.md) or fix-forward. Append your
-            analysis in markdown to the file whose path is in the
-            GITHUB_STEP_SUMMARY environment variable.
+            revision readiness or a smoke test). Inspect it and the recently
+            deployed changes (git log/diff) and produce a concise triage:
+            most likely root cause, the specific commit/change implicated if
+            identifiable, and a recommendation — rollback (see
+            docs/sdlc/rollback.md) or fix-forward. Append your analysis in
+            markdown to the file whose path is in the GITHUB_STEP_SUMMARY
+            environment variable.
           claude_args: >-
             --max-turns 12
             --allowedTools "Read,Grep,Glob,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Write"
