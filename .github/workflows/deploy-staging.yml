@@ -134,6 +134,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -146,6 +147,10 @@ jobs:
       - name: Smoke test and log soak
         run: ./scripts/post_deploy_check.sh "$SERVICE" "$REGION" "https://staging.ai-almanac.org" 300
 
+      - name: Remove GCP credentials before triage
+        if: failure()
+        run: rm -f "$GOOGLE_GHA_CREDS_PATH"
+
       - name: Collect deployed changes for triage
         if: failure()
         env:
@@ -153,9 +158,10 @@ jobs:
         run: ./scripts/collect-deploy-changes.sh "$PREVIOUS_SHA" post-deploy-changes.txt
 
       # The error log is attacker-influenced and the summary is public, so the
-      # agent can only read the checkout (--restricted), minus the GCP
-      # credentials file auth writes into it and .git, with no shell, writes,
-      # or MCP connectors. Its final message is published by the next step.
+      # agent can only read the checkout (--restricted), minus .git, where the
+      # action writes a token, with no shell, writes, or MCP connectors. The
+      # GCP credentials file auth writes into the checkout is deleted above.
+      # The agent's final message is published by the next step.
       - name: AI triage on failure
         id: triage
         if: failure()
@@ -176,12 +182,12 @@ jobs:
             --max-turns 12
             --restricted
             --tools "Read,Grep,Glob"
-            --disallowedTools "Read(gha-creds-*.json),Read(./.git/**),mcp__*"
+            --disallowedTools "Read(./.git/**),mcp__*"
 
       - name: Publish triage
         if: failure() && steps.triage.outputs.execution_file != ''
         env:
           EXECUTION_FILE: ${{ steps.triage.outputs.execution_file }}
         run: |
-          jq -r '.[] | select(.type == "result") | .result // "Triage did not finish (\(.subtype))."' \
+          jq -r 'map(select(.type == "result")) | last | if . == null then "Triage produced no result." else .result // "Triage did not finish (\(.subtype))." end' \
             "$EXECUTION_FILE" >> "$GITHUB_STEP_SUMMARY"
