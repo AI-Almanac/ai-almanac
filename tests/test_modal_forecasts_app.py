@@ -239,3 +239,22 @@ def test_a_failed_volume_commit_does_not_hide_the_rollout_error(
         forecasts_app._season_rollouts_impl(
             "fuxi", {"season_plan": plan.to_dict()}, ["2020-05-04", "2020-05-07"]
         )
+
+
+def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, monkeypatch):
+    """A job submitted before season plans existed fails with a clear reason
+    instead of starting any season work."""
+    forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    spawned: list = []
+    monkeypatch.setattr(
+        forecasts_app.run_season_forecast_bundle, "spawn", lambda *a: spawned.append(a)
+    )
+    monkeypatch.delenv("SERVICE_ACCOUNT_JSON", raising=False)
+
+    with pytest.raises(RuntimeError, match="season_plan") as exc:
+        forecasts_app.run_forecast.local(
+            "job-old", {"blend_config_snapshot": {"model_names": ["fuxi"]}}, ""
+        )
+
+    assert "no season plan" in str(exc.value)
+    assert spawned == []

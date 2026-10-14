@@ -409,7 +409,9 @@ def _fake_rollout_env(monkeypatch, source, during_rollout=None):
     return rolled_out
 
 
-def test_roll_out_writes_every_date_to_the_store_fetching_each_init_once(tmp_path, monkeypatch):
+def test_roll_out_writes_every_date_to_the_store_fetching_each_init_once(
+    tmp_path, monkeypatch, capsys
+):
     from ai_almanac.server.services import forecast_pipeline
 
     source = _RecordingSource()
@@ -420,6 +422,7 @@ def test_roll_out_writes_every_date_to_the_store_fetching_each_init_once(tmp_pat
     assert rolled_out == [MAY_4, MAY_7]
     assert forecast_pipeline.stored_issue_dates(tmp_path, FUXI_GFS) == {MAY_4, MAY_7}
     assert len(source.calls) == 4  # 2 dates x 2 input lead times, no refetches
+    assert "Prefetched init data served 2/2 issue date(s)" in capsys.readouterr().out
 
 
 def test_roll_out_fetches_next_init_while_current_date_rolls_out(tmp_path, monkeypatch):
@@ -516,3 +519,36 @@ def test_gcs_store_sweep_lists_the_key_prefix_once_and_reads_dates_from_names(mo
 
     assert missing == [MAY_7]
     assert listings == [("data-bucket", "season-forecasts/aifs/gfs/v1/lead45d/")]
+
+
+def test_roll_out_reports_dates_whose_prefetch_went_unused(tmp_path, monkeypatch, capsys):
+    import numpy as np
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    _fake_rollout_env(monkeypatch, _RecordingSource())
+    # Predict init data one hour off what the (fake) workflow actually asks for.
+    real_requests = forecast_pipeline.init_requests
+    monkeypatch.setattr(
+        forecast_pipeline,
+        "init_requests",
+        lambda model, issue_date: [
+            (time + np.timedelta64(1, "h"), variable)
+            for time, variable in real_requests(model, issue_date)
+        ],
+    )
+
+    def rollout_asking_for_the_real_times(model, data, issue_date, *_args):
+        for time, variable in real_requests(model, issue_date):
+            data(time, variable)
+        return _trajectory()
+
+    monkeypatch.setattr(
+        forecast_pipeline, "_daily_precip_trajectory", rollout_asking_for_the_real_times
+    )
+
+    forecast_pipeline.roll_out_issue_dates(FUXI_RUN, FUXI_GFS, [MAY_4, MAY_7], tmp_path, tmp_path)
+
+    out = capsys.readouterr().out
+    assert out.count("prefetched init data went unused") == 2
+    assert "Prefetched init data served 0/2 issue date(s)" in out

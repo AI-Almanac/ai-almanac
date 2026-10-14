@@ -825,6 +825,7 @@ def roll_out_issue_dates(
     )
     model = load_model(model_class)
     data = PrefetchingSource(resolve_data_source(key.init_source))
+    unused_prefetches = 0
     try:
         for i, issue_date in enumerate(issue_dates):
             for upcoming in issue_dates[i : i + 2]:
@@ -836,12 +837,18 @@ def roll_out_issue_dates(
             )
             write_stored_trajectory(store, key, issue_date, trajectory)
             if data.discard(init_requests(model, issue_date)):
+                unused_prefetches += 1
                 print("    warning: prefetched init data went unused", flush=True)
             print(f"  [{i + 1}/{len(issue_dates)}] done in {time.perf_counter() - t0:.1f}s")
             del trajectory
             gc.collect()
     finally:
         data.close()
+    # A miss means the model asks earth2studio for different init data than
+    # init_requests predicts: results are unaffected, but the GPU waits on the
+    # download for that date.
+    served = len(issue_dates) - unused_prefetches
+    print(f"==> Prefetched init data served {served}/{len(issue_dates)} issue date(s)")
 
 
 def assemble_season_netcdf(
