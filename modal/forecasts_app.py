@@ -260,6 +260,14 @@ def _season_plan(pipeline, config: dict):
     return pipeline.SeasonPlan.parse(config.get("season_plan"))
 
 
+# Each season function waits on the one below it, so each ceiling must outlast
+# the one it waits on plus its own work, or a long cold season is killed from
+# above. A rollout is many sequential issue dates on one GPU.
+ROLLOUT_TIMEOUT_S = 6 * 3600
+SEASON_BUNDLE_TIMEOUT_S = ROLLOUT_TIMEOUT_S + 30 * 60  # + sweep and assembly
+FORECAST_TIMEOUT_S = SEASON_BUNDLE_TIMEOUT_S + 30 * 60  # + blend scoring
+
+
 def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> None:
     """Roll one member's model out for the given issue dates, writing each
     trajectory to the store. The only season step that needs a GPU."""
@@ -272,17 +280,20 @@ def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> 
     plan = _season_plan(pipeline, config)
     run = plan.run(member)
     scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{member}-"))
-    pipeline.roll_out_issue_dates(
-        run,
-        plan.key(run),
-        [datetime.fromisoformat(d).date() for d in issue_dates],
-        scratch_root,
-        _trajectory_store(config),
-    )
-    print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
-    t0 = time.perf_counter()
-    forecast_volume.commit()
-    print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
+    try:
+        pipeline.roll_out_issue_dates(
+            run,
+            plan.key(run),
+            [datetime.fromisoformat(d).date() for d in issue_dates],
+            scratch_root,
+            _trajectory_store(config),
+        )
+    finally:
+        # Also on failure: a Volume-backed store keeps the dates already rolled out.
+        print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
+        t0 = time.perf_counter()
+        forecast_volume.commit()
+        print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
@@ -296,9 +307,7 @@ for _env, _image in INFERENCE_IMAGES.items():
         gpu="A100-80GB",
         cpu=(8, 16),
         memory=(32768, 65536),
-        # Many sequential issue-date runs per season, not one — a much longer
-        # ceiling than the single-run map-visualization inference function.
-        timeout=21600,
+        timeout=ROLLOUT_TIMEOUT_S,
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
@@ -323,8 +332,7 @@ def _rollout_function(run):
     image=cpu_image,
     cpu=(1, 2),
     memory=(4096, 16384),
-    # Waits on the GPU rollouts, so it needs at least their ceiling.
-    timeout=21600,
+    timeout=SEASON_BUNDLE_TIMEOUT_S,
     secrets=[gcp_secret],
     volumes={"/cache": forecast_volume},
 )
@@ -365,7 +373,7 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     image=cpu_image,
     cpu=(0.25, 1),
     memory=1024,
-    timeout=10800,
+    timeout=FORECAST_TIMEOUT_S,
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:

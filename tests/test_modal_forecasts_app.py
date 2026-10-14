@@ -94,9 +94,13 @@ def _trajectory():
 class _FakeVolume:
     def __init__(self):
         self.reloads = 0
+        self.commits = 0
 
     def reload(self):
         self.reloads += 1
+
+    def commit(self):
+        self.commits += 1
 
 
 @pytest.fixture
@@ -168,3 +172,36 @@ def test_the_gpu_rolls_out_only_the_dates_the_store_is_missing(season_bundle):
 def test_a_model_with_no_rollout_image_is_refused_by_name(season_bundle):
     with pytest.raises(ValueError, match="fuxi runs in environment 'gpu9'"):
         season_bundle.run(env="gpu9")
+
+
+def test_a_failed_rollout_still_commits_what_it_wrote_to_the_volume(
+    forecasts_app, monkeypatch, tmp_path
+):
+    pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    volume = _FakeVolume()
+
+    def fail_midway(*_args):
+        raise RuntimeError("GPU fell over on the second date")
+
+    monkeypatch.setattr(forecasts_app, "_VOLUME_STORE", tmp_path)
+    monkeypatch.setattr(forecasts_app, "forecast_volume", volume)
+    monkeypatch.setattr(pipeline, "roll_out_issue_dates", fail_midway)
+    plan = pipeline.plan_season(
+        {
+            "fuxi": (
+                pipeline.ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"}),
+                pipeline.ArchiveLayout.parse({"init_days": "0,3"}),
+            )
+        },
+        season=2020,
+        season_start_month_day="05-01",
+        init_source="gfs",
+        today=MAY_11,
+    )
+
+    with pytest.raises(RuntimeError, match="fell over"):
+        forecasts_app._season_rollouts_impl(
+            "fuxi", {"season_plan": plan.to_dict()}, ["2020-05-04", "2020-05-07"]
+        )
+
+    assert volume.commits == 1

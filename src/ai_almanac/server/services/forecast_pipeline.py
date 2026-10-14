@@ -11,9 +11,11 @@ Deliberately self-contained: only stdlib and scientific-stack imports
   - Imported normally inside the local `forecast` pixi environment (see
     envs/forecast_entrypoint.py), which has no Modal dependency at all.
 
-Callers resolve model registry entries (server/config/forecast_models.yaml)
-and any local/GCS staging themselves and pass plain dicts/Paths in — this
-module has no opinion on where the model registry or job config come from.
+The server builds a SeasonPlan at submission (plan_season, from registry
+entries and archive metadata it looks up itself) and stores it in the job
+config; runners parse it back with SeasonPlan.parse, which raises PlanError on
+anything malformed, and pass it in with a store root (local path or gs:// URI).
+This module has no opinion on where the registry, job config, or store live.
 """
 
 from __future__ import annotations
