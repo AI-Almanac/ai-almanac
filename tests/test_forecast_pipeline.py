@@ -91,6 +91,18 @@ def test_plan_refuses_a_season_that_has_no_issue_dates_yet():
         )
 
 
+@pytest.mark.parametrize(
+    ("season_start", "today"), [("13-01", END_OF_2020), ("02-29", dt.date(2021, 12, 31))]
+)
+def test_plan_refuses_a_season_start_that_is_not_a_date(season_start, today):
+    with pytest.raises(PlanError, match="season start"):
+        _plan(
+            {"fuxi": (FUXI, ArchiveLayout.parse({}))},
+            today=today,
+            season_start_month_day=season_start,
+        )
+
+
 def test_plan_reads_back_unchanged_from_the_job_config():
     ensemble_model = ForecastModel.parse(
         {"id": "aifsens", "earth2studio_class": "AIFSENS", "ensemble": True, "nensemble": 4}
@@ -441,10 +453,13 @@ def test_prefetching_source_fetches_unplanned_requests_directly():
     source.prefetch(planned)
 
     unplanned_time = np.array([np.datetime64(MAY_7, "ns")])
-    assert source(unplanned_time, np.array(["t2m"])) == f"data@{unplanned_time[0]}"
+    fetched = source(unplanned_time, np.array(["t2m"]))
     # The planned request was never consumed, so discarding it reports it.
-    assert source.discard(planned) == 1
+    discarded = source.discard(planned)
     source.close()
+
+    assert fetched == f"data@{unplanned_time[0]}"
+    assert discarded == 1
 
 
 def test_short_horizon_rollout_runs_and_stores_only_that_horizon(tmp_path, monkeypatch):

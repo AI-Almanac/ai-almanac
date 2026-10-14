@@ -270,12 +270,22 @@ def _parse_weekdays(raw) -> tuple[int, ...]:
     return weekdays
 
 
-def _parse_month_day(raw) -> str:
+def _parse_month_day(raw, what: str = "init_month_days entries") -> str:
     try:
         # 2000 is a leap year, so 02-29 is a valid schedule entry.
         return dt.datetime.strptime(f"2000-{raw}", "%Y-%m-%d").strftime("%m-%d")
     except (TypeError, ValueError) as exc:
-        raise PlanError(f"init_month_days entries must be MM-DD, got {raw!r}") from exc
+        raise PlanError(f"{what} must be MM-DD, got {raw!r}") from exc
+
+
+def _parse_season_start(raw, season: int) -> str:
+    month_day = _parse_month_day(raw, "The season start")
+    month, day = (int(part) for part in month_day.split("-"))
+    try:
+        dt.date(season, month, day)
+    except ValueError as exc:
+        raise PlanError(f"The season start {raw!r} is not a date in {season}") from exc
+    return month_day
 
 
 @dataclass(frozen=True)
@@ -484,13 +494,14 @@ def plan_season(
     `max_issue_dates` keeps only the most recent N dates — a smoke-test knob, as
     is a `lead_day` shorter than the canonical horizon.
     """
+    season_start = _parse_season_start(season_start_month_day, season)
     shared_month_days = sorted(
         {entry for _, layout in members.values() for entry in layout.init_month_days}
     )
     runs = []
     for member, (model, layout) in members.items():
         dates = season_issue_dates(
-            season_start_month_day,
+            season_start,
             list(layout.init_weekdays),
             season,
             shared_month_days or None,

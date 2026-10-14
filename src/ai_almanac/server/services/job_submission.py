@@ -1379,16 +1379,30 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     body = ForecastCreate(
         blend_id=cfg.get("blend_id") or "",
         forecast_model_ids=cfg.get("forecast_model_ids") or None,
-        params=ForecastParams(
+        params=_saved_forecast_params(cfg),
+        run_id=row["run_id"],
+    )
+    return await create_forecast_for_user(body, user_id)
+
+
+def _saved_forecast_params(cfg: dict) -> ForecastParams:
+    """The request a stored forecast was submitted with. Jobs saved before a
+    setting was restricted (e.g. an init source no longer offered) can't be
+    re-run as they were, so they are refused rather than silently changed."""
+    try:
+        return ForecastParams(
             init_time=cfg.get("init_time"),
             init_source=cfg.get("init_source") or "gfs",
             max_issue_dates=cfg.get("max_issue_dates"),
             lead_hours=cfg.get("lead_hours"),
             variables=cfg.get("variables"),
-        ),
-        run_id=row["run_id"],
-    )
-    return await create_forecast_for_user(body, user_id)
+        )
+    except ValidationError as exc:
+        fields = ", ".join(sorted({str(error["loc"][0]) for error in exc.errors()}))
+        raise HTTPException(
+            status_code=409,
+            detail=f"This forecast can't be updated: its saved {fields} is no longer supported.",
+        ) from exc
 
 
 class InvalidBenchmarkSettings(ValueError):

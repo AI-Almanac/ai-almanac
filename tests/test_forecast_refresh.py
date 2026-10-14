@@ -73,3 +73,27 @@ async def test_refresh_unknown_forecast_404():
     with pytest.raises(HTTPException) as exc:
         await job_submission.refresh_forecast_for_user("nope", user["id"])
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_refresh_refuses_a_forecast_saved_with_a_retired_init_source():
+    """Jobs saved before init sources were restricted re-run as a clear 409,
+    not a server error."""
+    async with get_db() as conn:
+        user = await get_or_create_user(conn, external_id="refresh-user-3")
+        await conn.execute(
+            sa.insert(jobs).values(
+                id="fc-era5",
+                user_id=user["id"],
+                dataset_id="ds-1",
+                job_type="forecast",
+                status="complete",
+                config_json=json.dumps({"blend_id": "blend-123", "init_source": "era5"}),
+                created_at="2026-05-10T00:00:00",
+            )
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.refresh_forecast_for_user("fc-era5", user["id"])
+    assert exc.value.status_code == 409
+    assert "init_source" in exc.value.detail
