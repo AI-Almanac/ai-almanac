@@ -369,7 +369,10 @@ class ModelRun:
 
     def __post_init__(self) -> None:
         if not self.issue_dates:
-            raise PlanError(f"No issue dates for {self.member} this season yet")
+            raise PlanError(
+                f"No issue dates for {self.member} this season yet. The blend scores "
+                "every member together, so each needs at least one."
+            )
 
     @classmethod
     def parse(cls, raw: dict) -> ModelRun:

@@ -407,7 +407,6 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark
     and run_blend so the platform's ModalRunner dispatches it the same way.
     """
-    import sys
     from contextlib import redirect_stderr, redirect_stdout
 
     from google.cloud import storage as gcs
