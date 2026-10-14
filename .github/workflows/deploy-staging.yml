@@ -152,6 +152,7 @@ jobs:
         with:
           name: post-deploy-errors
           path: post-deploy-errors.txt
+          if-no-files-found: ignore
           retention-days: 1
 
   # On verification failure, Claude triages the captured errors against the
@@ -172,7 +173,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Absent when verify failed before the check reached the log scan.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
         with:
           name: post-deploy-errors
 
@@ -184,8 +187,8 @@ jobs:
           prompt: |
             The staging deploy of commit ${{ github.sha }} failed post-deploy
             verification. Captured error logs are in post-deploy-errors.txt
-            (empty if the check failed before the log scan, i.e. on revision
-            readiness or a smoke test). Inspect them and the
+            (absent if verification failed before the log scan, e.g. on
+            revision readiness or a smoke test). Inspect them and the
             recently deployed changes (git log/diff of the last few commits)
             and produce a concise triage: most likely root cause, the
             specific commit/change implicated if identifiable, and a
