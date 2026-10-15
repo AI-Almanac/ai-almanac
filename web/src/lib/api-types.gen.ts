@@ -2741,7 +2741,7 @@ export interface components {
              * @default benchmark_run_group
              * @enum {string}
              */
-            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "job_set";
+            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "general" | "job_set";
             /** Key */
             key: string;
             /** Title */

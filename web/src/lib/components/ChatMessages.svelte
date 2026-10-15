@@ -4,6 +4,8 @@
 	import ChatActivity from '$lib/components/ChatActivity.svelte';
 	import ChatJobNotice from '$lib/components/ChatJobNotice.svelte';
 	import ChatRunConfirmation from '$lib/components/ChatRunConfirmation.svelte';
+	import ChatSetupHandoff from '$lib/components/ChatSetupHandoff.svelte';
+	import { setupHandoffs } from '$lib/chat/handoff';
 	import { conversationItems } from '$lib/chat/conversation';
 	import { renderMarkdown } from '$lib/chat/format';
 	import { turnTimeline } from '$lib/chat/timeline';
@@ -103,6 +105,10 @@
 							{onOpenArtifact}
 						/>
 					{/if}
+				{/each}
+
+				{#each setupHandoffs(msg) as handoff (handoff.href)}
+					<ChatSetupHandoff {handoff} />
 				{/each}
 
 				{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}

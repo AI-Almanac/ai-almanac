@@ -76,7 +76,7 @@ export type BlendSubmitResponse = {
 };
 
 export type ChatScope = {
-	kind: 'benchmark_setup' | 'benchmark_run_group' | 'blend_setup' | 'job_set';
+	kind: 'general' | 'benchmark_setup' | 'benchmark_run_group' | 'blend_setup' | 'job_set';
 	key: string;
 	title?: string | null;
 	job_ids: string[];

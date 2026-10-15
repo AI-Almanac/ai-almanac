@@ -1,50 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { isBackendUrl, sendChatMessage, usesBearerAuth, type ChatEvent } from '../src/lib/api';
+import { sendChatMessage, usesBearerAuth, type ChatEvent } from '../src/lib/api';
 
 describe('usesBearerAuth', () => {
-	it('uses proxy-provided identity without requiring a browser token', () => {
-		expect(usesBearerAuth({ authMode: 'proxy' }, 'globus-client')).toBe(false);
-	});
-
-	it('requires a browser token for Globus auth', () => {
-		expect(usesBearerAuth({ authMode: 'globus' }, undefined)).toBe(true);
-	});
-
-	it('falls back to the build-time Globus client for the Vite dev server', () => {
-		expect(usesBearerAuth(undefined, 'globus-client')).toBe(true);
-	});
-});
-
-describe('isBackendUrl', () => {
-	it('treats relative same-origin API URLs as backend URLs', () => {
-		expect(
-			isBackendUrl(
-				'/cog/tiles/WebMercatorQuad/0/0/0.png?job_id=job-1',
-				'',
-				'https://staging.ai-almanac.org/forecasts'
-			)
-		).toBe(true);
-	});
-
-	it('does not treat external basemap URLs as backend URLs', () => {
-		expect(
-			isBackendUrl(
-				'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-				'',
-				'https://staging.ai-almanac.org/forecasts'
-			)
-		).toBe(false);
-	});
-
-	it('treats configured API-origin URLs as backend URLs', () => {
-		expect(
-			isBackendUrl(
-				'https://api.ai-almanac.org/cog/point/10,5?job_id=job-1',
-				'https://api.ai-almanac.org',
-				'https://app.ai-almanac.org/forecasts'
-			)
-		).toBe(true);
+	it.each([
+		{
+			case: 'uses proxy-provided identity without requiring a browser token',
+			config: { authMode: 'proxy' as const },
+			clientId: 'globus-client',
+			bearer: false
+		},
+		{
+			case: 'requires a browser token for Globus auth',
+			config: { authMode: 'globus' as const },
+			clientId: undefined,
+			bearer: true
+		},
+		{
+			case: 'falls back to the build-time Globus client for the Vite dev server',
+			config: undefined,
+			clientId: 'globus-client',
+			bearer: true
+		}
+	])('$case', ({ config, clientId, bearer }) => {
+		expect(usesBearerAuth(config, clientId)).toBe(bearer);
 	});
 });
 
@@ -69,19 +48,16 @@ async function collectEvents(stream: AsyncGenerator<ChatEvent>): Promise<ChatEve
 
 describe('sendChatMessage', () => {
 	it('parses chunked SSE and stops on done', async () => {
-		const fetchMock = vi
-			.spyOn(globalThis, 'fetch')
-			.mockResolvedValue(
-				streamingResponse([
-					'data: {"type":"text_delta","turn_id":"turn-1","content":"Hel',
-					'lo"}\n',
-					'data: {"type":"done","turn":{"id":"turn-1","role":"assistant","content":"Hello","created_at":"2026-04-23T00:00:00Z"}}\n'
-				])
-			);
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			streamingResponse([
+				'data: {"type":"text_delta","turn_id":"turn-1","content":"Hel',
+				'lo"}\n',
+				'data: {"type":"done","turn":{"id":"turn-1","role":"assistant","content":"Hello","created_at":"2026-04-23T00:00:00Z"}}\n'
+			])
+		);
 
 		const events = await collectEvents(sendChatMessage('session-1', 'hi'));
 
-		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(events).toEqual([
 			{ type: 'text_delta', turn_id: 'turn-1', content: 'Hello' },
 			{

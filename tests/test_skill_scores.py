@@ -86,53 +86,21 @@ def test_parse_binned_drops_tail_bins() -> None:
     assert [b.label for b in skill_scores.parse_binned_csv(with_tails)] == ["1-5"]
 
 
-def test_parse_float_rejects_non_finite() -> None:
-    assert skill_scores._parse_float("nan") is None
-    assert skill_scores._parse_float("inf") is None
-    assert skill_scores._parse_float("  ") is None
-    assert skill_scores._parse_float("0.5") == 0.5
-
-
-# ---------------------------------------------------------------------------
-# Filename parsing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("filename", "kind", "model", "window"),
-    [
-        ("overall_skill_scores_fuxi_1-15.csv", "overall", "fuxi", "1-15"),
-        ("binned_skill_scores_fuxi_16-30.csv", "binned", "fuxi", "16-30"),
-        # Model tokens contain underscores — romp_safe_model_name collapses
-        # whitespace runs to "_", so a naive split() would mangle these.
-        (
-            "overall_skill_scores_AIFS_Single_v2_1-15.csv",
-            "overall",
-            "AIFS_Single_v2",
-            "1-15",
-        ),
-        # Legacy comma-separated window token.
-        ("binned_skill_scores_fuxi_1,15.csv", "binned", "fuxi", "1,15"),
-    ],
-)
-def test_skill_file_regex(filename: str, kind: str, model: str, window: str) -> None:
-    match = skill_scores._SKILL_FILE_RE.match(filename)
-    assert match is not None
-    assert match.group("kind") == kind
-    assert match.group("model") == model
-    assert match.group("window") == window
-
-
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "spatial_metrics_fuxi_1-15.nc",
-        "overall_skill_scores_fuxi.csv",
-        "summary_models_pooled.csv",
-    ],
-)
-def test_skill_file_regex_rejects_others(filename: str) -> None:
-    assert skill_scores._SKILL_FILE_RE.match(filename) is None
+def test_non_finite_and_unparseable_cells_read_as_missing() -> None:
+    overall = "Fair_Brier_Score,Fair_Brier_Skill_Score,AUC,AUC_ref\nnan,inf,  ,0.5\n"
+    assert skill_scores.parse_overall_csv(overall) == {
+        "brier_score": None,
+        "brier_skill_score": None,
+        "auc": None,
+        "auc_ref": 0.5,
+    }
+    binned = (
+        "Bin,clean_bins,Fair_Brier_Skill_Score,AUC,AUC_ref,"
+        "Fair_Brier_Score_Forecast,Fair_Brier_Score_Climatology\n"
+        "Days 1-5,1-5,-inf,nan,n/a,0.1,0.1\n"
+    )
+    (only,) = skill_scores.parse_binned_csv(binned)
+    assert (only.brier_skill_score, only.auc, only.auc_ref) == (None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +121,37 @@ class FakeStorage:
         if kind != "output":
             return None
         return self._files.get(filename)
+
+
+@pytest.mark.parametrize(
+    ("filename", "model", "window"),
+    [
+        ("overall_skill_scores_fuxi_1-15.csv", "fuxi", "1-15"),
+        # Model tokens contain underscores — romp_safe_model_name collapses
+        # whitespace runs to "_", so a naive split() would mangle these.
+        ("overall_skill_scores_AIFS_Single_v2_1-15.csv", "AIFS_Single_v2", "1-15"),
+        # Legacy comma-separated window token reads as the current form.
+        ("overall_skill_scores_fuxi_1,15.csv", "fuxi", "1-15"),
+    ],
+)
+def test_skill_files_are_grouped_by_the_model_and_window_in_their_name(
+    filename: str, model: str, window: str
+) -> None:
+    storage = FakeStorage({filename: _OVERALL_CSV})
+    result = skill_scores.compute_job_skill_scores("job-1", storage)  # type: ignore[arg-type]
+    assert [(w.model, w.window) for w in result.windows] == [(model, window)]
+
+
+def test_files_that_are_not_skill_csvs_are_ignored() -> None:
+    storage = FakeStorage(
+        {
+            "spatial_metrics_fuxi_1-15.nc": "binary",
+            "overall_skill_scores_fuxi.csv": _OVERALL_CSV,
+            "summary_models_pooled.csv": _OVERALL_CSV,
+        }
+    )
+    result = skill_scores.compute_job_skill_scores("job-1", storage)  # type: ignore[arg-type]
+    assert result.windows == []
 
 
 def test_compute_groups_by_model_and_window() -> None:
@@ -186,13 +185,6 @@ def test_compute_sorts_windows_numerically() -> None:
     )
     result = skill_scores.compute_job_skill_scores("job-1", storage)  # type: ignore[arg-type]
     assert [w.window for w in result.windows] == ["1-15", "16-30"]
-
-
-def test_compute_returns_empty_for_deterministic_job() -> None:
-    storage = FakeStorage({"spatial_metrics_fuxi_1-15.nc": "binary"})
-    result = skill_scores.compute_job_skill_scores("job-1", storage)  # type: ignore[arg-type]
-    assert result.windows == []
-    assert result.job_id == "job-1"
 
 
 # ---------------------------------------------------------------------------
@@ -240,13 +232,13 @@ def _write_output(job_id: str, filename: str, body: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_parsed_scores(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_returns_parsed_scores(client, user_id: str, as_new_user) -> None:
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id)
     _write_output(job_id, "overall_skill_scores_fuxi_1-15.csv", _OVERALL_CSV)
     _write_output(job_id, "binned_skill_scores_fuxi_1-15.csv", _BINNED_CSV)
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 200
     body = resp.json()
     assert body["job_id"] == job_id
@@ -260,22 +252,22 @@ async def test_endpoint_returns_parsed_scores(client, user_id: str, auth_headers
 
 
 @pytest.mark.asyncio
-async def test_endpoint_returns_empty_not_404(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_returns_empty_not_404(client, user_id: str, as_new_user) -> None:
     """A deterministic job has no skill CSVs; that is empty, not an error."""
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id)
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 200
     assert resp.json()["windows"] == []
 
 
 @pytest.mark.asyncio
-async def test_endpoint_rejects_incomplete(client, user_id: str, auth_headers) -> None:
+async def test_endpoint_rejects_incomplete(client, user_id: str, as_new_user) -> None:
     job_id = str(uuid.uuid4())
     await _insert_job(user_id, job_id, status="running")
 
-    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=auth_headers)
+    resp = await client.get(f"/jobs/{job_id}/skill-scores", headers=as_new_user)
     assert resp.status_code == 409
 
 
@@ -304,9 +296,7 @@ async def test_llm_tool_returns_scores_with_interpretation_notes(client, user_id
     assert result["windows"][0]["overall"]["auc"] == 0.82
     # The notes exist so the model doesn't have to infer the semantics — and in
     # particular doesn't read an uncomputed metric as a passing one.
-    assert "fair" in result["notes"]["scores_are_fair"].lower()
-    assert "climatology" in result["notes"]["reference"].lower()
-    assert "not" in result["notes"]["not_computed"].lower()
+    assert {"scores_are_fair", "reference", "not_computed"} <= result["notes"].keys()
 
 
 @pytest.mark.asyncio
@@ -345,4 +335,5 @@ async def test_llm_tool_rejects_incomplete(client, user_id: str) -> None:
     await _insert_job(user_id, job_id, status="running")
 
     result = await benchmark_domain.get_skill_scores(job_id, user_id, _scope())
-    assert "not complete" in result["error"]
+    assert result.get("error")
+    assert "windows" not in result

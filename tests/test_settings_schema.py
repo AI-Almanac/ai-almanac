@@ -21,25 +21,21 @@ def _fields(schema) -> dict[str, dict]:
     return {f["name"]: f for g in schema.groups for f in g["fields"]}
 
 
-def test_personal_mode_exposes_local_fields_as_editable(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("mode", ["personal", "shared"])
+def test_local_fields_and_env_locks_follow_the_deployment_mode(
+    monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    monkeypatch.setattr(settings, "deployment_mode", mode)
     fields = _fields(get_schema(_admin=None))
-    assert "runner_mode" in fields
-    assert all(f["editable"] for f in fields.values())
-    # Labels are product language, not raw field names.
-    assert fields["runner_mode"]["label"] != "runner_mode"
+    personal = mode == "personal"
 
-
-def test_shared_mode_hides_local_fields_and_locks_env_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "deployment_mode", "shared")
-    fields = _fields(get_schema(_admin=None))
-    assert LOCAL_ONLY_FIELDS.isdisjoint(fields)
-    for name in SHARED_ENV_ONLY_FIELDS & set(fields):
-        assert fields[name]["editable"] is False
+    local_fields = LOCAL_ONLY_FIELDS & _SCHEMA_FIELDS
+    assert local_fields
+    assert (local_fields <= set(fields)) is personal
+    assert LOCAL_ONLY_FIELDS.isdisjoint(fields) is not personal
+    env_locked = SHARED_ENV_ONLY_FIELDS & set(fields)
+    assert env_locked
+    assert all(fields[name]["editable"] is personal for name in env_locked)
 
 
 def test_get_settings_reports_secrets_as_flags_not_values(
@@ -69,15 +65,6 @@ def test_get_settings_never_exposes_undeclared_fields(
     assert "database_url" not in get_settings(_admin=None).values
 
 
-def test_enum_fields_declare_their_choices() -> None:
-    fields = _fields(get_schema(_admin=None))
-    audience = fields["assistant_comparisons_audience"]
-    assert audience["type"] == "string"
-    assert audience["choices"] == ["off", "admins", "everyone"]
-    # Non-enum fields carry no choices, so the UI keeps its plain inputs.
-    assert fields["llm_model"]["choices"] is None
-
-
 @pytest.mark.parametrize(
     ("legacy_flag", "audience"),
     [
@@ -88,26 +75,21 @@ def test_enum_fields_declare_their_choices() -> None:
 def test_legacy_feature_flag_maps_to_audience_off(
     legacy_flag: str, audience: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_config_yaml",
-            lambda: {legacy_flag: False},
-        )
-        monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
-        reload_settings()
-        assert getattr(settings, audience) == "off"
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_config_yaml",
+        lambda: {legacy_flag: False},
+    )
+    monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
+    reload_settings()
+    assert getattr(settings, audience) == "off"
 
-        # An explicit audience wins over the deprecated flag.
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay",
-            lambda: {audience: "everyone"},
-        )
-        reload_settings()
-        assert getattr(settings, audience) == "everyone"
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    # An explicit audience wins over the deprecated flag.
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay",
+        lambda: {audience: "everyone"},
+    )
+    reload_settings()
+    assert getattr(settings, audience) == "everyone"
 
 
 def test_db_overlay_beats_env_but_yaml_seed_does_not(
@@ -116,42 +98,32 @@ def test_db_overlay_beats_env_but_yaml_seed_does_not(
     """Issue #179: a prod deploy sets LLM_MODEL via env; an admin's saved
     change (the DB overlay) must still take effect, while config.yaml stays a
     seed below env."""
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setenv("LLM_MODEL", "env-model")
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_config_yaml", lambda: {"llm_model": "yaml-model"}
-        )
-        monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
-        reload_settings()
-        assert settings.llm_model == "env-model"
+    monkeypatch.setenv("LLM_MODEL", "env-model")
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_config_yaml", lambda: {"llm_model": "yaml-model"}
+    )
+    monkeypatch.setattr("ai_almanac.settings._load_db_overlay", dict)
+    reload_settings()
+    assert settings.llm_model == "env-model"
 
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay", lambda: {"llm_model": "admin-model"}
-        )
-        reload_settings()
-        assert settings.llm_model == "admin-model"
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay", lambda: {"llm_model": "admin-model"}
+    )
+    reload_settings()
+    assert settings.llm_model == "admin-model"
 
 
 def test_shared_env_only_fields_resist_the_db_overlay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = {name: getattr(settings, name) for name in type(settings).model_fields}
-    try:
-        monkeypatch.setenv("DEPLOYMENT_MODE", "shared")
-        monkeypatch.setattr("ai_almanac.settings._load_config_yaml", dict)
-        monkeypatch.setattr(
-            "ai_almanac.settings._load_db_overlay",
-            lambda: {"admin_emails": "attacker@example.com"},
-        )
-        reload_settings()
-        assert settings.admin_emails == ""
-    finally:
-        for name, value in snapshot.items():
-            setattr(settings, name, value)
+    monkeypatch.setenv("DEPLOYMENT_MODE", "shared")
+    monkeypatch.setattr("ai_almanac.settings._load_config_yaml", dict)
+    monkeypatch.setattr(
+        "ai_almanac.settings._load_db_overlay",
+        lambda: {"admin_emails": "attacker@example.com"},
+    )
+    reload_settings()
+    assert settings.admin_emails == ""
 
 
 def test_secret_overlay_value_is_sealed_at_rest(

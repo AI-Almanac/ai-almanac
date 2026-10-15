@@ -47,34 +47,38 @@ async def _owned_job(visibility: str = "private", status: str = "complete") -> s
     return job_id, f"owner-{owner_uid}"
 
 
+@pytest.mark.parametrize(
+    ("visibility", "caller", "status"),
+    [
+        ("private", "owner", 200),
+        ("private", "other", 404),
+        ("private", "admin", 200),
+        ("private", "anonymous", 404),
+        ("shared", "other", 200),
+        # 'shared' means shared with signed-in users, not the public.
+        ("shared", "anonymous", 404),
+        ("example", "other", 200),
+        ("example", "anonymous", 200),
+    ],
+)
 @pytest.mark.asyncio
-async def test_private_job_hidden_from_other_users(client: httpx.AsyncClient, proxy) -> None:
-    job_id, _owner = await _owned_job(visibility="private")
-    resp = await client.get(f"/jobs/{job_id}", headers={"X-Forwarded-User": "intruder"})
-    assert resp.status_code == 404
+async def test_job_read_rules(
+    client: httpx.AsyncClient, proxy, visibility: str, caller: str, status: int
+) -> None:
+    job_id, owner = await _owned_job(visibility=visibility)
+    headers = {
+        "owner": {"X-Forwarded-User": owner},
+        "other": {"X-Forwarded-User": "reader"},
+        "admin": {"X-Forwarded-User": "boss"},
+        "anonymous": {},
+    }[caller]
 
+    resp = await client.get(f"/jobs/{job_id}", headers=headers)
 
-@pytest.mark.asyncio
-async def test_owner_reads_own_private_job(client: httpx.AsyncClient, proxy) -> None:
-    job_id, owner = await _owned_job(visibility="private")
-    resp = await client.get(f"/jobs/{job_id}", headers={"X-Forwarded-User": owner})
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_shared_job_readable_by_other_users(client: httpx.AsyncClient, proxy) -> None:
-    job_id, _owner = await _owned_job(visibility="shared")
-    resp = await client.get(f"/jobs/{job_id}", headers={"X-Forwarded-User": "reader"})
-    assert resp.status_code == 200
-    assert resp.json()["visibility"] == "shared"
-    assert resp.json()["is_owner"] is False
-
-
-@pytest.mark.asyncio
-async def test_admin_reads_any_private_job(client: httpx.AsyncClient, proxy) -> None:
-    job_id, _owner = await _owned_job(visibility="private")
-    resp = await client.get(f"/jobs/{job_id}", headers={"X-Forwarded-User": "boss"})
-    assert resp.status_code == 200
+    assert resp.status_code == status
+    if status == 200 and caller in ("other", "anonymous"):
+        assert resp.json()["visibility"] == visibility
+        assert resp.json()["is_owner"] is False
 
 
 @pytest.mark.asyncio

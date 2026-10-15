@@ -296,8 +296,7 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
 		gap: clamp(1rem, 3vw, 2rem);
-		height: calc(100vh - 9rem);
-		min-height: 34rem;
+		height: var(--workspace-screen-height);
 	}
 
 	.setup-workspace.has-plan {
@@ -552,7 +551,7 @@
 		}
 
 		.setup-chat {
-			min-height: 36rem;
+			height: var(--workspace-screen-height);
 		}
 
 		.spec-list div {

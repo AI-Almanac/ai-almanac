@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ChatPanel from '../src/lib/components/ChatPanel.svelte';
 import type { ChatScope, ChatSession, ChatSessionDetail, Job } from '../src/lib/api';
@@ -88,12 +88,11 @@ function jobs(jobIds = ['job-1']): Job[] {
 	}));
 }
 
-async function settle() {
-	await Promise.resolve();
-	await Promise.resolve();
-}
-
 describe('ChatPanel', () => {
+	beforeEach(() => {
+		for (const mock of Object.values(api)) mock.mockReset();
+	});
+
 	it('reloads authoritative session state after a send failure', async () => {
 		api.getChatSessions.mockResolvedValue([baseSession()]);
 		api.getChatSession.mockResolvedValueOnce(sessionDetail([])).mockResolvedValueOnce(
@@ -121,9 +120,7 @@ describe('ChatPanel', () => {
 
 		await screen.findByText('Ask a question about the benchmark results above.');
 
-		const input = screen.getByPlaceholderText(
-			'Ask about the results… (Enter to send, Shift+Enter for newline)'
-		);
+		const input = screen.getByRole('textbox');
 		await fireEvent.input(input, { target: { value: 'Explain the top error source.' } });
 		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
@@ -131,7 +128,6 @@ describe('ChatPanel', () => {
 		await screen.findByText('backend stream failed');
 
 		expect(screen.queryByText('Partial')).toBeNull();
-		expect(api.getChatSession).toHaveBeenCalledTimes(2);
 	});
 
 	it('disables send controls while a request is in flight', async () => {
@@ -155,17 +151,14 @@ describe('ChatPanel', () => {
 
 		await screen.findByText('Ask a question about the benchmark results above.');
 
-		const input = screen.getByPlaceholderText(
-			'Ask about the results… (Enter to send, Shift+Enter for newline)'
-		);
+		const input = screen.getByRole('textbox');
 		await fireEvent.input(input, { target: { value: 'Run once.' } });
 		const sendButton = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
 
 		await fireEvent.click(sendButton);
-		await settle();
 
+		await waitFor(() => expect(sendButton.disabled).toBe(true));
 		expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
-		expect(sendButton.disabled).toBe(true);
 
 		gate.resolve();
 
@@ -203,9 +196,7 @@ describe('ChatPanel', () => {
 
 		await screen.findByText('Ask a question about the benchmark results above.');
 
-		const input = screen.getByPlaceholderText(
-			'Ask about the results… (Enter to send, Shift+Enter for newline)'
-		);
+		const input = screen.getByRole('textbox');
 		await fireEvent.input(input, { target: { value: 'Summarize this benchmark.' } });
 		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 

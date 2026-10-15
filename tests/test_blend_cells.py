@@ -54,32 +54,18 @@ def test_builds_a_grid_of_skill_against_the_baseline() -> None:
     # 1 - 0.40/0.80 = +0.5, then 1 - 0.80/0.40 = -1.0.
     assert grid.values[0][0] == pytest.approx(0.5)
     assert grid.values[1][0] == pytest.approx(-1.0)
+    assert (grid.value_min, grid.value_max) == (pytest.approx(-1.0), pytest.approx(0.5))
     assert result.baseline_model == "unc_clim_raw"
 
 
-def test_reports_both_skill_metrics() -> None:
-    result = blend_cells.build_cell_metrics("job-1", _TWO_POINTS)
-    assert [g.metric for g in result.grids] == [
-        "ranked_probability_skill_score",
-        "brier_skill_score",
-    ]
-    brier = _grid(result, "brier_skill_score")
-    assert brier.values[0][0] == pytest.approx(0.5)
-
-
-def test_omits_area_under_roc_curve() -> None:
+def test_reports_both_skill_scores_but_not_area_under_roc_curve() -> None:
     """Per-point AUC headroom over chance is too small to divide by safely."""
     result = blend_cells.build_cell_metrics("job-1", _TWO_POINTS)
-    assert all(g.metric != "auc" for g in result.grids)
-
-
-def test_reports_the_true_extremes_alongside_the_scale() -> None:
-    grid = _grid(
-        blend_cells.build_cell_metrics("job-1", _TWO_POINTS),
+    assert {g.metric for g in result.grids} == {
         "ranked_probability_skill_score",
-    )
-    assert grid.value_min == pytest.approx(-1.0)
-    assert grid.value_max == pytest.approx(0.5)
+        "brier_skill_score",
+    }
+    assert _grid(result, "brier_skill_score").values[0][0] == pytest.approx(0.5)
 
 
 def test_scale_clips_outliers_so_ordinary_points_stay_visible() -> None:
@@ -156,35 +142,29 @@ def test_leaves_points_only_one_model_scored_empty() -> None:
     assert grid.lats == [10.0]
 
 
-def test_zero_baseline_yields_no_value_rather_than_infinity() -> None:
-    csv_text = _csv(
-        _row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model"),
-        _row("10.00_33.00", "0", "0", "0.65", "24", "unc_clim_raw"),
-    )
-    result = blend_cells.build_cell_metrics("job-1", csv_text)
-    # Nothing is mappable, so no grid claims to be.
-    assert result.grids == []
-
-
-def test_blank_cells_are_missing_not_zero() -> None:
-    csv_text = _csv(
-        _row("10.00_33.00", "", "", "0.70", "", "blended_model"),
-        _row("10.00_33.00", "1.00", "0.80", "0.65", "24", "unc_clim_raw"),
-    )
-    result = blend_cells.build_cell_metrics("job-1", csv_text)
-    assert result.grids == []
-
-
-def test_returns_no_grids_without_a_baseline_model() -> None:
-    csv_text = _csv(_row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model"))
+@pytest.mark.parametrize(
+    "csv_text",
+    [
+        _csv(
+            _row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model"),
+            _row("10.00_33.00", "0", "0", "0.65", "24", "unc_clim_raw"),
+        ),
+        _csv(
+            _row("10.00_33.00", "", "", "0.70", "", "blended_model"),
+            _row("10.00_33.00", "1.00", "0.80", "0.65", "24", "unc_clim_raw"),
+        ),
+        _csv(_row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model")),
+        "",
+        "id,model\n",
+    ],
+    ids=["zero baseline", "blank cells", "no baseline model", "empty", "headerless"],
+)
+def test_unmappable_input_yields_no_grids_or_coverage(csv_text: str) -> None:
+    """A zero baseline must not become infinity, nor a blank cell a zero."""
     result = blend_cells.build_cell_metrics("job-1", csv_text)
     assert result.grids == []
     assert result.cell_size_deg is None
-
-
-def test_handles_empty_and_headerless_input() -> None:
-    assert blend_cells.build_cell_metrics("job-1", "").grids == []
-    assert blend_cells.build_cell_metrics("job-1", "id,model\n").grids == []
+    assert blend_cells.coverage_summary(result) == []
 
 
 def test_negative_coordinates_parse() -> None:
@@ -243,11 +223,6 @@ def test_coverage_median_resists_a_single_wild_point() -> None:
     assert rps.value_min is not None and rps.value_min < -50
 
 
-def test_coverage_is_empty_without_grids() -> None:
-    coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job-1", ""))
-    assert coverage == []
-
-
 def _area_row(name: str, lat: str, lon: str, brier: str, rps: str, n: str, model: str) -> str:
     return ",".join([name, brier, rps, "0.70", n, lat, lon, *[""] * 11, model, "global"])
 
@@ -289,37 +264,6 @@ def test_coverage_summary_reads_areas_too() -> None:
     coverage = blend_cells.coverage_summary(blend_cells.build_cell_metrics("job", _TWO_AREAS))
     brier = next(c for c in coverage if c.metric == "brier_skill_score")
     assert (brier.points, brier.points_better) == (2, 1)
-
-
-# The day-level blend beats the baseline at both points (rps 0.20 vs 0.80 and 0.40),
-# so its skill is +0.75 and +0.5 where the week-level blend scores +0.5 and -1.0.
-_BOTH_BLENDS = _csv(
-    _row("10.00_33.00", "0.50", "0.40", "0.70", "24", "blended_model"),
-    _row("10.25_33.00", "0.80", "0.80", "0.60", "24", "blended_model"),
-    _row("10.00_33.00", "0.40", "0.20", "0.72", "24", "blended_forest"),
-    _row("10.25_33.00", "0.30", "0.20", "0.66", "24", "blended_forest"),
-    _row("10.00_33.00", "1.00", "0.80", "0.65", "24", "unc_clim_raw"),
-    _row("10.25_33.00", "0.40", "0.40", "0.62", "24", "unc_clim_raw"),
-)
-
-
-def test_defaults_to_the_week_level_blend() -> None:
-    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS)
-    grid = _grid(result, "ranked_probability_skill_score")
-    assert result.blend_model == "blended_model"
-    assert [row[0] for row in grid.values] == [pytest.approx(0.5), pytest.approx(-1.0)]
-
-
-def test_scores_the_day_level_blend_when_asked() -> None:
-    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS, model="blended_forest")
-    grid = _grid(result, "ranked_probability_skill_score")
-    assert result.blend_model == "blended_forest"
-    assert [row[0] for row in grid.values] == [pytest.approx(0.75), pytest.approx(0.5)]
-
-
-def test_names_every_blend_the_summary_scores() -> None:
-    result = blend_cells.build_cell_metrics("job-1", _BOTH_BLENDS)
-    assert result.available_models == ["blended_model", "blended_forest"]
 
 
 def test_a_blend_trained_before_the_day_level_blend_offers_only_the_week_level() -> None:

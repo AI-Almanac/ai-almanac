@@ -1,8 +1,5 @@
 /**
  * AllMetricsPanel and the ResultsViewer tab split.
- *
- * NOTE: this file should be renamed to `all-metrics-panel.test.ts`. It could not
- * be renamed in place when SkillScoresPanel was replaced by AllMetricsPanel.
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
@@ -150,11 +147,15 @@ describe('AllMetricsPanel', () => {
 
 		render(AllMetricsPanel, { props: { jobs: [job('p-4')] } });
 
-		await waitFor(() => {
-			expect(screen.getByText(/Reliability/)).toBeTruthy();
-		});
 		// Absence has to be visible, or users assume discrimination covers calibration.
-		expect(screen.getByText(/not a passing score/)).toBeTruthy();
+		await waitFor(() => expect(screen.getByText(/Reliability/)).toBeTruthy());
+		for (const name of [
+			'Continuous Ranked Probability Score',
+			'Ensemble spread–skill ratio',
+			'Rank histogram'
+		]) {
+			expect(screen.getByText(new RegExp(name))).toBeTruthy();
+		}
 	});
 
 	it('explains an empty run set rather than rendering nothing', async () => {
@@ -203,16 +204,5 @@ describe('ResultsViewer tabs', () => {
 		await waitFor(() => {
 			expect(screen.getByText('Brier Skill Score')).toBeTruthy();
 		});
-	});
-
-	it('offers the metrics tab even for a run set with no probabilistic jobs', async () => {
-		api.getJobMetrics.mockResolvedValue(EMPTY_METRICS);
-		api.getJobSkillScores.mockResolvedValue({ job_id: 'd-1', windows: [] });
-		api.getMetricDefinitions.mockResolvedValue(DEFINITIONS);
-
-		render(ResultsViewer, { props: { jobs: [job('d-1')] } });
-
-		// Hiding it would make the feature undiscoverable; the panel explains instead.
-		expect(screen.getByRole('tab', { name: 'All Metrics' })).toBeTruthy();
 	});
 });

@@ -77,12 +77,18 @@ textarea {
    their own contents; only the structure lives here. */
 
 .workspace-page {
+	--workspace-top-gap: 1.25rem;
+	/* Where a pinned column sits, and how tall it can be while staying fully on
+	   screen below the sticky nav. The assistant uses this so its input never
+	   falls below the fold however long the conversation gets. */
+	--workspace-pinned-top: calc(var(--nav-height, 0rem) + var(--workspace-top-gap));
+	--workspace-screen-height: calc(100dvh - var(--workspace-pinned-top) - 1rem);
 	min-height: calc(100vh - 3.5rem);
 	/* Wide enough for run list + results + a two-column assistant comparison.
 	   Still capped: past this, lines get too long to read comfortably. */
 	width: min(100% - 2rem, 120rem);
 	margin: 0 auto;
-	padding: 1.25rem 0 2rem;
+	padding: var(--workspace-top-gap) 0 2rem;
 	display: flex;
 	gap: 1.25rem;
 	align-items: flex-start;
@@ -91,8 +97,8 @@ textarea {
 /* Setup/creation has no run list and reads as a focused, narrower form. */
 .workspace-page.is-setup {
 	width: min(100% - 2rem, 76rem);
+	--workspace-top-gap: clamp(1rem, 4vw, 3rem);
 	min-height: calc(100vh - 4rem);
-	padding-top: clamp(1rem, 4vw, 3rem);
 	display: block;
 }
 
@@ -130,12 +136,11 @@ textarea {
 
 .workspace-aside {
 	position: sticky;
-	top: 5rem;
+	top: var(--workspace-pinned-top);
 	display: flex;
 	flex-direction: column;
 	gap: 1rem;
-	height: calc(100vh - 6rem);
-	min-height: 36rem;
+	height: var(--workspace-screen-height);
 }
 
 @media (max-width: 1050px) {
@@ -145,8 +150,6 @@ textarea {
 
 	.workspace-aside {
 		position: static;
-		height: auto;
-		min-height: 0;
 	}
 }
 

@@ -147,6 +147,10 @@ async def test_streamed_turn_keeps_progress_tool_and_answer_in_order(
     tool_statuses = [e["tool_call"]["status"] for e in events if e["type"] == "tool_call"]
     assert tool_statuses == ["pending", "running"]
     assert any(e["type"] == "thinking_delta" for e in events)
+    assert any(e["type"] == "tool_result" for e in events)
+    assert events[-1]["type"] == "done"
     turn = events[-1]["turn"]
     assert [block["kind"] for block in turn["blocks"]] == ["thinking", "tool", "text"]
     assert turn["content"] == "Three regions are set up."
+    # The next turn resumes from this state, so a run must leave some behind.
+    assert events[-1]["provider_state"]

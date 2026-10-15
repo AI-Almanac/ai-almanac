@@ -29,9 +29,6 @@ def _modal_constant(name: str) -> str:
 def test_blending_repo_pins_match() -> None:
     assert _modal_constant("DEFAULT_REPO_REF") == manager.BLENDING_REPO_REF
     assert _modal_constant("DEFAULT_REPO_URL") == manager.BLENDING_REPO_URL
-
-
-def test_blending_repo_ref_is_a_full_sha() -> None:
     # Full SHAs keep `git fetch --depth 1 origin <ref>` deterministic; a branch
     # name or short SHA would make the env and image drift over time.
     assert re.fullmatch(r"[0-9a-f]{40}", manager.BLENDING_REPO_REF)
@@ -47,7 +44,4 @@ def test_forest_pins_match() -> None:
     url, rev = _blending_env_forest_pin()
     assert _modal_constant("FOREST_REPO_URL") == url
     assert _modal_constant("FOREST_REPO_REF") == rev
-
-
-def test_forest_ref_is_a_full_sha() -> None:
-    assert re.fullmatch(r"[0-9a-f]{40}", _blending_env_forest_pin()[1])
+    assert re.fullmatch(r"[0-9a-f]{40}", rev)

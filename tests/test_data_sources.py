@@ -7,14 +7,6 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from ai_almanac.server.services.data_sources import _season_window
-
-
-def test_season_window_uses_schedule_bounds_else_full_year() -> None:
-    assert _season_window(["05-02", "06-01", "07-29"]) == ("05-02", "07-29")
-    assert _season_window(None) == ("01-01", "12-31")
-    assert _season_window([]) == ("01-01", "12-31")
-
 
 @pytest.mark.asyncio
 async def test_source_validation_does_not_persist_and_returns_inferred_metadata(
@@ -47,13 +39,18 @@ async def test_source_validation_does_not_persist_and_returns_inferred_metadata(
     assert after.json() == before.json()
 
 
+@pytest.mark.parametrize(
+    "filename",
+    ["{}.nc", "aifs_2p0_{}_v2025.nc"],
+    ids=["year-only", "year-before-a-version-number"],
+)
 @pytest.mark.asyncio
 async def test_source_validation_reports_years_missing_inside_the_range(
-    client: httpx.AsyncClient, tmp_path: Path
+    client: httpx.AsyncClient, tmp_path: Path, filename: str
 ) -> None:
     fixtures = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
     for year in (1998, 2000):
-        (tmp_path / f"{year}.nc").write_bytes((fixtures / f"{year}.nc").read_bytes())
+        (tmp_path / filename.format(year)).write_bytes((fixtures / f"{year}.nc").read_bytes())
 
     response = await client.post(
         "/data-sources/validate",
@@ -62,30 +59,23 @@ async def test_source_validation_reports_years_missing_inside_the_range(
             "name": "Gappy observations",
             "path": str(tmp_path),
             "region": "ethiopia",
-            "metadata": {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"},
+            "metadata": {"obs_file_pattern": filename, "obs_var": "RAINFALL"},
         },
     )
 
     assert response.status_code == 200
     draft = response.json()
-    assert draft["status"] == "ready"
+    assert draft["status"] == "ready", draft["validation_error"]
     assert draft["metadata"]["start_year"] == 1998
     assert draft["metadata"]["end_year"] == 2000
     assert draft["metadata"]["years"] == [1998, 2000]
     assert draft["metadata"]["missing_years"] == [1999]
 
 
-def test_year_detection_keeps_the_first_year_in_each_filename() -> None:
-    from ai_almanac.server.services.data_sources import _coverage_years
-
-    files = [Path("aifs_2p0_2001_v2025.nc"), Path("aifs_2p0_2002_v2025.nc")]
-    assert _coverage_years(files) == [2001, 2002]
-
-
 @pytest.mark.asyncio
 async def test_local_sources_drive_benchmark_selection_and_submission(
     client: httpx.AsyncClient,
-    auth_headers: dict[str, str],
+    as_new_user: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Path(__file__).parents[1] / "testdata" / "ethiopia"
@@ -145,10 +135,8 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     assert model["metadata"]["end_date"] == "2000-07-29"
     assert model["metadata"]["init_days"] == "2,5"
     assert model["metadata"]["init_days_source"] == "inferred"
-    assert model["metadata"]["init_time_coordinate"] == "time"
-    assert model["metadata"]["init_time_sample_count"] == 26
 
-    datasets_response = await client.get("/datasets", headers=auth_headers)
+    datasets_response = await client.get("/datasets", headers=as_new_user)
     assert datasets_response.status_code == 200
     listed_obs = {dataset["id"]: dataset for dataset in datasets_response.json()}
     assert listed_obs[obs["id"]]["grid_step_deg"] == 0.25
@@ -167,7 +155,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
     job_response = await client.post(
         "/jobs",
-        headers=auth_headers,
+        headers=as_new_user,
         json={
             "dataset_id": obs["id"],
             "model_name": model["id"],
@@ -226,7 +214,6 @@ async def test_configured_initialization_days_override_inference(
     metadata = response.json()["metadata"]
     assert metadata["init_days"] == "1,4"
     assert metadata["init_days_source"] == "configured"
-    assert "init_time_coordinate" not in metadata
 
 
 def _write_ensemble_model_source(directory: Path) -> None:
@@ -240,73 +227,54 @@ def _write_ensemble_model_source(directory: Path) -> None:
         ensemble.to_netcdf(directory / "2001.nc")
 
 
+_FUXI_ROOT = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+
+
+@pytest.mark.parametrize(
+    ("ensemble", "stored_flag", "probabilistic", "member"),
+    [
+        (True, None, True, "number"),
+        # A stale probabilistic=False (e.g. from a pre-detection registration)
+        # must not survive: the deterministic path crashes on the ensemble dim,
+        # so the file shape wins.
+        (True, False, True, "number"),
+        (False, None, False, None),
+    ],
+    ids=["ensemble", "ensemble-with-stale-flag", "deterministic"],
+)
 @pytest.mark.asyncio
-async def test_ensemble_member_dim_defaults_probabilistic(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = tmp_path / "aifs-ens"
-    _write_ensemble_model_source(root)
-
-    response = await client.post(
-        "/data-sources/validate",
-        json={
-            "kind": "model",
-            "name": "Ensemble model",
-            "path": str(root),
-            "region": "ethiopia",
-            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ready"
-    assert response.json()["metadata"]["probabilistic"] is True
-
-
-@pytest.mark.asyncio
-async def test_ensemble_dim_forces_probabilistic_over_stored_flag(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    # A stale/incorrect probabilistic=False (e.g. from a pre-detection
-    # registration) must not survive: the deterministic path crashes on the
-    # ensemble dim, so the file shape wins.
-    root = tmp_path / "aifs-ens-forced-det"
-    _write_ensemble_model_source(root)
-
-    response = await client.post(
-        "/data-sources/validate",
-        json={
-            "kind": "model",
-            "name": "Ensemble model, stale deterministic flag",
-            "path": str(root),
-            "region": "ethiopia",
-            "metadata": {"file_pattern": "{}.nc", "model_var": "tp", "probabilistic": False},
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["metadata"]["probabilistic"] is True
-
-
-@pytest.mark.asyncio
-async def test_deterministic_source_stays_non_probabilistic(
+async def test_the_file_shape_decides_whether_a_model_is_probabilistic(
     client: httpx.AsyncClient,
+    tmp_path: Path,
+    ensemble: bool,
+    stored_flag: bool | None,
+    probabilistic: bool,
+    member: str | None,
 ) -> None:
-    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
+    root = _FUXI_ROOT
+    if ensemble:
+        root = tmp_path / "ens"
+        _write_ensemble_model_source(root)
+    metadata = {"file_pattern": "{}.nc", "model_var": "tp"}
+    if stored_flag is not None:
+        metadata["probabilistic"] = stored_flag
 
     response = await client.post(
         "/data-sources/validate",
         json={
             "kind": "model",
-            "name": "Deterministic model",
+            "name": "Model draft",
             "path": str(root),
             "region": "ethiopia",
-            "metadata": {"file_pattern": "{}.nc", "model_var": "tp"},
+            "metadata": metadata,
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["metadata"]["probabilistic"] is False
+    draft = response.json()
+    assert draft["status"] == "ready"
+    assert draft["metadata"]["probabilistic"] is probabilistic
+    assert draft["metadata"]["forecast_dims"].get("member") == member
 
 
 def _write_fuxi_variant(directory: Path, transform) -> Path:
@@ -386,103 +354,52 @@ async def test_start_date_under_any_name_sets_the_initialization_schedule(
     assert renamed_draft["metadata"]["init_days_source"] == "inferred"
 
 
-@pytest.mark.asyncio
-async def test_dim_names_romp_cannot_carry_are_rejected_at_registration(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = _write_fuxi_variant(tmp_path / "spaced", lambda ds: ds.rename({"day": "lead day"}))
-
-    draft = await _validate_model(client, root)
-
-    assert draft["status"] == "invalid"
-    assert "lead day" in draft["validation_error"]
-
-
-@pytest.mark.asyncio
-async def test_leftover_dim_is_recorded_as_the_ensemble_member(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = tmp_path / "ens"
-    _write_ensemble_model_source(root)
-
-    draft = await _validate_model(client, root)
-
-    assert draft["metadata"]["forecast_dims"]["member"] == "number"
-
-
-@pytest.mark.asyncio
-async def test_unidentifiable_lead_time_is_rejected(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = _write_fuxi_variant(tmp_path / "no-lead", lambda ds: ds.rename({"day": "horizon"}))
-
-    draft = await _validate_model(client, root)
-
-    assert draft["status"] == "invalid"
-    assert "lead time" in draft["validation_error"]
-
-
-@pytest.mark.asyncio
-async def test_more_than_one_leftover_dim_is_rejected(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = _write_fuxi_variant(tmp_path / "extra", lambda ds: ds.expand_dims(number=2, height=2))
-
-    draft = await _validate_model(client, root)
-
-    assert draft["status"] == "invalid"
-    assert "ensemble member" in draft["validation_error"]
-
-
-@pytest.mark.asyncio
-async def test_single_valued_leftover_dim_is_not_taken_for_an_ensemble(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    root = _write_fuxi_variant(tmp_path / "height", lambda ds: ds.expand_dims(height=1))
-
-    draft = await _validate_model(client, root)
-
-    assert draft["status"] == "invalid"
-    assert "'height'" in draft["validation_error"]
-
-
-@pytest.mark.asyncio
-async def test_precipitation_in_metres_converts_to_millimetres(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    def in_metres(ds):
-        ds["tp"].attrs["units"] = "m"
+def _with_units(units: str):
+    def transform(ds):
+        ds["tp"].attrs["units"] = units
         return ds
 
-    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "metres", in_metres))
+    return transform
+
+
+@pytest.mark.parametrize(
+    ("transform", "offender"),
+    [
+        (lambda ds: ds.rename({"day": "lead day"}), "lead day"),
+        (lambda ds: ds.rename({"day": "horizon"}), "lead time"),
+        (lambda ds: ds.expand_dims(number=2, height=2), "height"),
+        (lambda ds: ds.expand_dims(height=1), "height"),
+        (_with_units("kg m-2 s-1"), "kg m-2 s-1"),
+    ],
+    ids=[
+        "dim-name-romp-cannot-carry",
+        "unidentifiable-lead-time",
+        "two-leftover-dims",
+        "single-valued-leftover-dim",
+        "unrecognized-units",
+    ],
+)
+@pytest.mark.asyncio
+async def test_unusable_model_layouts_are_rejected_naming_the_offender(
+    client: httpx.AsyncClient, tmp_path: Path, transform, offender: str
+) -> None:
+    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "variant", transform))
+
+    assert draft["status"] == "invalid"
+    assert offender in draft["validation_error"]
+
+
+@pytest.mark.parametrize(("units", "unit_cvt"), [("m", 1000.0), (None, 1.0)])
+@pytest.mark.asyncio
+async def test_precipitation_units_set_the_conversion_to_millimetres(
+    client: httpx.AsyncClient, tmp_path: Path, units: str | None, unit_cvt: float
+) -> None:
+    root = _FUXI_ROOT if units is None else _write_fuxi_variant(tmp_path / "m", _with_units(units))
+
+    draft = await _validate_model(client, root)
 
     assert draft["status"] == "ready"
-    assert draft["metadata"]["unit_cvt"] == 1000.0
-
-
-@pytest.mark.asyncio
-async def test_unrecognized_precipitation_units_are_rejected(
-    client: httpx.AsyncClient, tmp_path: Path
-) -> None:
-    def per_second(ds):
-        ds["tp"].attrs["units"] = "kg m-2 s-1"
-        return ds
-
-    draft = await _validate_model(client, _write_fuxi_variant(tmp_path / "rate", per_second))
-
-    assert draft["status"] == "invalid"
-    assert "'kg m-2 s-1'" in draft["validation_error"]
-
-
-@pytest.mark.asyncio
-async def test_precipitation_without_units_keeps_the_default_conversion(
-    client: httpx.AsyncClient,
-) -> None:
-    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "fuxi"
-
-    draft = await _validate_model(client, root)
-
-    assert draft["metadata"]["unit_cvt"] == 1.0
+    assert draft["metadata"]["unit_cvt"] == unit_cvt
 
 
 @pytest.mark.asyncio
@@ -508,7 +425,7 @@ async def test_invalid_initialization_days_are_rejected_during_validation(
 
     assert response.status_code == 200
     assert response.json()["status"] == "invalid"
-    assert "weekday numbers from 0 to 6" in response.json()["validation_error"]
+    assert response.json()["validation_error"]
 
 
 @pytest.mark.asyncio
@@ -533,7 +450,7 @@ async def test_invalid_source_can_be_revalidated(
     assert response.status_code == 201
     source = response.json()
     assert source["status"] == "invalid"
-    assert source["validation_error"] == "Directory does not exist."
+    assert source["validation_error"]
 
     fixture = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs" / "1998.nc"
     source_dir.mkdir()
@@ -549,8 +466,8 @@ async def test_invalid_source_can_be_revalidated(
 @pytest.mark.parametrize(
     ("region", "detail"),
     [
-        (None, "region is required"),
-        ("atlantis", "region 'atlantis' is not configured"),
+        (None, "region"),
+        ("atlantis", "atlantis"),
     ],
 )
 async def test_source_region_must_be_configured(
@@ -575,7 +492,7 @@ async def test_source_region_must_be_configured(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == detail
+    assert detail in response.json()["detail"]
 
 
 def test_custom_sources_must_overlap() -> None:

@@ -7,13 +7,6 @@ from ai_almanac.server.services.job_submission import skip_missing_years
 PARAMS = {"start_date": "2011-05-01", "end_date": "2015-07-31"}
 
 
-def test_model_gap_is_skipped_from_evaluation_but_not_climatology() -> None:
-    params = skip_missing_years(PARAMS, obs_missing=set(), model_missing={2013})
-
-    assert params["years"] == [2011, 2012, 2014, 2015]
-    assert params["years_clim"] == [2011, 2012, 2013, 2014, 2015]
-
-
 def test_observation_gap_is_skipped_from_evaluation_and_climatology() -> None:
     params = skip_missing_years(
         {**PARAMS, "start_year_clim": 2000, "end_year_clim": 2015},

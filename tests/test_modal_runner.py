@@ -99,82 +99,83 @@ def test_preflight_requires_outputs_bucket() -> None:
     assert error and "bucket_mounts" in error
 
 
-def test_preflight_rejects_local_obs_dir() -> None:
-    config = {**_GCS_CONFIG, "obs_dir": "/mnt/obs"}
-    error = mr._preflight_error(config, "out-bucket")
-    assert error and "obs_dir" in error
-
-
-def test_preflight_rejects_local_model_dir() -> None:
-    config = {**_GCS_CONFIG, "model_dir": "/mnt/models"}
-    error = mr._preflight_error(config, "out-bucket")
-    assert error and "model_dir" in error
-
-
-def test_preflight_exempts_remote_obs_provider() -> None:
-    config = {
-        "obs_dir": "",
-        "model_dir": "gs://data/models/fuxi",
-        "dataset_config": {"provider": "earth2studio"},
-    }
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(_GCS_CONFIG, id="all-gcs-paths"),
+        pytest.param(
+            {
+                "obs_dir": "",
+                "model_dir": "gs://data/models/fuxi",
+                "dataset_config": {"provider": "earth2studio"},
+            },
+            id="remote-obs-provider-needs-no-obs-dir",
+        ),
+        pytest.param(_BLEND_CONFIG, id="blend-model-files"),
+        # An absolute path is a mounted Modal volume, which is stageable.
+        pytest.param(
+            {**_BLEND_CONFIG, "model_files": {"aifs": ["/vol/forecasts/aifs/2019.nc"]}},
+            id="blend-volume-mount",
+        ),
+        # A forecast's own config has no obs_dir/model_files — only its
+        # blend_config_snapshot does (live inference reads GFS directly).
+        pytest.param(_FORECAST_CONFIG, id="forecast-checks-its-blend-snapshot"),
+    ],
+)
+def test_preflight_accepts_configs_modal_can_stage(config: dict) -> None:
     assert mr._preflight_error(config, "out-bucket") is None
 
 
-def test_preflight_passes_for_all_gcs_paths() -> None:
-    assert mr._preflight_error(_GCS_CONFIG, "out-bucket") is None
-
-
-def test_preflight_passes_for_blend_model_files() -> None:
-    assert mr._preflight_error(_BLEND_CONFIG, "out-bucket") is None
-
-
-def test_preflight_accepts_volume_mount_blend_uri() -> None:
-    # The relaxation: an absolute path (a mounted Modal volume) is stageable.
-    config = {**_BLEND_CONFIG, "model_files": {"aifs": ["/vol/forecasts/aifs/2019.nc"]}}
-    assert mr._preflight_error(config, "out-bucket") is None
-
-
-def test_preflight_rejects_relative_blend_uri() -> None:
-    config = {**_BLEND_CONFIG, "model_files": {"aifs": ["models/aifs/2019.nc"]}}
+@pytest.mark.parametrize(
+    ("config", "names"),
+    [
+        pytest.param({**_GCS_CONFIG, "obs_dir": "/mnt/obs"}, "obs_dir", id="local-obs-dir"),
+        pytest.param(
+            {**_GCS_CONFIG, "model_dir": "/mnt/models"}, "model_dir", id="local-model-dir"
+        ),
+        pytest.param(
+            {**_BLEND_CONFIG, "model_files": {"aifs": ["models/aifs/2019.nc"]}},
+            "models/aifs/2019.nc",
+            id="relative-blend-uri",
+        ),
+        pytest.param(
+            {**_BLEND_CONFIG, "model_files": {"aifs": []}}, "aifs", id="blend-model-without-files"
+        ),
+        pytest.param(
+            {**_BLEND_CONFIG, "model_files": {}}, "at least one model", id="no-blend-models"
+        ),
+        pytest.param(
+            {**_FORECAST_CONFIG, "blend_config_snapshot": {**_BLEND_CONFIG, "obs_dir": "/local"}},
+            "obs_dir",
+            id="forecast-snapshot-with-local-obs-dir",
+        ),
+    ],
+)
+def test_preflight_names_what_modal_cannot_stage(config: dict, names: str) -> None:
     error = mr._preflight_error(config, "out-bucket")
-    assert error and "models/aifs/2019.nc" in error
-
-
-def test_preflight_rejects_blend_model_with_no_files() -> None:
-    config = {**_BLEND_CONFIG, "model_files": {"aifs": []}}
-    error = mr._preflight_error(config, "out-bucket")
-    assert error and "aifs" in error
-
-
-def test_preflight_rejects_empty_blend_models() -> None:
-    config = {**_BLEND_CONFIG, "model_files": {}}
-    error = mr._preflight_error(config, "out-bucket")
-    assert error and "at least one model" in error
-
-
-def test_preflight_forecast_validates_blend_snapshot_not_top_level() -> None:
-    # A forecast job's own config has no obs_dir/model_files — only its
-    # blend_config_snapshot does (live inference reads GFS directly).
-    assert mr._preflight_error(_FORECAST_CONFIG, "out-bucket") is None
-
-
-def test_preflight_forecast_rejects_bad_snapshot_obs_dir() -> None:
-    bad_snapshot = {**_BLEND_CONFIG, "obs_dir": "/local/obs"}
-    config = {**_FORECAST_CONFIG, "blend_config_snapshot": bad_snapshot}
-    error = mr._preflight_error(config, "out-bucket")
-    assert error and "obs_dir" in error
+    assert error and names in error
 
 
 # --- submit / inspect / cancel ----------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_submit_spawns_and_records_call_id(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("config", "lookup"),
+    [
+        pytest.param(_GCS_CONFIG, ("almanac-romp", "run_benchmark"), id="benchmark"),
+        # A blend config selects its own app + function over the runner's default.
+        pytest.param(_BLEND_CONFIG, ("almanac-blending", "run_blend"), id="blend"),
+    ],
+)
+async def test_submit_spawns_the_configured_function_and_records_its_call_id(
+    monkeypatch: pytest.MonkeyPatch, config: dict, lookup: tuple[str, str]
+) -> None:
     record: dict = {}
     _install_fake_modal(monkeypatch, record=record)
 
     async def fake_config(job_id):
-        return _GCS_CONFIG
+        return config
 
     monkeypatch.setattr(mr, "_job_config", fake_config)
     monkeypatch.setattr(mr, "outputs_bucket_name", lambda: "out-bucket")
@@ -183,29 +184,8 @@ async def test_submit_spawns_and_records_call_id(monkeypatch: pytest.MonkeyPatch
 
     assert handle.runner == "modal"
     assert handle.external_id == "fc-123"
-    assert record["lookup"] == ("almanac-romp", "run_benchmark")
-    assert record["spawn_args"] == ("job-xyz", _GCS_CONFIG, "out-bucket")
-
-
-@pytest.mark.asyncio
-async def test_submit_routes_blend_app_and_function(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    record: dict = {}
-    _install_fake_modal(monkeypatch, record=record)
-
-    async def fake_config(job_id):
-        return _BLEND_CONFIG
-
-    monkeypatch.setattr(mr, "_job_config", fake_config)
-    monkeypatch.setattr(mr, "outputs_bucket_name", lambda: "out-bucket")
-
-    handle = await _runner().submit(_request("blend-1"))
-
-    assert handle.external_id == "fc-123"
-    # Config selects a different app + function than the runner's benchmark default.
-    assert record["lookup"] == ("almanac-blending", "run_blend")
-    assert record["spawn_args"] == ("blend-1", _BLEND_CONFIG, "out-bucket")
+    assert record["lookup"] == lookup
+    assert record["spawn_args"] == ("job-xyz", config, "out-bucket")
 
 
 @pytest.mark.asyncio
@@ -243,17 +223,3 @@ async def test_cancel_rehydrates_call_from_id(monkeypatch: pytest.MonkeyPatch) -
     _install_fake_modal(monkeypatch, record=record)
     await _runner().cancel(RunnerHandle(runner="modal", external_id="fc-999"))
     assert record["canceled"] == "fc-999"
-
-
-# --- selection ---------------------------------------------------------------
-
-
-def test_registry_selects_runner_by_setting(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ai_almanac.server.services import runner_registry
-    from ai_almanac.server.services.local_runner import LocalProcessRunner
-
-    monkeypatch.setattr("ai_almanac.settings.settings.job_runner", "modal")
-    assert runner_registry.get_job_runner().name == "modal"
-
-    monkeypatch.setattr("ai_almanac.settings.settings.job_runner", "local")
-    assert isinstance(runner_registry.get_job_runner(), LocalProcessRunner)

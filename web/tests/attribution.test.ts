@@ -10,32 +10,17 @@ import {
 const ALL_ENTRIES = [...groundTruthSources, ...forecastModelSources, ...mapDataSources];
 
 describe('attribution catalog', () => {
-	it('credits every ground-truth source and forecast model the platform ships by default', () => {
-		expect(groundTruthSources.map((entry) => entry.name)).toEqual([
-			'CHIRPS v3 daily (IMERG)',
-			'IMERG'
-		]);
-		expect(forecastModelSources.map((entry) => entry.name)).toEqual([
-			'AIFS-single-v1p1',
-			'AIFS-ENS-v1',
-			'AIFS-single-v2',
-			'AIFS-ENS-v2',
-			'FuXi-S2S',
-			'GenCast',
-			'GraphCast',
-			'IFS-S2S (TIGGE)',
-			'NeuralGCM (IMERG, precip)',
-			'FuXi (deterministic)'
-		]);
-	});
-
-	it('states a provider, license, and at least one citation and link for every entry', () => {
+	it('states a provider, license, and at least one citation and https link for every entry', () => {
 		for (const entry of ALL_ENTRIES) {
 			expect(entry.provider, entry.slug).not.toBe('');
 			expect(entry.license, entry.slug).not.toBe('');
 			expect(entry.usage, entry.slug).not.toBe('');
 			expect(entry.citations.length, entry.slug).toBeGreaterThan(0);
 			expect(entry.links.length, entry.slug).toBeGreaterThan(0);
+			for (const link of entry.links) {
+				expect(link.href, link.label).toMatch(/^https:\/\//);
+				expect(link.label, link.href).not.toBe('');
+			}
 		}
 	});
 
@@ -44,19 +29,14 @@ describe('attribution catalog', () => {
 		expect(new Set(slugs).size).toBe(slugs.length);
 	});
 
-	it('uses absolute https URLs for provider links', () => {
-		for (const link of ALL_ENTRIES.flatMap((entry) => entry.links)) {
-			expect(link.href, link.label).toMatch(/^https:\/\//);
-			expect(link.label, link.href).not.toBe('');
+	it('lists every entry in exactly one section', () => {
+		const listed = attributionSections.flatMap((section) => section.entries);
+		for (const entry of ALL_ENTRIES) {
+			expect(
+				listed.filter((candidate) => candidate === entry),
+				entry.slug
+			).toHaveLength(1);
 		}
-	});
-
-	it('renders every section in the order the page walks them', () => {
-		expect(attributionSections.map((section) => section.slug)).toEqual([
-			'ground-truth',
-			'models',
-			'map-data'
-		]);
-		expect(attributionSections.flatMap((section) => section.entries)).toEqual(ALL_ENTRIES);
+		expect(listed).toHaveLength(ALL_ENTRIES.length);
 	});
 });

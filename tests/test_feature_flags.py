@@ -15,110 +15,68 @@ from ai_almanac.settings import (
 def test_overlay_persists_across_reload() -> None:
     """An admin's setting change survives a settings reload (i.e. a redeploy),
     because it lives in the database overlay, not the ephemeral config.yaml."""
-    original = settings.data_management_audience
-    try:
-        write_settings_overlay({"data_management_audience": "off"})
-        # Simulate a fresh process / redeploy: drop the in-memory value, then
-        # re-resolve settings from scratch.
-        settings.data_management_audience = "everyone"
-        reload_settings()
-        assert settings.data_management_audience == "off"
-    finally:
-        write_settings_overlay({"data_management_audience": None})
-        reload_settings()
-        assert settings.data_management_audience == original
+    write_settings_overlay({"data_management_audience": "off"})
+    # Simulate a fresh process / redeploy: drop the in-memory value, then
+    # re-resolve settings from scratch.
+    settings.data_management_audience = "everyone"
+    reload_settings()
+    assert settings.data_management_audience == "off"
 
 
-@pytest.mark.asyncio
-async def test_capability_reports_flag_state(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "data_management_audience", "off")
-    caps = (await client.get("/auth/me")).json()["capabilities"]
-    assert caps["can_manage_data"] is False
-
-
-@pytest.mark.asyncio
-async def test_region_mutations_hidden_when_disabled(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "data_management_audience", "off")
-    resp = await client.post("/regions", json={"display_name": "Nope"})
-    assert resp.status_code == 404
-
-    # Reads stay available so benchmarks can still list regions.
-    assert (await client.get("/regions")).status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_region_create_allowed_when_enabled(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "data_management_audience", "everyone")
-    resp = await client.post(
-        "/regions",
-        json={
-            "display_name": "Testland",
-            "lat_min": 0,
-            "lat_max": 1,
-            "lon_min": 0,
-            "lon_max": 1,
-        },
-    )
-    # Not a 404 from the flag gate; the feature is reachable.
-    assert resp.status_code != 404
-
-
-@pytest.mark.asyncio
-async def test_admins_audience_hides_data_management_from_users_only(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "data_management_audience", "admins")
-
-    admin_caps = (await client.get("/auth/me")).json()["capabilities"]
-    assert admin_caps["can_manage_data"] is True
-    # Past the gate: an empty body fails validation instead of hiding the route.
-    assert (await client.post("/data-sources/validate", json={})).status_code == 422
-
+def _caller_headers(monkeypatch: pytest.MonkeyPatch, role: str) -> dict[str, str]:
+    """A personal-mode admin, or a proxy-mode user with no admin allow-list."""
+    if role == "admin":
+        return {}
     monkeypatch.setattr(settings, "auth_mode", "proxy")
     monkeypatch.setattr(settings, "admin_subjects", "")
     monkeypatch.setattr(settings, "admin_emails", "")
-    user_headers = {"X-Forwarded-User": "rando"}
-    user_caps = (await client.get("/auth/me", headers=user_headers)).json()["capabilities"]
-    assert user_caps["can_manage_data"] is False
-    hidden = await client.post("/data-sources/validate", json={}, headers=user_headers)
-    assert hidden.status_code == 404
-    # Reads stay available so a user's benchmarks can still list datasets.
-    assert (await client.get("/data-sources", headers=user_headers)).status_code == 200
+    return {"X-Forwarded-User": "rando"}
 
 
 @pytest.mark.asyncio
-async def test_forecasting_capability_defaults_enabled(
+@pytest.mark.parametrize(
+    ("audience", "role", "can_manage"),
+    [
+        ("off", "admin", False),
+        ("off", "user", False),
+        ("admins", "admin", True),
+        ("admins", "user", False),
+        ("everyone", "admin", True),
+        ("everyone", "user", True),
+    ],
+)
+async def test_data_management_audience_gates_mutations_but_not_reads(
     client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    audience: str,
+    role: str,
+    can_manage: bool,
 ) -> None:
-    # enable_forecasting is on by default now that the live-forecast workflow is
-    # finalized; admins can still turn it off from the Settings page.
-    assert settings.enable_forecasting is True
+    monkeypatch.setattr(settings, "data_management_audience", audience)
+    headers = _caller_headers(monkeypatch, role)
+
+    caps = (await client.get("/auth/me", headers=headers)).json()["capabilities"]
+    assert caps["can_manage_data"] is can_manage
+    # Behind the gate the route is hidden; past it, other checks may still refuse.
+    for path in ("/data-sources/validate", "/regions"):
+        resp = await client.post(path, json={}, headers=headers)
+        assert (resp.status_code == 404) is not can_manage, path
+    # Reads stay available so benchmarks can still list datasets and regions.
+    assert (await client.get("/data-sources", headers=headers)).status_code == 200
+    assert (await client.get("/regions", headers=headers)).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_forecasting_flag_gates_the_whole_forecasts_router(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    monkeypatch.setattr(settings, "enable_forecasting", enabled)
+
     caps = (await client.get("/auth/me")).json()["capabilities"]
-    assert caps["can_use_forecasting"] is True
-
-
-@pytest.mark.asyncio
-async def test_forecasts_router_hidden_when_disabled(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "enable_forecasting", False)
-    assert (await client.get("/forecasts")).status_code == 404
-    assert (await client.get("/forecasts/models")).status_code == 404
-    assert (await client.post("/forecasts", json={"blend_id": "nope"})).status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_forecasts_router_reachable_when_enabled(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "enable_forecasting", True)
-    # Not a 404 from the flag gate; the feature is reachable (reads too,
-    # unlike data-management's mutations-only gate).
-    assert (await client.get("/forecasts")).status_code != 404
-    assert (await client.get("/forecasts/models")).status_code != 404
+    assert caps["can_use_forecasting"] is enabled
+    # Unlike data management, reads are gated too.
+    for path in ("/forecasts", "/forecasts/models"):
+        assert ((await client.get(path)).status_code == 404) is not enabled, path
+    if not enabled:
+        assert (await client.post("/forecasts", json={"blend_id": "nope"})).status_code == 404

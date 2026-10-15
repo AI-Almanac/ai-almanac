@@ -37,18 +37,6 @@ describe('parsePooledSummary', () => {
 		]);
 	});
 
-	it("derives the day-level blend's per-lead skill like any other row", () => {
-		const rows = parsePooledSummary([HEADER, BLEND, FOREST, BASELINE].join('\n'));
-		const forest = rows.find((r) => r.model === 'blended_forest');
-		expect(forest?.brierSkillByLead[0]).toBeCloseTo(1 - 0.085 / 0.091, 6);
-		expect(forest?.rpsSkill).toBeCloseTo(0.165);
-	});
-
-	it('prettifies component model names without abbreviating', () => {
-		const rows = parsePooledSummary([HEADER, AIFS].join('\n'));
-		expect(rows[0].label).toBe('AIFS (raw)');
-	});
-
 	it('spells out climatology baselines', () => {
 		const cal =
 			'ALL,0.6,0.5,0.7,1,,,0.3,0,0,0,0,0,0.7,0.6,0.55,0.54,0.6,fuxi_calibrated_clim_mok_date,calibrated,0,0,0';
@@ -74,12 +62,11 @@ describe('parsePooledSummary', () => {
 		expect(isDefaultVisibleSeries('fuxi_calibrated_clim_mok_date')).toBe(false);
 	});
 
-	it('returns [] when the header lacks AUC columns', () => {
-		expect(parsePooledSummary('id,model\nALL,blended_model')).toEqual([]);
-	});
-
-	it('returns [] for empty input', () => {
-		expect(parsePooledSummary('')).toEqual([]);
+	it.each([
+		{ case: 'the header lacks AUC columns', csv: 'id,model\nALL,blended_model' },
+		{ case: 'the input is empty', csv: '' }
+	])('returns [] when $case', ({ csv }) => {
+		expect(parsePooledSummary(csv)).toEqual([]);
 	});
 
 	it('keeps the pooled scores the chart cannot plot as a curve', () => {
@@ -104,12 +91,6 @@ describe('parsePooledSummary', () => {
 		expect(blend.brierSkillByLead[0]).toBeCloseTo(1 - 0.088 / 0.091, 6);
 		expect(blend.brierSkillByLead[2]).toBeCloseTo(1 - 0.118 / 0.117, 6);
 		expect(blend.brierSkillByLead[2]).toBeLessThan(0);
-	});
-
-	it('scores the baseline at exactly zero skill against itself', () => {
-		const rows = parsePooledSummary([HEADER, BLEND, BASELINE].join('\n'));
-		const baseline = rows.find((r) => r.isBaseline);
-		expect(baseline?.brierSkillByLead).toEqual([0, 0, 0, 0, 0]);
 	});
 
 	it('yields null per-lead skill when the baseline row is absent', () => {

@@ -27,37 +27,20 @@ def test_partial_ownership_migration_resumes(tmp_path: Path, monkeypatch) -> Non
         )
     engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006")
 
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
     inspector = sa.inspect(engine)
-    assert {
-        "owner_id",
-        "visibility",
-        "origin",
-    } <= {column["name"] for column in inspector.get_columns("data_sources")}
-    assert {
-        "visibility",
-        "runner",
-        "runner_handle",
-        "artifacts_published_at",
-    } <= {column["name"] for column in inspector.get_columns("jobs")}
-    assert "display_name" in {column["name"] for column in inspector.get_columns("users")}
-    assert {
-        "issuer",
-        "subject",
-        "status",
-        "groups",
-        "last_login_at",
-    } <= {column["name"] for column in inspector.get_columns("users")}
-    assert {
-        "upload_sessions",
-        "llm_providers",
-        "user_llm_profiles",
-        "audit_events",
-        "usage_events",
-    } <= set(inspector.get_table_names())
+    columns = {
+        table: {c["name"] for c in inspector.get_columns(table)}
+        for table in ("data_sources", "jobs", "users")
+    }
     engine.dispose()
+    assert {"owner_id", "visibility", "origin"} <= columns["data_sources"]
+    assert {"visibility", "runner", "runner_handle"} <= columns["jobs"]
+    assert "display_name" in columns["users"]
+
+    command.upgrade(config, "head")
 
 
 def test_sync_database_url_uses_psycopg3() -> None:

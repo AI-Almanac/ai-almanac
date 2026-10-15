@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { account } from '$lib/account.svelte';
 import type { Account } from '$lib/api';
@@ -24,6 +24,11 @@ function asAdmin(canAdmin: boolean): Account {
 }
 
 describe('viewing as a regular user', () => {
+	afterEach(() => {
+		account.account = null;
+		account.setViewingAsUser(false);
+	});
+
 	beforeEach(() => {
 		account.setViewingAsUser(false);
 		account.account = asAdmin(true);

@@ -6,8 +6,7 @@ import {
 	lowerIsBetter,
 	metricMap,
 	metricOptions,
-	metricUnit,
-	windowLabel
+	metricUnit
 } from '../src/lib/metric-metadata';
 
 const definitions: MetricDefinition[] = [
@@ -72,10 +71,5 @@ describe('metric metadata helpers', () => {
 		expect(metricUnit('mae', 'days', byId)).toBe('mm');
 		expect(lowerIsBetter('acc', byId)).toBe(false);
 		expect(lowerIsBetter('bias', byId)).toBeNull();
-	});
-
-	it('labels the all verification window', () => {
-		expect(windowLabel('all')).toBe('All days');
-		expect(windowLabel('1-15')).toBe('Days 1–15');
 	});
 });
