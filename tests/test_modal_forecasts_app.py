@@ -55,22 +55,36 @@ def test_the_bundled_pipeline_plans_a_season_when_loaded_by_path(forecasts_app):
 def test_every_season_function_the_runner_calls_is_registered(forecasts_app):
     functions = set(forecasts_app.app.registered_functions)
 
-    assert {"run_forecast", "run_season_forecast_bundle"} <= functions
+    assert {"run_forecast", "roll_out_missing_dates", "assemble_season_bundle"} <= functions
     assert {f"run_season_rollouts_{env}" for env in forecasts_app.INFERENCE_IMAGES} <= functions
 
 
 MAY_4, MAY_7, MAY_11 = dt.date(2020, 5, 4), dt.date(2020, 5, 7), dt.date(2020, 5, 11)
 
 
+class _FakeCall:
+    def __init__(self, result):
+        self._result = result
+
+    def get(self):
+        return self._result()
+
+
 class _FakeRollouts:
-    """Stands in for run_season_rollouts_<env>: records the dates it was asked
-    for and stores a trajectory for each, as the GPU function does."""
+    """Stands in for run_season_rollouts_<env>: each spawn is one GPU
+    container's chunk, which stores its dates (or fails) as the real one does."""
 
-    def __init__(self, pipeline, store: Path):
-        self.pipeline, self.store, self.calls = pipeline, store, []
+    def __init__(self, pipeline, store: Path, failing_member: str | None = None):
+        self.pipeline, self.store, self.failing_member = pipeline, store, failing_member
+        self.calls: list[tuple[str, list[str]]] = []
 
-    def remote(self, member, config, issue_dates):
+    def spawn(self, member, config, issue_dates):
         self.calls.append((member, issue_dates))
+        return _FakeCall(lambda: self._roll_out(member, config, issue_dates))
+
+    def _roll_out(self, member, config, issue_dates):
+        if member == self.failing_member:
+            raise RuntimeError(f"GPU fell over rolling out {member}")
         plan = self.pipeline.SeasonPlan.parse(config["season_plan"])
         key = plan.key(plan.run(member))
         for issue_date in issue_dates:
@@ -104,74 +118,126 @@ class _FakeVolume:
 
 
 @pytest.fixture
-def season_bundle(forecasts_app, monkeypatch, tmp_path):
-    """run_season_forecast_bundle against a Volume-style store in tmp_path, with
-    the GPU function stubbed and assembly recorded instead of run."""
+def season(forecasts_app, monkeypatch, tmp_path):
+    """The season phases against a Volume-style store in tmp_path, with the
+    GPU functions stubbed and assembly recorded instead of run."""
     pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
-    rollouts = _FakeRollouts(pipeline, tmp_path)
     assembled: list[tuple] = []
 
     def fake_assemble(store, key, run, scratch_root, out_path):
-        assembled.append(run.issue_dates)
+        assembled.append((run.member, run.issue_dates))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"season")
         return out_path
 
     monkeypatch.setattr(forecasts_app, "_VOLUME_STORE", tmp_path)
-    monkeypatch.setattr(forecasts_app, "SEASON_ROLLOUT_FNS", {"base": rollouts})
-    volume = _FakeVolume()
-    monkeypatch.setattr(forecasts_app, "forecast_volume", volume)
+    monkeypatch.setattr(forecasts_app, "forecast_volume", _FakeVolume())
     monkeypatch.setattr(pipeline, "assemble_season_netcdf", fake_assemble)
 
-    def run(env: str = "base") -> bytes:
-        model = pipeline.ForecastModel.parse(
-            {"id": "fuxi", "earth2studio_class": "FuXi", "env": env}
-        )
+    def config(models: dict[str, tuple[str, str]]) -> dict:
+        """{member: (registry id, env)} -> a job config with a frozen plan."""
         plan = pipeline.plan_season(
-            {"fuxi": (model, pipeline.ArchiveLayout.parse({"init_days": "0,3"}))},
+            {
+                member: (
+                    pipeline.ForecastModel.parse(
+                        {"id": model_id, "earth2studio_class": "FuXi", "env": env}
+                    ),
+                    pipeline.ArchiveLayout.parse({"init_days": "0,3"}),
+                )
+                for member, (model_id, env) in models.items()
+            },
             season=2020,
             season_start_month_day="05-01",
             init_source="gfs",
             today=MAY_11,
         )
-        config = {"season_plan": plan.to_dict()}
-        return forecasts_app.run_season_forecast_bundle.local("job-1", "fuxi", config)
+        return {"season_plan": plan.to_dict()}
 
-    def store(*issue_dates):
-        key = pipeline.TrajectoryKey("fuxi", "gfs")
+    def gpus(failing_member: str | None = None) -> _FakeRollouts:
+        rollouts = _FakeRollouts(pipeline, tmp_path, failing_member)
+        monkeypatch.setattr(forecasts_app, "SEASON_ROLLOUT_FNS", {"base": rollouts})
+        return rollouts
+
+    def store(model_id: str, *issue_dates):
+        key = pipeline.TrajectoryKey(model_id, "gfs")
         for issue_date in issue_dates:
             pipeline.write_stored_trajectory(tmp_path, key, issue_date, _trajectory())
 
     return SimpleNamespace(
-        run=run, store=store, rollouts=rollouts, assembled=assembled, volume=volume
+        app=forecasts_app, config=config, gpus=gpus, store=store, assembled=assembled
     )
 
 
-def test_a_fully_stored_season_never_calls_the_gpu(season_bundle):
-    season_bundle.store(MAY_4, MAY_7, MAY_11)
+FUXI_ONLY = {"fuxi": ("fuxi", "base")}
 
-    bundle = season_bundle.run()
 
-    assert season_bundle.rollouts.calls == []
-    assert season_bundle.volume.reloads == 1  # before the sweep, never after
-    assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
+def test_a_fully_stored_season_starts_no_gpu_container(season):
+    gpus = season.gpus()
+    season.store("fuxi", MAY_4, MAY_7, MAY_11)
+
+    failures = season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
+
+    assert failures == {}
+    assert gpus.calls == []
+
+
+def test_missing_dates_fan_out_across_gpu_containers(season, monkeypatch):
+    monkeypatch.setattr(season.app, "DATES_PER_ROLLOUT", 1)
+    gpus = season.gpus()
+    season.store("fuxi", MAY_7)
+
+    season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
+
+    # One container per missing date, all spawned before any is awaited.
+    assert gpus.calls == [("fuxi", ["2020-05-04"]), ("fuxi", ["2020-05-11"])]
+
+
+def test_members_sharing_a_model_roll_out_its_dates_once(season):
+    gpus = season.gpus()
+    shared = {"fuxi_india": ("fuxi", "base"), "fuxi_india_wide": ("fuxi", "base")}
+
+    season.app.roll_out_missing_dates.local(season.config(shared))
+
+    rolled_out = [date for _, dates in gpus.calls for date in dates]
+    assert sorted(rolled_out) == ["2020-05-04", "2020-05-07", "2020-05-11"]
+
+
+def test_a_failed_chunk_fails_every_member_sharing_its_model(season):
+    season.gpus(failing_member="fuxi_india")
+    models = {
+        "fuxi_india": ("fuxi", "base"),
+        "fuxi_india_wide": ("fuxi", "base"),
+        "graphcast": ("graphcast", "base"),
+    }
+
+    failures = season.app.roll_out_missing_dates.local(season.config(models))
+
+    assert set(failures) == {"fuxi_india", "fuxi_india_wide"}
+    assert "GPU fell over" in failures["fuxi_india_wide"]
+
+
+def test_a_model_with_no_rollout_image_is_refused_by_name(season):
+    season.gpus()
+
+    with pytest.raises(ValueError, match="fuxi runs in environment 'gpu9'"):
+        season.app.roll_out_missing_dates.local(season.config({"fuxi": ("fuxi", "gpu9")}))
+
+
+def test_assembly_builds_the_season_from_the_store(season):
+    season.store("fuxi", MAY_4, MAY_7, MAY_11)
+
+    bundle = season.app.assemble_season_bundle.local("job-1", "fuxi", season.config(FUXI_ONLY))
+
+    assert season.assembled == [("fuxi", (MAY_4, MAY_7, MAY_11))]
     assert bundle  # a tar.gz of the assembled season
 
 
-def test_the_gpu_rolls_out_only_the_dates_the_store_is_missing(season_bundle):
-    season_bundle.store(MAY_7)
+def test_assembly_refuses_a_season_the_store_is_missing_dates_for(season):
+    season.store("fuxi", MAY_4)
 
-    season_bundle.run()
-
-    assert season_bundle.rollouts.calls == [("fuxi", ["2020-05-04", "2020-05-11"])]
-    # Reloaded before the sweep, then again to see what the GPU container wrote.
-    assert season_bundle.volume.reloads == 2
-    assert season_bundle.assembled == [(MAY_4, MAY_7, MAY_11)]
-
-
-def test_a_model_with_no_rollout_image_is_refused_by_name(season_bundle):
-    with pytest.raises(ValueError, match="fuxi runs in environment 'gpu9'"):
-        season_bundle.run(env="gpu9")
+    with pytest.raises(RuntimeError, match="no stored trajectory for"):
+        season.app.assemble_season_bundle.local("job-1", "fuxi", season.config(FUXI_ONLY))
+    assert season.assembled == []
 
 
 def test_a_failed_rollout_still_commits_what_it_wrote_to_the_volume(
@@ -248,9 +314,9 @@ def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, mo
     """A job submitted before season plans existed fails with a clear reason
     instead of starting any season work."""
     forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
-    spawned: list = []
+    started: list = []
     monkeypatch.setattr(
-        forecasts_app.run_season_forecast_bundle, "spawn", lambda *a: spawned.append(a)
+        forecasts_app.roll_out_missing_dates, "remote", lambda *a: started.append(a)
     )
     monkeypatch.delenv("SERVICE_ACCOUNT_JSON", raising=False)
 
@@ -260,7 +326,7 @@ def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, mo
         )
 
     assert "no season plan" in str(exc.value)
-    assert spawned == []
+    assert started == []
 
 
 def test_the_gpu_skips_dates_another_job_stored_after_the_sweep(

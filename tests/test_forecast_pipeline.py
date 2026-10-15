@@ -586,26 +586,59 @@ def test_roll_out_carries_on_without_prefetch_when_inputs_cannot_be_predicted(
     assert "Not prefetching init data" in capsys.readouterr().out
 
 
-def test_members_sharing_a_registry_model_roll_out_in_a_later_wave():
+def test_members_sharing_a_registry_model_share_one_set_of_store_dates():
     plan = _plan(
         {
-            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({})),
-            "fuxi": (FUXI, ArchiveLayout.parse({})),
-            "aifs_v2_india_wide": (AIFS2, ArchiveLayout.parse({})),
-        }
+            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({"init_days": "0"})),
+            "fuxi": (FUXI, ArchiveLayout.parse({"init_days": "0"})),
+            "aifs_v2_india_wide": (AIFS2, ArchiveLayout.parse({"init_days": "3"})),
+        },
+        today=dt.date(2020, 5, 12),
     )
 
-    assert plan.rollout_waves() == (["aifs_v2_india", "fuxi"], ["aifs_v2_india_wide"])
+    dates = plan.dates_by_key()
+
+    # Weekday fallbacks differ, so the shared AIFS2 key needs both members' dates.
+    assert dates[TrajectoryKey("aifs2", "gfs")] == (
+        dt.date(2020, 5, 4),
+        dt.date(2020, 5, 7),
+        dt.date(2020, 5, 11),
+    )
+    assert dates[TrajectoryKey("fuxi", "gfs")] == (dt.date(2020, 5, 4), dt.date(2020, 5, 11))
 
 
-def test_rollout_partners_are_the_members_sharing_a_store_key():
+def test_missing_dates_are_chunked_per_store_key():
+    from ai_almanac.server.services.forecast_pipeline import RolloutChunk, chunk_rollouts
+
     plan = _plan(
         {
-            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({})),
             "fuxi": (FUXI, ArchiveLayout.parse({})),
-            "aifs_v2_india_wide": (AIFS2, ArchiveLayout.parse({})),
+            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({})),
         }
     )
+    may = [dt.date(2020, 5, day) for day in (4, 7, 11, 14, 18)]
 
-    assert plan.rollout_partners({"aifs_v2_india"}) == {"aifs_v2_india", "aifs_v2_india_wide"}
-    assert plan.rollout_partners(set()) == set()
+    chunks = chunk_rollouts(
+        plan, {TrajectoryKey("fuxi", "gfs"): may, TrajectoryKey("aifs2", "gfs"): may[:1]}, 2
+    )
+
+    assert chunks == [
+        RolloutChunk("fuxi", tuple(may[0:2])),
+        RolloutChunk("fuxi", tuple(may[2:4])),
+        RolloutChunk("fuxi", tuple(may[4:5])),
+        RolloutChunk("aifs_v2_india", tuple(may[:1])),
+    ]
+
+
+def test_ensemble_models_roll_out_one_date_per_chunk():
+    from ai_almanac.server.services.forecast_pipeline import chunk_rollouts
+
+    ensemble = ForecastModel.parse(
+        {"id": "aifsens", "earth2studio_class": "AIFSENS", "ensemble": True}
+    )
+    plan = _plan({"aifsens": (ensemble, ArchiveLayout.parse({}))})
+    may = [dt.date(2020, 5, 4), dt.date(2020, 5, 7)]
+
+    chunks = chunk_rollouts(plan, {TrajectoryKey("aifsens", "gfs"): may}, 4)
+
+    assert [chunk.issue_dates for chunk in chunks] == [(may[0],), (may[1],)]

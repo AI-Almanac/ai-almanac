@@ -262,14 +262,21 @@ def _season_plan(pipeline, config: dict):
     return pipeline.SeasonPlan.parse(config.get("season_plan"))
 
 
-# Each season function waits on the one below it, so each ceiling must outlast
-# the one it waits on plus its own work, or a long cold season is killed from
-# above. A rollout is many sequential issue dates on one GPU.
-ROLLOUT_TIMEOUT_S = 6 * 3600
-SEASON_BUNDLE_TIMEOUT_S = ROLLOUT_TIMEOUT_S + 30 * 60  # + sweep and assembly
-# run_forecast waits on up to two waves of bundles in sequence (see
-# SeasonPlan.rollout_waves), then blend scoring.
-FORECAST_TIMEOUT_S = 2 * SEASON_BUNDLE_TIMEOUT_S + 30 * 60
+# A season's missing issue dates are split into chunks, one GPU container each,
+# all spawned at once. Each container pays one model load (~1-2 min) for its
+# chunk, so a few dates keeps that small against ~12 min per 45-day date.
+DATES_PER_ROLLOUT = 4
+# Most GPU containers one rollout function (one image) runs at once. Chunks
+# beyond this queue until a container frees up.
+MAX_PARALLEL_ROLLOUTS = 12
+
+# Each season function waits on the ones it calls, so each ceiling must outlast
+# them plus its own work, or a long cold season is killed from above.
+ROLLOUT_TIMEOUT_S = 6 * 3600  # one chunk on one GPU
+# Waits on every chunk; allows a second round for chunks queued behind the cap.
+ROLLOUTS_PHASE_TIMEOUT_S = 2 * ROLLOUT_TIMEOUT_S
+ASSEMBLE_TIMEOUT_S = 3600
+FORECAST_TIMEOUT_S = ROLLOUTS_PHASE_TIMEOUT_S + ASSEMBLE_TIMEOUT_S + 30 * 60  # + scoring
 
 
 def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> None:
@@ -320,7 +327,7 @@ def _commit_volume(member: str) -> None:
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
-# inference/warm functions above; run_season_forecast_bundle calls these by env.
+# inference/warm functions above; roll_out_missing_dates spawns these by env.
 SEASON_ROLLOUT_FNS = {}
 for _env, _image in INFERENCE_IMAGES.items():
 
@@ -331,6 +338,7 @@ for _env, _image in INFERENCE_IMAGES.items():
         cpu=(8, 16),
         memory=(32768, 65536),
         timeout=ROLLOUT_TIMEOUT_S,
+        max_containers=MAX_PARALLEL_ROLLOUTS,
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
@@ -360,23 +368,70 @@ def _refresh_volume_store(store: str) -> None:
 
 @app.function(
     image=cpu_image,
+    cpu=(0.25, 1),
+    memory=1024,
+    timeout=ROLLOUTS_PHASE_TIMEOUT_S,
+    secrets=[gcp_secret],
+    volumes={"/cache": forecast_volume},
+)
+def roll_out_missing_dates(config: dict) -> dict[str, str]:
+    """Roll out every issue date the job's plan needs and the store lacks,
+    spread over parallel GPU containers. Returns {member: error} for members
+    whose store key had a chunk fail; every other member's season is stored.
+
+    Runs on CPU: one store sweep per key, then chunk_rollouts decides the GPU
+    containers. A fully stored season spawns none.
+    """
+    pipeline = _load_pipeline()
+    plan = _season_plan(pipeline, config)
+    store = _trajectory_store(config)
+    _refresh_volume_store(store)
+
+    missing_by_key = {}
+    for key, issue_dates in plan.dates_by_key().items():
+        missing = pipeline.unstored_issue_dates(store, key, list(issue_dates))
+        print(f"==> [{key.model_id}] {len(issue_dates) - len(missing)}/{len(issue_dates)} stored")
+        if missing:
+            missing_by_key[key] = missing
+    chunks = pipeline.chunk_rollouts(plan, missing_by_key, DATES_PER_ROLLOUT)
+    print(f"==> Rolling out on {len(chunks)} GPU container(s)", flush=True)
+
+    calls = [
+        (
+            chunk,
+            _rollout_function(plan.run(chunk.member)).spawn(
+                chunk.member, config, [d.isoformat() for d in chunk.issue_dates]
+            ),
+        )
+        for chunk in chunks
+    ]
+    failed_keys: dict = {}
+    for chunk, call in calls:
+        try:
+            call.get()
+        except Exception as exc:
+            failed_keys.setdefault(plan.key(plan.run(chunk.member)), str(exc))
+            traceback.print_exc()
+    _refresh_volume_store(store)
+    return {
+        run.member: failed_keys[plan.key(run)] for run in plan.runs if plan.key(run) in failed_keys
+    }
+
+
+@app.function(
+    image=cpu_image,
     cpu=(1, 2),
     # Assembly streams one slice at a time, but a season with no bounds reads
     # global native-grid trajectories (~190 MB each at 0.25 deg).
     memory=(4096, 32768),
-    timeout=SEASON_BUNDLE_TIMEOUT_S,
+    timeout=ASSEMBLE_TIMEOUT_S,
     secrets=[gcp_secret],
     volumes={"/cache": forecast_volume},
 )
-def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
-    """One member's season as a tar.gz bundle holding one NetCDF in the
-    historical `{year}.nc` schema — the bundle shape run_blend's
-    forecast_bundles expect.
-
-    Runs on CPU: sweeps the trajectory store once, starts a GPU container only
-    for the planned issue dates it is missing, then assembles the season from
-    the store. A fully stored season never touches a GPU.
-    """
+def assemble_season_bundle(job_id: str, member: str, config: dict) -> bytes:
+    """One member's season, from the store, as a tar.gz bundle holding one
+    NetCDF in the historical `{year}.nc` schema — the bundle shape run_blend's
+    forecast_bundles expect. Runs after roll_out_missing_dates, on CPU."""
     pipeline = _load_pipeline()
     plan = _season_plan(pipeline, config)
     run = plan.run(member)
@@ -384,20 +439,42 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     store = _trajectory_store(config)
     _refresh_volume_store(store)
     missing = pipeline.unstored_issue_dates(store, key, list(run.issue_dates))
-    print(
-        f"==> [{member}] {len(run.issue_dates) - len(missing)}/{len(run.issue_dates)} "
-        "issue date(s) already stored",
-        flush=True,
-    )
     if missing:
-        _rollout_function(run).remote(member, config, [d.isoformat() for d in missing])
-        _refresh_volume_store(store)
+        raise RuntimeError(
+            f"{member} has no stored trajectory for {[d.isoformat() for d in missing]}"
+        )
 
     stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{member}-"))
     out_path = pipeline.assemble_season_netcdf(
         store, key, run, stage_root / "slices", stage_root / f"{plan.season}.nc"
     )
     return pipeline.bundle_files([out_path])
+
+
+def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -> dict[str, bytes]:
+    """Roll out what the store lacks, then assemble every member whose
+    rollouts succeeded, in parallel. Records each failure in `failures`."""
+    try:
+        rollout_failures = roll_out_missing_dates.remote(config)
+    except Exception as exc:
+        failures["rollouts"] = str(exc)
+        traceback.print_exc()
+        return {}
+    failures.update({f"{member} (season)": error for member, error in rollout_failures.items()})
+
+    calls = {
+        run.member: assemble_season_bundle.spawn(job_id, run.member, config)
+        for run in plan.runs
+        if run.member not in rollout_failures
+    }
+    bundles = {}
+    for member, call in calls.items():
+        try:
+            bundles[member] = call.get()
+        except Exception as exc:
+            failures[f"{member} (season)"] = str(exc)
+            traceback.print_exc()
+    return bundles
 
 
 @app.function(
@@ -408,13 +485,12 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Build every blend member's season bundle, score the season against the
-    trained blend, and publish a run.log.
+    """Build every blend member's season, score it against the trained blend,
+    and publish a run.log.
 
-    Members fan out with .spawn()/.get() so they run in parallel instead of one
-    at a time. Members that share stored trajectories (the same registry model)
-    run in a second wave, after the first has rolled them out, so no store key
-    is rolled out on two GPUs at once (see SeasonPlan.rollout_waves).
+    Two phases: roll out the store's missing issue dates across parallel GPU
+    containers (roll_out_missing_dates), then assemble each member's season on
+    CPU in parallel (assemble_season_bundle).
 
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark
     and run_blend so the platform's ModalRunner dispatches it the same way.
@@ -450,40 +526,19 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         if blend_config and plan is not None:
             members = [run.member for run in plan.runs]
             print(f"==> Running season-long inference for blend scoring: {members}")
-            live_forecast_bundles: dict[str, bytes] = {}
-            failed_members: set[str] = set()
-            for wave in plan.rollout_waves():
-                # A member sharing a failed rollout would only repeat it, and
-                # scoring needs every member, so the job fails either way.
-                blocked = plan.rollout_partners(failed_members)
-                for member in (m for m in wave if m in blocked):
-                    failures[f"{member} (season)"] = "skipped: shares a failed rollout"
-                    print(f"==> Skipping {member}: it shares a rollout that already failed")
-                season_calls = {
-                    member: run_season_forecast_bundle.spawn(job_id, member, config)
-                    for member in wave
-                    if member not in blocked
-                }
-                for member, call in season_calls.items():
-                    try:
-                        live_forecast_bundles[member] = call.get()
-                    except Exception as exc:
-                        failures[f"{member} (season)"] = str(exc)
-                        failed_members.add(member)
-                        traceback.print_exc()
+            live_forecast_bundles = _season_bundles(job_id, plan, config, failures)
 
             missing = [member for member in members if member not in live_forecast_bundles]
             if not missing:
                 try:
                     print("==> Scoring live season against the trained blend")
-                    live_year = plan.season
                     modal.Function.from_name(
                         "almanac-blending", "score_live_forecast_bundle"
                     ).remote(
                         job_id,
                         {**blend_config, "gcs_cache_bucket": config.get("gcs_cache_bucket")},
                         live_forecast_bundles,
-                        live_year,
+                        plan.season,
                         outputs_bucket,
                     )
                 except Exception as exc:
@@ -619,7 +674,7 @@ def smoke_season_forecast(
 
     Without --gcs-bucket the trajectories go to the Volume store, so the shared
     GCS store is untouched. Run it twice: the second run should report every
-    issue date as stored and never start run_season_rollouts_*. --reset clears
+    issue date as stored and start no GPU container. --reset clears
     the Volume store for this model first, to exercise the cold path again.
 
     --lead-days keeps rollouts short (2 days is 8 steps for a 6-hourly model).
@@ -640,7 +695,11 @@ def smoke_season_forecast(
 
     config = {"season_plan": plan, "gcs_cache_bucket": gcs_bucket}
     t0 = time.perf_counter()
-    bundle = run_season_forecast_bundle.remote(f"smoke-{int(time.time())}", model, config)
+    rollout_failures = roll_out_missing_dates.remote(config)
+    print(f"==> Rollouts done in {time.perf_counter() - t0:.0f}s")
+    if rollout_failures:
+        raise SystemExit(f"Rollouts failed: {rollout_failures}")
+    bundle = assemble_season_bundle.remote(f"smoke-{int(time.time())}", model, config)
     print(f"==> Season bundle ({len(bundle) / 1e6:.1f} MB) in {time.perf_counter() - t0:.0f}s")
     for key, value in describe_season_bundle.remote(bundle).items():
         print(f"    {key}: {value}")

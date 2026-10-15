@@ -476,25 +476,17 @@ class SeasonPlan:
     def key(self, run: ModelRun) -> TrajectoryKey:
         return TrajectoryKey(run.model.registry_id, self.init_source, self.lead_day)
 
-    def rollout_waves(self) -> tuple[list[str], list[str]]:
-        """Members split so each store key is rolled out once. The first member
-        per key goes in the first wave; members sharing that key (two archives
-        linked to one registry model) go in the second, where they find its
-        trajectories already stored and only sweep and assemble."""
-        seen: set[TrajectoryKey] = set()
-        first: list[str] = []
-        rest: list[str] = []
+    def dates_by_key(self) -> dict[TrajectoryKey, tuple[dt.date, ...]]:
+        """Every issue date each store key needs. Members whose archives link to
+        the same registry model share a key, so their dates are rolled out once."""
+        dates: dict[TrajectoryKey, set[dt.date]] = {}
         for run in self.runs:
-            key = self.key(run)
-            (rest if key in seen else first).append(run.member)
-            seen.add(key)
-        return first, rest
+            dates.setdefault(self.key(run), set()).update(run.issue_dates)
+        return {key: tuple(sorted(key_dates)) for key, key_dates in dates.items()}
 
-    def rollout_partners(self, members: set[str]) -> set[str]:
-        """Every member whose trajectories are rolled out under the same store
-        key as one of `members` (the given members included)."""
-        keys = {self.key(self.run(member)) for member in members}
-        return {run.member for run in self.runs if self.key(run) in keys}
+    def runs_for(self, key: TrajectoryKey) -> list[ModelRun]:
+        """The members whose trajectories are stored under `key`."""
+        return [run for run in self.runs if self.key(run) == key]
 
     def covered_dates(self) -> dict[str, list[str]]:
         """Issue dates each member's rollout covers: what the readiness gate
@@ -784,8 +776,9 @@ def write_stored_trajectory(
 #
 # Split so the GPU only ever runs rollouts: the caller sweeps the store once
 # (unstored_issue_dates), rolls out just the missing dates, then assembles the
-# season from the store. Modal runs the sweep and assembly in a CPU container
-# and starts a GPU container only when something is missing.
+# season from the store. Modal sweeps and assembles on CPU and spreads the
+# missing dates over parallel GPU containers (chunk_rollouts); the local runner
+# rolls them out in one process.
 # ---------------------------------------------------------------------------
 
 
@@ -915,6 +908,38 @@ def _predicted_init_requests(model, issue_dates: list[dt.date]) -> dict[dt.date,
     except Exception as exc:  # noqa: BLE001
         print(f"==> Not prefetching init data: {exc!r}", flush=True)
         return {}
+
+
+@dataclass(frozen=True)
+class RolloutChunk:
+    """One GPU container's share of a season: some issue dates of one store
+    key, rolled out with `member`'s model (any member using that key)."""
+
+    member: str
+    issue_dates: tuple[dt.date, ...]
+
+
+def chunk_rollouts(
+    plan: SeasonPlan,
+    missing_by_key: Mapping[TrajectoryKey, list[dt.date]],
+    dates_per_chunk: int,
+) -> list[RolloutChunk]:
+    """Split each store key's missing dates into chunks that roll out in
+    parallel, one GPU container each. Every issue date is an independent
+    rollout, so only the per-container model load is repeated.
+
+    Ensemble models get one date per chunk: each date is already a rollout per
+    member, so a few dates would outlast a container's timeout.
+    """
+    if dates_per_chunk < 1:
+        raise ValueError(f"dates_per_chunk must be at least 1, got {dates_per_chunk}")
+    chunks = []
+    for key, missing in missing_by_key.items():
+        lead_run = plan.runs_for(key)[0]
+        size = 1 if lead_run.model.ensemble else dates_per_chunk
+        for start in range(0, len(missing), size):
+            chunks.append(RolloutChunk(lead_run.member, tuple(missing[start : start + size])))
+    return chunks
 
 
 def assemble_season_netcdf(
