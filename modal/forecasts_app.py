@@ -413,22 +413,26 @@ def roll_out_missing_dates(config: dict) -> dict[str, str]:
     print(f"==> Rolling out on {len(chunks)} GPU container(s)", flush=True)
     _warn_if_chunks_outrun_the_phase(plan, chunks)
 
-    calls = [
-        (
-            chunk,
-            _rollout_function(plan.run(chunk.member)).spawn(
-                chunk.member, config, [d.isoformat() for d in chunk.issue_dates]
-            ),
-        )
-        for chunk in chunks
-    ]
+    # Resolve every chunk's image first, so a bad env spawns nothing.
+    targets = [(chunk, _rollout_function(plan.run(chunk.member))) for chunk in chunks]
+    pending = []
     failed_keys: dict = {}
-    for chunk, call in calls:
-        try:
-            call.get()
-        except Exception as exc:
-            failed_keys.setdefault(plan.key(plan.run(chunk.member)), str(exc))
-            traceback.print_exc()
+    try:
+        for chunk, rollout in targets:
+            dates = [d.isoformat() for d in chunk.issue_dates]
+            pending.append((chunk, rollout.spawn(chunk.member, config, dates)))
+        while pending:
+            chunk, call = pending[0]
+            try:
+                call.get()
+            except Exception as exc:
+                failed_keys.setdefault(plan.key(plan.run(chunk.member)), str(exc))
+                traceback.print_exc()
+            pending.pop(0)
+    finally:
+        # If this phase dies (an error, an interrupt), stop the GPUs still running.
+        for _, call in pending:
+            call.cancel()
     _refresh_volume_store(store)
     return {
         run.member: failed_keys[plan.key(run)] for run in plan.runs if plan.key(run) in failed_keys
@@ -469,8 +473,8 @@ def assemble_season_bundle(job_id: str, member: str, config: dict) -> bytes:
 
 
 def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -> dict[str, bytes]:
-    """Roll out what the store lacks, then assemble every member whose
-    rollouts succeeded, in parallel. Records each failure in `failures`."""
+    """Roll out what the store lacks, then assemble every member in parallel.
+    Records each failure in `failures`; any failed rollout skips assembly."""
     try:
         rollout_failures = roll_out_missing_dates.remote(config)
     except Exception as exc:
@@ -478,11 +482,12 @@ def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -
         traceback.print_exc()
         return {}
     failures.update({f"{member} (season)": error for member, error in rollout_failures.items()})
+    if rollout_failures:
+        # Scoring needs every member, so assembling the rest would be wasted.
+        return {}
 
     calls = {
-        run.member: assemble_season_bundle.spawn(job_id, run.member, config)
-        for run in plan.runs
-        if run.member not in rollout_failures
+        run.member: assemble_season_bundle.spawn(job_id, run.member, config) for run in plan.runs
     }
     bundles = {}
     for member, call in calls.items():

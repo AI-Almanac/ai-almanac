@@ -65,9 +65,13 @@ MAY_4, MAY_7, MAY_11 = dt.date(2020, 5, 4), dt.date(2020, 5, 7), dt.date(2020, 5
 class _FakeCall:
     def __init__(self, result):
         self._result = result
+        self.cancelled = False
 
     def get(self):
         return self._result()
+
+    def cancel(self):
+        self.cancelled = True
 
 
 class _FakeRollouts:
@@ -370,3 +374,43 @@ def test_more_chunks_than_two_container_rounds_are_flagged(season, monkeypatch, 
     season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
 
     assert "exceed two rounds of 1 containers" in capsys.readouterr().out
+
+
+def test_gpu_calls_still_running_are_cancelled_when_the_phase_dies(season, monkeypatch):
+    monkeypatch.setattr(season.app, "DATES_PER_ROLLOUT", 1)
+    spawned: list[_FakeCall] = []
+
+    class _GpusThatStopSpawning:
+        def spawn(self, member, config, issue_dates):
+            if spawned:
+                raise RuntimeError("Modal refused the second container")
+            spawned.append(_FakeCall(lambda: None))
+            return spawned[-1]
+
+    monkeypatch.setattr(season.app, "SEASON_ROLLOUT_FNS", {"base": _GpusThatStopSpawning()})
+
+    with pytest.raises(RuntimeError, match="refused"):
+        season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
+
+    assert [call.cancelled for call in spawned] == [True]
+
+
+def test_a_failed_rollout_skips_assembling_the_other_members(season, monkeypatch):
+    plan = season.app._season_plan(
+        season.app._load_pipeline(),
+        season.config({"fuxi": ("fuxi", "base"), "graphcast": ("graphcast", "base")}),
+    )
+    assembled: list = []
+    monkeypatch.setattr(
+        season.app.roll_out_missing_dates, "remote", lambda config: {"fuxi": "GPU fell over"}
+    )
+    monkeypatch.setattr(
+        season.app.assemble_season_bundle, "spawn", lambda *args: assembled.append(args)
+    )
+    failures: dict[str, str] = {}
+
+    bundles = season.app._season_bundles("job-1", plan, {}, failures)
+
+    assert bundles == {}
+    assert assembled == []
+    assert failures == {"fuxi (season)": "GPU fell over"}
