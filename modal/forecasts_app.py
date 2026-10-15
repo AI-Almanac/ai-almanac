@@ -426,7 +426,10 @@ def roll_out_missing_dates(config: dict) -> dict[str, str]:
             try:
                 call.get()
             except Exception as exc:
-                failed_keys.setdefault(plan.key(plan.run(chunk.member)), str(exc))
+                dates = ", ".join(d.isoformat() for d in chunk.issue_dates)
+                # The GPU container's own log lives in Modal; name the chunk here.
+                print(f"==> [{chunk.member}] rollout chunk failed ({dates}): {exc!r}")
+                failed_keys.setdefault(plan.key(plan.run(chunk.member)), f"{exc} ({dates})")
                 traceback.print_exc()
             pending.pop(0)
     finally:

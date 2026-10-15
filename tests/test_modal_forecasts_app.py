@@ -218,6 +218,7 @@ def test_a_failed_chunk_fails_every_member_sharing_its_model(season):
 
     assert set(failures) == {"fuxi_india", "fuxi_india_wide"}
     assert "GPU fell over" in failures["fuxi_india_wide"]
+    assert "2020-05-04" in failures["fuxi_india_wide"]  # names the failed chunk's dates
 
 
 def test_a_model_with_no_rollout_image_is_refused_by_name(season):
