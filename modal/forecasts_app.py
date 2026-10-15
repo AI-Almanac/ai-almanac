@@ -449,16 +449,25 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             members = [run.member for run in plan.runs]
             print(f"==> Running season-long inference for blend scoring: {members}")
             live_forecast_bundles: dict[str, bytes] = {}
+            failed_members: set[str] = set()
             for wave in plan.rollout_waves():
+                # A member sharing a failed rollout would only repeat it, and
+                # scoring needs every member, so the job fails either way.
+                blocked = plan.rollout_partners(failed_members)
+                for member in (m for m in wave if m in blocked):
+                    failures[f"{member} (season)"] = "skipped: shares a failed rollout"
+                    print(f"==> Skipping {member}: it shares a rollout that already failed")
                 season_calls = {
                     member: run_season_forecast_bundle.spawn(job_id, member, config)
                     for member in wave
+                    if member not in blocked
                 }
                 for member, call in season_calls.items():
                     try:
                         live_forecast_bundles[member] = call.get()
                     except Exception as exc:
                         failures[f"{member} (season)"] = str(exc)
+                        failed_members.add(member)
                         traceback.print_exc()
 
             missing = [member for member in members if member not in live_forecast_bundles]

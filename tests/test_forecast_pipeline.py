@@ -596,3 +596,16 @@ def test_members_sharing_a_registry_model_roll_out_in_a_later_wave():
     )
 
     assert plan.rollout_waves() == (["aifs_v2_india", "fuxi"], ["aifs_v2_india_wide"])
+
+
+def test_rollout_partners_are_the_members_sharing_a_store_key():
+    plan = _plan(
+        {
+            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({})),
+            "fuxi": (FUXI, ArchiveLayout.parse({})),
+            "aifs_v2_india_wide": (AIFS2, ArchiveLayout.parse({})),
+        }
+    )
+
+    assert plan.rollout_partners({"aifs_v2_india"}) == {"aifs_v2_india", "aifs_v2_india_wide"}
+    assert plan.rollout_partners(set()) == set()

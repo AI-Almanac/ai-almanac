@@ -490,6 +490,12 @@ class SeasonPlan:
             seen.add(key)
         return first, rest
 
+    def rollout_partners(self, members: set[str]) -> set[str]:
+        """Every member whose trajectories are rolled out under the same store
+        key as one of `members` (the given members included)."""
+        keys = {self.key(self.run(member)) for member in members}
+        return {run.member for run in self.runs if self.key(run) in keys}
+
     def covered_dates(self) -> dict[str, list[str]]:
         """Issue dates each member's rollout covers: what the readiness gate
         checks and what the coverage markers record."""
