@@ -38,9 +38,10 @@ from typing import Any
 # with the wrong shape (D4). It is part of the cache key.
 TRAJECTORY_CACHE_VERSION = 1
 
-# Single canonical rollout horizon for the trajectory store (D4). The store
-# always holds the full trajectory, so lead is a fixed key segment rather than
-# a variable that splits the same rollout across `lead30d`/`lead45d` keys.
+# Canonical rollout horizon for the trajectory store (D4). Real forecasts always
+# store the full 45-day trajectory, so their rollouts never split across lead
+# keys; smoke tests use a shorter TrajectoryKey.lead_day on purpose, under its
+# own `lead{N}d` prefix.
 CANONICAL_LEAD_DAY = 45
 
 
@@ -379,7 +380,7 @@ class ModelRun:
 
     def __post_init__(self) -> None:
         # Member names become file and temp-dir names in the runners.
-        if not _SAFE_MEMBER_NAME.fullmatch(self.member):
+        if not _SAFE_MEMBER_NAME.fullmatch(self.member) or not self.member.strip("."):
             raise PlanError(f"Member name {self.member!r} isn't a plain identifier")
         if not self.issue_dates:
             raise PlanError(
@@ -430,7 +431,10 @@ class SeasonPlan:
     @classmethod
     def parse(cls, raw) -> SeasonPlan:
         if not isinstance(raw, dict):
-            raise PlanError("The job config has no season plan")
+            raise PlanError(
+                "The job config has no season plan: it was queued before season plans "
+                "existed. Submit the forecast again."
+            )
         try:
             return cls(
                 season=int(raw["season"]),

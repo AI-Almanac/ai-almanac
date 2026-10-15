@@ -141,7 +141,8 @@ def _load_pipeline(path: Path = Path("/almanac/forecast_pipeline.py")):
 
     The module is registered in sys.modules before it runs: dataclasses resolve
     its string annotations through sys.modules, so an unregistered module fails
-    on its first @dataclass.
+    on its first @dataclass. The first load wins; later calls return it whatever
+    `path` they pass.
     """
     if (loaded := sys.modules.get("forecast_pipeline")) is not None:
         return loaded
