@@ -366,6 +366,22 @@ def _refresh_volume_store(store: str) -> None:
         forecast_volume.reload()
 
 
+def _warn_if_chunks_outrun_the_phase(plan, chunks) -> None:
+    """ROLLOUTS_PHASE_TIMEOUT_S allows two rounds of MAX_PARALLEL_ROLLOUTS
+    containers per image. More chunks than that still run, but slow ones could
+    outlast the phase; say so up front so a timeout is easy to explain."""
+    from collections import Counter
+
+    per_image = Counter(plan.run(chunk.member).model.env for chunk in chunks)
+    crowded = {env: n for env, n in per_image.items() if n > 2 * MAX_PARALLEL_ROLLOUTS}
+    if crowded:
+        print(
+            f"==> warning: chunks per image {crowded} exceed two rounds of "
+            f"{MAX_PARALLEL_ROLLOUTS} containers; slow ones may outlast the rollout phase",
+            flush=True,
+        )
+
+
 @app.function(
     image=cpu_image,
     cpu=(0.25, 1),
@@ -395,6 +411,7 @@ def roll_out_missing_dates(config: dict) -> dict[str, str]:
             missing_by_key[key] = missing
     chunks = pipeline.chunk_rollouts(plan, missing_by_key, DATES_PER_ROLLOUT)
     print(f"==> Rolling out on {len(chunks)} GPU container(s)", flush=True)
+    _warn_if_chunks_outrun_the_phase(plan, chunks)
 
     calls = [
         (

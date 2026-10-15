@@ -360,3 +360,13 @@ def test_the_gpu_skips_dates_another_job_stored_after_the_sweep(
     )
 
     assert rolled_out == [[MAY_7]]
+
+
+def test_more_chunks_than_two_container_rounds_are_flagged(season, monkeypatch, capsys):
+    monkeypatch.setattr(season.app, "DATES_PER_ROLLOUT", 1)
+    monkeypatch.setattr(season.app, "MAX_PARALLEL_ROLLOUTS", 1)
+    season.gpus()
+
+    season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
+
+    assert "exceed two rounds of 1 containers" in capsys.readouterr().out
