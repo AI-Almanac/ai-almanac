@@ -297,6 +297,14 @@ class Bounds:
         }
 
 
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def _is_plain_identifier(name: str) -> bool:
+    """Safe as one path segment: no separators, and not `.` or `..`."""
+    return bool(_PLAIN_IDENTIFIER.fullmatch(name)) and bool(name.strip("."))
+
+
 @dataclass(frozen=True)
 class ForecastModel:
     """The registry model a blend member runs (server/config/forecast_models.yaml)."""
@@ -305,6 +313,11 @@ class ForecastModel:
     earth2studio_class: str
     env: str
     ensemble: EnsembleSpec | None
+
+    def __post_init__(self) -> None:
+        # The registry id is a trajectory-store path segment.
+        if not _is_plain_identifier(self.registry_id):
+            raise PlanError(f"Forecast model id {self.registry_id!r} isn't a plain identifier")
 
     @classmethod
     def parse(cls, entry: dict) -> ForecastModel:
@@ -316,6 +329,8 @@ class ForecastModel:
                 env=str(entry.get("env") or "base"),
                 ensemble=ensemble_config(entry),
             )
+        except PlanError:
+            raise
         except KeyError as exc:
             raise PlanError(f"forecast model entry is missing {exc}") from exc
         except (TypeError, ValueError) as exc:
@@ -365,9 +380,6 @@ class ArchiveLayout:
         )
 
 
-_SAFE_MEMBER_NAME = re.compile(r"[A-Za-z0-9_.-]+")
-
-
 @dataclass(frozen=True)
 class ModelRun:
     """One blend member's season rollout."""
@@ -380,7 +392,7 @@ class ModelRun:
 
     def __post_init__(self) -> None:
         # Member names become file and temp-dir names in the runners.
-        if not _SAFE_MEMBER_NAME.fullmatch(self.member) or not self.member.strip("."):
+        if not _is_plain_identifier(self.member):
             raise PlanError(f"Member name {self.member!r} isn't a plain identifier")
         if not self.issue_dates:
             raise PlanError(

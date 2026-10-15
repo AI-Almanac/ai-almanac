@@ -147,6 +147,7 @@ def _stored_plan() -> dict:
         (lambda raw: raw["runs"][0]["model"].pop("earth2studio_class"), "missing"),
         (lambda raw: raw["runs"][0].update(member="../../etc"), "plain identifier"),
         (lambda raw: raw["runs"][0].update(member=".."), "plain identifier"),
+        (lambda raw: raw["runs"][0]["model"].update(id="../fuxi"), "plain identifier"),
     ],
 )
 def test_a_corrupt_plan_is_refused_with_what_is_wrong(corrupt, message):
