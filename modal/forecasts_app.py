@@ -267,7 +267,9 @@ def _season_plan(pipeline, config: dict):
 # above. A rollout is many sequential issue dates on one GPU.
 ROLLOUT_TIMEOUT_S = 6 * 3600
 SEASON_BUNDLE_TIMEOUT_S = ROLLOUT_TIMEOUT_S + 30 * 60  # + sweep and assembly
-FORECAST_TIMEOUT_S = SEASON_BUNDLE_TIMEOUT_S + 30 * 60  # + blend scoring
+# run_forecast waits on up to two waves of bundles in sequence (see
+# SeasonPlan.rollout_waves), then blend scoring.
+FORECAST_TIMEOUT_S = 2 * SEASON_BUNDLE_TIMEOUT_S + 30 * 60
 
 
 def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> None:
