@@ -476,6 +476,20 @@ class SeasonPlan:
     def key(self, run: ModelRun) -> TrajectoryKey:
         return TrajectoryKey(run.model.registry_id, self.init_source, self.lead_day)
 
+    def rollout_waves(self) -> tuple[list[str], list[str]]:
+        """Members split so each store key is rolled out once. The first member
+        per key goes in the first wave; members sharing that key (two archives
+        linked to one registry model) go in the second, where they find its
+        trajectories already stored and only sweep and assemble."""
+        seen: set[TrajectoryKey] = set()
+        first: list[str] = []
+        rest: list[str] = []
+        for run in self.runs:
+            key = self.key(run)
+            (rest if key in seen else first).append(run.member)
+            seen.add(key)
+        return first, rest
+
     def covered_dates(self) -> dict[str, list[str]]:
         """Issue dates each member's rollout covers: what the readiness gate
         checks and what the coverage markers record."""

@@ -584,3 +584,15 @@ def test_roll_out_carries_on_without_prefetch_when_inputs_cannot_be_predicted(
     assert forecast_pipeline.stored_issue_dates(tmp_path, FUXI_GFS) == {MAY_4, MAY_7}
     assert len(source.calls) == 2  # each date fetched directly, once
     assert "Not prefetching init data" in capsys.readouterr().out
+
+
+def test_members_sharing_a_registry_model_roll_out_in_a_later_wave():
+    plan = _plan(
+        {
+            "aifs_v2_india": (AIFS2, ArchiveLayout.parse({})),
+            "fuxi": (FUXI, ArchiveLayout.parse({})),
+            "aifs_v2_india_wide": (AIFS2, ArchiveLayout.parse({})),
+        }
+    )
+
+    assert plan.rollout_waves() == (["aifs_v2_india", "fuxi"], ["aifs_v2_india_wide"])

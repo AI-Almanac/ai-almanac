@@ -282,15 +282,22 @@ def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> 
     pipeline = _load_pipeline()
     plan = _season_plan(pipeline, config)
     run = plan.run(member)
+    key = plan.key(run)
+    store = _trajectory_store(config)
+    # Another job for the same model may have stored some of these dates since
+    # the caller swept; one more listing keeps the GPU off work already done.
+    _refresh_volume_store(store)
+    requested = [datetime.fromisoformat(d).date() for d in issue_dates]
+    missing = pipeline.unstored_issue_dates(store, key, requested)
+    if len(missing) < len(requested):
+        print(
+            f"==> [{member}] {len(requested) - len(missing)} date(s) were stored meanwhile; "
+            f"rolling out {len(missing)}",
+            flush=True,
+        )
     scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{member}-"))
     try:
-        pipeline.roll_out_issue_dates(
-            run,
-            plan.key(run),
-            [datetime.fromisoformat(d).date() for d in issue_dates],
-            scratch_root,
-            _trajectory_store(config),
-        )
+        pipeline.roll_out_issue_dates(run, key, missing, scratch_root, store)
     except BaseException:
         # Keep the dates already rolled out on a Volume-backed store, without
         # letting a failed commit replace the rollout's own error. A hard kill
@@ -399,13 +406,13 @@ def run_season_forecast_bundle(job_id: str, member: str, config: dict) -> bytes:
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Run every requested model's inference + rendering concurrently and
-    publish a run.log alongside the per-model output directories.
+    """Build every blend member's season bundle, score the season against the
+    trained blend, and publish a run.log.
 
-    Models are independent of each other, so each phase fans out with
-    .spawn()/.get() instead of awaiting one model's .remote() call before
-    starting the next — otherwise this function's own timeout is spent
-    waiting on models one at a time instead of in parallel.
+    Members fan out with .spawn()/.get() so they run in parallel instead of one
+    at a time. Members that share stored trajectories (the same registry model)
+    run in a second wave, after the first has rolled them out, so no store key
+    is rolled out on two GPUs at once (see SeasonPlan.rollout_waves).
 
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark
     and run_blend so the platform's ModalRunner dispatches it the same way.
@@ -441,17 +448,18 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         if blend_config and plan is not None:
             members = [run.member for run in plan.runs]
             print(f"==> Running season-long inference for blend scoring: {members}")
-            season_calls = {
-                member: run_season_forecast_bundle.spawn(job_id, member, config)
-                for member in members
-            }
             live_forecast_bundles: dict[str, bytes] = {}
-            for member, call in season_calls.items():
-                try:
-                    live_forecast_bundles[member] = call.get()
-                except Exception as exc:
-                    failures[f"{member} (season)"] = str(exc)
-                    traceback.print_exc()
+            for wave in plan.rollout_waves():
+                season_calls = {
+                    member: run_season_forecast_bundle.spawn(job_id, member, config)
+                    for member in wave
+                }
+                for member, call in season_calls.items():
+                    try:
+                        live_forecast_bundles[member] = call.get()
+                    except Exception as exc:
+                        failures[f"{member} (season)"] = str(exc)
+                        traceback.print_exc()
 
             missing = [member for member in members if member not in live_forecast_bundles]
             if not missing:

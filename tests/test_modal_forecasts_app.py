@@ -213,6 +213,9 @@ def test_a_failed_volume_commit_does_not_hide_the_rollout_error(
     pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
 
     class _BrokenVolume:
+        def reload(self):
+            pass
+
         def commit(self):
             raise OSError("volume unavailable")
 
@@ -258,3 +261,36 @@ def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, mo
 
     assert "no season plan" in str(exc.value)
     assert spawned == []
+
+
+def test_the_gpu_skips_dates_another_job_stored_after_the_sweep(
+    forecasts_app, monkeypatch, tmp_path
+):
+    pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    rolled_out: list = []
+    monkeypatch.setattr(forecasts_app, "_VOLUME_STORE", tmp_path)
+    monkeypatch.setattr(forecasts_app, "forecast_volume", _FakeVolume())
+    monkeypatch.setattr(
+        pipeline, "roll_out_issue_dates", lambda run, key, dates, *_: rolled_out.append(dates)
+    )
+    plan = pipeline.plan_season(
+        {
+            "fuxi": (
+                pipeline.ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"}),
+                pipeline.ArchiveLayout.parse({"init_days": "0,3"}),
+            )
+        },
+        season=2020,
+        season_start_month_day="05-01",
+        init_source="gfs",
+        today=MAY_11,
+    )
+    pipeline.write_stored_trajectory(
+        tmp_path, pipeline.TrajectoryKey("fuxi", "gfs"), MAY_4, _trajectory()
+    )
+
+    forecasts_app._season_rollouts_impl(
+        "fuxi", {"season_plan": plan.to_dict()}, ["2020-05-04", "2020-05-07"]
+    )
+
+    assert rolled_out == [[MAY_7]]

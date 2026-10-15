@@ -1393,7 +1393,8 @@ def _saved_forecast_params(cfg: dict) -> ForecastParams:
         return ForecastParams(
             init_time=cfg.get("init_time"),
             init_source=cfg.get("init_source") or "gfs",
-            max_issue_dates=cfg.get("max_issue_dates"),
+            # Older jobs saved 0 to mean "no trim", which None now means.
+            max_issue_dates=cfg.get("max_issue_dates") or None,
             lead_hours=cfg.get("lead_hours"),
             variables=cfg.get("variables"),
         )
