@@ -266,8 +266,10 @@ def _season_plan(pipeline, config: dict):
 # all spawned at once. Each container pays one model load (~1-2 min) for its
 # chunk, so a few dates keeps that small against ~12 min per 45-day date.
 DATES_PER_ROLLOUT = 4
-# Most GPU containers one rollout function (one image) runs at once. Chunks
-# beyond this queue until a container frees up.
+# Most GPU containers one rollout function (one image) runs at once, shared by
+# every forecast job running concurrently. Chunks beyond this queue until a
+# container frees up, so cold seasons submitted together can each wait on the
+# other's chunks.
 MAX_PARALLEL_ROLLOUTS = 12
 
 # Each season function waits on the ones it calls, so each ceiling must outlast

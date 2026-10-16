@@ -148,6 +148,7 @@ def _stored_plan() -> dict:
         (lambda raw: raw["runs"][0].update(member="../../etc"), "plain identifier"),
         (lambda raw: raw["runs"][0].update(member=".."), "plain identifier"),
         (lambda raw: raw["runs"][0]["model"].update(id="../fuxi"), "plain identifier"),
+        (lambda raw: raw["runs"][0].update(unit_cvt=float("nan")), "unit_cvt must be finite"),
     ],
 )
 def test_a_corrupt_plan_is_refused_with_what_is_wrong(corrupt, message):
@@ -180,6 +181,8 @@ def test_a_job_without_a_plan_is_refused():
         {"init_days": "mon,thu"},
         {"init_month_days": ["13-01"]},
         {"unit_cvt": "lots"},
+        {"unit_cvt": "nan"},
+        {"unit_cvt": float("inf")},
         {"spatial_bounds": {"lat_min": "north", "lat_max": 1, "lon_min": 0, "lon_max": 1}},
         {"spatial_bounds": {"lat_min": 3, "lat_max": 15}},
     ],

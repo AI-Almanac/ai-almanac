@@ -23,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import gc
 import io
+import math
 import os
 import re
 import tarfile
@@ -366,18 +367,24 @@ class ArchiveLayout:
     @classmethod
     def parse(cls, metadata: dict) -> ArchiveLayout:
         unit_cvt = metadata.get("unit_cvt")
-        try:
-            unit_cvt = 1.0 if unit_cvt is None else float(unit_cvt)
-        except (TypeError, ValueError) as exc:
-            raise PlanError(f"unit_cvt must be a number, got {unit_cvt!r}") from exc
         return cls(
             init_weekdays=_parse_weekdays(metadata.get("init_days") or "0,3"),
             init_month_days=tuple(
                 _parse_month_day(entry) for entry in metadata.get("init_month_days") or ()
             ),
-            unit_cvt=unit_cvt,
+            unit_cvt=1.0 if unit_cvt is None else _parse_unit_cvt(unit_cvt),
             spatial_bounds=Bounds.parse(metadata.get("spatial_bounds")),
         )
+
+
+def _parse_unit_cvt(value) -> float:
+    try:
+        unit_cvt = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PlanError(f"unit_cvt must be a number, got {value!r}") from exc
+    if not math.isfinite(unit_cvt):
+        raise PlanError(f"unit_cvt must be finite, got {value!r}")
+    return unit_cvt
 
 
 @dataclass(frozen=True)
@@ -405,7 +412,7 @@ class ModelRun:
         return cls(
             member=str(raw["member"]),
             model=ForecastModel.parse(raw["model"]),
-            unit_cvt=float(raw["unit_cvt"]),
+            unit_cvt=_parse_unit_cvt(raw["unit_cvt"]),
             spatial_bounds=Bounds.parse(raw.get("spatial_bounds")),
             issue_dates=tuple(dt.date.fromisoformat(d) for d in raw["issue_dates"]),
         )
