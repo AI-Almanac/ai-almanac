@@ -374,8 +374,9 @@ def _refresh_volume_store(store: str) -> None:
 
 def _warn_if_chunks_outrun_the_phase(plan, chunks) -> None:
     """ROLLOUTS_PHASE_TIMEOUT_S allows ROLLOUT_ROUNDS_PER_PHASE full-length
-    rounds of MAX_PARALLEL_ROLLOUTS containers per image. More chunks than that still run, but slow ones could
-    outlast the phase; say so up front so a timeout is easy to explain."""
+    rounds of MAX_PARALLEL_ROLLOUTS containers per image. More chunks than that
+    still run, but slow ones could outlast the phase; say so up front so a
+    timeout is easy to explain."""
     from collections import Counter
 
     per_image = Counter(plan.run(chunk.member).model.env for chunk in chunks)
@@ -636,13 +637,33 @@ def plan_smoke_season(
     """A one-member season plan built the way submission builds one, from the
     bundled registry and archive metadata given on the command line."""
     pipeline = _load_pipeline()
+    try:
+        plan = _smoke_season_plan(
+            pipeline,
+            model_id,
+            archive_metadata,
+            season_start,
+            init_source,
+            max_issue_dates,
+            lead_days,
+        )
+    except pipeline.PlanError as exc:
+        # PlanError lives in the path-loaded pipeline module, which the local
+        # client can't import to unpickle; a builtin keeps the message intact.
+        raise ValueError(str(exc)) from None
+    return plan.to_dict()
+
+
+def _smoke_season_plan(
+    pipeline, model_id, archive_metadata, season_start, init_source, max_issue_dates, lead_days
+):
     entry = next(
         (e for e in _load_model_registry().get("models") or [] if e["id"] == model_id), None
     )
     if entry is None:
         raise pipeline.PlanError(f"Unknown forecast model id: {model_id!r}")
     today = datetime.now(UTC).date()
-    plan = pipeline.plan_season(
+    return pipeline.plan_season(
         {
             model_id: (
                 pipeline.ForecastModel.parse(entry),
@@ -656,7 +677,6 @@ def plan_smoke_season(
         max_issue_dates=max_issue_dates,
         lead_day=lead_days,
     )
-    return plan.to_dict()
 
 
 @app.function(image=cpu_image, cpu=1, memory=4096, timeout=600)

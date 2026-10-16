@@ -52,6 +52,17 @@ def test_the_bundled_pipeline_plans_a_season_when_loaded_by_path(forecasts_app):
     assert pipeline.SeasonPlan.parse(plan.to_dict()) == plan
 
 
+def test_a_smoke_plan_error_reaches_the_local_client_as_a_builtin(forecasts_app, monkeypatch):
+    pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    monkeypatch.setattr(forecasts_app, "_load_pipeline", lambda: pipeline)
+    monkeypatch.setattr(forecasts_app, "_load_model_registry", lambda: {"models": []})
+
+    with pytest.raises(ValueError, match="Unknown forecast model id") as raised:
+        forecasts_app.plan_smoke_season.local("nope", {}, "05-01", "gfs", 2, 2)
+
+    assert type(raised.value) is ValueError
+
+
 def test_every_season_function_the_runner_calls_is_registered(forecasts_app):
     functions = set(forecasts_app.app.registered_functions)
 
