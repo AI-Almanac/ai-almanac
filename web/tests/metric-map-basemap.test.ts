@@ -68,7 +68,7 @@ beforeEach(() => {
 
 describe('MetricMap basemap', () => {
 	it('builds on the default basemap and does not restyle once the map is ready', async () => {
-		renderMap();
+		const { queryByText } = renderMap();
 		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
 		const [instance] = maplibre.instances;
 		expect(instance.style).toBe(basemapStyle(DEFAULT_BASEMAP));
@@ -77,10 +77,11 @@ describe('MetricMap basemap', () => {
 		instance.emit('load');
 		await Promise.resolve();
 		expect(instance.setStyle).not.toHaveBeenCalled();
+		expect(queryByText(/online map couldn't be reached/i)).toBeNull();
 	});
 
 	it('switches to the bundled basemap when the online one cannot be fetched', async () => {
-		const { findByRole } = renderMap();
+		const { findByRole, findByText } = renderMap();
 		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
 		const [instance] = maplibre.instances;
 
@@ -97,6 +98,7 @@ describe('MetricMap basemap', () => {
 			'value',
 			BUNDLED_BASEMAP
 		);
+		expect(await findByText(/online map couldn't be reached/i)).toBeTruthy();
 		expect(instance.setStyle).toHaveBeenCalledOnce();
 	});
 });

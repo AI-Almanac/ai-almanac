@@ -20,6 +20,7 @@
 		type BasemapStyleId
 	} from '$lib/basemaps';
 	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import {
 		getBlendCellMetrics,
 		type BlendCellMetrics,
@@ -72,6 +73,8 @@
 	/** Areas with no matching outline, drawn as markers at their centroid. */
 	let centredAreas = $state(0);
 	let stopWatchingBasemap: (() => void) | null = null;
+	/** The online basemap failed and the bundled one replaced it. */
+	let basemapUnreachable = $state(false);
 
 	let hover = $state<{
 		skill: number;
@@ -109,6 +112,7 @@
 	const unitWord = $derived(byArea ? 'areas' : 'points');
 
 	function useBundledBasemap() {
+		basemapUnreachable = true;
 		appliedBasemap = BUNDLED_BASEMAP;
 		basemap = BUNDLED_BASEMAP;
 	}
@@ -335,6 +339,7 @@
 		const next = basemap;
 		if (!map || !mapReady || appliedBasemap === next) return;
 		appliedBasemap = next;
+		basemapUnreachable = false;
 		const style = basemapStyle(next);
 		map.setStyle(style);
 		// setStyle discards the cell layers, so re-add them once the new style parses.
@@ -416,6 +421,7 @@
 				{/each}
 			</select>
 		</label>
+		{#if basemapUnreachable}<BasemapUnreachableNote />{/if}
 
 		<p class="caption">
 			{#if share && share.total > 0}

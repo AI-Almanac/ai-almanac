@@ -164,7 +164,7 @@ describe('BlendSkillMap', () => {
 
 	it('draws the cells on the bundled basemap when the online one cannot be fetched', async () => {
 		api.getBlendCellMetrics.mockResolvedValue(metrics());
-		const { findByRole } = render(BlendSkillMap, { jobId: 'job-1' });
+		const { findByRole, findByText } = render(BlendSkillMap, { jobId: 'job-1' });
 		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
 
 		const instance = maplibre.instances[0];
@@ -182,6 +182,8 @@ describe('BlendSkillMap', () => {
 			'value',
 			BUNDLED_BASEMAP
 		);
+		// And says why, since the user did not pick it.
+		expect(await findByText(/online map couldn't be reached/i)).toBeTruthy();
 		expect(instance.setStyle).toHaveBeenCalledOnce();
 	});
 

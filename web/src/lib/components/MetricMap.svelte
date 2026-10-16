@@ -16,6 +16,7 @@
 		type BasemapStyleId
 	} from '$lib/basemaps';
 	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
 	import { CellInspector } from '$lib/components/metric-map/cellInspector.svelte';
 	import {
@@ -76,6 +77,8 @@
 	let selectedBasemap = $state<BasemapStyleId>(DEFAULT_BASEMAP);
 	let appliedBasemap: BasemapStyleId = DEFAULT_BASEMAP;
 	let stopWatchingBasemap: (() => void) | null = null;
+	/** The online basemap failed and the bundled one replaced it. */
+	let basemapUnreachable = $state(false);
 
 	let layers = $state<Record<string, LayerState>>({});
 	let loading = $state<Set<string>>(new Set());
@@ -135,6 +138,7 @@
 	}
 
 	function useBundledBasemap() {
+		basemapUnreachable = true;
 		appliedBasemap = BUNDLED_BASEMAP;
 		selectedBasemap = BUNDLED_BASEMAP;
 	}
@@ -570,6 +574,7 @@
 		const next = selectedBasemap;
 		if (!map || !mapReady || next === appliedBasemap) return;
 		appliedBasemap = next;
+		basemapUnreachable = false;
 		map.once('style.load', () => {
 			untrack(loadAll);
 		});
@@ -686,6 +691,7 @@
 		selectedReferenceJobId={lens.selectedReferenceJobId}
 		selectedReferenceWindow={lens.selectedReferenceWindow}
 		{selectedBasemap}
+		{basemapUnreachable}
 		viewMode={lens.viewMode}
 		visibleBoundaryLevels={boundaries.visibleLevels}
 		boundaryLoading={boundaries.loading}

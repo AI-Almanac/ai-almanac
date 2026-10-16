@@ -42,6 +42,7 @@
 		type BasemapStyleId
 	} from '$lib/basemaps';
 	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import { formatLatLon } from '$lib/geo';
 	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
@@ -63,10 +64,13 @@
 	let selectedBasemap = $state<BasemapStyleId>(DEFAULT_BASEMAP);
 	let appliedBasemap: BasemapStyleId = DEFAULT_BASEMAP;
 	let stopWatchingBasemap: (() => void) | null = null;
+	/** The online basemap failed and the bundled one replaced it. */
+	let basemapUnreachable = $state(false);
 	let fullscreen = $state(false);
 	const isDark = $derived(isDarkBasemap(selectedBasemap));
 
 	function useBundledBasemap() {
+		basemapUnreachable = true;
 		appliedBasemap = BUNDLED_BASEMAP;
 		selectedBasemap = BUNDLED_BASEMAP;
 	}
@@ -450,6 +454,7 @@
 		const next = selectedBasemap;
 		if (!map || !mapReady || next === appliedBasemap) return;
 		appliedBasemap = next;
+		basemapUnreachable = false;
 		map.once('style.load', () => {
 			liftBasemap();
 			if (data) initLayer(data, { fit: false });
@@ -817,6 +822,7 @@
 					<option value={style.id}>{style.label}</option>
 				{/each}
 			</select>
+			{#if basemapUnreachable}<BasemapUnreachableNote />{/if}
 		</div>
 
 		{#if regionId}
