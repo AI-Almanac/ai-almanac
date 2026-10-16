@@ -550,6 +550,7 @@ def _daily_precip_trajectory(
     """
     import shutil
 
+    import dask
     import numpy as np
     import xarray as xr
     from earth2studio.io import ZarrBackend
@@ -574,41 +575,46 @@ def _daily_precip_trajectory(
     # levels and variables; loading everything before selecting tp causes OOM
     # after just a few rollouts. Instead, select tp lazily and .compute() one
     # day's sum at a time so peak memory per rollout is ~tp-only.
-    dataset = xr.open_zarr(zarr_path)
-    tp = select_variable(dataset, "tp")
-    # Ensemble models write a member dim; average to the ensemble mean before
-    # reducing (kept lazy, so peak memory stays ~one member). Mean and per-day
-    # sum commute, so meaning first gives the same daily totals.
-    if "ensemble" in tp.dims:
-        tp = tp.mean("ensemble")
-    tp = tp.squeeze()
-    lat_name, lon_name = lat_lon_names(tp)
-    # unit_cvt (from the archived data source's metadata, applied by the
-    # caller) converts the model's native units to the mm/day convention
-    # ROMP/blending expect.
-    # ponytail: native model grid, not reprojected to match the historical
-    # archive's exact lat/lon cells — the blend joins by rounded lat/lon id,
-    # so close-enough grids still join, just not cell-for-cell identical.
-    # Upgrade: regrid to the archived source's exact grid if join quality
-    # against historical years turns out to matter.
-    lead_hours_coord = (tp["lead_time"].values / np.timedelta64(1, "h")).astype(int)
-    daily_totals = []
-    for lead_day in range(max_lead_day + 1):
-        day_start = lead_day * 24
-        day_end = day_start + 24
-        mask = (lead_hours_coord >= day_start) & (lead_hours_coord < day_end)
-        if not mask.any():
-            daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan).compute())
-            continue
-        window = tp.isel(lead_time=np.where(mask)[0])
-        # tp06/tp12 are period accumulations (precip since the *previous*
-        # step, resetting every step), not cumulative-since-init — so a
-        # day's total is the sum of the steps inside it, not a diff across
-        # days.
-        daily_totals.append(window.sum(dim="lead_time").compute())
+    # dask's default threaded scheduler starts a module-global pool that is
+    # only shut down at interpreter exit, so Modal containers linger on its
+    # threads after the rollout returns. Reducing tp is light; one thread does.
+    # Closing the store releases its file handles before the rmtree below.
+    with (
+        dask.config.set(scheduler="single-threaded"),
+        xr.open_zarr(zarr_path) as dataset,
+    ):
+        tp = select_variable(dataset, "tp")
+        # Ensemble models write a member dim; average to the ensemble mean before
+        # reducing (kept lazy, so peak memory stays ~one member). Mean and per-day
+        # sum commute, so meaning first gives the same daily totals.
+        if "ensemble" in tp.dims:
+            tp = tp.mean("ensemble")
+        tp = tp.squeeze()
+        lat_name, lon_name = lat_lon_names(tp)
+        # unit_cvt (from the archived data source's metadata, applied by the
+        # caller) converts the model's native units to the mm/day convention
+        # ROMP/blending expect.
+        # ponytail: native model grid, not reprojected to match the historical
+        # archive's exact lat/lon cells — the blend joins by rounded lat/lon id,
+        # so close-enough grids still join, just not cell-for-cell identical.
+        # Upgrade: regrid to the archived source's exact grid if join quality
+        # against historical years turns out to matter.
+        lead_hours_coord = (tp["lead_time"].values / np.timedelta64(1, "h")).astype(int)
+        daily_totals = []
+        for lead_day in range(max_lead_day + 1):
+            day_start = lead_day * 24
+            day_end = day_start + 24
+            mask = (lead_hours_coord >= day_start) & (lead_hours_coord < day_end)
+            if not mask.any():
+                daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan).compute())
+                continue
+            window = tp.isel(lead_time=np.where(mask)[0])
+            # tp06/tp12 are period accumulations (precip since the *previous*
+            # step, resetting every step), not cumulative-since-init — so a
+            # day's total is the sum of the steps inside it, not a diff across
+            # days.
+            daily_totals.append(window.sum(dim="lead_time").compute())
 
-    # Release all zarr file handles before rmtree so nothing is left open.
-    dataset.close()
     del tp
     print(f"    zarr reduce done in {time.perf_counter() - t0:.1f}s", flush=True)
     shutil.rmtree(zarr_path, ignore_errors=True)
