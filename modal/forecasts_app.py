@@ -273,8 +273,12 @@ MAX_PARALLEL_ROLLOUTS = 12
 # Each season function waits on the ones it calls, so each ceiling must outlast
 # them plus its own work, or a long cold season is killed from above.
 ROLLOUT_TIMEOUT_S = 6 * 3600  # one chunk on one GPU
-# Waits on every chunk; allows a second round for chunks queued behind the cap.
-ROLLOUTS_PHASE_TIMEOUT_S = 2 * ROLLOUT_TIMEOUT_S
+# The rollout phase waits on every chunk, including those queued behind the
+# cap. Waiting costs a fraction of a CPU, so it gets as many full-length rounds
+# as Modal's 24 h ceiling leaves room for: a cold ensemble season is ~45
+# one-date chunks per model (~4 rounds of ~1.5 h each).
+ROLLOUT_ROUNDS_PER_PHASE = 3
+ROLLOUTS_PHASE_TIMEOUT_S = ROLLOUT_ROUNDS_PER_PHASE * ROLLOUT_TIMEOUT_S
 ASSEMBLE_TIMEOUT_S = 3600
 FORECAST_TIMEOUT_S = ROLLOUTS_PHASE_TIMEOUT_S + ASSEMBLE_TIMEOUT_S + 30 * 60  # + scoring
 
@@ -367,17 +371,19 @@ def _refresh_volume_store(store: str) -> None:
 
 
 def _warn_if_chunks_outrun_the_phase(plan, chunks) -> None:
-    """ROLLOUTS_PHASE_TIMEOUT_S allows two rounds of MAX_PARALLEL_ROLLOUTS
-    containers per image. More chunks than that still run, but slow ones could
+    """ROLLOUTS_PHASE_TIMEOUT_S allows ROLLOUT_ROUNDS_PER_PHASE full-length
+    rounds of MAX_PARALLEL_ROLLOUTS containers per image. More chunks than that still run, but slow ones could
     outlast the phase; say so up front so a timeout is easy to explain."""
     from collections import Counter
 
     per_image = Counter(plan.run(chunk.member).model.env for chunk in chunks)
-    crowded = {env: n for env, n in per_image.items() if n > 2 * MAX_PARALLEL_ROLLOUTS}
+    capacity = ROLLOUT_ROUNDS_PER_PHASE * MAX_PARALLEL_ROLLOUTS
+    crowded = {env: n for env, n in per_image.items() if n > capacity}
     if crowded:
         print(
-            f"==> warning: chunks per image {crowded} exceed two rounds of "
-            f"{MAX_PARALLEL_ROLLOUTS} containers; slow ones may outlast the rollout phase",
+            f"==> warning: chunks per image {crowded} exceed {ROLLOUT_ROUNDS_PER_PHASE} "
+            f"rounds of {MAX_PARALLEL_ROLLOUTS} containers; slow ones may outlast the "
+            "rollout phase",
             flush=True,
         )
 
@@ -700,7 +706,8 @@ def smoke_season_forecast(
     Without --gcs-bucket the trajectories go to the Volume store, so the shared
     GCS store is untouched. Run it twice: the second run should report every
     issue date as stored and start no GPU container. --reset clears
-    the Volume store for this model first, to exercise the cold path again.
+    the Volume store for this model first, to exercise the cold path again;
+    it cannot clear the GCS store, so it is refused with --gcs-bucket.
 
     --lead-days keeps rollouts short (2 days is 8 steps for a 6-hourly model).
     Short rollouts are stored under their own `lead{N}d` key, so they are never
@@ -709,6 +716,8 @@ def smoke_season_forecast(
         modal run --env staging modal/forecasts_app.py::smoke_season_forecast \\
             --model fuxi --max-issue-dates 2 --lead-days 2 --reset
     """
+    if reset and gcs_bucket:
+        raise SystemExit("--reset clears only the Volume store; drop --gcs-bucket for a cold run")
     archive_metadata = {"init_days": init_days, "spatial_bounds": _parse_bounds(bounds)}
     plan = plan_smoke_season.remote(
         model, archive_metadata, season_start, init_source, max_issue_dates, lead_days

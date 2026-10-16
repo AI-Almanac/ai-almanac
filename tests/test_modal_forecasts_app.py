@@ -367,14 +367,19 @@ def test_the_gpu_skips_dates_another_job_stored_after_the_sweep(
     assert rolled_out == [[MAY_7]]
 
 
-def test_more_chunks_than_two_container_rounds_are_flagged(season, monkeypatch, capsys):
+def test_more_chunks_than_the_phase_has_rounds_for_are_flagged(season, monkeypatch, capsys):
     monkeypatch.setattr(season.app, "DATES_PER_ROLLOUT", 1)
     monkeypatch.setattr(season.app, "MAX_PARALLEL_ROLLOUTS", 1)
+    monkeypatch.setattr(season.app, "ROLLOUT_ROUNDS_PER_PHASE", 1)
     season.gpus()
 
     season.app.roll_out_missing_dates.local(season.config(FUXI_ONLY))
 
-    assert "exceed two rounds of 1 containers" in capsys.readouterr().out
+    assert "exceed 1 rounds of 1 containers" in capsys.readouterr().out
+
+
+def test_every_season_timeout_fits_within_modals_ceiling(season):
+    assert season.app.FORECAST_TIMEOUT_S <= 24 * 3600
 
 
 def test_gpu_calls_still_running_are_cancelled_when_the_phase_dies(season, monkeypatch):
