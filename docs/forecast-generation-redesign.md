@@ -129,7 +129,7 @@ hardened because it is now load-bearing:
 ### D5 — "Update forecast" = incremental top-up, user-triggerable
 
 Re-running a blend uses the identical `blend_config_snapshot` (same coefficients) and
-recomputes `season_issue_dates` up to today. Cached dates are served for free; the
+plans a new season up to today (each job's plan is then frozen at submission). Cached dates are served for free; the
 init dates elapsed since the set was last generated are rolled out as a **bounded
 gap-fill generation** (D3) and the season is then re-scored. This is cheap relative
 to a full season (a 1–2 week gap is a handful of rollouts), so **users may trigger it

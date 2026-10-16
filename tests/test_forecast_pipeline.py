@@ -84,6 +84,16 @@ def test_plan_covers_the_season_up_to_today_and_trims_to_the_latest_dates():
     assert plan.covered_dates() == {"fuxi": ["2020-05-07", "2020-05-11"]}
 
 
+@pytest.mark.parametrize("max_issue_dates", [0, -1])
+def test_plan_refuses_a_trim_that_keeps_no_dates(max_issue_dates):
+    with pytest.raises(PlanError, match="max_issue_dates must be at least 1"):
+        _plan(
+            {"fuxi": (FUXI, ArchiveLayout.parse({}))},
+            today=dt.date(2020, 5, 12),
+            max_issue_dates=max_issue_dates,
+        )
+
+
 def test_plan_refuses_a_season_that_has_no_issue_dates_yet():
     with pytest.raises(PlanError, match="No issue dates for fuxi"):
         _plan(

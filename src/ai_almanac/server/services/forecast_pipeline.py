@@ -530,6 +530,8 @@ def plan_season(
     `max_issue_dates` keeps only the most recent N dates — a smoke-test knob, as
     is a `lead_day` shorter than the canonical horizon.
     """
+    if max_issue_dates is not None and max_issue_dates < 1:
+        raise PlanError(f"max_issue_dates must be at least 1, got {max_issue_dates}")
     season_start = _parse_season_start(season_start_month_day, season)
     shared_month_days = sorted(
         {entry for _, layout in members.values() for entry in layout.init_month_days}
@@ -543,7 +545,7 @@ def plan_season(
             shared_month_days or None,
             today=today,
         )
-        if max_issue_dates:
+        if max_issue_dates is not None:
             dates = dates[-max_issue_dates:]
         runs.append(ModelRun(member, model, layout.unit_cvt, layout.spatial_bounds, tuple(dates)))
     return SeasonPlan(season, init_source, lead_day, tuple(runs))
@@ -899,10 +901,20 @@ def roll_out_issue_dates(
                 data.prefetch(predicted.get(upcoming, []))
             t0 = time.perf_counter()
             print(f"  [{i + 1}/{len(issue_dates)}] issue date {issue_date}", flush=True)
-            trajectory = _daily_precip_trajectory(
-                model, data, issue_date, key.lead_day, step_hours, scratch_root, run.model.ensemble
-            )
-            write_stored_trajectory(store, key, issue_date, trajectory)
+            try:
+                trajectory = _daily_precip_trajectory(
+                    model,
+                    data,
+                    issue_date,
+                    key.lead_day,
+                    step_hours,
+                    scratch_root,
+                    run.model.ensemble,
+                )
+                write_stored_trajectory(store, key, issue_date, trajectory)
+            except Exception as exc:
+                # The chunk's caller logs only the message; name the date in it.
+                raise RuntimeError(f"Issue date {issue_date} failed: {exc}") from exc
             if data.discard(predicted.get(issue_date, [])):
                 unused_prefetches += 1
                 print("    warning: prefetched init data went unused", flush=True)
