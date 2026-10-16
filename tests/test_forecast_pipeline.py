@@ -160,7 +160,14 @@ def test_a_corrupt_plan_is_refused_with_what_is_wrong(corrupt, message):
 
 
 @pytest.mark.parametrize(
-    "settings", [{"nensemble": "eight"}, {"nensemble": -1}, {"nensemble_batch": -2}]
+    "settings",
+    [
+        {"nensemble": "eight"},
+        {"nensemble": -1},
+        {"nensemble": 0},
+        {"nensemble_batch": -2},
+        {"nensemble_batch": 0},
+    ],
 )
 def test_a_registry_model_with_unusable_ensemble_settings_is_refused(settings):
     entry = {"id": "aifsens", "earth2studio_class": "AIFSENS", "ensemble": True, **settings}

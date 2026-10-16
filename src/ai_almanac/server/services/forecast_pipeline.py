@@ -125,15 +125,22 @@ def ensemble_config(model_entry: dict) -> EnsembleSpec | None:
     """Ensemble settings from a registry entry, or None for deterministic models."""
     if not model_entry.get("ensemble"):
         return None
-    members = int(model_entry.get("nensemble") or 8)
+    members = int(_setting_or_default(model_entry, "nensemble", 8))
     # Members run in batches to bound VRAM — a global-resolution member is large,
     # so default to one at a time and let a model override it.
-    batch_size = int(model_entry.get("nensemble_batch") or 1)
+    batch_size = int(_setting_or_default(model_entry, "nensemble_batch", 1))
     if members < 1 or batch_size < 1:
         raise ValueError(
             f"nensemble and nensemble_batch must be at least 1, got {members}, {batch_size}"
         )
     return EnsembleSpec(members=members, batch_size=min(batch_size, members))
+
+
+def _setting_or_default(model_entry: dict, key: str, default):
+    """A registry setting, or the default when it is unset (an explicit 0 is
+    kept, so it can be refused)."""
+    value = model_entry.get(key)
+    return default if value is None else value
 
 
 def run_rollout(
