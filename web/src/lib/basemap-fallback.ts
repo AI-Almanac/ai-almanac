@@ -24,6 +24,10 @@ function isFailureOf(url: string, event: object): boolean {
  * style being replaced, never trigger the swap. A style object is already in
  * hand, so there is nothing to watch.
  *
+ * The swap is final on purpose: setStyle aborts the slow request, so a style
+ * that would have arrived after the wait never replaces the bundled one. The
+ * caller records the bundled basemap as selected and tells the user why.
+ *
  * Returns a function that stops watching, for map teardown.
  */
 export function fallBackWhenBasemapFails(
