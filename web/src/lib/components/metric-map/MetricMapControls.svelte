@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { BASEMAP_STYLES, BOUNDARY_LEVELS, type BasemapStyleId } from './constants';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import { modelRunLabel, viewModeDescription } from './mapUi';
 	import type {
 		BoundaryLevel,
@@ -25,6 +26,7 @@
 		selectedReferenceJobId: string;
 		selectedReferenceWindow: string;
 		selectedBasemap: BasemapStyleId;
+		basemapUnreachable: boolean;
 		viewMode: MapViewMode;
 		visibleBoundaryLevels: Set<BoundaryLevel>;
 		boundaryLoading: Set<BoundaryLevel>;
@@ -54,6 +56,7 @@
 		selectedReferenceJobId,
 		selectedReferenceWindow,
 		selectedBasemap,
+		basemapUnreachable,
 		viewMode,
 		visibleBoundaryLevels,
 		boundaryLoading,
@@ -205,6 +208,7 @@
 						<option value={style.id}>{style.label}</option>
 					{/each}
 				</select>
+				{#if basemapUnreachable}<BasemapUnreachableNote />{/if}
 			</label>
 
 			<details class="boundary-group">

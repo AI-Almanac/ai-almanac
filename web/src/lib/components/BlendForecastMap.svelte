@@ -33,7 +33,16 @@
 	import { ONSET_ESTIMATE_CAVEAT } from '$lib/onset-outlook';
 	import CellInspector from './CellInspector.svelte';
 	import MapTooltip from './MapTooltip.svelte';
-	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
+	import {
+		BASEMAP_STYLES,
+		BUNDLED_BASEMAP,
+		DEFAULT_BASEMAP,
+		basemapStyle,
+		isDarkBasemap,
+		type BasemapStyleId
+	} from '$lib/basemaps';
+	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import { formatLatLon } from '$lib/geo';
 	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
@@ -52,13 +61,18 @@
 	let map: maplibregl.Map | null = null;
 	let mapReady = $state(false);
 
-	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
-	let appliedBasemap: BasemapStyleId = 'carto-dark';
+	let selectedBasemap = $state<BasemapStyleId>(DEFAULT_BASEMAP);
+	let appliedBasemap: BasemapStyleId = DEFAULT_BASEMAP;
+	let stopWatchingBasemap: (() => void) | null = null;
+	/** The online basemap failed and the bundled one replaced it. */
+	let basemapUnreachable = $state(false);
 	let fullscreen = $state(false);
 	const isDark = $derived(isDarkBasemap(selectedBasemap));
 
-	function basemapStyle() {
-		return BASEMAP_STYLES.find((s) => s.id === selectedBasemap) ?? BASEMAP_STYLES[0];
+	function useBundledBasemap() {
+		basemapUnreachable = true;
+		appliedBasemap = BUNDLED_BASEMAP;
+		selectedBasemap = BUNDLED_BASEMAP;
 	}
 
 	// Dot outlines flip with the basemap so a cell stays visible on light or
@@ -293,9 +307,10 @@
 
 	// Nudge the dark basemap so land reads as a surface a shade above the void
 	// and water sits below it — gives the dot field something to rest on.
-	// Carto layer names vary, so match defensively and skip anything absent.
+	// Carto layer names vary, so match defensively and skip anything absent. The
+	// bundled basemap already ships these colours.
 	function liftBasemap() {
-		if (!map || !isDark) return;
+		if (!map || !isDark || selectedBasemap === BUNDLED_BASEMAP) return;
 		try {
 			for (const layer of map.getStyle().layers ?? []) {
 				if (layer.type === 'background')
@@ -439,6 +454,7 @@
 		const next = selectedBasemap;
 		if (!map || !mapReady || next === appliedBasemap) return;
 		appliedBasemap = next;
+		basemapUnreachable = false;
 		map.once('style.load', () => {
 			liftBasemap();
 			if (data) initLayer(data, { fit: false });
@@ -447,7 +463,10 @@
 			boundaries.clearFromMap();
 			boundaries.reloadVisible();
 		});
-		map.setStyle(basemapStyle().url);
+		const style = basemapStyle(next);
+		map.setStyle(style);
+		stopWatchingBasemap?.();
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 	});
 
 	// Returns a CSS calc() that positions a tick/label along the track,
@@ -629,15 +648,17 @@
 
 	onMount(() => {
 		if (!mapHost) return;
+		const style = basemapStyle(selectedBasemap);
 		map = new maplibregl.Map({
 			container: mapHost,
-			style: basemapStyle().url,
+			style,
 			center: [20, 10],
 			zoom: 1.8,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 		map.on('load', () => {
 			mapReady = true;
 			liftBasemap();
@@ -676,6 +697,7 @@
 
 	onDestroy(() => {
 		stopPlay();
+		stopWatchingBasemap?.();
 		resizeObserver?.disconnect();
 		map?.remove();
 		map = null;
@@ -800,6 +822,7 @@
 					<option value={style.id}>{style.label}</option>
 				{/each}
 			</select>
+			{#if basemapUnreachable}<BasemapUnreachableNote />{/if}
 		</div>
 
 		{#if regionId}

@@ -11,7 +11,16 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
-	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
+	import {
+		BASEMAP_STYLES,
+		BUNDLED_BASEMAP,
+		DEFAULT_BASEMAP,
+		basemapStyle,
+		isDarkBasemap,
+		type BasemapStyleId
+	} from '$lib/basemaps';
+	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
+	import BasemapUnreachableNote from '$lib/components/BasemapUnreachableNote.svelte';
 	import {
 		getBlendCellMetrics,
 		type BlendCellMetrics,
@@ -52,7 +61,7 @@
 
 	// Dark, as the benchmark and forecast maps are: the diverging scale's midpoint is
 	// near-white, which reads as neutral against dark but disappears against light.
-	let basemap = $state<BasemapStyleId>('carto-dark');
+	let basemap = $state<BasemapStyleId>(DEFAULT_BASEMAP);
 	let metrics = $state<BlendCellMetrics | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -63,9 +72,9 @@
 	let boundaries = $state<GeoJSON.FeatureCollection | null>(null);
 	/** Areas with no matching outline, drawn as markers at their centroid. */
 	let centredAreas = $state(0);
-	/** The basemap style never arrived; the frame would otherwise be silently blank. */
-	let stalled = $state(false);
-	let styleTimer: ReturnType<typeof setTimeout> | null = null;
+	let stopWatchingBasemap: (() => void) | null = null;
+	/** The online basemap failed and the bundled one replaced it. */
+	let basemapUnreachable = $state(false);
 
 	let hover = $state<{
 		skill: number;
@@ -102,8 +111,10 @@
 	const byArea = $derived(grid != null && isAreaMetric(grid));
 	const unitWord = $derived(byArea ? 'areas' : 'points');
 
-	function basemapUrl(): string {
-		return (BASEMAP_STYLES.find((s) => s.id === basemap) ?? BASEMAP_STYLES[0]).url;
+	function useBundledBasemap() {
+		basemapUnreachable = true;
+		appliedBasemap = BUNDLED_BASEMAP;
+		basemap = BUNDLED_BASEMAP;
 	}
 
 	const outlineColor = $derived(
@@ -229,16 +240,17 @@
 	 * during onMount it does not exist yet — constructing the map there leaves a
 	 * blank frame forever, because nothing retries once the element arrives.
 	 *
-	 * basemapUrl() is read untracked: this effect must depend on the host alone, or
+	 * basemapStyle(basemap) is read untracked: this effect must depend on the host alone, or
 	 * changing the basemap would tear the whole map down and rebuild it.
 	 */
 	$effect(() => {
 		const host = mapHost;
 		if (!host) return;
 
+		const style = untrack(() => basemapStyle(basemap));
 		const instance = new maplibregl.Map({
 			container: host,
-			style: untrack(() => basemapUrl()),
+			style,
 			center: [20, 10],
 			zoom: 1.5,
 			attributionControl: false
@@ -262,14 +274,8 @@
 		 * Only the flag is set here; the redraw effect below owns every render.
 		 */
 		instance.on('style.load', () => (mapReady = true));
-		// A style that never arrives leaves the same empty frame, so name it.
-		instance.on('error', (event: { error?: { message?: string } }) => {
-			if (!mapReady) error = event.error?.message ?? 'The map could not be loaded.';
-		});
-		// Nothing above guarantees an error on a request that merely hangs.
-		styleTimer = setTimeout(() => {
-			if (!mapReady && !error) stalled = true;
-		}, 10_000);
+		// A style that fails or hangs would leave the cells undrawn.
+		stopWatchingBasemap = fallBackWhenBasemapFails(instance, style, useBundledBasemap);
 
 		const showHover = (event: maplibregl.MapLayerMouseEvent) => {
 			const feature = event.features?.[0];
@@ -304,14 +310,13 @@
 		observer.observe(host);
 
 		return () => {
-			if (styleTimer) clearTimeout(styleTimer);
-			styleTimer = null;
+			stopWatchingBasemap?.();
+			stopWatchingBasemap = null;
 			observer.disconnect();
 			instance.remove();
 			if (map === instance) {
 				map = null;
 				mapReady = false;
-				stalled = false;
 			}
 		};
 	});
@@ -334,9 +339,13 @@
 		const next = basemap;
 		if (!map || !mapReady || appliedBasemap === next) return;
 		appliedBasemap = next;
-		map.setStyle(basemapUrl());
+		basemapUnreachable = false;
+		const style = basemapStyle(next);
+		map.setStyle(style);
 		// setStyle discards the cell layers, so re-add them once the new style parses.
 		map.once('style.load', () => renderCells(false));
+		stopWatchingBasemap?.();
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 	});
 
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
@@ -380,12 +389,6 @@
 	{:else}
 		<div class="map-frame">
 			<div class="map-host" bind:this={mapHost}></div>
-			{#if stalled}
-				<p class="map-stalled">
-					The basemap did not load, so the grid cannot be drawn. Check the browser console for a
-					blocked request to <code>basemaps.cartocdn.com</code>.
-				</p>
-			{/if}
 			{#if hover}
 				<div class="map-tooltip" style={`left: ${hover.x}px; top: ${hover.y}px`} role="tooltip">
 					<strong>{formatSkillValue(hover.skill)}</strong>
@@ -418,6 +421,7 @@
 				{/each}
 			</select>
 		</label>
+		{#if basemapUnreachable}<BasemapUnreachableNote />{/if}
 
 		<p class="caption">
 			{#if share && share.total > 0}
@@ -520,19 +524,6 @@
 
 	.map-tooltip .flag {
 		color: #f4a582;
-	}
-
-	.map-stalled {
-		position: absolute;
-		inset: auto 0.75rem 0.75rem 0.75rem;
-		margin: 0;
-		padding: 0.5rem 0.6rem;
-		border-radius: 0.35rem;
-		background: var(--color-surface);
-		border: 1px solid var(--color-danger-border);
-		color: var(--color-text);
-		font-size: 0.7rem;
-		line-height: 1.45;
 	}
 
 	.legend {
