@@ -187,19 +187,20 @@ not a reduced version.
 
 ### What needs an internet connection
 
-| Task                                                   | Needs internet?                                                                                                         |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| Installing or upgrading, and `ai-almanac env prepare`  | Yes: downloads the app, its workload environments, and the scoring and blending code                                    |
-| Benchmarks and blends on datasets in local directories | No                                                                                                                      |
-| The first forecast with each AI model                  | Yes: downloads the model's weights                                                                                      |
-| Live forecasts                                         | Yes: downloads the latest public GFS (NOAA) or IFS (ECMWF) analysis as starting conditions; none of your data is sent   |
-| The assistant                                          | Only if `LLM_BASE_URL` points outside your network                                                                      |
-| Choosing administrative areas by name                  | Yes: outlines come from [geoBoundaries](https://www.geoboundaries.org). Drawing a box works offline                     |
-| Maps in the browser                                    | Yes: the background map loads from public tile servers (CARTO, OpenFreeMap), which see the area you view, not your data |
+| Task                                                   | Needs internet?                                                                                                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Installing or upgrading, and `ai-almanac env prepare`  | Yes: downloads the app, its workload environments, and the scoring and blending code                                      |
+| Benchmarks and blends on datasets in local directories | No                                                                                                                        |
+| The first forecast with each AI model                  | Yes: downloads the model's weights                                                                                        |
+| Live forecasts                                         | Yes: downloads the latest public GFS (NOAA) or IFS (ECMWF) analysis as starting conditions; none of your data is sent     |
+| The assistant                                          | Only if `LLM_BASE_URL` points outside your network                                                                        |
+| Choosing administrative areas by name                  | Yes: outlines come from [geoBoundaries](https://www.geoboundaries.org). Drawing a box works offline                       |
+| Maps in the browser                                    | No: "No background map" is bundled. CARTO and OpenFreeMap backgrounds are online and see the area you view, not your data |
 
 On a machine with no internet access, runs still complete and save their run
-logs, NetCDF outputs, and figures under `jobs/` in the data directory, but the in-app maps cannot be drawn
-without their background map.
+logs, NetCDF outputs, and figures under `jobs/` in the data directory, and the
+in-app maps still draw every result: when the online background map cannot be
+reached they switch to "No background map" on their own.
 
 ---
 
