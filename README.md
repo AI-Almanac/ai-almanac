@@ -12,7 +12,9 @@ can set up each step for you from a plain-language request.
 > the hosted version. Browse example results without an account, or sign in to
 > run your own.
 
-To run it on your own machine, with your own data:
+To run it on your own machine, with your own data (see
+[Run it on your own hardware](#run-it-on-your-own-hardware) for keeping
+everything in-house):
 
 ```bash
 uv tool install ai-almanac   # or `pipx install ai-almanac`
@@ -149,6 +151,55 @@ $AI_ALMANAC_DATA_DIR/
 Registered datasets stay where they are; only pointers to them are stored.
 Set `AI_ALMANAC_DATA_DIR=/some/path` to keep a separate instance. Don't point
 two running instances at the same data directory.
+
+---
+
+## Run it on your own hardware
+
+AI Almanac can run entirely on machines you control, so observations, model
+data, and results stay inside your organization and your country. The
+installed app is the same software as [ai-almanac.org](https://ai-almanac.org),
+not a reduced version.
+
+- **Your own machine is the default.** `ai-almanac serve` runs as a single
+  process with its own database, and benchmarks, blends, and forecasts run on
+  the same machine. It listens only on `127.0.0.1` and needs no account.
+  Registered datasets are read where they already are and are never uploaded;
+  everything the app produces goes to the
+  [data directory](#where-data-lives).
+- **The assistant can use a model on your own network.** Point it at any LLM
+  server with an OpenAI-compatible API, such as Ollama, vLLM, or LM Studio:
+
+  ```bash
+  export LLM_BASE_URL=http://localhost:11434/v1   # Ollama's default address
+  export LLM_MODEL=<a model you have pulled>
+  ai-almanac serve
+  ```
+
+  The assistant sets up runs by calling tools, so choose a model that supports
+  tool calling. Without an LLM, every workflow still works through manual
+  configuration.
+
+- **Forecasts need an NVIDIA GPU on Linux** (x86-64 or ARM64, with CUDA). The
+  hosted version runs each forecast model on an 80 GB NVIDIA A100; a GPU with
+  less memory may not fit every model. Benchmarks and blends need only a CPU
+  and also run on Apple Silicon Macs.
+
+### What needs an internet connection
+
+| Task                                                   | Needs internet?                                                                                                         |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Installing or upgrading, and `ai-almanac env prepare`  | Yes: downloads the app, its workload environments, and the scoring and blending code                                    |
+| Benchmarks and blends on datasets in local directories | No                                                                                                                      |
+| The first forecast with each AI model                  | Yes: downloads the model's weights                                                                                      |
+| Live forecasts                                         | Yes: downloads the latest public GFS (NOAA) or IFS (ECMWF) analysis as starting conditions; none of your data is sent   |
+| The assistant                                          | Only if `LLM_BASE_URL` points outside your network                                                                      |
+| Choosing administrative areas by name                  | Yes: outlines come from [geoBoundaries](https://www.geoboundaries.org). Drawing a box works offline                     |
+| Maps in the browser                                    | Yes: the background map loads from public tile servers (CARTO, OpenFreeMap), which see the area you view, not your data |
+
+On a machine with no internet access, runs still complete and save their run
+logs, NetCDF outputs, and figures under `jobs/` in the data directory, but the in-app maps cannot be drawn
+without their background map.
 
 ---
 
