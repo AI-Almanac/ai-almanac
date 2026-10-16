@@ -612,7 +612,7 @@ place for a staging-only surprise. Worth checking one probabilistic job's
 
 **The ROMP pin gates half the feature.** `src/ai_almanac/envs/benchmark.pixi.toml:36`
 pins momp to a git SHA. The `driver.py` fix reaches staging only once it is merged
-in `hholb/ROMP` and that `rev` is bumped. Until then probabilistic runs still
+in `AI-Almanac/ROMP` and that `rev` is bumped. Until then probabilistic runs still
 produce no spatial NetCDF, so the Map tab stays empty for them — which the design
 handles, and which the skill-score half does not depend on (it reads CSVs the
 current pin already writes).
