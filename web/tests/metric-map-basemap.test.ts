@@ -77,7 +77,7 @@ describe('MetricMap basemap', () => {
 		instance.emit('load');
 		await Promise.resolve();
 		expect(instance.setStyle).not.toHaveBeenCalled();
-		expect(queryByText(/online map couldn't be reached/i)).toBeNull();
+		expect(queryByText(/online map didn't load/i)).toBeNull();
 	});
 
 	it('switches to the bundled basemap when the online one cannot be fetched', async () => {
@@ -98,7 +98,7 @@ describe('MetricMap basemap', () => {
 			'value',
 			BUNDLED_BASEMAP
 		);
-		expect(await findByText(/online map couldn't be reached/i)).toBeTruthy();
+		expect(await findByText(/online map didn't load/i)).toBeTruthy();
 		expect(instance.setStyle).toHaveBeenCalledOnce();
 	});
 });

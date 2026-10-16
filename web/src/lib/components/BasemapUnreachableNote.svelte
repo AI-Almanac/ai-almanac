@@ -1,6 +1,6 @@
 <!-- Shown beside a basemap picker after the map fell back to the bundled background. -->
 <span class="basemap-note" role="status">
-	The online map couldn't be reached, so this shows the built-in background.
+	The online map didn't load, so this shows the built-in background.
 </span>
 
 <style>

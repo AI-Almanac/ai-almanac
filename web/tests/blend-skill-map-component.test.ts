@@ -183,7 +183,7 @@ describe('BlendSkillMap', () => {
 			BUNDLED_BASEMAP
 		);
 		// And says why, since the user did not pick it.
-		expect(await findByText(/online map couldn't be reached/i)).toBeTruthy();
+		expect(await findByText(/online map didn't load/i)).toBeTruthy();
 		expect(instance.setStyle).toHaveBeenCalledOnce();
 	});
 
