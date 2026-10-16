@@ -23,7 +23,7 @@ async def test_refresh_replays_original_params(monkeypatch):
             "job_type": "forecast",
             "blend_id": "blend-123",
             "forecast_model_ids": ["fuxi"],
-            "init_source": "era5",
+            "init_source": "ifs",
             "init_time": "2026-05-01T00:00:00",
             "max_issue_dates": 3,
             "lead_hours": [24, 48],
@@ -61,7 +61,7 @@ async def test_refresh_replays_original_params(monkeypatch):
     body = captured["body"]
     assert body.blend_id == "blend-123"
     assert body.forecast_model_ids == ["fuxi"]
-    assert body.params.init_source == "era5"
+    assert body.params.init_source == "ifs"
     assert body.params.init_time == "2026-05-01T00:00:00"
     assert body.params.max_issue_dates == 3
 
@@ -73,3 +73,61 @@ async def test_refresh_unknown_forecast_404():
     with pytest.raises(HTTPException) as exc:
         await job_submission.refresh_forecast_for_user("nope", user["id"])
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_refresh_refuses_a_forecast_saved_with_a_retired_init_source():
+    """Jobs saved before init sources were restricted re-run as a clear 409,
+    not a server error."""
+    async with get_db() as conn:
+        user = await get_or_create_user(conn, external_id="refresh-user-3")
+        await conn.execute(
+            sa.insert(jobs).values(
+                id="fc-era5",
+                user_id=user["id"],
+                dataset_id="ds-1",
+                job_type="forecast",
+                status="complete",
+                config_json=json.dumps({"blend_id": "blend-123", "init_source": "era5"}),
+                created_at="2026-05-10T00:00:00",
+            )
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.refresh_forecast_for_user("fc-era5", user["id"])
+    assert exc.value.status_code == 409
+    assert "init_source" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_refresh_reads_a_saved_zero_issue_date_trim_as_no_trim(monkeypatch):
+    async with get_db() as conn:
+        user = await get_or_create_user(conn, external_id="refresh-user-4")
+        await conn.execute(
+            sa.insert(jobs).values(
+                id="fc-zero",
+                user_id=user["id"],
+                dataset_id="ds-1",
+                job_type="forecast",
+                status="complete",
+                config_json=json.dumps({"blend_id": "blend-123", "max_issue_dates": 0}),
+                created_at="2026-05-10T00:00:00",
+            )
+        )
+    captured: dict = {}
+
+    async def fake_create(body, user_id, *, is_admin=False):
+        captured["body"] = body
+        return job_submission.ForecastOut(
+            id="fc-zero-2",
+            blend_id=body.blend_id,
+            status="queued",
+            forecast_model_ids=[],
+            created_at="2026-05-10T01:00:00",
+        )
+
+    monkeypatch.setattr(job_submission, "create_forecast_for_user", fake_create)
+
+    await job_submission.refresh_forecast_for_user("fc-zero", user["id"])
+
+    assert captured["body"].params.max_issue_dates is None
