@@ -9,7 +9,13 @@
 	import MetricMapControls from '$lib/components/metric-map/MetricMapControls.svelte';
 	import MetricMapLegend from '$lib/components/metric-map/MetricMapLegend.svelte';
 	import SwipeComparisonOverlay from '$lib/components/metric-map/SwipeComparisonOverlay.svelte';
-	import { BASEMAP_STYLES, type BasemapStyleId } from '$lib/components/metric-map/constants';
+	import {
+		BUNDLED_BASEMAP,
+		DEFAULT_BASEMAP,
+		basemapStyle,
+		type BasemapStyleId
+	} from '$lib/basemaps';
+	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
 	import { CellInspector } from '$lib/components/metric-map/cellInspector.svelte';
 	import {
@@ -67,7 +73,9 @@
 	let mapContainer = $state<HTMLElement | null>(null);
 	let map = $state<maplibregl.Map | null>(null);
 	let mapReady = $state(false);
-	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
+	let selectedBasemap = $state<BasemapStyleId>(DEFAULT_BASEMAP);
+	let appliedBasemap: BasemapStyleId = DEFAULT_BASEMAP;
+	let stopWatchingBasemap: (() => void) | null = null;
 
 	let layers = $state<Record<string, LayerState>>({});
 	let loading = $state<Set<string>>(new Set());
@@ -126,8 +134,9 @@
 		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
 	}
 
-	function selectedBasemapStyle() {
-		return BASEMAP_STYLES.find((style) => style.id === selectedBasemap) ?? BASEMAP_STYLES[0];
+	function useBundledBasemap() {
+		appliedBasemap = BUNDLED_BASEMAP;
+		selectedBasemap = BUNDLED_BASEMAP;
 	}
 
 	function windowLabelFor(value: string | undefined) {
@@ -462,13 +471,14 @@
 		if (!mapContainer) return;
 		map = new maplibregl.Map({
 			container: mapContainer,
-			style: selectedBasemapStyle().url,
+			style: basemapStyle(selectedBasemap),
 			center: [80, 20],
 			zoom: 4,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
 		map.on('load', () => {
 			mapReady = true;
 			const attrib = mapContainer?.querySelector<HTMLDetailsElement>('.maplibregl-ctrl-attrib');
@@ -540,6 +550,7 @@
 	});
 
 	onDestroy(() => {
+		stopWatchingBasemap?.();
 		if (map) {
 			map.remove();
 			map = null;
@@ -553,13 +564,17 @@
 		if (jobIds && forecastWindow && activeWindowKey && map && mapReady) untrack(loadAll);
 	});
 
+	// Only restyle on an actual change: the map is built with the selected basemap.
 	$effect(() => {
-		const style = selectedBasemapStyle();
-		if (!map || !mapReady) return;
+		const next = selectedBasemap;
+		if (!map || !mapReady || next === appliedBasemap) return;
+		appliedBasemap = next;
 		map.once('style.load', () => {
 			untrack(loadAll);
 		});
-		map.setStyle(style.url);
+		map.setStyle(basemapStyle(next));
+		stopWatchingBasemap?.();
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
 	});
 
 	$effect(() => {

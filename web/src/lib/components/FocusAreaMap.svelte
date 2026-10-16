@@ -4,7 +4,8 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
 	import type { FeatureCollection, Position } from 'geojson';
-	import { BASEMAP_STYLES } from '$lib/basemaps';
+	import { DEFAULT_BASEMAP, basemapStyle } from '$lib/basemaps';
+	import { fallBackWhenBasemapFails } from '$lib/basemap-fallback';
 	import {
 		isFocusUnits,
 		type BboxExtent,
@@ -42,6 +43,7 @@
 	const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
 	let container = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
+	let stopWatchingBasemap: (() => void) | null = null;
 	let mapReady = $state(false);
 	let drawing = $state(false);
 	let anchor: maplibregl.LngLat | null = null;
@@ -184,12 +186,14 @@
 		if (!container) return;
 		map = new maplibregl.Map({
 			container,
-			style: BASEMAP_STYLES[0].url,
+			style: basemapStyle(DEFAULT_BASEMAP),
 			center: [40, 9],
 			zoom: 4,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+		// No basemap picker here, so a failed style quietly becomes the bundled one.
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, () => {});
 		map.on('load', () => {
 			if (!map) return;
 			// Region first, then pickable areas, then the box, so each paints above the last.
@@ -274,7 +278,10 @@
 		});
 	});
 
-	onDestroy(() => map?.remove());
+	onDestroy(() => {
+		stopWatchingBasemap?.();
+		map?.remove();
+	});
 
 	// A value set from outside (chat, a reloaded config) decides the mode.
 	$effect(() => {

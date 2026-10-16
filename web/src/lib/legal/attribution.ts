@@ -252,6 +252,16 @@ export const mapDataSources: AttributionEntry[] = [
 		links: [{ label: 'OpenFreeMap', href: 'https://openfreemap.org' }]
 	},
 	{
+		slug: 'natural-earth',
+		name: 'Natural Earth',
+		provider: 'Natural Earth',
+		license: 'Public domain',
+		usage:
+			'Country outlines on the "No background map" option, which the maps also switch to when the online basemaps cannot be reached.',
+		citations: ['Made with Natural Earth.'],
+		links: [{ label: 'Natural Earth', href: 'https://www.naturalearthdata.com' }]
+	},
+	{
 		slug: 'geoboundaries',
 		name: 'geoBoundaries',
 		provider: 'William & Mary geoLab',

@@ -12,13 +12,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import BlendSkillMap from '../src/routes/blends/BlendSkillMap.svelte';
 import type { BlendCellMetrics } from '../src/lib/api';
+import { BUNDLED_BASEMAP, basemapStyle } from '../src/lib/basemaps';
 
 // MapLibre needs a real WebGL context, which jsdom does not provide.
 const maplibre = vi.hoisted(() => {
 	const instances: {
 		container: unknown;
 		style: unknown;
-		emit: (event: string) => void;
+		emit: (event: string, payload?: object) => void;
+		setStyle: ReturnType<typeof vi.fn>;
 		sources: Map<string, { setData: ReturnType<typeof vi.fn> }>;
 		addSource: ReturnType<typeof vi.fn>;
 		addLayer: ReturnType<typeof vi.fn>;
@@ -61,9 +63,16 @@ const maplibre = vi.hoisted(() => {
 		once(event: string, handler: (...args: unknown[]) => void) {
 			return this.on(event, handler);
 		}
+		off(event: string, handler: (...args: unknown[]) => void) {
+			this.handlers.set(
+				event,
+				(this.handlers.get(event) ?? []).filter((h) => h !== handler)
+			);
+			return this;
+		}
 		/** Fire whatever maplibre would have fired once the style finished loading. */
-		emit(event: string) {
-			for (const handler of this.handlers.get(event) ?? []) handler();
+		emit(event: string, payload: object = {}) {
+			for (const handler of [...(this.handlers.get(event) ?? [])]) handler(payload);
 		}
 	}
 	return { instances, FakeMap };
@@ -151,6 +160,27 @@ describe('BlendSkillMap', () => {
 		expect(instance.addSource).toHaveBeenCalledOnce();
 		// Every metric shares one grid, so switching metric leaves the camera alone.
 		expect(instance.fitBounds).toHaveBeenCalledOnce();
+	});
+
+	it('draws the cells on the bundled basemap when the online one cannot be fetched', async () => {
+		api.getBlendCellMetrics.mockResolvedValue(metrics());
+		const { findByRole } = render(BlendSkillMap, { jobId: 'job-1' });
+		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
+
+		const instance = maplibre.instances[0];
+		instance.emit('error', { error: new Error('Failed to fetch') });
+		expect(instance.setStyle).toHaveBeenCalledExactlyOnceWith(basemapStyle(BUNDLED_BASEMAP), {
+			diff: false
+		});
+		instance.emit('style.load');
+
+		await waitFor(() => expect(instance.sources.get('blend-skill')).toBeDefined());
+		// The picker says what is on screen, and choosing it does not restyle again.
+		expect(await findByRole('combobox', { name: /basemap/i })).toHaveProperty(
+			'value',
+			BUNDLED_BASEMAP
+		);
+		expect(instance.setStyle).toHaveBeenCalledOnce();
 	});
 
 	it('never builds a map when the blend has no per-point grids', async () => {
