@@ -184,16 +184,17 @@
 
 	onMount(() => {
 		if (!container) return;
+		const style = basemapStyle(DEFAULT_BASEMAP);
 		map = new maplibregl.Map({
 			container,
-			style: basemapStyle(DEFAULT_BASEMAP),
+			style,
 			center: [40, 9],
 			zoom: 4,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		// No basemap picker here, so a failed style quietly becomes the bundled one.
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, () => {});
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, () => {});
 		map.on('load', () => {
 			if (!map) return;
 			// Region first, then pickable areas, then the box, so each paints above the last.

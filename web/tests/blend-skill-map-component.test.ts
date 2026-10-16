@@ -12,7 +12,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import BlendSkillMap from '../src/routes/blends/BlendSkillMap.svelte';
 import type { BlendCellMetrics } from '../src/lib/api';
-import { BUNDLED_BASEMAP, basemapStyle } from '../src/lib/basemaps';
+import { BUNDLED_BASEMAP, DEFAULT_BASEMAP, basemapStyle } from '../src/lib/basemaps';
 
 // MapLibre needs a real WebGL context, which jsdom does not provide.
 const maplibre = vi.hoisted(() => {
@@ -168,7 +168,9 @@ describe('BlendSkillMap', () => {
 		await waitFor(() => expect(maplibre.instances).toHaveLength(1));
 
 		const instance = maplibre.instances[0];
-		instance.emit('error', { error: new Error('Failed to fetch') });
+		instance.emit('error', {
+			error: Object.assign(new Error('Failed to fetch'), { url: basemapStyle(DEFAULT_BASEMAP) })
+		});
 		expect(instance.setStyle).toHaveBeenCalledExactlyOnceWith(basemapStyle(BUNDLED_BASEMAP), {
 			diff: false
 		});

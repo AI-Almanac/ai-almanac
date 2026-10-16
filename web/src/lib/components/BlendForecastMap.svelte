@@ -458,9 +458,10 @@
 			boundaries.clearFromMap();
 			boundaries.reloadVisible();
 		});
-		map.setStyle(basemapStyle(next));
+		const style = basemapStyle(next);
+		map.setStyle(style);
 		stopWatchingBasemap?.();
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 	});
 
 	// Returns a CSS calc() that positions a tick/label along the track,
@@ -642,16 +643,17 @@
 
 	onMount(() => {
 		if (!mapHost) return;
+		const style = basemapStyle(selectedBasemap);
 		map = new maplibregl.Map({
 			container: mapHost,
-			style: basemapStyle(selectedBasemap),
+			style,
 			center: [20, 10],
 			zoom: 1.8,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 		map.on('load', () => {
 			mapReady = true;
 			liftBasemap();

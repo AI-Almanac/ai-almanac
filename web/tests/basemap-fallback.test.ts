@@ -34,10 +34,17 @@ class FakeMap {
 	}
 }
 
-function watch() {
+const remoteStyle = basemapStyle(DEFAULT_BASEMAP) as string;
+
+/** What maplibre emits when a request fails: an AJAXError naming the URL. */
+function failureOf(url: string) {
+	return { error: Object.assign(new Error('Failed to fetch'), { status: 0, url }) };
+}
+
+function watch(style: Parameters<typeof fallBackWhenBasemapFails>[1] = remoteStyle) {
 	const map = new FakeMap();
 	const onFallback = vi.fn();
-	const stop = fallBackWhenBasemapFails(map as never, onFallback);
+	const stop = fallBackWhenBasemapFails(map as never, style, onFallback);
 	return { map, onFallback, stop };
 }
 
@@ -49,7 +56,7 @@ afterEach(() => vi.useRealTimers());
 describe('fallBackWhenBasemapFails', () => {
 	it('switches to the bundled basemap when the style request fails', () => {
 		const { map, onFallback } = watch();
-		map.emit('error', { error: new Error('Failed to fetch') });
+		map.emit('error', failureOf(remoteStyle));
 
 		expect(map.setStyle).toHaveBeenCalledExactlyOnceWith(bundledStyle, { diff: false });
 		expect(onFallback).toHaveBeenCalledOnce();
@@ -68,15 +75,16 @@ describe('fallBackWhenBasemapFails', () => {
 	it('keeps an online style that loaded, even if it later errors or is slow to finish', () => {
 		const { map, onFallback } = watch();
 		map.emit('style.load');
-		map.emit('error', { error: new Error('sprite failed') });
+		map.emit('error', failureOf(remoteStyle));
 		vi.advanceTimersByTime(BASEMAP_WAIT_MS * 2);
 
 		expect(map.setStyle).not.toHaveBeenCalled();
 		expect(onFallback).not.toHaveBeenCalled();
 	});
 
-	it('ignores tile and data errors, which only happen once a style has parsed', () => {
+	it("ignores failures of other requests, such as the outgoing style's sprite or a tile", () => {
 		const { map, onFallback } = watch();
+		map.emit('error', failureOf('https://tiles.example/sprite@2x.json'));
 		map.emit('error', { error: new Error('tile 404'), sourceId: 'carto' });
 
 		expect(map.setStyle).not.toHaveBeenCalled();
@@ -85,18 +93,26 @@ describe('fallBackWhenBasemapFails', () => {
 
 	it('falls back only once, however many failures follow', () => {
 		const { map, onFallback } = watch();
-		map.emit('error', { error: new Error('Failed to fetch') });
-		map.emit('error', { error: new Error('Failed to fetch') });
+		map.emit('error', failureOf(remoteStyle));
+		map.emit('error', failureOf(remoteStyle));
 		vi.advanceTimersByTime(BASEMAP_WAIT_MS);
 
 		expect(map.setStyle).toHaveBeenCalledOnce();
 		expect(onFallback).toHaveBeenCalledOnce();
 	});
 
+	it('has nothing to watch for a style the app already holds', () => {
+		const { map, onFallback } = watch(bundledStyle);
+		vi.advanceTimersByTime(BASEMAP_WAIT_MS);
+
+		expect(map.setStyle).not.toHaveBeenCalled();
+		expect(onFallback).not.toHaveBeenCalled();
+	});
+
 	it('does nothing after the map stops watching, as on teardown', () => {
 		const { map, onFallback, stop } = watch();
 		stop();
-		map.emit('error', { error: new Error('Failed to fetch') });
+		map.emit('error', failureOf(remoteStyle));
 		vi.advanceTimersByTime(BASEMAP_WAIT_MS);
 
 		expect(map.setStyle).not.toHaveBeenCalled();

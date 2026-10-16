@@ -243,9 +243,10 @@
 		const host = mapHost;
 		if (!host) return;
 
+		const style = untrack(() => basemapStyle(basemap));
 		const instance = new maplibregl.Map({
 			container: host,
-			style: untrack(() => basemapStyle(basemap)),
+			style,
 			center: [20, 10],
 			zoom: 1.5,
 			attributionControl: false
@@ -270,7 +271,7 @@
 		 */
 		instance.on('style.load', () => (mapReady = true));
 		// A style that fails or hangs would leave the cells undrawn.
-		stopWatchingBasemap = fallBackWhenBasemapFails(instance, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(instance, style, useBundledBasemap);
 
 		const showHover = (event: maplibregl.MapLayerMouseEvent) => {
 			const feature = event.features?.[0];
@@ -334,11 +335,12 @@
 		const next = basemap;
 		if (!map || !mapReady || appliedBasemap === next) return;
 		appliedBasemap = next;
-		map.setStyle(basemapStyle(next));
+		const style = basemapStyle(next);
+		map.setStyle(style);
 		// setStyle discards the cell layers, so re-add them once the new style parses.
 		map.once('style.load', () => renderCells(false));
 		stopWatchingBasemap?.();
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 	});
 
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));

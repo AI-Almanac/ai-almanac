@@ -469,16 +469,17 @@
 
 	onMount(() => {
 		if (!mapContainer) return;
+		const style = basemapStyle(selectedBasemap);
 		map = new maplibregl.Map({
 			container: mapContainer,
-			style: basemapStyle(selectedBasemap),
+			style,
 			center: [80, 20],
 			zoom: 4,
 			attributionControl: false
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 		map.on('load', () => {
 			mapReady = true;
 			const attrib = mapContainer?.querySelector<HTMLDetailsElement>('.maplibregl-ctrl-attrib');
@@ -572,9 +573,10 @@
 		map.once('style.load', () => {
 			untrack(loadAll);
 		});
-		map.setStyle(basemapStyle(next));
+		const style = basemapStyle(next);
+		map.setStyle(style);
 		stopWatchingBasemap?.();
-		stopWatchingBasemap = fallBackWhenBasemapFails(map, useBundledBasemap);
+		stopWatchingBasemap = fallBackWhenBasemapFails(map, style, useBundledBasemap);
 	});
 
 	$effect(() => {
