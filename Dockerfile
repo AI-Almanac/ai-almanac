@@ -10,7 +10,7 @@ ENV VITE_GLOBUS_CLIENT_ID=$VITE_GLOBUS_CLIENT_ID \
 RUN npm run build
 
 # Install from pixi.lock so the image ships exactly the versions CI tests.
-FROM ghcr.io/prefix-dev/pixi:0.63.1-bookworm-slim AS builder
+FROM ghcr.io/prefix-dev/pixi:0.81.0-bookworm-slim AS builder
 # color-operations has no prebuilt wheel for 3.14 yet and compiles from source.
 # The pixi image has no CA bundle, and PyPI downloads verify against the system's.
 RUN apt-get update \
