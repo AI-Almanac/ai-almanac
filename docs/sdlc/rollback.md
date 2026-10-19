@@ -45,6 +45,13 @@ traffic back to the latest revision after every deploy, so the next push to
 `main`/`develop` undoes the rollback — it does not stop the pipeline.
 Revert or fix the offending commit before pushing again.
 
+A failed deploy can leave Modal ahead of Cloud Run: CI deploys the Modal
+apps before migrations and the Cloud Run deploy, so if either of those
+fails, the old revision keeps serving while Modal runs the new commit. Don't
+run a bare `rollback.sh` then (it would go one release further back).
+Resync Modal to the serving release instead:
+`scripts/rollback.sh <env> <serving-sha>`, which leaves traffic where it is.
+
 ## The migration caveat
 
 `rollback.sh` never touches the schema. Migrations run **before** traffic
