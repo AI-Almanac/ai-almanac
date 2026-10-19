@@ -87,11 +87,11 @@ target-version = "py312"
 # The single source of ruff's scope: pixi tasks, autofix.yml, and
 # claude-mention.yml all run bare `ruff format` / `ruff check` against it.
 include = [
-    "src/**/*.py",
-    "tests/**/*.py",
-    "modal/**/*.py",
-    "scripts/**/*.py",
-    "evals/**/*.py",
+    "src/**/*.{py,pyi}",
+    "tests/**/*.{py,pyi}",
+    "modal/**/*.{py,pyi}",
+    "scripts/**/*.{py,pyi}",
+    "evals/**/*.{py,pyi}",
 ]
 
 [tool.ruff.lint]

@@ -226,13 +226,17 @@ async def test_supervisor_cancels_running_workload(
     job_id = await _insert_job(user_id, "queued", config={"model_name": "cancel-test"})
     supervisor = asyncio.create_task(asyncio.to_thread(job_manager.execute_job, job_id))
     try:
-        # The supervisor polls the cancel flag only once the workload is up, so
-        # a cancel requested from here on must stop that workload. Racing the
-        # supervisor task fails fast if it exits without starting one.
+        # Once the workload is up, the supervisor stops it as soon as it sees
+        # cancel_requested_at, even if its own "running" write lands after the
+        # cancel's "canceling". Racing the supervisor task fails fast, with its
+        # own error, if it exits without starting the workload.
         started = asyncio.create_task(workload_started.wait())
         await asyncio.wait({started, supervisor}, timeout=60, return_when=asyncio.FIRST_COMPLETED)
         started.cancel()
-        assert workload_started.is_set(), "supervisor did not start the workload"
+        if not workload_started.is_set():
+            if supervisor.done():
+                supervisor.result()
+            pytest.fail("supervisor did not start the workload")
 
         await job_manager.request_cancel(job_id, user_id)
         await asyncio.wait_for(supervisor, timeout=15)

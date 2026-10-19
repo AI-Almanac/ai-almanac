@@ -27,7 +27,7 @@ ruleset_id() {
 
 # Order-independent form of a ruleset, so reordering rules is not drift.
 canonical() {
-	jq -S '.rules |= sort_by(.type) | .bypass_actors |= sort_by(.actor_type, .actor_id)'
+	jq -S '.rules |= sort_by(.type) | .bypass_actors = (.bypass_actors // [] | sort_by(.actor_type, .actor_id))'
 }
 
 # The live ruleset restricted to the keys the file declares: GitHub adds
