@@ -101,6 +101,17 @@ def test_sha_picks_the_newest_revision_built_from_it(tmp_path: Path) -> None:
     assert _select("revision_for_sha", GOOD, revisions, tmp_path) == f"rev-3\t{GOOD}"
 
 
+def test_sha_prefers_the_serving_revision_so_a_resync_leaves_traffic_alone(
+    tmp_path: Path,
+) -> None:
+    # rev-4 came from a config-only apply after a rollback pinned rev-3.
+    tsv = f"rev-4\t{GOOD}\nrev-3\t{GOOD}\nrev-2\t{OLDER}\n"
+
+    result = _run(f'revision_for_sha "{GOOD}" rev-3', tmp_path, stdin=tsv)
+
+    assert result.stdout.strip() == f"rev-3\t{GOOD}"
+
+
 @needs_jq
 def test_serving_revision_ignores_tagged_zero_percent_entries(tmp_path: Path) -> None:
     traffic = [

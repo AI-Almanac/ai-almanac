@@ -58,8 +58,14 @@ previous_revision() {
 		found && $2 != image { print; exit }'
 }
 
+# Prefers the serving revision ($2) when it runs this sha, so a resync leaves
+# traffic alone even if a config-only apply made a newer same-image revision.
 revision_for_sha() {
-	awk -F'\t' -v sha="$1" '$2 == sha { print; exit }'
+	awk -F'\t' -v sha="$1" -v serving="${2:-}" '
+		$2 != sha { next }
+		$1 == serving { print; found = 1; exit }
+		first == "" { first = $0 }
+		END { if (!found && first != "") print first }'
 }
 
 # --- Cloud Run queries (read-only, run even under --dry-run) -----------------
@@ -227,7 +233,7 @@ resolve_target() {
 	revisions=$(ready_revisions_newest_first) || die "could not list revisions of $SERVICE"
 	if [[ -n $REQUESTED_SHA ]]; then
 		sha=$(resolve_commit "$REQUESTED_SHA") || exit 1
-		target=$(revision_for_sha "$sha" <<<"$revisions")
+		target=$(revision_for_sha "$sha" "$serving" <<<"$revisions")
 		[[ -n $target ]] || die "no ready $SERVICE revision runs image tag $sha"
 	else
 		target=$(previous_revision "$serving" <<<"$revisions")
@@ -263,6 +269,8 @@ main() {
 	# Everything that can fail before Modal deploys runs before traffic moves.
 	log "1/4 preparing $TARGET_SHA in a temporary worktree"
 	prepare_release
+	# Again: a deploy could have been approved during the install.
+	ensure_no_deploy_running
 
 	log "2/4 routing 100% of traffic to $TARGET_REVISION"
 	run gcloud run services update-traffic "$SERVICE" --region "$REGION" --project "$PROJECT" \
