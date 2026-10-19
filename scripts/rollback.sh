@@ -92,6 +92,22 @@ confirm() {
 	[[ $reply == [yY] ]] || die "aborted"
 }
 
+# A running deploy ends by routing traffic to latest, which would undo this.
+ensure_no_deploy_running() {
+	local workflow="deploy-$ENV_NAME.yml" running
+	if ! command -v gh >/dev/null; then
+		log "gh not found; check by hand that no $workflow run is in progress"
+		return 0
+	fi
+	running=$(gh run list --workflow "$workflow" --limit 10 --json status \
+		--jq '[.[] | select(.status != "completed")] | length') || {
+		log "could not list $workflow runs; check by hand that none is in progress"
+		return 0
+	}
+	[[ $running == 0 ]] ||
+		die "$workflow has $running run(s) in progress; wait for or cancel them, then rerun"
+}
+
 WORKTREE=""
 remove_worktree() {
 	if [[ -n $WORKTREE ]]; then
@@ -100,7 +116,7 @@ remove_worktree() {
 }
 trap remove_worktree EXIT
 
-checkout_release() {
+prepare_release() {
 	if $DRY_RUN; then
 		RELEASE_DIR="<temp-worktree>"
 	else
@@ -111,6 +127,16 @@ checkout_release() {
 	# pyproject force-includes web/build, so pixi cannot install the package
 	# (and therefore the env) without it. Modal deploys don't need the SPA.
 	run mkdir -p "$RELEASE_DIR/web/build"
+	require_modal_apps
+	run_in "$RELEASE_DIR" pixi install --locked
+}
+
+require_modal_apps() {
+	$DRY_RUN && return 0
+	local app
+	for app in "${MODAL_APPS[@]}"; do
+		[[ -f "$RELEASE_DIR/modal/$app.py" ]] || die "modal/$app.py does not exist at $TARGET_SHA; roll back by hand"
+	done
 }
 
 deploy_modal_apps() {
@@ -209,6 +235,7 @@ main() {
 	# Checked before traffic moves, so a stale clone can't strand Modal on the bad release.
 	git cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null ||
 		die "commit $TARGET_SHA is not in this clone; fetch it, then rerun"
+	ensure_no_deploy_running
 
 	log "env:     $ENV_NAME ($SERVICE, Modal env $MODAL_ENV)"
 	log "serving: $serving"
@@ -216,18 +243,23 @@ main() {
 	[[ $TARGET_REVISION != "$serving" ]] || log "target already serves traffic; resyncing Modal apps only"
 	confirm
 
-	log "1/3 routing 100% of traffic to $TARGET_REVISION"
+	# Everything that can fail before Modal deploys runs before traffic moves.
+	log "1/4 preparing $TARGET_SHA in a temporary worktree"
+	prepare_release
+
+	log "2/4 routing 100% of traffic to $TARGET_REVISION"
 	run gcloud run services update-traffic "$SERVICE" --region "$REGION" --project "$PROJECT" \
 		--to-revisions "$TARGET_REVISION=100"
 
-	log "2/3 redeploying Modal apps from $TARGET_SHA"
-	checkout_release
+	log "3/4 redeploying Modal apps from $TARGET_SHA"
 	deploy_modal_apps
 
-	log "3/3 smoke-testing $BASE_URL/ready"
+	log "4/4 smoke-testing $BASE_URL/ready"
 	smoke_ready
 
 	log "done. Traffic stays pinned to $TARGET_REVISION until the next deploy moves it to latest: revert or fix the bad commit first."
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+	main "$@"
+fi

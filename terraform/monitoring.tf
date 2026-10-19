@@ -84,19 +84,19 @@ resource "google_monitoring_alert_policy" "ready_down" {
   notification_channels = [google_monitoring_notification_channel.email.id]
 }
 
-# Uptime checks add a steady trickle of /ready requests, which keeps the
-# ratio from swinging on a single failed request at low traffic.
+# Every env, with or without a hostname. Where an uptime check exists, its
+# steady /ready traffic keeps the ratio from swinging on one failed request.
 resource "google_monitoring_alert_policy" "backend_5xx" {
-  for_each = local.monitored_hosts
+  for_each = local.env_config
 
   display_name = "almanac ${each.key}: 5xx ratio above 5%"
   combiner     = "OR"
 
   conditions {
-    display_name = "${local.env_config[each.key].service_name} 5xx / all requests > 5% for 5m"
+    display_name = "${each.value.service_name} 5xx / all requests > 5% for 5m"
     condition_threshold {
-      filter             = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"${local.env_config[each.key].service_name}\" AND metric.label.response_code_class=\"5xx\""
-      denominator_filter = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"${local.env_config[each.key].service_name}\""
+      filter             = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"${each.value.service_name}\" AND metric.label.response_code_class=\"5xx\""
+      denominator_filter = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"${each.value.service_name}\""
       comparison         = "COMPARISON_GT"
       threshold_value    = 0.05
       duration           = "300s"
@@ -116,7 +116,7 @@ resource "google_monitoring_alert_policy" "backend_5xx" {
   }
 
   documentation {
-    content   = "More than 5% of requests to ${local.env_config[each.key].service_name} returned 5xx for 5 minutes. If this started with a deploy, roll back with `scripts/rollback.sh ${each.key}`. ${local.runbook}"
+    content   = "More than 5% of requests to ${each.value.service_name} returned 5xx for 5 minutes. If this started with a deploy, roll back with `scripts/rollback.sh ${each.key}`. ${local.runbook}"
     mime_type = "text/markdown"
   }
 

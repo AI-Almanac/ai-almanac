@@ -19,6 +19,8 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
   `artifact_registry.tf` (image repo + CI service account),
   `batch.tf` (ROMP batch worker), `wif.tf` (GitHub Actions keyless auth),
   `monitoring.tf` (uptime checks and email alerts for both envs and Cloud SQL).
+  `alert_email` is required: add it to an existing `terraform.tfvars` before the
+  next plan.
 - `moved.tf` — state moves from the pre-module layout; delete once every
   workspace has applied past the refactor.
 
@@ -26,7 +28,7 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
 
 ```bash
 cp backend.hcl.example backend.hcl          # state bucket: ai-almanac-tf-state
-cp terraform.tfvars.example terraform.tfvars # fill in the two DB passwords
+cp terraform.tfvars.example terraform.tfvars # fill in the two DB passwords and alert_email
 tofu init -backend-config=backend.hcl
 tofu plan
 ```

@@ -20,23 +20,24 @@ It:
 1. Picks the newest ready Cloud Run revision older than the one serving
    traffic that runs a different image — or, given `<sha>`, the revision
    built from that commit (revision images are tagged with the commit SHA).
-2. Routes 100% of traffic to it. This is the user-visible fix and lands
-   within a minute.
-3. Checks that commit out in a temporary git worktree and runs
-   `modal deploy` for each app into the matching Modal environment
-   (`main` for prod, `staging` for staging). Expect a few minutes for the
-   pixi environment install; until it finishes, the old backend is calling
-   the new Modal apps.
+2. Checks that commit out in a temporary git worktree and installs its
+   pixi environment (a few minutes when uncached). This happens before any
+   traffic moves, so a broken checkout or lockfile stops the rollback early.
+3. Routes 100% of traffic to the target revision, then runs `modal deploy`
+   for each app into the matching Modal environment (`main` for prod,
+   `staging` for staging).
 4. Smokes `/ready` until it returns 200.
 
-It asks for confirmation before changing anything (`--yes` skips). You need
-`gcloud` authenticated for `ai-almanac`, `jq`, `pixi`, and a Modal profile
-that can deploy to the target environment.
+It refuses to run while a `deploy-<env>.yml` run is in progress, because
+that run ends by routing traffic to latest and would undo the rollback. It
+asks for confirmation before changing anything (`--yes` skips). You need
+`gcloud` authenticated for `ai-almanac`, `jq`, `pixi`, `gh` (for the deploy
+check), and a Modal profile that can deploy to the target environment.
 
-The script checks that the target commit is in your clone before it moves
-traffic. If the Modal step still fails, traffic has already moved: rerun
-with the same `<sha>` (the traffic switch is a no-op when that revision
-already serves) or deploy the apps by hand from a checkout of that commit.
+If a `modal deploy` still fails (e.g. Modal auth), traffic has already
+moved: rerun with the same `<sha>` (the traffic switch is a no-op when that
+revision already serves) or deploy the apps by hand from a checkout of that
+commit.
 
 Note: the rollback pins traffic to one revision. The deploy workflows route
 traffic back to the latest revision after every deploy, so the next push to
