@@ -6,7 +6,7 @@
 # is left as is; see "The migration caveat" in docs/sdlc/rollback.md.
 #
 # Usage:
-#   scripts/rollback.sh [--dry-run] [--yes] <staging|prod> [<sha>]
+#   scripts/rollback.sh [--dry-run] [--yes] [--skip-deploy-check] <staging|prod> [<sha>]
 #
 #   <sha>      roll to the newest ready revision built from this commit.
 #              Without it: the newest ready revision older than the one now
@@ -14,8 +14,10 @@
 #   --dry-run  resolve the target, then print the commands that would change
 #              anything instead of running them.
 #   --yes      skip the confirmation prompt.
+#   --skip-deploy-check
+#              don't ask gh whether a deploy run is in progress (check by hand).
 #
-# Needs: gcloud (authenticated for the project), jq, git, pixi, curl, and a
+# Needs: gcloud (authenticated for the project), jq, git, pixi, curl, gh, and a
 # Modal profile with deploy access to the target Modal environment.
 
 set -euo pipefail
@@ -26,7 +28,7 @@ MODAL_APPS=(app blending_app forecasts_app)
 
 die() { printf 'rollback: %s\n' "$*" >&2; exit 1; }
 log() { printf 'rollback: %s\n' "$*" >&2; }
-usage() { sed -n '8,16s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '8,18s/^# \{0,1\}//p' "$0"; }
 
 # --- command runners: everything that changes state goes through these --------
 quote() { printf '%q ' "$@"; }
@@ -95,15 +97,10 @@ confirm() {
 # A running deploy ends by routing traffic to latest, which would undo this.
 ensure_no_deploy_running() {
 	local workflow="deploy-$ENV_NAME.yml" running
-	if ! command -v gh >/dev/null; then
-		log "gh not found; check by hand that no $workflow run is in progress"
-		return 0
-	fi
+	$SKIP_DEPLOY_CHECK && return 0
 	running=$(gh run list --workflow "$workflow" --limit 10 --json status \
-		--jq '[.[] | select(.status != "completed")] | length') || {
-		log "could not list $workflow runs; check by hand that none is in progress"
-		return 0
-	}
+		--jq '[.[] | select(.status != "completed")] | length') ||
+		die "could not ask gh about $workflow runs; check by hand that none is in progress, then pass --skip-deploy-check"
 	[[ $running == 0 ]] ||
 		die "$workflow has $running run(s) in progress; wait for or cancel them, then rerun"
 }
@@ -122,7 +119,10 @@ prepare_release() {
 	else
 		RELEASE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/almanac-rollback.XXXXXX")
 	fi
-	run git worktree add --detach "$RELEASE_DIR" "$TARGET_SHA"
+	if ! run git worktree add --detach "$RELEASE_DIR" "$TARGET_SHA"; then
+		rmdir "$RELEASE_DIR"
+		die "could not check out $TARGET_SHA"
+	fi
 	$DRY_RUN || WORKTREE=$RELEASE_DIR
 	# pyproject force-includes web/build, so pixi cannot install the package
 	# (and therefore the env) without it. Modal deploys don't need the SPA.
@@ -140,9 +140,11 @@ require_modal_apps() {
 }
 
 deploy_modal_apps() {
-	local app
+	local app deployed=()
 	for app in "${MODAL_APPS[@]}"; do
-		run_in "$RELEASE_DIR" pixi run --locked python -m modal deploy --env "$MODAL_ENV" "modal/$app.py"
+		run_in "$RELEASE_DIR" pixi run --locked python -m modal deploy --env "$MODAL_ENV" "modal/$app.py" ||
+			die "modal deploy of $app failed after traffic moved (already redeployed: ${deployed[*]:-none}). Fix the cause, then rerun: scripts/rollback.sh $ENV_NAME $TARGET_SHA"
+		deployed+=("$app")
 	done
 }
 
@@ -167,11 +169,13 @@ smoke_ready() {
 parse_args() {
 	DRY_RUN=false
 	ASSUME_YES=false
+	SKIP_DEPLOY_CHECK=false
 	local positional=() arg
 	for arg in "$@"; do
 		case $arg in
 		--dry-run) DRY_RUN=true ;;
 		--yes | -y) ASSUME_YES=true ;;
+		--skip-deploy-check) SKIP_DEPLOY_CHECK=true ;;
 		-h | --help)
 			usage
 			exit 0
@@ -207,9 +211,10 @@ select_env() {
 # Prints "<revision>\t<sha>" for the revision to roll to.
 resolve_target() {
 	local serving=$1 revisions target sha
-	revisions=$(ready_revisions_newest_first)
+	# errexit is off inside the $(...) that calls this, so failures need explicit exits.
+	revisions=$(ready_revisions_newest_first) || die "could not list revisions of $SERVICE"
 	if [[ -n $REQUESTED_SHA ]]; then
-		sha=$(resolve_commit "$REQUESTED_SHA")
+		sha=$(resolve_commit "$REQUESTED_SHA") || exit 1
 		target=$(revision_for_sha "$sha" <<<"$revisions")
 		[[ -n $target ]] || die "no ready $SERVICE revision runs image tag $sha"
 	else

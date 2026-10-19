@@ -29,7 +29,9 @@ It:
 4. Smokes `/ready` until it returns 200.
 
 It refuses to run while a `deploy-<env>.yml` run is in progress, because
-that run ends by routing traffic to latest and would undo the rollback. It
+that run ends by routing traffic to latest and would undo the rollback. If
+`gh` can't answer, check the Actions tab yourself and pass
+`--skip-deploy-check`. It
 asks for confirmation before changing anything (`--yes` skips). You need
 `gcloud` authenticated for `ai-almanac`, `jq`, `pixi`, `gh` (for the deploy
 check), and a Modal profile that can deploy to the target environment.
