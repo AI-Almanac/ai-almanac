@@ -17,7 +17,8 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
   `storage.tf` (data bucket), `secrets.tf` (Secret Manager secrets),
   `load_balancer.tf` (one LB fronting both envs by hostname),
   `artifact_registry.tf` (image repo + CI service account),
-  `batch.tf` (ROMP batch worker), `wif.tf` (GitHub Actions keyless auth).
+  `batch.tf` (ROMP batch worker), `wif.tf` (GitHub Actions keyless auth),
+  `monitoring.tf` (uptime checks and email alerts for both envs and Cloud SQL).
 - `moved.tf` — state moves from the pre-module layout; delete once every
   workspace has applied past the refactor.
 
