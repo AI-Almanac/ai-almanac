@@ -10,7 +10,7 @@
 #
 #   <sha>      roll to the newest ready revision built from this commit.
 #              Without it: the newest ready revision older than the one now
-#              serving traffic that runs a different image.
+#              serving traffic that was built from a different commit.
 #   --dry-run  resolve the target, then print the commands that would change
 #              anything instead of running them.
 #   --yes      skip the confirmation prompt.
@@ -51,7 +51,7 @@ run_in() {
 	fi
 }
 
-# --- revision selection (pure: TSV of "<revision>\t<image tag>" on stdin) ------
+# --- revision selection (pure: TSV of "<revision>\t<commit sha>" on stdin) ------
 previous_revision() {
 	awk -F'\t' -v serving="$1" '
 		$1 == serving { found = 1; image = $2; next }
@@ -74,11 +74,18 @@ serving_revision() {
 		jq -r '[.status.traffic[] | select(.percent == 100) | .revisionName] | if length == 1 then .[0] else empty end'
 }
 
+# Cloud Run stores the image by digest, so the commit comes from the
+# commit-sha label that deploy-cloudrun stamps on each revision, then from the
+# tag of the image as deployed (client.knative.dev/user-image).
 ready_revisions_newest_first() {
 	gcloud run revisions list --service "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json |
-		jq -r 'map(select(any(.status.conditions[]?; .type == "Ready" and .status == "True")))
+		jq -r 'def commit_sha:
+				.metadata.labels["commit-sha"]
+				// (.metadata.annotations["client.knative.dev/user-image"] // "" | capture(":(?<sha>[0-9a-f]{40})$").sha)
+				// "unknown";
+			map(select(any(.status.conditions[]?; .type == "Ready" and .status == "True")))
 			| sort_by(.metadata.creationTimestamp) | reverse | .[]
-			| [.metadata.name, (.spec.containers[0].image | sub("^.*:"; ""))] | @tsv'
+			| [.metadata.name, commit_sha] | @tsv'
 }
 
 fetch_origin() {
@@ -234,10 +241,10 @@ resolve_target() {
 	if [[ -n $REQUESTED_SHA ]]; then
 		sha=$(resolve_commit "$REQUESTED_SHA") || exit 1
 		target=$(revision_for_sha "$sha" "$serving" <<<"$revisions")
-		[[ -n $target ]] || die "no ready $SERVICE revision runs image tag $sha"
+		[[ -n $target ]] || die "no ready $SERVICE revision was built from $sha"
 	else
 		target=$(previous_revision "$serving" <<<"$revisions")
-		[[ -n $target ]] || die "no ready revision of $SERVICE older than $serving with a different image"
+		[[ -n $target ]] || die "no ready revision of $SERVICE older than $serving built from a different commit"
 	fi
 	printf '%s\n' "$target"
 }
@@ -254,7 +261,7 @@ main() {
 	target=$(resolve_target "$serving")
 	IFS=$'\t' read -r TARGET_REVISION TARGET_SHA <<<"$target"
 	[[ $TARGET_SHA =~ ^[0-9a-f]{40}$ ]] ||
-		die "$TARGET_REVISION runs image tag '$TARGET_SHA', not a commit SHA; pass <sha> explicitly"
+		die "can't tell which commit $TARGET_REVISION was built from (got '$TARGET_SHA'); pass <sha> explicitly"
 	# Checked before traffic moves, so a stale clone can't strand Modal on the bad release.
 	git cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null ||
 		die "commit $TARGET_SHA is not in this clone; fetch it, then rerun"
