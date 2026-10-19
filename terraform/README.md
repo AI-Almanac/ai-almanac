@@ -17,7 +17,10 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
   `storage.tf` (data bucket), `secrets.tf` (Secret Manager secrets),
   `load_balancer.tf` (one LB fronting both envs by hostname),
   `artifact_registry.tf` (image repo + CI service account),
-  `batch.tf` (ROMP batch worker), `wif.tf` (GitHub Actions keyless auth).
+  `batch.tf` (ROMP batch worker), `wif.tf` (GitHub Actions keyless auth),
+  `monitoring.tf` (uptime checks and email alerts for both envs and Cloud SQL).
+  `alert_email` is required: add it to an existing `terraform.tfvars` before the
+  next plan.
 - `moved.tf` — state moves from the pre-module layout; delete once every
   workspace has applied past the refactor.
 
@@ -25,7 +28,7 @@ OpenTofu configuration for the GCP deployment (project `ai-almanac`). Use the
 
 ```bash
 cp backend.hcl.example backend.hcl          # state bucket: ai-almanac-tf-state
-cp terraform.tfvars.example terraform.tfvars # fill in the two DB passwords
+cp terraform.tfvars.example terraform.tfvars # fill in the two DB passwords and alert_email
 tofu init -backend-config=backend.hcl
 tofu plan
 ```
@@ -40,8 +43,9 @@ deploy prod (`.github/workflows/deploy-*.yml`), authenticating via Workload
 Identity Federation as `almanac-ci@`. The `romp` image comes from hholb/ROMP's
 publish workflow, which authenticates the same way as `romp-publisher@`, a
 push-only account trusted only from that repo's `main` and `v*` tags.
-Terraform deliberately ignores image, label, and scaling drift that CI deploys
-create — `tofu apply` never rolls a revision unless the config itself changed.
+Terraform deliberately ignores image, label, scaling, and traffic drift that CI
+deploys and `scripts/rollback.sh` create — `tofu apply` never rolls a revision
+unless the config itself changed, and never moves traffic.
 
 ## Manual, out-of-band steps
 
