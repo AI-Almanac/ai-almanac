@@ -94,15 +94,27 @@ confirm() {
 	[[ $reply == [yY] ]] || die "aborted"
 }
 
-# A running deploy ends by routing traffic to latest, which would undo this.
+# The deploy job ends by routing traffic to latest, which would undo this.
+# A run that is only soaking in its verify job is fine; one waiting for
+# approval to start its deploy job is not.
 ensure_no_deploy_running() {
-	local workflow="deploy-$ENV_NAME.yml" running
+	local workflow="deploy-$ENV_NAME.yml" run_ids id
 	$SKIP_DEPLOY_CHECK && return 0
-	running=$(gh run list --workflow "$workflow" --limit 10 --json status \
-		--jq '[.[] | select(.status != "completed")] | length') ||
-		die "could not ask gh about $workflow runs; check by hand that none is in progress, then pass --skip-deploy-check"
-	[[ $running == 0 ]] ||
-		die "$workflow has $running run(s) in progress; wait for or cancel them, then rerun"
+	run_ids=$(gh run list --workflow "$workflow" --limit 10 --json databaseId,status \
+		--jq '.[] | select(.status != "completed") | .databaseId') ||
+		die "could not ask gh about $workflow runs; check by hand that none is deploying, then pass --skip-deploy-check"
+	for id in $run_ids; do
+		deploy_job_finished "$id" ||
+			die "$workflow run $id has not finished its deploy job (pending approval counts); wait for or cancel it, then rerun"
+	done
+}
+
+deploy_job_finished() {
+	local finished
+	finished=$(gh run view "$1" --json jobs \
+		--jq '[.jobs[] | select(.name == "deploy" and .status == "completed")] | length') ||
+		die "could not ask gh about run $1; check it by hand, then pass --skip-deploy-check"
+	[[ $finished != 0 ]]
 }
 
 WORKTREE=""
