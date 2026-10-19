@@ -18,8 +18,9 @@ scripts/rollback.sh prod             # or: staging; append <sha> for a specific 
 It:
 
 1. Picks the newest ready Cloud Run revision older than the one serving
-   traffic that runs a different image — or, given `<sha>`, the revision
-   built from that commit (revision images are tagged with the commit SHA).
+   traffic that was built from a different commit — or, given `<sha>`, the revision
+   built from that commit (read from the `commit-sha` label CI puts on each
+   revision).
 2. Checks that commit out in a temporary git worktree and installs its
    pixi environment (a few minutes when uncached). This happens before any
    traffic moves, so a broken checkout or lockfile stops the rollback early.

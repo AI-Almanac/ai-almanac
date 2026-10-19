@@ -16,6 +16,7 @@ GOOD = "a" * 40
 BAD = "b" * 40
 OLDER = "c" * 40
 IMAGE = "us-central1-docker.pkg.dev/ai-almanac/almanac/ai-almanac-web"
+DIGEST = "d" * 64
 
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
 
@@ -67,10 +68,23 @@ def _select(function: str, arg: str, revisions: list[tuple[str, str]], tmp_path:
     return _run(f'{function} "{arg}"', tmp_path, stdin=tsv).stdout.strip()
 
 
-def _revision(name: str, created: str, tag: str, ready: bool = True) -> dict:
+def _revision(
+    name: str,
+    created: str,
+    *,
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    ready: bool = True,
+) -> dict:
+    """A revision as Cloud Run returns it: the image pinned by digest."""
     return {
-        "metadata": {"name": name, "creationTimestamp": created},
-        "spec": {"containers": [{"image": f"{IMAGE}:{tag}"}]},
+        "metadata": {
+            "name": name,
+            "creationTimestamp": created,
+            "labels": labels or {},
+            "annotations": annotations or {},
+        },
+        "spec": {"containers": [{"image": f"{IMAGE}@sha256:{DIGEST}"}]},
         "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]},
     }
 
@@ -135,11 +149,11 @@ def test_serving_revision_is_empty_when_traffic_is_split(tmp_path: Path) -> None
 
 
 @needs_jq
-def test_ready_revisions_are_newest_first_with_their_image_tags(tmp_path: Path) -> None:
+def test_ready_revisions_are_newest_first_with_their_commits(tmp_path: Path) -> None:
     revisions = [
-        _revision("rev-2", "2026-10-19T02:00:00Z", OLDER),
-        _revision("rev-4", "2026-10-19T04:00:00Z", BAD, ready=False),
-        _revision("rev-3", "2026-10-19T03:00:00Z", GOOD),
+        _revision("rev-2", "2026-10-19T02:00:00Z", labels={"commit-sha": OLDER}),
+        _revision("rev-4", "2026-10-19T04:00:00Z", labels={"commit-sha": BAD}, ready=False),
+        _revision("rev-3", "2026-10-19T03:00:00Z", labels={"commit-sha": GOOD}),
     ]
     _write(tmp_path, "gcloud.json", revisions)
 
@@ -168,3 +182,26 @@ def test_deploy_check_refuses_a_run_waiting_to_deploy(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "run 8 has not finished its deploy job" in result.stderr
+
+
+@needs_jq
+def test_commit_falls_back_to_the_deployed_image_tag(tmp_path: Path) -> None:
+    user_image = {"client.knative.dev/user-image": f"{IMAGE}:{GOOD}"}
+    _write(
+        tmp_path,
+        "gcloud.json",
+        [_revision("rev-3", "2026-10-19T03:00:00Z", annotations=user_image)],
+    )
+
+    result = _run("select_env prod; ready_revisions_newest_first", tmp_path)
+
+    assert result.stdout.splitlines() == [f"rev-3\t{GOOD}"]
+
+
+@needs_jq
+def test_commit_is_unknown_without_a_label_or_tagged_image(tmp_path: Path) -> None:
+    _write(tmp_path, "gcloud.json", [_revision("rev-3", "2026-10-19T03:00:00Z")])
+
+    result = _run("select_env prod; ready_revisions_newest_first", tmp_path)
+
+    assert result.stdout.splitlines() == ["rev-3\tunknown"]
