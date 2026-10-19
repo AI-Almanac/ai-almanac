@@ -3,11 +3,15 @@
 // stays visible; in shared deployments non-admins see a reduced surface.
 
 import { getAccount, type Account } from './api';
+import { USE_BEARER_AUTH } from './api/core';
+import { hasApiAccessToken } from './auth';
 
 class AccountState {
 	account = $state<Account | null>(null);
 	loaded = $state(false);
 	loading = $state(false);
+	/** Set when `/auth/me` fails: the browser had no sign-in to send, so the server would have answered anonymous. */
+	failedWithoutCredential = $state(false);
 
 	/**
 	 * An admin previewing the interface a regular user gets.
@@ -38,12 +42,13 @@ class AccountState {
 	}
 
 	/**
-	 * No signed-in account once loading has finished. Only an account that says
-	 * it is signed in counts as one: if `/auth/me` failed, the pages ask the user to
-	 * sign in instead of showing setup forms whose requests would all 401.
+	 * No signed-in account once loading has finished. When `/auth/me` failed, this
+	 * follows from what the server would have checked: a browser with no token is
+	 * signed out, and one holding a token (or an install without sign-in) is not.
 	 */
 	get isAnonymous(): boolean {
-		return this.loaded && this.account?.anonymous !== false;
+		if (!this.loaded) return false;
+		return this.account ? this.account.anonymous === true : this.failedWithoutCredential;
 	}
 
 	get isShared(): boolean {
@@ -75,6 +80,7 @@ class AccountState {
 			this.account = await getAccount();
 		} catch {
 			this.account = null;
+			this.failedWithoutCredential = USE_BEARER_AUTH && !hasApiAccessToken();
 		} finally {
 			this.loaded = true;
 			this.loading = false;
