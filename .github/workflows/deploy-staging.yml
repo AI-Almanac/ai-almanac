@@ -119,6 +119,11 @@ jobs:
           region: us-central1
           image: ${{ env.AR_IMAGE }}:${{ github.sha }}
 
+      # scripts/rollback.sh pins traffic to one revision, and a deploy to a
+      # pinned service lands at 0%. A deploy means "serve this build".
+      - name: Route traffic to the new revision
+        run: gcloud run services update-traffic "$SERVICE" --region "$REGION" --to-latest
+
   # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
   # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
   # live in the script). On failure, Claude triages the captured errors

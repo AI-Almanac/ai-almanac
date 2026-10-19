@@ -73,8 +73,11 @@ ready_revisions_newest_first() {
 			| [.metadata.name, (.spec.containers[0].image | sub("^.*:"; ""))] | @tsv'
 }
 
+fetch_origin() {
+	git fetch --quiet origin || log "git fetch failed; using local refs"
+}
+
 resolve_commit() {
-	git fetch --quiet origin || log "git fetch failed; resolving $1 from local refs"
 	git rev-parse --verify --quiet "$1^{commit}" || die "unknown commit: $1"
 }
 
@@ -101,10 +104,10 @@ checkout_release() {
 	if $DRY_RUN; then
 		RELEASE_DIR="<temp-worktree>"
 	else
-		WORKTREE=$(mktemp -d "${TMPDIR:-/tmp}/almanac-rollback.XXXXXX")
-		RELEASE_DIR=$WORKTREE
+		RELEASE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/almanac-rollback.XXXXXX")
 	fi
 	run git worktree add --detach "$RELEASE_DIR" "$TARGET_SHA"
+	$DRY_RUN || WORKTREE=$RELEASE_DIR
 	# pyproject force-includes web/build, so pixi cannot install the package
 	# (and therefore the env) without it. Modal deploys don't need the SPA.
 	run mkdir -p "$RELEASE_DIR/web/build"
@@ -196,12 +199,16 @@ main() {
 	cd "$(git rev-parse --show-toplevel)"
 
 	local serving target
+	fetch_origin
 	serving=$(serving_revision)
 	[[ -n $serving ]] || die "$SERVICE is not sending 100% of traffic to one revision; resolve the split by hand"
 	target=$(resolve_target "$serving")
 	IFS=$'\t' read -r TARGET_REVISION TARGET_SHA <<<"$target"
 	[[ $TARGET_SHA =~ ^[0-9a-f]{40}$ ]] ||
 		die "$TARGET_REVISION runs image tag '$TARGET_SHA', not a commit SHA; pass <sha> explicitly"
+	# Checked before traffic moves, so a stale clone can't strand Modal on the bad release.
+	git cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null ||
+		die "commit $TARGET_SHA is not in this clone; fetch it, then rerun"
 
 	log "env:     $ENV_NAME ($SERVICE, Modal env $MODAL_ENV)"
 	log "serving: $serving"
@@ -220,7 +227,7 @@ main() {
 	log "3/3 smoke-testing $BASE_URL/ready"
 	smoke_ready
 
-	log "done. The next push to the deploy branch rolls forward again: revert or fix the bad commit."
+	log "done. Traffic stays pinned to $TARGET_REVISION until the next deploy moves it to latest: revert or fix the bad commit first."
 }
 
 main "$@"

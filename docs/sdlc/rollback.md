@@ -33,13 +33,15 @@ It asks for confirmation before changing anything (`--yes` skips). You need
 `gcloud` authenticated for `ai-almanac`, `jq`, `pixi`, and a Modal profile
 that can deploy to the target environment.
 
-If the Modal step fails, traffic has already moved: rerun with the same
-`<sha>` (it skips the traffic switch when that revision already serves)
-or deploy the apps by hand from a checkout of that commit.
+The script checks that the target commit is in your clone before it moves
+traffic. If the Modal step still fails, traffic has already moved: rerun
+with the same `<sha>` (the traffic switch is a no-op when that revision
+already serves) or deploy the apps by hand from a checkout of that commit.
 
-Note: a later push to `main`/`develop` deploys a new revision with 100%
-traffic again — rolling back does not stop the pipeline. Revert or fix the
-offending commit promptly.
+Note: the rollback pins traffic to one revision. The deploy workflows route
+traffic back to the latest revision after every deploy, so the next push to
+`main`/`develop` undoes the rollback — it does not stop the pipeline.
+Revert or fix the offending commit before pushing again.
 
 ## The migration caveat
 

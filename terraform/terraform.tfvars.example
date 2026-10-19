@@ -42,4 +42,4 @@ enable_run_code         = true
 enable_run_code_sandbox = true
 
 # Monitoring — uptime, 5xx, and Cloud SQL alerts go here (monitoring.tf).
-alert_email = "hholbrook@uchicago.edu"
+alert_email = "CHANGE-ME@example.org"
