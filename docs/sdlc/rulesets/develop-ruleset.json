@@ -32,7 +32,6 @@
     }
   ],
   "bypass_actors": [
-    { "actor_id": null, "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
-    { "actor_id": 111379706, "actor_type": "User", "bypass_mode": "always" }
+    { "actor_id": null, "actor_type": "OrganizationAdmin", "bypass_mode": "always" }
   ]
 }
