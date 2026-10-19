@@ -44,7 +44,8 @@ Identity Federation as `almanac-ci@`. The `romp` image comes from hholb/ROMP's
 publish workflow, which authenticates the same way as `romp-publisher@`, a
 push-only account trusted only from that repo's `main` and `v*` tags.
 Terraform deliberately ignores image, label, scaling, and traffic drift that CI
-deploys and `scripts/rollback.sh` create — `tofu apply` never rolls a revision unless the config itself changed.
+deploys and `scripts/rollback.sh` create — `tofu apply` never rolls a revision
+unless the config itself changed, and never moves traffic.
 
 ## Manual, out-of-band steps
 
