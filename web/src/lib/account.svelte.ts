@@ -37,8 +37,13 @@ class AccountState {
 		this.viewingAsUser = viewing;
 	}
 
+	/**
+	 * No signed-in account once loading has finished. Only an account that says
+	 * it is signed in counts as one: if `/auth/me` failed, the pages ask the user to
+	 * sign in instead of showing setup forms whose requests would all 401.
+	 */
 	get isAnonymous(): boolean {
-		return this.account?.anonymous ?? false;
+		return this.loaded && this.account?.anonymous !== false;
 	}
 
 	get isShared(): boolean {
@@ -79,11 +84,6 @@ class AccountState {
 	async reload(): Promise<void> {
 		this.loaded = false;
 		await this.load();
-	}
-
-	clear(): void {
-		this.account = null;
-		this.loaded = true;
 	}
 }
 
