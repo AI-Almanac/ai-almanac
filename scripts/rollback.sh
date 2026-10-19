@@ -75,7 +75,7 @@ serving_revision() {
 }
 
 # Cloud Run stores the image by digest, so the commit comes from the
-# commit-sha label that deploy-cloudrun stamps on each revision, then from the
+# commit-sha label the deploy workflows set on each revision, then from the
 # tag of the image as deployed (client.knative.dev/user-image).
 ready_revisions_newest_first() {
 	gcloud run revisions list --service "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json |
