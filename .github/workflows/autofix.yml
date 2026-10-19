@@ -48,12 +48,12 @@ jobs:
           pip install --quiet ruff==0.15.16  # keep in sync with pixi.lock
           npm ci --prefix web --no-audit --no-fund
 
-      # Paths mirror the lint-python/format-python pixi tasks in
-      # pyproject.toml; keep them in sync when the lint scope changes.
+      # Bare ruff: [tool.ruff] include in pyproject.toml sets the scope,
+      # the same one `pixi run check` enforces.
       - name: Format and apply safe lint fixes
         run: |
-          ruff format src tests
-          ruff check --fix-only src tests
+          ruff format
+          ruff check --fix-only
           npm run format --prefix web
 
       - name: Push fixup commit if anything changed
