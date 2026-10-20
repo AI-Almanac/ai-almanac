@@ -154,8 +154,9 @@ server/core/
   forecasts.py    check_forecast, submit_forecast, refresh_forecast
   jobs.py         list, get, logs, cancel, rerun, delete, share, unshare,
                   promote_to_example
-  results.py      summary, metrics, skill_scores, grids, cell, map_image,
+  results.py      summary, metrics, skill_scores, grids, cell,
                   blend_summary, blend_cell_metrics, blend_forecast, files
+  telemetry.py    the @operation decorator and request context (D11)
 ```
 
 Existing `services/*` modules that are already storage, compute or integration
@@ -246,8 +247,13 @@ class BenchmarkCheck(BaseModel):
     warnings: list[Finding]           # shown, never block
     missing: list[str]                # draft fields still required
     jobs: int                         # how many jobs submit would create
-    estimate: CostEstimate            # CPU/GPU class and rough hours; GPU ⇒ forecast
 ```
+
+`Finding` (today `guardrails.Finding`: `key`, `severity`, `message`) gains an
+optional `field` path (e.g. `models[1].eval_start_year`) so forms can attach a
+server finding to the input that caused it (D10). Cost estimates are left out
+until cost becomes a real problem; the job count and the job kind (forecasts
+are the GPU path) are enough to confirm against for now.
 
 Two refinements:
 
@@ -314,7 +320,6 @@ New or changed endpoints, each backed by one `core/results.py` or
 | --- | --- | --- |
 | `GET /jobs/{id}/summary` | compact structured summary: per-model, per-window headline metrics and skill, best/worst areas, coverage, warnings | assistant-only `get_spatial_summary`; gives the CLI and agents a few-KB answer instead of `/grids` |
 | `GET /jobs/{id}/blend-summary` | **structured JSON** (per-lead metrics, Brier skill vs climatology, members in display order) | raw CSV + `blend-summary.ts` + `_parse_pooled_summary` |
-| `GET /jobs/{id}/maps/{model}/{metric}/{window}.png` | server-rendered static skill map | nothing (new); used by CLI `results map` and image previews |
 | `GET /forecasts` | logical forecasts (latest active, else latest complete), with `superseded_by_failure` | `specKey` / `representativeRun` / `newerRunFailed` in the forecasts page |
 | `GET /config/defaults` | the `Defaults` model (D2) | hardcoded defaults in forms; extends the existing `/config` group |
 | `GET /config/guardrails` | (exists) now *used* by the blend form | `MIN_ONSET_YEARS`, `OVERFIT_WARNING_MEMBERS` constants |
@@ -332,10 +337,9 @@ the web form switches to `POST /benchmarks`. The SPA ships in the same wheel as
 the API, so there is no external client to keep compatible; a stale open tab
 gets a 404 and reloads.
 
-**Web form validation.** The blend, benchmark and forecast forms call
-`POST /*/check` (debounced) and render its `errors`, `warnings` and `missing`.
-`year-coverage.ts`, `onset-params.ts`, `gridsMatch`, `unlinkedModels`, the
-hardcoded thresholds and the payload builders are deleted. The hand-written TS
+**Web form validation** is two-tier (D10). `year-coverage.ts`,
+`onset-params.ts`, `gridsMatch`, `unlinkedModels`, the hardcoded thresholds and
+the payload builders are deleted. The hand-written TS
 types in `lib/api/{jobs,blends,forecasts,config,chat}.ts` move to
 `api-types.gen.ts`, as `lib/api/index.ts:1` already asks.
 
@@ -410,9 +414,17 @@ ai-almanac results open <id>                  # opens ui_url in the browser
 - `--json` on every command prints the response model exactly (the shape
   `schemas/` defines). Without it, TTY output is a readable table or summary.
   The skill tells agents to use `--json`.
-- `run` always checks first and prints the check (findings, job count,
-  estimate). It asks for confirmation unless `--yes`, and refuses if not
-  `runnable`. GPU-class estimates (forecasts) always print a cost line.
+- `run` always checks first and prints the check (findings, job count, job
+  kind). It asks for confirmation unless `--yes`, and refuses if not
+  `runnable`.
+- `results map` renders a PNG **in the CLI** from `GET /jobs/{id}/grids` and the
+  region boundary GeoJSON, using matplotlib (already a runtime dependency,
+  `pyproject.toml:43`). This is the easiest first pass and adds no endpoint:
+  drawing a map is presentation, which clients own (P5), exactly as the web UI
+  draws its maplibre map from the same JSON. The grid never enters an agent's
+  context; the agent reads the PNG. `results download --figures` fetches the
+  figure PNGs ROMP already writes. A server-side image endpoint is revisited
+  only if a second client needs the same picture.
 - `--wait` and `jobs wait` poll `GET /jobs/{id}` with backoff and exit with the
   job's terminal state. They never wait unbounded (default timeout 30 m,
   overridable).
@@ -427,16 +439,32 @@ ai-almanac results open <id>                  # opens ui_url in the browser
 - `~/.config/ai-almanac/client.toml` holds named servers (`local` =
   `http://127.0.0.1:8765` built in) and the active one; `AI_ALMANAC_URL` and
   `--server` override.
-- On first contact the client reads `/config/capabilities` (extended with
-  `api_version` and `auth_mode`) and refuses to run against an incompatible
-  API with a clear message.
+- On first contact the client reads a new **unauthenticated**
+  `GET /config/client`: `api_version`, `auth_mode`, and for Globus the public
+  client id and API scope. (`/config/capabilities` can't serve this because it
+  requires a signed-in user.) The CLI refuses to run against an incompatible
+  API with a clear message. Nothing in this response is secret: the web app
+  already embeds the same client id (`VITE_GLOBUS_CLIENT_ID`) and scope
+  (`web/src/lib/auth.ts:6-7`).
 - `auth_mode=none`: no login.
-- `auth_mode=globus`: `login` runs the Globus native-app flow (`globus-sdk`
-  `NativeAppAuthClient`, PKCE, local redirect or copy-paste code) for the
-  existing API scope plus `offline_access`, and stores refresh tokens in the OS
-  keyring (`keyring`), falling back to a `0600` file. Needs one new native-app
-  client registration. The server is unchanged: it already introspects any token
-  for its scope.
+- `auth_mode=globus`: `login` uses `globus_sdk.UserApp` with the **web app's
+  existing public client id**, read from `/config/client`, requesting the API
+  scope plus `offline_access`. It uses Globus's copy-paste redirect
+  (`https://auth.globus.org/v2/web/auth-code`), so it works over SSH and in
+  headless shells, and keeps the SDK's default token storage.
+  - **Setup:** add that redirect URI to the existing client. No new client
+    registration and no server change; the server already introspects any token
+    issued for its scope.
+  - **Rejected: delegating to `globus login`.** The Globus CLI can obtain a
+    token for our scope (`globus session consent <scope>`), but it never hands
+    tokens to other programs. Using one would mean reading its private
+    `~/.globus/cli/storage.db`, an undocumented format that can change in any
+    release.
+  - **Trade-off:** Globus sees CLI and web sign-ins as the same app (same
+    consent screen name). Telling them apart in our own records is handled by
+    D11's `channel`, not by the client id. If separate branding or auditing at
+    Globus is ever needed, registering a dedicated native client is cheap and
+    changes only the id `/config/client` returns.
 
 ### D9 — The Claude Code skill
 
@@ -467,6 +495,132 @@ ignored.
 
 Distribution to people outside this repo (a plugin) is future work; the MVP
 audience is the team.
+
+### D10 — Form validation: generated field rules in the browser, plan rules on the server
+
+Instant, as-you-type validation and a single rule layer are compatible if the
+rules are split by **what they need to know**, and each kind has exactly one
+home:
+
+| Tier | What it covers | Where it is written | How the form gets it |
+| --- | --- | --- | --- |
+| **Field rules** | one value against static constraints: required, type, range, enum, string pattern, list length | pydantic constraints on the draft/plan models in `schemas/` (`Field(ge=30)`, `Literal[...]`, `Annotated[str, StringConstraints(pattern=...)]`) | **generated** zod schemas from the OpenAPI document, produced by the same `generate-api-types` task that writes `api-types.gen.ts` (e.g. the zod plugin of `@hey-api/openapi-ts`, or `openapi-zod-client`; pick at implementation) |
+| **Plan rules** | anything cross-field or data-dependent: coverage and year splits, grid compatibility, region membership, guardrails, forecast readiness, access | `core/*._rules` only | `POST /*/check`, debounced (~300 ms after typing stops, and on step changes); findings attach to inputs through `Finding.field` |
+
+The forms validate field rules synchronously with zod on every keystroke, and
+show plan findings as they arrive. Nothing is written twice: field rules are
+written once in Python and compiled to TypeScript; plan rules exist only on the
+server.
+
+The discipline that makes this hold: **a rule that needs only the field's own
+value must be a declarative constraint, not code in a `field_validator`**,
+because validator bodies do not appear in JSON Schema and so would silently
+become server-only. Year specs are the main case: the syntax becomes a
+`pattern` on the string type (generated into zod), while range bounds and
+coverage stay plan rules. A lint-style test lists every `field_validator` /
+`model_validator` in `schemas/` against an allowlist of ones that are
+genuinely cross-field, so new single-field validators get pushed into
+constraints.
+
+What this costs: cross-field checks that are static (e.g. start year ≤ end
+year) appear after the debounce instead of instantly. That is the price of not
+duplicating them, and the check round trip is cheap: it reads the catalog, it
+does not touch data.
+
+The CLI needs neither tier locally: `check` is the server call, and `schemas/`
+parsing of a plan file reports field-rule errors before the request is sent,
+from the same pydantic models.
+
+### D11 — Observability: one instrumentation point in the core
+
+The shared core makes cross-interface observability nearly free: every action,
+from any interface, passes through one function, so it can be measured in one
+place.
+
+**What exists today:**
+
+- Plain-text logs from `logging.basicConfig` (`app.py:47`).
+- A per-request id: generated in the `log_requests` middleware, returned as
+  `X-Request-ID`, and already used by the web app's feedback breadcrumbs.
+- `audit_events` / `usage_events` rows on job submission and LLM use
+  (`services/events.py`).
+- The assistant turn log (`services/turn_log.py`).
+- Cloud Monitoring alerts on uptime, 5xx ratio and the database being down
+  (`terraform/monitoring.tf`).
+
+**What is missing:**
+
+- Logs are not structured, so Cloud Logging cannot filter or count by field.
+- Nothing records *which interface* an action came from.
+- Unexpected errors are not tracked as errors.
+- Job failures are not watched.
+
+**Decisions:**
+
+1. **Channel on the actor.** `Actor` carries `channel` (`web`, `cli`,
+   `assistant`, `api`) and `client_version`. The web app and the CLI send
+   `X-Almanac-Client: web/<version>` or `cli/<version>`. A request without the
+   header is `api`. The assistant sets `assistant` in-process. The header is
+   self-reported and used for analytics only, never for decisions.
+2. **One decorator on every core function.** Each core function is declared
+   with `@operation("benchmarks.submit")`. The decorator emits one structured
+   log record per call:
+   - `operation`, `channel` and `client_version`;
+   - user id, plus `request_id`, or the assistant's `turn_id` when the call
+     came from a chat turn;
+   - `duration_ms`;
+   - `outcome`: `ok`, a domain error class (D4), or `unexpected`;
+   - resource ids (job, run, blend).
+
+   This replaces ad-hoc logging in routers and tools, and it is the only place
+   to add a metric for a new capability.
+3. **JSON logs when deployed.** In deployed mode a small stdlib JSON formatter
+   writes fields Cloud Logging understands (`severity`, `message`,
+   `logging.googleapis.com/trace`). Locally the human-readable format stays,
+   with `ai-almanac serve --log-format json` available for debugging. No new
+   dependency.
+4. **Correlation end to end.**
+   - The middleware accepts an inbound `X-Request-ID` from the CLI, validated as
+     short hex, and generates one otherwise.
+   - The id goes into a context variable read by `@operation` and by
+     `events.audit` / `events.usage`, whose `metadata` gains `channel` and
+     `request_id`. That needs no migration, because `metadata` is already JSON.
+   - A job row can then be traced back to the CLI command, web click or chat
+     turn that created it.
+   - The CLI prints the request id with every error
+     (`error: … (request 3f2a9c…)`) so a user report can be matched to the
+     server log.
+5. **Errors split by kind.**
+   - **Domain errors** are expected outcomes. They are counted by operation,
+     channel and class, but don't alert. A spike in `InvalidPlan` from
+     `channel=cli` usually means the skill is teaching the wrong plan format.
+     That is a useful signal, and it is visible only because outcomes are
+     labelled.
+   - **Unexpected exceptions** are logged at `ERROR` with the stack trace.
+     Cloud Run sends those to Error Reporting with no new service.
+   - A log-based metric plus an alert in `monitoring.tf` covers the rate of
+     unexpected errors.
+6. **Job outcomes.** The supervisor logs a `job.finished` record (kind, status,
+   channel, duration) when a job reaches a terminal state. A log-based metric
+   gives the failure ratio per job kind, and an alert fires when it crosses a
+   threshold. This is the gap that matters most for unattended agent use.
+7. **Usage questions are answered from the same records.** Examples:
+   - Which interfaces are used, and by whom?
+   - What fraction of checks lead to a submit?
+   - Which CLI versions are in use?
+   - Is any agent looping, i.e. repeated failing submits from one user?
+
+   Log-based metrics labelled by `operation`, `channel` and `outcome` feed a
+   Cloud Monitoring dashboard in Terraform. Deeper questions use SQL over
+   `usage_events`. A BigQuery log sink is future work if that stops being
+   enough.
+8. **The CLI does not phone home.** There is no client-side telemetry.
+   Everything worth measuring already happens on the server, and that keeps the
+   CLI's privacy story simple.
+
+The assistant's turn log stays as it is. It answers assistant-quality
+questions (ratings, flags, offered tools), and `turn_id` in `@operation`
+records links a turn to the core calls it made.
 
 ## Architecture
 
@@ -507,7 +661,9 @@ migration, one-version compatible).
 ## Security considerations
 
 - The CLI uses the same bearer-token path as the SPA; no new auth mechanism on
-  the server. Tokens are stored in the OS keyring, never printed, and the CLI
+  the server. The one new unauthenticated endpoint, `/config/client`, returns
+  only values the public web bundle already contains. Tokens stay in the
+  globus-sdk token store, are never printed, and the CLI
   never echoes `Authorization` headers in `--debug` output.
 - Moving every rule into `submit_*` *tightens* REST: benchmark guardrails and
   catalog/coverage checks now apply to direct API calls, closing the gap where
@@ -529,6 +685,13 @@ migration, one-version compatible).
   catches a rule creeping back into a shell.
 - **Layering:** a test fails if `core/` imports `fastapi`, `pydantic_ai` or
   `routers`, or if `HTTPException` appears in `core/` or `services/`.
+- **Field rules:** a shared fixture file of field values (valid and invalid)
+  is consumed by a pytest test against the pydantic models and a vitest test
+  against the generated zod schemas, asserting the same accept/reject verdicts.
+  It catches a generator gap or a rule that slipped into a validator body.
+- **Telemetry:** every public `core/` function carries `@operation` (a test
+  walks the package); a domain error and an unexpected error each produce one
+  record with the right `outcome` and `channel`.
 - **CLI:** commands run against the ASGI app through `httpx.ASGITransport`, so
   CLI tests exercise real routes and the real core without a network or a
   running server.
@@ -551,9 +714,8 @@ migration, one-version compatible).
 6. CLI with the command set in D8, including `login` for Globus.
 7. Skill with `workflow.md`, generated `plans.md`, `reading-results.md`.
 
-The static map endpoint (`/maps/…png`) and `results map` are in scope if
-server-side rendering fits without new heavyweight dependencies; otherwise they
-follow in the next phase.
+8. Generated field schemas for the forms (D10) and the observability
+   chokepoint with JSON logs (D11).
 
 ## Rough implementation phases
 
@@ -564,8 +726,9 @@ Each phase is one or more PRs into `develop`; none deploys before the demo.
   submit; make benchmark fan-out atomic; send the metrics cache through one
   function; correct the forecast form's readiness check; add `warnings` to the
   TS `Blend` type. Small, independently reviewable, and each closes a real gap.
-- **Phase 1 — Core skeleton.** `core/errors.py`, `Actor`, the FastAPI
-  exception handler, the layering test. Move `create_*_for_user` into
+- **Phase 1 — Core skeleton.** `core/errors.py`, `Actor` (with `channel`),
+  `core/telemetry.py` (`@operation`, request context, JSON log formatter,
+  inbound `X-Request-ID`), the FastAPI exception handler, the layering test. Move `create_*_for_user` into
   `core/{benchmarks,blends,forecasts}.py` split into `_resolve` / `_rules` /
   `_dispatch`, raising domain errors. Routers become thin. No API shape changes
   yet.
@@ -576,13 +739,21 @@ Each phase is one or more PRs into `develop`; none deploys before the demo.
   delete, share, promote moved out of the router) and `core/results.py`;
   `/summary`, structured `/blend-summary`, `/config/defaults`, logical
   `/forecasts`, `ui_url`.
-- **Phase 4 — Web UI on the core.** Forms call check endpoints; hand-written
-  types replaced by generated ones; client rule copies and parsers deleted;
-  `POST /jobs` retired.
+- **Phase 4 — Web UI on the core.** zod generation added to
+  `generate-api-types`; forms validate field rules with the generated schemas
+  and plan rules with debounced check calls; `X-Almanac-Client` header;
+  hand-written types replaced by generated ones; client rule copies and
+  parsers deleted; `POST /jobs` retired.
 - **Phase 5 — Assistant adapters.** `chat_tools` reduced to session handling
   plus core calls; access via `job_access`; kind-aware rerun.
 - **Phase 6 — CLI.** `client/` package, server profiles, version handshake,
-  Globus login, the D8 commands, ASGI-transport tests.
+  `/config/client`, Globus login on the web app's client (add the copy-paste
+  redirect URI to it), the D8 commands including `results map`, the
+  `X-Almanac-Client` and `X-Request-ID` headers, ASGI-transport tests.
+- **Phase 6b — Watching it.** `job.finished` records from the supervisor;
+  log-based metrics, an unexpected-error alert, a job-failure-ratio alert and a
+  usage dashboard in `terraform/monitoring.tf`. Applied after the demo along
+  with everything else.
 - **Phase 7 — Skill.** Skill files, the `plans.md` generator and check,
   permission rules, optional eval.
 
@@ -590,21 +761,27 @@ Phases 0–1 are prerequisites. 2 and 3 can run in parallel. 4 and 5 depend on
 2–3. 6 needs 2–3 but not 4–5, so the CLI can be built while the web and
 assistant migrations are under review.
 
+## Resolved decisions (2026-10-20)
+
+- **Command name:** client commands extend `ai-almanac`. Users who want a
+  shorter name can alias it themselves.
+- **Login:** reuse the web app's public Globus client (D8). No new
+  registration; `globus login` delegation rejected.
+- **Cost estimates:** out of scope until cost is a real problem.
+- **Map images:** rendered in the CLI from `/grids` for the first pass (D8). No
+  server image endpoint.
+- **Form validation:** generated field rules in the browser, plan rules on the
+  server (D10).
+- **Observability:** one `@operation` chokepoint in the core (D11).
+
 ## Open questions (need input)
 
-1. **Command name.** Extend `ai-almanac` (one entry point, server and client
-   commands side by side) or add a short `almanac` alias for client commands?
-   Proposed: extend `ai-almanac`, add the alias only if typing it gets old.
-2. **Globus native-app client.** Who registers it, and under which project
-   (same as `ai-almanac-api`)?
-3. **Cost estimates.** Is "CPU vs GPU class plus rough hours" enough for
-   `check`, or do we want per-job estimates from past run durations?
-4. **Static maps.** matplotlib is already a runtime dependency
-   (`pyproject.toml:43`). Render `/maps/…png` on request in the server (cached
-   like `metrics_cache`), or have the runner write map images as job artifacts?
-5. **Web form check latency.** Debounced `POST /*/check` replaces instant
-   client-side validation. Is a ~200 ms round trip acceptable, or do we keep a
-   *syntax-only* client check (no rules) for instant feedback?
+1. **zod generator.** `@hey-api/openapi-ts` (zod plugin) or
+   `openapi-zod-client`: pick by how well each maps pydantic's `pattern`,
+   `ge`/`le` and discriminated unions. Settled by a spike in Phase 4.
+2. **Job-failure alert threshold.** What failure ratio per job kind should
+   page? It needs a few weeks of `job.finished` data before it can be set
+   sensibly; start as a dashboard-only metric.
 
 ## Future work (post-MVP, designed-for but not built)
 
