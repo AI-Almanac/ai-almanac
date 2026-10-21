@@ -6,7 +6,7 @@
 
 locals {
   github_repository_id      = "1200599198" # AI-Almanac/ai-almanac
-  romp_github_repository_id = "1209562774" # hholb/ROMP
+  romp_github_repository_id = "1209562774" # AI-Almanac/ROMP
 }
 
 resource "google_iam_workload_identity_pool" "github" {
@@ -43,13 +43,13 @@ output "workload_identity_provider" {
   value       = google_iam_workload_identity_pool_provider.github.name
 }
 
-# hholb/ROMP's image publish workflow. Its own provider accepts tokens only
+# AI-Almanac/ROMP's image publish workflow. Its own provider accepts tokens only
 # from main and release tags, and those tokens can impersonate only
 # romp-publisher: the almanac-ci binding above matches almanac's repository id.
 resource "google_iam_workload_identity_pool_provider" "romp" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github-romp"
-  display_name                       = "GitHub OIDC (hholb/ROMP)"
+  display_name                       = "GitHub OIDC (AI-Almanac/ROMP)"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -75,6 +75,6 @@ resource "google_service_account_iam_member" "romp_publisher_workload_identity" 
 }
 
 output "romp_workload_identity_provider" {
-  description = "Provider resource name for hholb/ROMP's google-github-actions/auth step"
+  description = "Provider resource name for AI-Almanac/ROMP's google-github-actions/auth step"
   value       = google_iam_workload_identity_pool_provider.romp.name
 }
