@@ -84,6 +84,15 @@ artifacts = ["web/build", "modal/blending_app.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# The single source of ruff's scope: pixi tasks, autofix.yml, and
+# claude-mention.yml all run bare `ruff format` / `ruff check` against it.
+include = [
+    "src/**/*.{py,pyi}",
+    "tests/**/*.{py,pyi}",
+    "modal/**/*.{py,pyi}",
+    "scripts/**/*.{py,pyi}",
+    "evals/**/*.{py,pyi}",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -113,9 +122,9 @@ ai-almanac = { path = ".", editable = false }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
-lint-python = { cmd = "ruff check src tests modal scripts evals", default-environment = "dev", description = "Lint Python sources and tests" }
-format-python = { cmd = "ruff format src tests modal scripts evals", default-environment = "dev", description = "Format Python sources and tests" }
-format-python-check = { cmd = "ruff format --check src tests modal scripts evals", default-environment = "dev", description = "Check Python formatting without modifying files" }
+lint-python = { cmd = "ruff check", default-environment = "dev", description = "Lint Python sources and tests" }
+format-python = { cmd = "ruff format", default-environment = "dev", description = "Format Python sources and tests" }
+format-python-check = { cmd = "ruff format --check", default-environment = "dev", description = "Check Python formatting without modifying files" }
 install-hooks = { cmd = "git config core.hooksPath .githooks", description = "Enable the repo's git hooks (pre-commit format/lint, pre-push check/test)" }
 install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
 build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }

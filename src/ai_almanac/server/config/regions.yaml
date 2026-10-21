@@ -4,7 +4,6 @@
 # Regions with a `romp_name` map to ROMP's built-in region definitions.
 # Regions without `romp_name` use ROMP's custom region support with explicit
 # lat/lon bounds and no shapefile masking.
-# The `custom` entry derives those bounds from registered NetCDF sources.
 #
 # The bbox coordinates are also used by the obs/forecast prep scripts to
 # extract the right spatial slice from global data sources.

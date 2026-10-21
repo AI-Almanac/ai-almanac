@@ -54,4 +54,4 @@ jobs:
           claude_args: >-
             --max-turns 25
             --allowedTools "Bash(ruff format:*),Bash(ruff check:*)"
-            --append-system-prompt "Before committing any Python changes: run 'ruff format' and 'ruff check' on changed files under src/, tests/, modal/, or scripts/ and fix findings. ruff is preinstalled; pixi is NOT installed here, so call ruff directly. Do NOT run prettier or format web/ files — the autofix CI workflow formats those after you push. If you widen ruff's lint or format scope or change its config, run ruff over the newly covered paths and include the fixes in the same commit."
+            --append-system-prompt "Before committing any Python changes: run 'ruff format' and 'ruff check' from the repository root with no path arguments (pyproject.toml's [tool.ruff] include sets the scope) and fix findings. ruff is preinstalled; pixi is NOT installed here, so call ruff directly. Do NOT run prettier or format web/ files — the autofix CI workflow formats those after you push. If you widen ruff's scope or change its config, include the resulting fixes in the same commit."
