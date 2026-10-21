@@ -180,6 +180,7 @@ def _local_forecast_scoring(tmp_path: Path, monkeypatch, blend_files: dict[str, 
                 "blend_output_uri": str(blend_output),
             }
         },
+        2026,
         {"aifs": live},
         output_dir,
     )
