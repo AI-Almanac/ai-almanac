@@ -38,6 +38,8 @@ class _LocalFunction:
         self.calls.append((args, kwargs))
         return self.result
 
+    __call__ = local
+
 
 def test_blending_workflow_loads_with_local_function_wrappers(monkeypatch) -> None:
     monkeypatch.setenv("ALMANAC_BLENDING_ROOT", "/tmp/onset-blending")
@@ -79,10 +81,12 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     )
     workflow = SimpleNamespace(
         BLENDING_ROOT=blending_root,
+        LOCAL_INTERMEDIATE_RESOURCES=_load_workflow().LOCAL_INTERMEDIATE_RESOURCES,
         _bundle_files=lambda files: [path.name for path in files],
+        _extract_bundle=lambda bundle: bundle,
         _read_tar_member_bytes=lambda data, name: combined,
         _parse_years=lambda value: [int(year) for year in value.split(",") if year],
-        build_lat_lon_intermediates_bundle=prepare,
+        build_blend_intermediates=prepare,
         train_blending_model_bundle=train,
     )
     layouts = {
@@ -107,8 +111,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     run(config, output_dir, workflow)
 
     prep_args, prep_kwargs = prepare.calls[0]
-    assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]})
-    assert prep_kwargs["threshold_mm"] == 25.0
+    assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]}, config["blend_params"])
     assert prep_kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
     assert prep_kwargs["model_layouts"] == layouts
     assert prep_kwargs["region_id"] == "ethiopia"
@@ -126,7 +129,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
-    from ai_almanac.envs.blend_entrypoint import intermediate_prep_kwargs
+    intermediate_prep_kwargs = _load_workflow()._intermediate_prep_kwargs
 
     # Pre-rename job configs still carry mok_month_day.
     assert intermediate_prep_kwargs({"mok_month_day": "06-05", "threshold_mm": 25.0}) == {
@@ -138,6 +141,143 @@ def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
         {"mok_month_day": "06-05", "ref_onset_month_day": "06-10", "formula_text": "x"}
     ) == {"ref_onset_month_day": "06-10"}
     assert intermediate_prep_kwargs({"training_years": "2020"}) == {}
+
+
+def test_blend_intermediates_run_with_the_given_resources_and_blend_params(
+    monkeypatch,
+) -> None:
+    workflow = _load_workflow()
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        workflow, "build_intermediates_from_dirs", lambda *args, **kwargs: calls.append(kwargs)
+    )
+
+    workflow.build_blend_intermediates(
+        Path("obs"),
+        {"aifs": Path("aifs")},
+        {"mok_month_day": "06-05", "training_years": "2020"},
+        region_id="india",
+        cache_dir="gs://bucket/blend-intermediates",
+        resources=workflow.IntermediateResources(workers=6, file_memory_budget_bytes=123),
+        climatology_test_year_min=2000,
+    )
+
+    built = calls[0]
+    assert (built["file_workers"], built["climatology_workers"]) == (6, 6)
+    assert built["file_memory_budget_bytes"] == 123
+    assert built["ref_onset_month_day"] == "06-05"
+    assert built["region_id"] == "india"
+    assert built["climatology_test_year_min"] == 2000
+    assert "training_years" not in built
+
+
+def test_live_scoring_builds_intermediates_with_the_resources_it_is_given(monkeypatch) -> None:
+    workflow = _load_workflow()
+    builds: list[dict] = []
+
+    def build(*_args, **kwargs):  # noqa: ANN002, ANN003
+        builds.append(kwargs)
+        return {"output_dir": "/tmp/intermediates"}
+
+    monkeypatch.setattr(workflow, "_extract_bundle", lambda bundle: Path("extracted"))
+    monkeypatch.setattr(workflow, "build_blend_intermediates", build)
+    monkeypatch.setattr(
+        workflow,
+        "apply_blend_coefs_bundle",
+        SimpleNamespace(local=lambda *_a, **_k: workflow.LiveScores(weekly_csv=b"weekly")),
+    )
+
+    workflow.score_live_forecast.local(
+        b"obs",
+        {"aifs": b"live"},
+        ["aifs"],
+        {"training_years": "2020", "cv_holdout_years": "2021"},
+        2026,
+        resources=workflow.MODAL_INTERMEDIATE_RESOURCES,
+        coef_pkl=b"coefs",
+        climatology_test_year_min=2000,
+    )
+
+    assert builds[0]["resources"] == workflow.MODAL_INTERMEDIATE_RESOURCES
+    assert builds[0]["climatology_test_year_min"] == 2000
+
+
+def _score_live_season(monkeypatch, blend_config: dict, artifacts: dict[str, bytes]):
+    """score_live_season with recorded scoring; returns (score kwargs, loaded models)."""
+    workflow = _load_workflow()
+    scored: list[dict] = []
+    loaded: list[str] = []
+
+    def score(obs, forecasts, model_names, params, live_year, **kwargs):  # noqa: ANN001, ANN003
+        scored.append({"forecasts": forecasts, "params": params, **kwargs})
+        return workflow.LiveScores(weekly_csv=b"weekly")
+
+    def load_historical(name: str) -> bytes:
+        loaded.append(name)
+        return b"historical"
+
+    monkeypatch.setattr(workflow, "score_live_forecast", SimpleNamespace(local=score))
+    monkeypatch.setattr(
+        workflow, "_merge_forecast_bundle", lambda historical, live: historical + b"+" + live
+    )
+    workflow.score_live_season(
+        {"model_names": ["aifs"], "region_id": "india", **blend_config},
+        {"aifs": b"live"},
+        2026,
+        obs_bundle=b"obs",
+        load_historical=load_historical,
+        read_artifact=artifacts.get,
+        cache_dir=None,
+        resources=workflow.MODAL_INTERMEDIATE_RESOURCES,
+    )
+    return scored[0], loaded
+
+
+def test_live_scoring_with_trained_coefficients_reads_only_the_live_season(monkeypatch) -> None:
+    coef_name = _load_workflow().FINAL_COEF_FILENAME
+    scored, loaded = _score_live_season(
+        monkeypatch, {"forecast_years": [2003, 2000, 2010]}, {coef_name: b"coefs"}
+    )
+
+    assert loaded == []
+    assert scored["forecasts"] == {"aifs": b"live"}
+    assert scored["coef_pkl"] == b"coefs"
+    # The climatology keeps the window the blend trained with: obs before 2000.
+    assert scored["climatology_test_year_min"] == 2000
+    assert scored["params"]["region_id"] == "india"
+
+
+@pytest.mark.parametrize(
+    ("blend_config", "has_coefs"),
+    [
+        ({"forecast_years": [2000, 2001]}, False),
+        # A config that predates recording its years cannot pin the climatology.
+        ({}, True),
+    ],
+)
+def test_live_scoring_merges_historical_forecasts_when_it_cannot_score_from_the_live_season(
+    monkeypatch, blend_config: dict, has_coefs: bool
+) -> None:
+    artifacts = {_load_workflow().FINAL_COEF_FILENAME: b"coefs"} if has_coefs else {}
+    scored, loaded = _score_live_season(monkeypatch, blend_config, artifacts)
+
+    assert loaded == ["aifs"]
+    assert scored["forecasts"] == {"aifs": b"historical+live"}
+
+
+def test_live_scoring_rejects_a_missing_live_forecast() -> None:
+    workflow = _load_workflow()
+    with pytest.raises(ValueError, match="No live forecast bundle"):
+        workflow.score_live_season(
+            {"model_names": ["aifs", "graphcast"]},
+            {"aifs": b"live"},
+            2026,
+            obs_bundle=b"obs",
+            load_historical=lambda name: b"",
+            read_artifact=lambda filename: None,
+            cache_dir=None,
+            resources=workflow.MODAL_INTERMEDIATE_RESOURCES,
+        )
 
 
 def _local_forecast_scoring(tmp_path: Path, monkeypatch, blend_files: dict[str, bytes]):

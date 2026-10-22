@@ -60,43 +60,23 @@ def _local_blend_artifact(blend_output_uri: str, filename: str) -> bytes | None:
 def _score_live(
     config: dict, live_year: int, live_forecast_paths: dict[str, Path], output_dir: Path
 ) -> None:
-    """Merge each model's live season file with its local historical archive
-    and score against the trained blend, reusing blending_app.py's pure
-    score_live_forecast (no GCS involved — that function never touches GCS,
-    only the Modal-side score_live_forecast_bundle wrapper does)."""
+    """Score the staged live season files against the trained blend through
+    blending_app.py's score_live_season, the same path the Modal runner takes,
+    reading inputs from local files instead of GCS."""
     workflow = _load_workflow()
     blend_config = config["blend_config_snapshot"]
-    params = {
-        **(blend_config.get("blend_params") or {}),
-        "region_id": blend_config.get("region_id"),
-    }
-    model_names = blend_config["model_names"]
-
-    obs_bundle = workflow._bundle_files(_netcdf_files(blend_config["obs_dir"]))
-    forecast_bundles: dict[str, bytes] = {}
-    for name in model_names:
-        historical_bundle = workflow._bundle_files(_forecast_files(blend_config, name))
-        live_bundle = workflow._bundle_files([live_forecast_paths[name]])
-        forecast_bundles[name] = workflow._merge_forecast_bundle(historical_bundle, live_bundle)
-
     blend_output_uri = str(blend_config.get("blend_output_uri") or "")
-    coef_pkl = _local_blend_artifact(blend_output_uri, workflow.FINAL_COEF_FILENAME)
-    forest_pkl = None
-    if coef_pkl is not None:
-        print("==> Using trained blend coefficients (skipping CV retrain)", flush=True)
-        # Blends trained before the day-level model have no forest.
-        forest_pkl = _local_blend_artifact(blend_output_uri, workflow.FOREST_MODEL_FILENAME)
 
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
-    scores = workflow.score_live_forecast.local(
-        obs_bundle,
-        forecast_bundles,
-        model_names,
-        params,
+    scores = workflow.score_live_season(
+        blend_config,
+        {name: workflow._bundle_files([path]) for name, path in live_forecast_paths.items()},
         live_year,
-        coef_pkl=coef_pkl,
+        obs_bundle=workflow._bundle_files(_netcdf_files(blend_config["obs_dir"])),
+        load_historical=lambda name: workflow._bundle_files(_forecast_files(blend_config, name)),
+        read_artifact=lambda filename: _local_blend_artifact(blend_output_uri, filename),
         cache_dir=str(cache_dir() / "blend-intermediates"),
-        forest_pkl=forest_pkl,
+        resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     workflow._write_live_scores(scores, output_dir)
