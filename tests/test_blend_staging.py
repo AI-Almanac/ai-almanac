@@ -467,3 +467,24 @@ def test_connecting_in_row_chunks_matches_a_one_shot_connect(tmp_path: Path) -> 
     pd.testing.assert_frame_equal(chunked, one_shot, check_exact=True)
     assert chunked.attrs == one_shot.attrs
     assert not list((tmp_path / "chunks").iterdir())  # chunk inputs and outputs are cleaned up
+
+
+_LINUX_STATUS = "Name:\tpython\nVmHWM:\t 31457280 kB\nVmRSS:\t 12582912 kB\nThreads:\t4\n"
+_GVISOR_STATUS = "Name:\tpython\nVmRSS:\t 12582912 kB\nThreads:\t4\n"
+
+
+@pytest.mark.parametrize(
+    ("status", "max_rss_kib", "note"),
+    [
+        (_LINUX_STATUS, 0, " (rss 12.0 GiB, peak 30.0 GiB)"),
+        (_GVISOR_STATUS, 20 * 2**20, " (rss 12.0 GiB, peak 20.0 GiB)"),
+        (_GVISOR_STATUS, 0, " (rss 12.0 GiB)"),
+        ("Name:\tpython\n", 0, ""),
+    ],
+)
+def test_memory_notes_report_only_the_figures_the_kernel_gives(
+    status: str, max_rss_kib: int, note: str
+) -> None:
+    app = _load_blending_app()
+
+    assert app._format_memory_note(status, max_rss_kib) == note
