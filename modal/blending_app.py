@@ -863,12 +863,7 @@ def _run_blend(job_id: str, config: dict, outputs_bucket: str, client) -> dict:
             "Blend training pipeline failed; stderr tail printed above (see run.log)"
         )
 
-    out_local = stage_root / "output"
-    out_local.mkdir()
-    if training.get("outputs_tar"):
-        with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
-            tar.extractall(out_local)
-    _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
+    _upload_output_dir_to_gcs(client, outputs_bucket, job_id, Path(training["output_dir"]))
     print("==> Done.")
     return {"day_level_call_id": day_level_call_id}
 
@@ -3260,6 +3255,7 @@ def train_blending_model_bundle(
     }
 
     outputs_tar = None
+    output_dir = None
     if return_outputs:
         output_dir = Path(tempfile.mkdtemp(prefix="blend-training-artifacts-"))
         # The connector pickles exactly the table it returns to output_rds, and
@@ -3274,7 +3270,13 @@ def train_blending_model_bundle(
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
-    return {"manifest": manifest, "outputs_tar": outputs_tar}
+    # In-process callers publish straight from output_dir rather than
+    # unpacking a copy from outputs_tar.
+    return {
+        "manifest": manifest,
+        "outputs_tar": outputs_tar,
+        "output_dir": str(output_dir) if output_dir else None,
+    }
 
 
 def _day_level_scoring_spec(blend_spec: dict, cv_preds_filename: str) -> dict:
