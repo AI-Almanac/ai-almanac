@@ -2936,8 +2936,12 @@ def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_nam
 
     For a one-year fold this is onset_forest.cross_validate's prediction for
     fold `fold_index` of a run over every fold, which seeds fold i with
-    random_state + i + 1 and skips folds with no test rows (checked at
-    FOREST_REPO_REF). Multi-year folds fit once for the whole block, which
+    random_state + i + 1 and skips folds with no test rows. Checked against
+    the real library at FOREST_REPO_REF fdda211: on a synthetic 5-year frame
+    with a true holdout, these per-fold predictions equal one cross_validate
+    over every fold under assert_frame_equal(check_exact=True). Re-run that
+    comparison when the ref moves (the ref is in the cache key, so old entries
+    are never reused). Multi-year folds fit once for the whole block, which
     cross_validate's single-test-year folds cannot express."""
     from dataclasses import replace
 

@@ -4,7 +4,9 @@
 
 import type { DayLevelSettings } from '$lib/api/blends';
 
-// The forest's own settings, used as placeholders and sent only when changed.
+// Placeholders only, never sent: a blank field leaves the setting to the run,
+// which keeps one CV year out per fold and onset_forest.ForestParams' own
+// defaults (these, at the pinned FOREST_REPO_REF).
 export const DAY_LEVEL_DEFAULTS = {
 	years_per_fold: 1,
 	trees: 100,

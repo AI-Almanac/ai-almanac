@@ -2865,41 +2865,39 @@ export interface components {
          * DayLevelSettings
          * @description How the day-level blend is cross-validated and how its forest grows.
          *
-         *     The defaults are the forest's original settings. Its cross-validation fits
-         *     one forest per fold, so holding several CV years out per fold cuts the
-         *     fits (and run time) by that factor, at the cost of training on fewer years
-         *     per fold; the week-level blend still leaves one year out at a time.
+         *     Every setting is optional and forwarded only when given, so an unset one
+         *     keeps the day-level run's default: one CV year out per fold, and
+         *     onset_forest.ForestParams' own forest settings. Holding several CV years
+         *     out per fold cuts the forests fitted (and run time) by that factor, at the
+         *     cost of training on fewer years per fold; the week-level blend still
+         *     leaves one year out at a time.
          */
         DayLevelSettings: {
             /**
              * Years Per Fold
-             * @description CV holdout years held out together per day-level fold, in contiguous blocks; 1 leaves one year out at a time.
-             * @default 1
+             * @description CV holdout years held out together per day-level fold, in contiguous blocks; 1 (the default) leaves one year out at a time.
              */
-            years_per_fold: number;
+            years_per_fold?: number | null;
             /**
              * Trees
              * @description Trees in the forest.
-             * @default 100
              */
-            trees: number;
+            trees?: number | null;
             /**
              * Max Depth
-             * @description Deepest a tree may grow; None for no limit.
+             * @description Deepest a tree may grow; unset for no limit.
              */
             max_depth?: number | null;
             /**
              * Min Samples Leaf
              * @description Fewest training rows a leaf may hold.
-             * @default 20
              */
-            min_samples_leaf: number;
+            min_samples_leaf?: number | null;
             /**
              * Max Samples
              * @description Share of the training rows each tree's bootstrap sample draws.
-             * @default 1
              */
-            max_samples: number;
+            max_samples?: number | null;
         };
         /**
          * Feature
