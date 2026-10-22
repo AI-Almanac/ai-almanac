@@ -32,7 +32,7 @@ these during Modal build if needed:
     ALMANAC_BLENDING_REPO_URL=https://github.com/hholb/onset_blending-adm3.git
     ALMANAC_BLENDING_REPO_REF=0a216aa436b36d83375407de64c803169beccd57
     ALMANAC_FOREST_REPO_URL=https://github.com/AI-Almanac/onset-forest.git
-    ALMANAC_FOREST_REPO_REF=fdda211333d91e8d32b5ddb3a89279d371bba6b1
+    ALMANAC_FOREST_REPO_REF=61a7f5afe7518b3805b76eae43ca62afe2ba0c13
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 DEFAULT_REPO_REF = "0a216aa436b36d83375407de64c803169beccd57"
 # The day-level blend's model library, installed into the same image.
 FOREST_REPO_URL = "https://github.com/AI-Almanac/onset-forest.git"
-FOREST_REPO_REF = "fdda211333d91e8d32b5ddb3a89279d371bba6b1"
+FOREST_REPO_REF = "61a7f5afe7518b3805b76eae43ca62afe2ba0c13"
 
 # Worker count for run_blend's intermediates process pools (per-file onset
 # processing, climatology) and 1_blend_evaluation.py --cores. Both phases run in
@@ -2937,8 +2937,9 @@ def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_nam
     For a one-year fold this is onset_forest.cross_validate's prediction for
     fold `fold_index` of a run over every fold, which seeds fold i with
     random_state + i + 1 and skips folds with no test rows. Checked against
-    the real library at FOREST_REPO_REF fdda211: on a synthetic 5-year frame
-    with a true holdout, these per-fold predictions equal one cross_validate
+    the real library at fdda211, whose tree the pinned 61a7f5a (its squash
+    merge) matches byte for byte: on a synthetic 5-year frame with a true
+    holdout, these per-fold predictions equal one cross_validate
     over every fold under assert_frame_equal(check_exact=True). Re-run that
     comparison when the ref moves (the ref is in the cache key, so old entries
     are never reused). Multi-year folds fit once for the whole block, which
