@@ -44,6 +44,7 @@
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
+	import { awaitingArtifacts, blendInProgress, blendStateChanged, dayLevelNote } from './day-level';
 	import { installTour } from '$lib/tour.svelte';
 	import { takeSetupRequest } from '$lib/setup-request';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
@@ -106,6 +107,8 @@
 	});
 
 	let artifacts = $state<JobArtifact[]>([]);
+	// The blend `artifacts` belongs to; plain, so reading it tracks nothing.
+	let artifactsFor: string | null = null;
 	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
@@ -400,8 +403,12 @@
 	// makes the page jump). Bounded by the server's ~5s reconcile cadence, so a
 	// 3s poll is as live as the data gets. Returning the stop fn lets $effect
 	// tear the timer down on unmount.
+	// A complete blend keeps being polled while its day-level blend trains.
 	$effect(() =>
-		pollWhileActive(() => blends.some((b) => ACTIVE_STATUSES.includes(b.status)), syncBlendStatuses)
+		pollWhileActive(
+			() => blends.some((b) => blendInProgress(b, ACTIVE_STATUSES)),
+			syncBlendStatuses
+		)
 	);
 
 	async function syncBlendStatuses() {
@@ -414,7 +421,7 @@
 		const byId = new Map(fresh.map((b) => [b.id, b]));
 		blends = blends.map((b) => {
 			const updated = byId.get(b.id);
-			return updated && updated.status !== b.status ? updated : b;
+			return updated && blendStateChanged(b, updated) ? updated : b;
 		});
 	}
 
@@ -429,12 +436,19 @@
 	});
 
 	// Load a completed blend's artifacts. Publication is a background step that
-	// lags completion by a few seconds, so an empty result is retried until the
-	// artifacts land rather than cached as "none".
+	// lags completion by a few seconds, so a list still missing files is retried
+	// until they land rather than cached as final. A day-level blend finishing
+	// later reloads the list with its files.
 	$effect(() => {
 		const job = selected;
 		if (job?.status !== 'complete') return;
 		const id = job.id;
+		const state = { status: job.status, day_level_status: job.day_level_status };
+		// Another blend's files never show; this blend's stay up while they reload.
+		if (artifactsFor !== id) {
+			artifacts = [];
+			artifactsFor = id;
+		}
 		let cancelled = false;
 		let attempts = 0;
 		const load = async () => {
@@ -443,12 +457,11 @@
 				const found = await getJobArtifacts(id);
 				if (cancelled) return;
 				artifacts = found;
-				if (found.length === 0 && attempts++ < 6) setTimeout(load, 2000);
+				if (awaitingArtifacts(state, found) && attempts++ < 6) setTimeout(load, 2000);
 			} catch {
 				if (!cancelled) artifacts = [];
 			}
 		};
-		artifacts = [];
 		void load();
 		return () => {
 			cancelled = true;
@@ -943,10 +956,31 @@
 					{/if}
 
 					{#if selected.status === 'complete'}
+						{@const dayLevel = dayLevelNote(selected)}
+						{#if dayLevel}
+							<div class="day-level-note {dayLevel.kind}" role="status">
+								{#if dayLevel.kind === 'training'}<div class="spinner"></div>{/if}
+								<div>
+									<strong>{dayLevel.title}</strong>
+									{#if dayLevel.kind === 'training'}
+										<p class="muted">{dayLevel.detail}</p>
+									{:else if dayLevel.detail}
+										<details>
+											<summary>Details</summary>
+											<pre class="error-block">{dayLevel.detail}</pre>
+										</details>
+									{/if}
+								</div>
+							</div>
+						{/if}
 						{#if skill.length > 0}
 							<div class="skill">
 								<h2>Forecast skill</h2>
-								<BlendSkillPanel series={skill} jobId={selected.id} />
+								<BlendSkillPanel
+									series={skill}
+									jobId={selected.id}
+									revision={selected.day_level_status ?? ''}
+								/>
 							</div>
 						{/if}
 
@@ -1345,6 +1379,34 @@
 
 	.running-state strong,
 	.running-state p {
+		margin: 0;
+	}
+
+	.day-level-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.75rem;
+		padding: 0.75rem 1rem;
+		margin-bottom: 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-bg);
+	}
+
+	.day-level-note.failed {
+		border-color: var(--color-danger-border);
+	}
+
+	.day-level-note > div {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.day-level-note strong,
+	.day-level-note p {
 		margin: 0;
 	}
 

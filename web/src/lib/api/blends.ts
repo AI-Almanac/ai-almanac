@@ -18,7 +18,14 @@ export type Blend = {
 	is_owner?: boolean;
 	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
+	// The day-level blend when it trains in its own run alongside this one, so
+	// a complete blend can still be 'running' here. Absent when it trains with
+	// the blend or not at all.
+	day_level_status?: DayLevelStatus | null;
+	day_level_error?: string | null;
 };
+
+export type DayLevelStatus = 'running' | 'complete' | 'failed' | 'canceled';
 
 export type BlendParams = {
 	training_years: string;
