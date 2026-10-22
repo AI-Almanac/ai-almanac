@@ -1602,6 +1602,21 @@ def _forecast_family_conf(max_day: int, has_spread: bool) -> dict:
     }
 
 
+def _lap_timer():
+    """lap(label) logs the time since the previous lap: call it as each phase ends."""
+    import time
+
+    last = time.perf_counter()
+
+    def lap(label: str) -> None:
+        nonlocal last
+        now = time.perf_counter()
+        print(f"==> {label} in {now - last:.1f}s", flush=True)
+        last = now
+
+    return lap
+
+
 def _write_year_slices(table, out_dir: Path, name: str, partitions: list[list[int]]) -> list[Path]:
     """One pickle per partition of `table`'s rows, each keeping its row positions as index."""
     paths = []
@@ -2029,8 +2044,10 @@ def build_intermediates_from_dirs(
     )
     cache_hits = 0
     cache_misses = 0
+    lap = _lap_timer()
     obs_paths = sorted(obs_dir.glob("*.nc"))
     obs_file_digests = _file_sha256s(obs_paths) if cache_dir else []
+    lap(f"Hashed {len(obs_paths)} obs files")
 
     obs_long_parts = []
     if cache_dir and not include_long:
@@ -2051,6 +2068,7 @@ def build_intermediates_from_dirs(
     else:
         obs_wide_parts = _map_parts(_process_obs_wide, obs_paths, part_context, file_workers)
 
+    lap("Obs parts")
     obs_wide = pd.concat(obs_wide_parts, ignore_index=True)
     obs_wide_path = output_dir / "ground_truth_wide.pkl"
     with obs_wide_path.open("wb") as f:
@@ -2107,6 +2125,7 @@ def build_intermediates_from_dirs(
         file_digests = (
             _file_sha256s(forecast_paths_in) if cache_dir else [None] * len(forecast_paths_in)
         )
+        lap(f"Hashed {len(forecast_paths_in)} {model_name} files")
         forecast_keys = [
             {
                 **static_cache_params,
@@ -2154,6 +2173,7 @@ def build_intermediates_from_dirs(
             del entry
         forecast_parts_by_model[model_name] = model_parts
         manifest["forecasts"][model_name] = summary.manifest()
+        lap(f"{model_name} forecast parts")
 
     clim = clim_unc = None
     if build_climatology:
@@ -2264,6 +2284,7 @@ def build_intermediates_from_dirs(
         )
         cache_hits += was_cached
         cache_misses += not was_cached
+        lap("Climatology")
         clim = climatology.pop("clim")
         clim_unc = climatology.pop("clim_unc")
         manifest["climatology"] = {
@@ -2328,6 +2349,7 @@ def build_intermediates_from_dirs(
         )
         del clim, clim_unc
         truth = read_ground_truth_wide(str(obs_wide_path))
+        lap("Climatology year slices")
 
         combined_dir = parts_root / "combined"
         combined_dir.mkdir()
@@ -2354,11 +2376,14 @@ def build_intermediates_from_dirs(
             part.to_pickle(part_path)
             combined_part_paths.append(part_path)
             del part
+        lap(f"Combined {len(combined_part_paths)} partition(s)")
         combined = _assemble_combined(combined_part_paths, restore_clim_order=join_how == "inner")
+        lap("Assembled the combined table")
 
         combined_path = output_dir / "combined_wide.pkl"
         with combined_path.open("wb") as f:
             pickle.dump(combined, f)
+        lap("Wrote combined_wide.pkl")
         manifest["outputs"][combined_path.name] = {"bytes": combined_path.stat().st_size}
         manifest["combined"] = {
             "rows": int(len(combined)),
