@@ -24,7 +24,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Analyze only the languages a change touches; the weekly run covers all.
+  # Each filter is named after the CodeQL language it selects.
+  languages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists a PR's files through the API
+    outputs:
+      matrix: ${{ github.event_name == 'schedule' && '["python","javascript-typescript","actions"]' || steps.changes.outputs.changes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'push'
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: changes
+        if: github.event_name != 'schedule'
+        with:
+          filters: |
+            python:
+              - "**/*.{py,pyi}"
+            javascript-typescript:
+              - "**/*.{js,cjs,mjs,ts,svelte,html}"
+            actions:
+              - ".github/workflows/**"
+              - ".github/actions/**"
+
   analyze:
+    needs: languages
+    if: needs.languages.outputs.matrix != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript, actions]
+        language: ${{ fromJSON(needs.languages.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
