@@ -14,8 +14,8 @@ import uuid
 
 import sqlalchemy as sa
 
+from ai_almanac.server.services import blend_summaries, guardrails, job_submission
 from ai_almanac.server.services import data_sources as data_source_service
-from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_cells import BLEND_MODELS
 from ai_almanac.server.services.blend_state import BlendRunSpec, BlendValidation, SuggestedYears
@@ -608,7 +608,6 @@ async def _blend_job_status(job_id: str, user_id: str, scope: BenchmarkScope):
 async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
     """Read a completed blend's pooled per-model skill summary and artifact list."""
     from ai_almanac.server.services.artifacts import list_job_artifacts
-    from ai_almanac.server.services.storage import get_storage
 
     row = await _blend_job_status(job_id, user_id, scope)
     if not row:
@@ -619,15 +618,11 @@ async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) ->
         return {"error": f"Blend {job_id} is not complete (status: {row['status']})"}
 
     artifacts = await list_job_artifacts(job_id)
-    summary = next(
-        (a for a in artifacts if a["filename"].startswith("summary_models_pooled")),
-        None,
-    )
     artifact_list = [
         {"filename": a["filename"], "kind": a["kind"], "size_bytes": a["size_bytes"]}
         for a in artifacts
     ]
-    if summary is None:
+    if blend_summaries.find(artifacts, "pooled") is None:
         return {
             "job_id": job_id,
             "skill": [],
@@ -635,10 +630,8 @@ async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) ->
             "note": "No pooled summary artifact found for this blend.",
         }
 
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
-    )
-    if text is None:
+    text = await blend_summaries.read_summary(job_id, artifacts, "pooled")
+    if not text:
         return {"error": f"Could not read the summary file for blend {job_id}"}
     return {
         "job_id": job_id,
@@ -657,18 +650,9 @@ async def _cell_coverage(job_id: str, artifacts: list[dict]) -> list[dict]:
     than being the answer, so failing to read it must not fail the whole tool.
     """
     from ai_almanac.server.services import blend_cells
-    from ai_almanac.server.services.storage import get_storage
 
-    summary = next(
-        (a for a in artifacts if blend_cells.is_per_cell_summary(a["filename"])),
-        None,
-    )
-    if summary is None:
-        return []
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
-    )
-    if text is None:
+    text = await blend_summaries.read_summary(job_id, artifacts, "cells")
+    if not text:
         return []
     metrics = await asyncio.to_thread(blend_cells.build_cell_metrics, job_id, text)
     return [c.model_dump() for c in blend_cells.coverage_summary(metrics)]

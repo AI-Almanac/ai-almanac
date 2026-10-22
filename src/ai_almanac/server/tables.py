@@ -65,6 +65,14 @@ jobs = sa.Table(
     sa.Column("timeout_seconds", sa.Integer()),
     sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
     sa.Column("failure_category", sa.Text()),
+    # A blend's day-level blend trains in its own Modal call and may still be
+    # running after the job completes (migration 0029). Status is NULL when it
+    # does not train apart from the job: not requested, or run in-process locally.
+    sa.Column("day_level_call_id", sa.Text()),
+    sa.Column("day_level_status", sa.Text()),
+    sa.Column("day_level_error", sa.Text()),
+    sa.Column("day_level_completed_at", sa.Text()),
+    sa.Column("day_level_published_at", sa.Text()),
 )
 
 # Per-user hiding of example jobs: "deleting" a visibility='example' job

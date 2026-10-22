@@ -229,7 +229,11 @@ class LocalStorage:
         return p
 
     def read_log(self, job_id: str) -> str:
-        p = self._outputs_dir / job_id / "run.log"
+        return self.read_job_text(job_id, "run.log")
+
+    def read_job_text(self, job_id: str, name: str) -> str:
+        """A text file the run wrote under the job's prefix, or "" if absent."""
+        p = self._outputs_dir / job_id / name
         return p.read_text() if p.exists() else ""
 
 
@@ -530,7 +534,11 @@ class GCSStorage:
         )
 
     def read_log(self, job_id: str) -> str:
-        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")
+        return self.read_job_text(job_id, "run.log")
+
+    def read_job_text(self, job_id: str, name: str) -> str:
+        """A text file the run wrote under the job's prefix, or "" if absent."""
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/{name}")
         return blob.download_as_text() if blob.exists() else ""
 
 
