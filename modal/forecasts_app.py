@@ -105,7 +105,7 @@ def _inference_image(extras: list[str]) -> modal.Image:
             f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git"
             "@96a9bd607013783da8560fbb7a0bb13a00018b66'",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs h5netcdf onnxruntime-gpu pyyaml",
+            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs 'h5netcdf[h5py]' onnxruntime-gpu pyyaml",
         )
         .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
@@ -121,7 +121,7 @@ cpu_image = (
         "dask",
         "google-cloud-storage",
         "gcsfs",
-        "h5netcdf",
+        "h5netcdf[h5py]",
         # Same pin as earth2studio, so season assembly picks the same netCDF
         # engine here as it did in the inference image.
         "netCDF4<1.7.3",
