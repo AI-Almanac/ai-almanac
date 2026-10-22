@@ -150,6 +150,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         true_holdout_years=workflow._parse_years(params.get("true_holdout_years") or ""),
         return_outputs=True,
         train_forest=bool(config.get("train_day_level_blend")),
+        cache_dir=config.get("cache_dir"),
         **train_kwargs,
     )
     if not training["manifest"].get("ok"):

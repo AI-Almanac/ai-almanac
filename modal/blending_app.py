@@ -755,6 +755,7 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
             train_kwargs = {
                 "cores": RUN_BLEND_TRAINING_CORES,
                 "memory_budget_bytes": RUN_BLEND_WORKER_BUDGET_BYTES,
+                "cache_dir": _blend_cache_dir(config),
             }
             if params.get("formula_text"):
                 train_kwargs["formula_text"] = params["formula_text"]
@@ -2774,19 +2775,91 @@ def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
     return [{"name": FOREST_MODEL_NAME, "file": cv_preds_filename, "method": "global"}]
 
 
-def _cross_validate_forest(
-    forest_frame, dissemination_path: Path, folds: list, model_names: list[str]
-):
-    """Out-of-fold day-level predictions on the rows the weekly model is scored
-    on, so both models' CV skill covers the same sample."""
+def _frame_sha256(frame) -> str:
+    """A digest of a frame's columns, dtypes, and row values, in order."""
+    import hashlib
+
+    import pandas as pd
+
+    digest = hashlib.sha256(json.dumps([[str(c), str(t)] for c, t in frame.dtypes.items()]).encode())
+    digest.update(pd.util.hash_pandas_object(frame, index=False).to_numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_names, params):
+    """onset_forest.cross_validate's predictions for fold `fold_index` alone,
+    seeded as a run over every fold seeds it (random_state + index + 1); None
+    when predict_on has no rows in the fold's test year, which that run skips."""
+    from dataclasses import replace
+
     import onset_forest
 
+    if not (predict_on["year"] == fold[0]).any():
+        return None
     return onset_forest.cross_validate(
-        _dissemination_rows(forest_frame, dissemination_path),
-        _multinomial_scoreable(forest_frame),
-        folds,
+        train,
+        predict_on,
+        [fold],
         model_names,
+        replace(params, random_state=params.random_state + fold_index),
     )
+
+
+def _cross_validate_forest(
+    forest_frame,
+    dissemination_path: Path,
+    folds: list,
+    model_names: list[str],
+    cache_dir: str | None = None,
+):
+    """Out-of-fold day-level predictions on the rows the weekly model is scored
+    on, so both models' CV skill covers the same sample.
+
+    Folds run one at a time, each logged as it finishes and cached under its
+    inputs, so a run restarted after preemption refits only unfinished folds.
+    The result equals onset_forest.cross_validate over every fold at once."""
+    from dataclasses import asdict
+
+    import onset_forest
+    import pandas as pd
+
+    lap = _lap_timer()
+    train = _dissemination_rows(forest_frame, dissemination_path)
+    predict_on = _multinomial_scoreable(forest_frame)
+    params = onset_forest.ForestParams()
+    inputs_key = {
+        "train_sha256": _frame_sha256(train) if cache_dir else None,
+        "predict_on_sha256": _frame_sha256(predict_on) if cache_dir else None,
+        "model_names": list(model_names),
+        "params": asdict(params),
+        "forest_repo_ref": FOREST_REPO_REF,
+    }
+    lap(f"Day-level CV inputs: {len(train)} training rows, {len(folds)} folds")
+    parts = []
+    for index, (test_year, train_years) in enumerate(folds):
+        part, was_cached = _cached_pickle(
+            cache_dir,
+            "forest_cv",
+            {**inputs_key, "fold_index": index, "fold": [test_year, list(train_years)]},
+            partial(
+                _forest_fold_predictions,
+                train,
+                predict_on,
+                (test_year, train_years),
+                index,
+                model_names,
+                params,
+            ),
+        )
+        lap(
+            f"Day-level CV fold {index + 1}/{len(folds)} (test year {test_year}"
+            f"{', cached' if was_cached else ''})"
+        )
+        if part is not None:
+            parts.append(part)
+    if not parts:
+        raise ValueError("No predict_on rows fall in any fold's test year.")
+    return pd.concat(parts, ignore_index=True)
 
 
 def _fit_final_forest(
@@ -2915,6 +2988,7 @@ def train_blending_model_bundle(
     combined_wide_path: str | None = None,
     train_forest: bool = True,
     memory_budget_bytes: int | None = None,
+    cache_dir: str | None = None,
 ) -> dict:
     """Train/evaluate the weekly blend and, with train_forest, the day-level
     blend from a combined wide pickle. Both are cross-validated and scored by
@@ -2923,7 +2997,8 @@ def train_blending_model_bundle(
     In-process callers pass combined_wide_path (and None for the bytes) so the
     table is read from disk instead of held in memory as a second copy.
     memory_budget_bytes, when set, caps `cores` so the training script's
-    copies of the weekly table fit it."""
+    copies of the weekly table fit it. cache_dir, when set, keeps each finished
+    day-level CV fold (see _cross_validate_forest)."""
     import subprocess
     import sys
     import uuid
@@ -2974,6 +3049,7 @@ def train_blending_model_bundle(
                 dissemination_path,
                 _cv_folds(training_years, cv_holdout_years, true_holdout_years),
                 model_names,
+                cache_dir=cache_dir,
             ).to_pickle(results_dir / cv_preds_filename)
             return frame
 
