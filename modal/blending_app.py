@@ -3318,11 +3318,14 @@ def _day_level_output_name(results_name: str) -> str | None:
 
 
 def _forest_score_rows(path: Path) -> bytes:
-    """A day-level score file (.csv or .pkl) cut to the forest's own rows."""
+    """A day-level score file (.csv or .pkl) cut to the forest's own rows.
+
+    CSV cells are kept as written: pandas' default float parser is not
+    round-trip exact, so re-parsing the scores would shift their last digit."""
     import pandas as pd
 
     if path.suffix == ".csv":
-        table = pd.read_csv(path)
+        table = pd.read_csv(path, dtype=str, keep_default_na=False)
         return table[table["model"] == FOREST_MODEL_NAME].to_csv(index=False).encode()
     table = pd.read_pickle(path)
     buffer = io.BytesIO()

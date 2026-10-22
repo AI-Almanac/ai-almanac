@@ -353,7 +353,12 @@ def test_a_restarted_blend_reuses_the_day_level_call_it_started(
 
 def test_day_level_scores_ship_only_the_forest_rows(workflow, tmp_path: Path) -> None:
     table = pd.DataFrame(
-        {"id": ["ALL", "ALL", "c1"], "model": ["clim_raw", "blended_forest", "blended_forest"]}
+        {
+            "id": ["ALL", "ALL", "c1"],
+            "model": ["clim_raw", "blended_forest", "blended_forest"],
+            # Values pandas' default CSV float parser does not read back exactly.
+            "rps": [0.5, 0.9008045652179817, float("nan")],
+        }
     )
     csv_path, pkl_path = tmp_path / "summary_models_x.csv", tmp_path / "summary_models_x.pkl"
     table.to_csv(csv_path, index=False)
@@ -365,6 +370,12 @@ def test_day_level_scores_ship_only_the_forest_rows(workflow, tmp_path: Path) ->
     for shipped in (from_csv, from_pkl):
         assert shipped["model"].tolist() == ["blended_forest", "blended_forest"]
         assert shipped["id"].tolist() == ["ALL", "c1"]
+    # The CSV keeps each cell exactly as the evaluation wrote it.
+    written = csv_path.read_text().splitlines()
+    assert workflow._forest_score_rows(csv_path).decode().splitlines() == [
+        written[0],
+        *[line for line in written[1:] if ",blended_forest," in line],
+    ]
 
 
 def test_an_unwritten_marker_cancels_the_day_level_call_it_was_for(
