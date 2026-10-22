@@ -419,3 +419,51 @@ def test_a_large_weekly_table_trains_with_fewer_cv_workers() -> None:
     # A table too big for even one fold worker trains its folds serially.
     assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=budget) == 1
     assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=None) == 4
+
+
+def _row_local_connect(spec: dict):
+    """A stand-in for make_cv_rds_from_daylevel: weekly columns from each row alone."""
+    import pandas as pd
+
+    raw = pd.read_pickle(spec["input_rds"])
+    weekly = pd.DataFrame(
+        {
+            "id": raw["id"].to_numpy(),
+            "year": raw["year"].to_numpy(),
+            "week1": raw[["day_1", "day_2"]].sum(axis=1).to_numpy(),
+            "outcome": raw["onset"].astype(str).where(raw["onset"].notna(), None).to_numpy(),
+        }
+    )
+    weekly.attrs["rain_horizons"] = {"aifs": spec["day_max"]}
+    pd.to_pickle(weekly, spec["output_rds"])
+    return weekly
+
+
+def test_connecting_in_row_chunks_matches_a_one_shot_connect(tmp_path: Path) -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    combined = pd.DataFrame(
+        {
+            "id": [f"c{i % 7}" for i in range(50)],
+            "year": [2000 + i % 3 for i in range(50)],
+            "day_1": [float(i) for i in range(50)],
+            "day_2": [0.5 * i for i in range(50)],
+            "onset": [None if i % 4 else f"week{i % 3}" for i in range(50)],
+        }
+    )
+    one_shot_input = tmp_path / "combined.pkl"
+    combined.to_pickle(one_shot_input)
+    spec = {"day_max": 28}
+    one_shot = _row_local_connect(
+        {**spec, "input_rds": str(one_shot_input), "output_rds": str(tmp_path / "weekly.pkl")}
+    )
+    row_bytes = int(combined.memory_usage(deep=True).sum()) // len(combined)
+
+    chunk_paths = app._write_row_chunks(combined, tmp_path / "chunks", chunk_bytes=8 * row_bytes)
+    chunked = app._connect_in_chunks(_row_local_connect, spec, chunk_paths)
+
+    assert len(chunk_paths) == 7
+    pd.testing.assert_frame_equal(chunked, one_shot, check_exact=True)
+    assert chunked.attrs == one_shot.attrs
+    assert not list((tmp_path / "chunks").iterdir())  # chunk inputs and outputs are cleaned up
