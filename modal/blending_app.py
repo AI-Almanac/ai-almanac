@@ -2781,7 +2781,9 @@ def _frame_sha256(frame) -> str:
 
     import pandas as pd
 
-    digest = hashlib.sha256(json.dumps([[str(c), str(t)] for c, t in frame.dtypes.items()]).encode())
+    digest = hashlib.sha256(
+        json.dumps([[str(c), str(t)] for c, t in frame.dtypes.items()]).encode()
+    )
     digest.update(pd.util.hash_pandas_object(frame, index=False).to_numpy().tobytes())
     return digest.hexdigest()
 
