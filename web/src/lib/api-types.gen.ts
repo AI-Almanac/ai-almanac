@@ -2316,6 +2316,10 @@ export interface components {
              * @default []
              */
             true_holdout_years: number[];
+            /** Day Level Status */
+            day_level_status?: string | null;
+            /** Day Level Error */
+            day_level_error?: string | null;
         };
         /**
          * BlendParams

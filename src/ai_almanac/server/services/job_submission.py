@@ -435,6 +435,12 @@ class BlendOut(BaseModel):
     forecast_models: dict[str, str] = {}
     # Years kept out of every fit, so results can show their scores apart.
     true_holdout_years: list[int] = []
+    # The day-level blend, when it trains in its own run alongside this one:
+    # "running" (the blend can be complete while it still trains), then
+    # "complete", "failed", or "canceled". None when it trains with the blend
+    # or not at all.
+    day_level_status: str | None = None
+    day_level_error: str | None = None
 
 
 _blend_model_key = blend_model_key
@@ -803,6 +809,8 @@ def blend_row_to_out(
         true_holdout_years=_years_or_empty(
             (cfg.get("blend_params") or {}).get("true_holdout_years")
         ),
+        day_level_status=row.get("day_level_status"),
+        day_level_error=row.get("day_level_error"),
     )
 
 
