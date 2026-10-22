@@ -14,9 +14,9 @@ _YEARS = {"training_years": "2000:2024", "cv_holdout_years": "2000:2019"}
 def test_only_the_settings_given_reach_the_run() -> None:
     """Unset settings are not sent, so the run keeps onset_forest's own defaults."""
     assert BlendParams(**_YEARS, day_level={}).model_dump(exclude_none=True)["day_level"] == {}
-    assert BlendParams(**_YEARS, day_level={"years_per_fold": 5}).model_dump(
-        exclude_none=True
-    )["day_level"] == {"years_per_fold": 5}
+    assert BlendParams(**_YEARS, day_level={"years_per_fold": 5}).model_dump(exclude_none=True)[
+        "day_level"
+    ] == {"years_per_fold": 5}
     assert "day_level" not in BlendParams(**_YEARS).model_dump(exclude_none=True)
 
 
