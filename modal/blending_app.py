@@ -853,7 +853,9 @@ def _run_blend(job_id: str, config: dict, outputs_bucket: str, client) -> dict:
     print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
     if not training["manifest"].get("ok"):
         _print_manifest_tails(training["manifest"], "Blend training pipeline")
-        raise RuntimeError("Blend training pipeline failed; stderr tail printed above (see run.log)")
+        raise RuntimeError(
+            "Blend training pipeline failed; stderr tail printed above (see run.log)"
+        )
 
     out_local = stage_root / "output"
     out_local.mkdir()
@@ -3281,9 +3283,7 @@ def _day_level_scoring_spec(blend_spec: dict, cv_preds_filename: str) -> dict:
     needs the weekly run's unc_clim_raw baseline, which the server pairs
     with them."""
     formulas = blend_spec["models"]["formulas"]
-    clim_raw = [
-        task for task in blend_spec["extras"]["clim_logits"] if task["name"] == "clim_raw"
-    ]
+    clim_raw = [task for task in blend_spec["extras"]["clim_logits"] if task["name"] == "clim_raw"]
     return {
         **blend_spec,
         "models": {

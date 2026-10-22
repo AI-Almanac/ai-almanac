@@ -334,7 +334,9 @@ def test_a_restarted_blend_reuses_the_day_level_call_it_started(
         workflow,
         "run_day_level_blend",
         SimpleNamespace(
-            spawn=lambda *args: spawned.append(args) or SimpleNamespace(object_id=f"fc-{len(spawned)}")
+            spawn=lambda *args: (
+                spawned.append(args) or SimpleNamespace(object_id=f"fc-{len(spawned)}")
+            )
         ),
     )
     monkeypatch.setattr(workflow, "_upload_combined_table", lambda *args: uploads.append(args))
