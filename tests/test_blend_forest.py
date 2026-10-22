@@ -184,3 +184,21 @@ def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow) -> No
 
     assert result is None
     assert "aifs_rain_mean_day_40" in error
+
+
+@pytest.mark.parametrize(
+    ("forest_pkl", "weekly_finished", "fit_error", "shipped", "error"),
+    [
+        (b"forest", True, None, b"forest", None),
+        (b"forest", False, None, None, "week-level blend did not finish"),
+        (None, True, "final fit failed: KeyError", None, "final fit failed"),
+        (None, False, "final fit failed: KeyError", None, "final fit failed"),
+    ],
+)
+def test_the_day_level_blend_ships_only_with_a_finished_week_level_blend(
+    workflow, forest_pkl, weekly_finished, fit_error, shipped, error
+) -> None:
+    result, reported = workflow._shipped_forest(forest_pkl, weekly_finished, fit_error)
+
+    assert result == shipped
+    assert (reported is None) if error is None else (error in reported)

@@ -84,6 +84,7 @@ RUN_BLEND_WORKER_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB
 # compute_cv_global: its main process keeps wide_df, the allowed-cells subset,
 # and a fold's training rows; each spawned CV fold worker unpickles its own
 # data_train and data_pred and slices a fold's training rows from them.
+# Read off DEFAULT_REPO_REF 0a216aa; recheck them when the pin moves.
 TRAINING_MAIN_TABLE_COPIES = 3
 TRAINING_FOLD_WORKER_TABLE_COPIES = 3
 
@@ -2657,6 +2658,16 @@ def _try_day_level(step: str, run):
         return None, message
 
 
+def _shipped_forest(
+    forest_pkl: bytes | None, weekly_finished: bool, day_level_error: str | None
+) -> tuple[bytes | None, str | None]:
+    """(forest model to ship, day-level error): the day-level blend ships only
+    alongside a finished week-level blend."""
+    if forest_pkl is not None and not weekly_finished:
+        return None, "day-level blend not shipped: the week-level blend did not finish"
+    return forest_pkl, day_level_error
+
+
 def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
     return [{"name": FOREST_MODEL_NAME, "file": cv_preds_filename, "method": "global"}]
 
@@ -2953,10 +2964,10 @@ def train_blending_model_bundle(
         with suppress(FileNotFoundError):
             spec_path.unlink()
 
-    if forest_pkl is not None and final_fit is not None and final_fit.returncode == 0:
+    weekly_finished = final_fit is not None and final_fit.returncode == 0
+    forest_pkl, day_level_error = _shipped_forest(forest_pkl, weekly_finished, day_level_error)
+    if forest_pkl is not None:
         (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
-    elif forest_pkl is not None:
-        day_level_error = "day-level blend not shipped: the week-level blend did not finish"
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
@@ -2994,7 +3005,8 @@ def train_blending_model_bundle(
     outputs_tar = None
     if return_outputs:
         output_dir = Path(tempfile.mkdtemp(prefix="blend-training-artifacts-"))
-        # The connector pickled this same table to pipeline_input_path.
+        # The connector pickles exactly the table it returns to output_rds, and
+        # 1_blend_evaluation.py / 3_fit_final_model.py only read it.
         shutil.copyfile(pipeline_input_path, output_dir / "weekly_training_input.pkl")
         (output_dir / "training_spec.yml").write_text(
             yaml.dump(blend_spec, default_flow_style=False)
