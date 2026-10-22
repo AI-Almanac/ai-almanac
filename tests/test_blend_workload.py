@@ -79,6 +79,15 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
             ),
         }
     )
+    day_level_calls = []
+
+    def train_day_level_bundle(combined_wide_path, model_names, **kwargs):
+        day_level_calls.append((combined_wide_path, model_names, kwargs))
+        out = tmp_path / "day-level-out"
+        out.mkdir()
+        (out / "forest.pkl").write_bytes(b"forest")
+        return {"manifest": {}, "output_dir": str(out)}
+
     workflow = SimpleNamespace(
         BLENDING_ROOT=blending_root,
         LOCAL_INTERMEDIATE_RESOURCES=_load_workflow().LOCAL_INTERMEDIATE_RESOURCES,
@@ -88,6 +97,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
         _parse_years=lambda value: [int(year) for year in value.split(",") if year],
         build_blend_intermediates=prepare,
         train_blending_model_bundle=train,
+        train_day_level_bundle=train_day_level_bundle,
     )
     layouts = {
         "aifs": {"forecast_dims": {"step": "prediction_timedelta_daily"}, "unit_cvt": 1000.0}
@@ -123,9 +133,18 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     assert train_kwargs["model_names"] == ["aifs"]
     assert train_kwargs["training_years"] == [2020, 2021]
     assert train_kwargs["cv_holdout_years"] == [2022]
-    assert train_kwargs["train_forest"] is day_level
     assert (output_dir / "combined_wide.pkl").read_bytes() == combined
     assert (output_dir / "weights.pkl").read_bytes() == b"weights"
+    # The day-level blend trains from the same combined table, after the weekly one.
+    assert (output_dir / "forest.pkl").exists() is day_level
+    if day_level:
+        [(combined_wide_path, model_names, kwargs)] = day_level_calls
+        assert combined_wide_path == train_kwargs["combined_wide_path"]
+        assert model_names == ["aifs"]
+        assert kwargs["cv_holdout_years"] == [2022]
+        assert kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
+    else:
+        assert day_level_calls == []
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:

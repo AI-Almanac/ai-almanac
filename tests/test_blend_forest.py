@@ -6,7 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -186,24 +186,6 @@ def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow) -> No
     assert "aifs_rain_mean_day_40" in error
 
 
-@pytest.mark.parametrize(
-    ("forest_pkl", "weekly_finished", "fit_error", "shipped", "error"),
-    [
-        (b"forest", True, None, b"forest", None),
-        (b"forest", False, None, None, "week-level blend did not finish"),
-        (None, True, "final fit failed: KeyError", None, "final fit failed"),
-        (None, False, "final fit failed: KeyError", None, "final fit failed"),
-    ],
-)
-def test_the_day_level_blend_ships_only_with_a_finished_week_level_blend(
-    workflow, forest_pkl, weekly_finished, fit_error, shipped, error
-) -> None:
-    result, reported = workflow._shipped_forest(forest_pkl, weekly_finished, fit_error)
-
-    assert result == shipped
-    assert (reported is None) if error is None else (error in reported)
-
-
 def _fold_counting_onset_forest(calls: list, fail_on_year: int | None = None) -> ModuleType:
     """cross_validate with onset_forest's seeding (random_state + i + 1) and
     skipping of folds with no test rows; records each fit's test year."""
@@ -287,3 +269,80 @@ def test_a_restarted_forest_cv_refits_only_the_folds_it_had_not_finished(
     assert first == [2001]
     assert restarted == [2003]
     assert sorted(result["year"].unique().tolist()) == [2001, 2003]
+
+
+def test_day_level_scoring_fits_nothing_and_scores_only_the_forest(workflow, tmp_path) -> None:
+    spec = _spec(workflow, tmp_path)
+
+    scoring = workflow._day_level_scoring_spec(spec, "cv_preds_blended_forest_global.pkl")
+
+    assert all(not formula["enabled"] for formula in scoring["models"]["formulas"].values())
+    assert scoring["extras"]["external_predictions"] == [
+        {"name": "blended_forest", "file": "cv_preds_blended_forest_global.pkl", "method": "global"}
+    ]
+    # clim_raw stays only so the script can read its week bins; no forecasts are scored.
+    assert [task["name"] for task in scoring["extras"]["clim_logits"]] == ["clim_raw"]
+    assert set(scoring["extras"]) == {"clim_logits", "external_predictions"}
+    assert scoring["run"] == spec["run"]
+    assert scoring["cell"] == spec["cell"]
+
+
+@pytest.mark.parametrize(
+    ("results_name", "output_name"),
+    [
+        ("forest_blended_forest_global_final.pkl", "forest_blended_forest_global_final.pkl"),
+        ("cv_preds_blended_forest_global_2020.pkl", "cv_preds_blended_forest_global_2020.pkl"),
+        ("summary_models_fixed_cutoff_2020.csv", "day_level_summary_models_fixed_cutoff_2020.csv"),
+        ("yearly_metrics_global_2020.csv", "day_level_yearly_metrics_global_2020.csv"),
+        ("almanac_training_spec.yml", None),
+    ],
+)
+def test_day_level_outputs_never_share_a_name_with_weekly_scores(
+    workflow, results_name: str, output_name: str | None
+) -> None:
+    assert workflow._day_level_output_name(results_name) == output_name
+
+
+class _MarkerBucket:
+    def __init__(self) -> None:
+        self.objects: dict[str, str] = {}
+
+    def blob(self, name: str):
+        bucket = self
+
+        class _Blob:
+            def exists(self) -> bool:
+                return name in bucket.objects
+
+            def download_as_text(self) -> str:
+                return bucket.objects[name]
+
+            def upload_from_string(self, text: str) -> None:
+                bucket.objects[name] = text
+
+        return _Blob()
+
+
+def test_a_restarted_blend_reuses_the_day_level_call_it_started(
+    workflow, monkeypatch, tmp_path: Path
+) -> None:
+    bucket = _MarkerBucket()
+    client = SimpleNamespace(bucket=lambda _name: bucket)
+    spawned: list = []
+    uploads: list = []
+    monkeypatch.setattr(
+        workflow,
+        "run_day_level_blend",
+        SimpleNamespace(
+            spawn=lambda *args: spawned.append(args) or SimpleNamespace(object_id=f"fc-{len(spawned)}")
+        ),
+    )
+    monkeypatch.setattr(workflow, "_upload_combined_table", lambda *args: uploads.append(args))
+    combined = tmp_path / "combined_wide.pkl"
+
+    first = workflow._start_day_level_blend(client, "job-1", {"k": 1}, "outputs", combined)
+    restarted = workflow._start_day_level_blend(client, "job-1", {"k": 1}, "outputs", combined)
+
+    assert first == restarted == "fc-1"
+    assert spawned == [("job-1", {"k": 1}, "outputs")]
+    assert len(uploads) == 1  # the running call's input is not rewritten

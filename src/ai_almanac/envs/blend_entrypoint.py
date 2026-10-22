@@ -140,17 +140,18 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     train_kwargs = {"cores": os.cpu_count() or 1}
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
+    years = {
+        "training_years": workflow._parse_years(params.get("training_years") or "") or [],
+        "cv_holdout_years": workflow._parse_years(params.get("cv_holdout_years") or "") or [],
+        "true_holdout_years": workflow._parse_years(params.get("true_holdout_years") or ""),
+    }
     print("==> Training blend weights", flush=True)
     training = workflow.train_blending_model_bundle.local(
         None,
         combined_wide_path=str(combined_path),
         model_names=model_names,
-        training_years=workflow._parse_years(params.get("training_years") or "") or [],
-        cv_holdout_years=workflow._parse_years(params.get("cv_holdout_years") or "") or [],
-        true_holdout_years=workflow._parse_years(params.get("true_holdout_years") or ""),
         return_outputs=True,
-        train_forest=bool(config.get("train_day_level_blend")),
-        cache_dir=config.get("cache_dir"),
+        **years,
         **train_kwargs,
     )
     if not training["manifest"].get("ok"):
@@ -158,9 +159,18 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         raise RuntimeError(f"Blend training pipeline failed:\n{tail}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.move(combined_path, output_dir / "combined_wide.pkl")
     if training.get("outputs_tar"):
         _extract_tar(training["outputs_tar"], output_dir)
+    if config.get("train_day_level_blend"):
+        # Modal trains this in its own container alongside the weekly blend;
+        # locally it follows it, into the same output dir.
+        print("==> Training the day-level blend", flush=True)
+        day_level = workflow.train_day_level_bundle(
+            str(combined_path), model_names, cache_dir=config.get("cache_dir"), **years
+        )
+        for path in Path(day_level["output_dir"]).iterdir():
+            shutil.move(path, output_dir / path.name)
+    shutil.move(combined_path, output_dir / "combined_wide.pkl")
     print("==> Model blending complete", flush=True)
 
 
