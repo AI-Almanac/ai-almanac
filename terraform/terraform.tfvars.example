@@ -40,3 +40,6 @@ llm_base_url            = "https://openrouter.ai/api/v1"
 llm_model               = "anthropic/claude-haiku-4.5"
 enable_run_code         = true
 enable_run_code_sandbox = true
+
+# Monitoring — uptime, 5xx, and Cloud SQL alerts go here (monitoring.tf).
+alert_email = "CHANGE-ME@example.org"

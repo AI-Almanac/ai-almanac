@@ -6,7 +6,9 @@
 
 	async function logout() {
 		await getManager()?.revoke();
-		account.clear();
+		// The token is gone, so the server now answers as it would any anonymous
+		// visitor, and every page's sign-in prompt follows from that.
+		await account.reload();
 	}
 
 	// Load the account once per authenticated session. Without the `attempted`

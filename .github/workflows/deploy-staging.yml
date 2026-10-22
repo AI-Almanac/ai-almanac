@@ -5,9 +5,11 @@ name: deploy-staging
 # runs the same single-image architecture; deploy-prod.yml is the mirror of
 # this workflow targeting almanac-backend.
 
-# Only paths that actually ship in the ai-almanac-web image trigger a deploy;
-# workflow_dispatch stays as the escape hatch for everything else (docs,
-# terraform, CI config, etc.).
+# Only paths that ship in the image or the Modal apps trigger a run; then
+# scripts/deploy-plan.sh picks which of the image, the Modal apps, and the
+# migrations the run ships. Keep these paths in step with that script.
+# workflow_dispatch ships everything and stays the escape hatch for the rest
+# (terraform, CI config, etc.).
 on:
   push:
     branches: [develop]
@@ -17,6 +19,9 @@ on:
       - "web/**"
       - "Dockerfile"
       - "pyproject.toml"
+      - "pixi.lock"
+      - "!web/tests/**"
+      - "!**/*.md"
   workflow_dispatch:
 
 concurrency:
@@ -36,8 +41,14 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      actions: read # deploy-plan.sh reads the previous run
+    outputs:
+      image: ${{ steps.plan.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # deploy-plan.sh diffs against the previous run's commit.
+          fetch-depth: 0
 
       - name: Authenticate to GCP
         id: auth
@@ -49,7 +60,18 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # A manual run or a re-run is a deliberate "ship this commit": all of it.
+      - name: Decide what this run ships
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_EVERYTHING: ${{ github.event_name == 'workflow_dispatch' || github.run_attempt != '1' }}
+        run: |
+          plan=$(scripts/deploy-plan.sh "$GITHUB_WORKFLOW" "$SERVICE" "$REGION")
+          echo "$plan" | tee -a "$GITHUB_OUTPUT"
+
       - name: Log in to Artifact Registry
+        if: steps.plan.outputs.image == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: us-central1-docker.pkg.dev
@@ -57,8 +79,10 @@ jobs:
           password: ${{ steps.auth.outputs.access_token }}
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        if: steps.plan.outputs.image == 'true'
 
       - name: Build and push
+        if: steps.plan.outputs.image == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -84,16 +108,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The backend calls these apps by name in its own Modal environment, so
-      # they ship with every backend deploy and never drift behind it.
+      # The backend calls these apps by name in its own Modal environment.
+      # They ship whenever they or a repo file they bundle changed, so they
+      # never drift from the release.
       # Installs the Modal CLI from pixi.lock (hash-pinned) rather than a fresh
       # PyPI resolve, since this step holds the Modal tokens.
       - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347 # v0.10.1
+        if: steps.plan.outputs.modal == 'true'
         with:
           environments: default
           cache: true
 
       - name: Deploy Modal apps
+        if: steps.plan.outputs.modal == 'true'
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -102,10 +129,12 @@ jobs:
             pixi run --locked python -m modal deploy --env staging "modal/$app.py"
           done
 
-      # Migrate before routing traffic: new code may need new schema. The job's
-      # image is pinned in Terraform with ignore_changes, so point it at this
-      # build, then run it to completion.
+      # Migrate before routing traffic: new code may need new schema. Without a
+      # new migration `db upgrade` is a no-op, so it only runs when the schema
+      # changed. The job's image is pinned in Terraform with ignore_changes, so
+      # point it at this build, then run it to completion.
       - name: Run database migrations
+        if: steps.plan.outputs.migrations == 'true'
         run: |
           gcloud run jobs update "$MIGRATE_JOB" \
             --region "$REGION" \
@@ -113,17 +142,29 @@ jobs:
           gcloud run jobs execute "$MIGRATE_JOB" --region "$REGION" --wait
 
       - name: Deploy to Cloud Run
+        if: steps.plan.outputs.image == 'true'
         uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3.0.1
         with:
           service: ${{ env.SERVICE }}
           region: us-central1
           image: ${{ env.AR_IMAGE }}:${{ github.sha }}
+          # deploy-cloudrun adds this by default too; scripts/rollback.sh reads it
+          # to map a revision back to its commit (the image is stored by digest).
+          labels: commit-sha=${{ github.sha }}
+
+      # scripts/rollback.sh pins traffic to one revision, and a deploy to a
+      # pinned service lands at 0%. A deploy means "serve this build".
+      - name: Route traffic to the new revision
+        if: steps.plan.outputs.image == 'true'
+        run: gcloud run services update-traffic "$SERVICE" --region "$REGION" --to-latest
 
   # Post-deploy verification (SDLC Phase 3): readiness + smoke tests + error
   # log soak via scripts/post_deploy_check.sh (all cloud-specific commands
   # live in the script).
+  # A run that ships only the Modal apps leaves the serving revision as is.
   verify:
     needs: deploy
+    if: needs.deploy.outputs.image == 'true'
     runs-on: ubuntu-latest
     environment: staging
     permissions:

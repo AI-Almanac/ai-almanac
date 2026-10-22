@@ -99,8 +99,8 @@ if [ "$WANT_PYTHON" = 1 ]; then
 				pip install --quiet ruff >/dev/null 2>&1 || true
 		fi
 		if python3 -m ruff --version >/dev/null 2>&1; then
-			run "ruff check"  python3 -m ruff check src tests modal scripts
-			run "ruff format" python3 -m ruff format --check src tests modal scripts
+			run "ruff check"  python3 -m ruff check
+			run "ruff format" python3 -m ruff format --check
 		else
 			skip "ruff" "could not install"
 		fi

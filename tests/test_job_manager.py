@@ -69,20 +69,6 @@ async def _job_row(job_id: str) -> dict:
     return dict(row)
 
 
-async def _wait_for_status(job_id: str, status: str, timeout: float = 10.0) -> None:
-    """Poll until the job reaches ``status``; the deadline absorbs slow subprocess
-    startup on loaded CI runners while still failing fast on real hangs."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    observed = None
-    while loop.time() < deadline:
-        observed = (await _job_row(job_id))["status"]
-        if observed == status:
-            return
-        await asyncio.sleep(0.1)
-    pytest.fail(f"job did not enter {status} state within {timeout:.0f}s (last: {observed})")
-
-
 @pytest.mark.asyncio
 async def test_cancel_job_persists_requested_state(
     client: httpx.AsyncClient,
@@ -228,16 +214,29 @@ async def test_supervisor_cancels_running_workload(
     from ai_almanac.server.services import job_manager
 
     workloads: list[subprocess.Popen] = []
+    loop = asyncio.get_running_loop()
+    workload_started = asyncio.Event()
 
     def start_workload(job_id: str, log_path: Path) -> subprocess.Popen:
         workloads.append(_start_unending_workload(job_id, log_path))
+        loop.call_soon_threadsafe(workload_started.set)
         return workloads[-1]
 
     monkeypatch.setattr(job_manager, "_start_workload", start_workload)
     job_id = await _insert_job(user_id, "queued", config={"model_name": "cancel-test"})
     supervisor = asyncio.create_task(asyncio.to_thread(job_manager.execute_job, job_id))
     try:
-        await _wait_for_status(job_id, "running")
+        # Once the workload is up, the supervisor stops it as soon as it sees
+        # cancel_requested_at, even if its own "running" write lands after the
+        # cancel's "canceling". Racing the supervisor task fails fast, with its
+        # own error, if it exits without starting the workload.
+        started = asyncio.create_task(workload_started.wait())
+        await asyncio.wait({started, supervisor}, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        started.cancel()
+        if not workload_started.is_set():
+            if supervisor.done():
+                supervisor.result()
+            pytest.fail("supervisor did not start the workload")
 
         await job_manager.request_cancel(job_id, user_id)
         await asyncio.wait_for(supervisor, timeout=15)

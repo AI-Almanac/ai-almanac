@@ -101,6 +101,9 @@ prose instructions.
 - Database migrations must be backward-compatible one version: deploys run
   migrations before routing traffic, so a rollback runs old code on the new
   schema. Additive changes first; destructive changes in a later release.
+  Retiring a built-in region follows the same rule: remove it from
+  `regions.yaml` first, delete its row in a later release (see
+  `docs/sdlc/rollback.md`).
 - Before pushing changes that touch `src/ai_almanac/server/`, `terraform/`,
   `.github/`, `modal/`, or `deploy/`, run `/security-review` and address or
   explicitly justify each finding.

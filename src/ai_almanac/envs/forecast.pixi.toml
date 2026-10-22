@@ -1,10 +1,10 @@
 # Pixi spec for the ai-almanac live-forecast execution environment.
 #
-# Holds earth2studio, its PyTorch/CUDA stack, and the geo stack needed to
-# render Cloud-Optimized GeoTIFFs (rasterio/GDAL/PROJ). Separate from the
-# benchmark/blending environments since this is by far the heaviest of the
-# three — kept out of the default install so `pip install ai-almanac` and
-# `ai-almanac env prepare`'s other environments stay light.
+# Holds earth2studio and its PyTorch/CUDA stack, plus the netCDF/zarr stack the
+# season rollouts write and read. Separate from the benchmark/blending
+# environments since this is by far the heaviest of the three — kept out of the
+# default install so `pip install ai-almanac` and `ai-almanac env prepare`'s
+# other environments stay light.
 #
 # Multiple environments, one manifest: the AIFS model families pin mutually
 # incompatible `anemoi-models` versions (v1 needs 0.5.1, AIFS2 needs 0.9.x,
@@ -27,15 +27,12 @@ channels = ["conda-forge"]
 # needs a Linux GPU host (see the `self-host-local-gpu` deployment profile).
 platforms = ["linux-64", "linux-aarch64"]
 
-# Shared conda base — the PyTorch/CUDA + geo stack every environment needs. Only
+# Shared conda base — the PyTorch/CUDA + netCDF stack every environment needs. Only
 # the earth2studio extras (with their conflicting anemoi pins) differ per group.
 [dependencies]
 python = "3.11.*"
 pip = "*"
 pytorch = "*"
-gdal = "*"
-proj = "*"
-rasterio = "*"
 netcdf4 = "<1.7.3"
 h5netcdf = "*"
 xarray = "*"

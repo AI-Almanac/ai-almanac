@@ -45,7 +45,9 @@ import shutil
 import tarfile
 import tempfile
 import traceback
+from collections.abc import Callable
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
@@ -70,12 +72,35 @@ RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
 # run_blend's memory limit. Training on a 26-year India 0.25° blend needs
 # ~44 GB (the weekly connector holds ~3.7x the combined table).
 RUN_BLEND_MEMORY_MB = 65536
-# Held back from the per-file worker budget for the main process (obs table,
-# blendable cells, the batch of parts it is writing out).
+# Held back from the worker budget for the main process (obs table, blendable
+# cells, the batch of parts it is writing out).
 RUN_BLEND_MAIN_PROCESS_MB = 16384
 # (request, limit) in MiB for the functions that build intermediates and train.
 RUN_BLEND_MEMORY = (RUN_BLEND_MEMORY_MB // 2, RUN_BLEND_MEMORY_MB)
-RUN_BLEND_FILE_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+# Memory run_blend's worker processes may share: the per-file intermediates
+# workers, then the training script and its CV fold workers.
+RUN_BLEND_WORKER_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+# Weekly-table copies 1_blend_evaluation.py holds, read off onset_blending's
+# compute_cv_global: its main process keeps wide_df, the allowed-cells subset,
+# and a fold's training rows; each spawned CV fold worker unpickles its own
+# data_train and data_pred and slices a fold's training rows from them.
+# Read off DEFAULT_REPO_REF 0a216aa; recheck them when the pin moves.
+TRAINING_MAIN_TABLE_COPIES = 3
+TRAINING_FOLD_WORKER_TABLE_COPIES = 3
+
+
+class IntermediateResources(NamedTuple):
+    """Processes that build intermediates, and the memory their files may share."""
+
+    workers: int
+    file_memory_budget_bytes: int | None
+
+
+# Training and live scoring both build intermediates in containers sized by RUN_BLEND_*.
+MODAL_INTERMEDIATE_RESOURCES = IntermediateResources(RUN_BLEND_CPU, RUN_BLEND_WORKER_BUDGET_BYTES)
+# The local runners load this module under a synthetic name, which worker
+# processes cannot re-import (see _map_parts), so they build serially.
+LOCAL_INTERMEDIATE_RESOURCES = IntermediateResources(1, None)
 # Peak memory per forecast value while one file is processed: the reader
 # expands every value into a wide frame before onset processing. Measured at
 # 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files.
@@ -362,15 +387,19 @@ _cache_gcs_client = None
 _blending_repo_ref_cached: str | None = None
 
 
-def _cache_gcs_blob(gs_uri: str):
-    """Resolve a gs:// URI to a Blob, reusing one client across cache lookups."""
+def _cache_gcs():
+    """One storage client reused across cache lookups."""
     global _cache_gcs_client
     from google.cloud import storage as gcs
 
     if _cache_gcs_client is None:
         _cache_gcs_client = gcs.Client()
+    return _cache_gcs_client
+
+
+def _cache_gcs_blob(gs_uri: str):
     bucket_name, key = _split_gcs_uri(gs_uri, "cache_dir")
-    return _cache_gcs_client.bucket(bucket_name).blob(key)
+    return _cache_gcs().bucket(bucket_name).blob(key)
 
 
 def _blending_repo_ref() -> str:
@@ -402,6 +431,20 @@ def _file_sha256(path: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+def _file_sha256s(paths: list[Path]) -> list[str]:
+    """_file_sha256 per path, in order; hashlib releases the GIL, so threads
+    hash files concurrently."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=max(1, os.cpu_count() or 1)) as pool:
+        return list(pool.map(_file_sha256, paths))
+
+
+def _cache_scope_rel(scope: str) -> str:
+    """The prefix, relative to cache_dir, holding every entry of one scope."""
+    return f"v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/{scope}"
+
+
 def _cache_entry(scope: str, key_material: dict) -> tuple[str, str]:
     """(digest, path relative to cache_dir) of one cached intermediate."""
     import hashlib
@@ -409,17 +452,77 @@ def _cache_entry(scope: str, key_material: dict) -> tuple[str, str]:
     digest = hashlib.sha256(
         json.dumps(key_material, sort_keys=True, default=str).encode()
     ).hexdigest()
-    rel = f"v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/{scope}/{digest}.pkl"
-    return digest, rel
+    return digest, f"{_cache_scope_rel(scope)}/{digest}.pkl"
 
 
-def _cache_has(cache_dir: str | None, scope: str, key_material: dict) -> bool:
+def _blend_cache_dir(config: dict) -> str | None:
+    """The shared intermediates cache in a job's data bucket, when it names one."""
+    bucket = (config.get("gcs_cache_bucket") or "").strip()
+    return f"gs://{bucket}/blend-intermediates" if bucket else None
+
+
+def _cache_uri(cache_dir: str, rel: str) -> str:
+    return f"{str(cache_dir).rstrip('/')}/{rel}"
+
+
+def _cached_digests(cache_dir: str | None, scope: str) -> frozenset[str]:
+    """Digests a scope already holds, from a single listing of its prefix
+    rather than one lookup per entry."""
     if not cache_dir:
-        return False
-    _, rel = _cache_entry(scope, key_material)
-    if str(cache_dir).startswith("gs://"):
-        return _cache_gcs_blob(f"{str(cache_dir).rstrip('/')}/{rel}").exists()
-    return (Path(cache_dir) / rel).exists()
+        return frozenset()
+    prefix = _cache_uri(cache_dir, _cache_scope_rel(scope))
+    if prefix.startswith("gs://"):
+        bucket_name, key = _split_gcs_uri(prefix, "cache_dir")
+        names = [
+            blob.name.rsplit("/", 1)[-1]
+            for blob in _cache_gcs().list_blobs(bucket_name, prefix=f"{key}/")
+        ]
+    else:
+        names = [path.name for path in Path(prefix).glob("*") if path.is_file()]
+    return frozenset(Path(name).stem for name in names)
+
+
+def _cache_entry_exists(cache_dir: str, rel: str) -> bool:
+    uri = _cache_uri(cache_dir, rel)
+    if uri.startswith("gs://"):
+        return _cache_gcs_blob(uri).exists()
+    return Path(uri).exists()
+
+
+def _read_cache_entry(cache_dir: str, rel: str):
+    import pickle
+
+    uri = _cache_uri(cache_dir, rel)
+    if uri.startswith("gs://"):
+        return pickle.loads(_cache_gcs_blob(uri).download_as_bytes())
+    with Path(uri).open("rb") as f:
+        return pickle.load(f)
+
+
+def _read_cache_entries(cache_dir: str, rels: list[str]) -> list:
+    """_read_cache_entry per rel, in order, downloading concurrently."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not rels:
+        return []
+    with ThreadPoolExecutor(max_workers=min(len(rels), STAGE_DOWNLOAD_WORKERS)) as pool:
+        return list(pool.map(lambda rel: _read_cache_entry(cache_dir, rel), rels))
+
+
+def _write_cache_entry(cache_dir: str, rel: str, obj) -> None:
+    import pickle
+    import uuid
+
+    uri = _cache_uri(cache_dir, rel)
+    if uri.startswith("gs://"):
+        _cache_gcs_blob(uri).upload_from_string(pickle.dumps(obj))
+        return
+    cache_file = Path(uri)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
+    with tmp_path.open("wb") as f:
+        pickle.dump(obj, f)
+    os.replace(tmp_path, cache_file)
 
 
 def _map_parts(fn, paths: list[Path], context: dict, workers: int) -> list:
@@ -463,21 +566,42 @@ def _cached_parts(
     context: dict,
     workers: int,
 ) -> list[tuple[object, bool]]:
-    """(part, was_cached) per path: misses are computed together in parallel,
-    then stored and returned through _cached_pickle like single lookups."""
-    missing = [i for i, key in enumerate(keys) if not _cache_has(cache_dir, scope, key)]
+    """(part, was_cached) per path, against one listing of the scope's cache."""
+    return _cached_batch(
+        _cached_digests(cache_dir, scope), cache_dir, scope, keys, paths, fn, context, workers
+    )
+
+
+def _cached_batch(
+    stored: frozenset[str],
+    cache_dir: str | None,
+    scope: str,
+    keys: list[dict],
+    paths: list[Path],
+    fn,
+    context: dict,
+    workers: int,
+) -> list[tuple[object, bool]]:
+    """(part, was_cached) per path: misses (digests absent from `stored`) are
+    computed together in parallel and stored; hits are downloaded concurrently."""
+    entries = [_cache_entry(scope, key) for key in keys]
+    is_hit = [digest in stored for digest, _ in entries]
+    if cache_dir:
+        for (digest, _), hit in zip(entries, is_hit, strict=True):
+            print(f"==> cache {'hit' if hit else 'miss'} {scope} {digest[:8]}", flush=True)
+    hits = [i for i, hit in enumerate(is_hit) if hit]
+    missing = [i for i, hit in enumerate(is_hit) if not hit]
+
     computed = dict(
         zip(missing, _map_parts(fn, [paths[i] for i in missing], context, workers), strict=True)
     )
-    return [
-        _cached_pickle(
-            cache_dir,
-            scope,
-            key,
-            lambda i=i: computed[i] if i in computed else fn(paths[i], context),
-        )
-        for i, key in enumerate(keys)
-    ]
+    if cache_dir:
+        for i in missing:
+            _write_cache_entry(cache_dir, entries[i][1], computed[i])
+    read = dict(
+        zip(hits, _read_cache_entries(cache_dir, [entries[i][1] for i in hits]), strict=True)
+    )
+    return [(computed[i], False) if i in computed else (read[i], True) for i in range(len(keys))]
 
 
 def _iter_cached_parts(
@@ -490,12 +614,14 @@ def _iter_cached_parts(
     workers: int,
 ):
     """_cached_parts in batches of `workers` files, yielded in file order, so a
-    caller that writes each part to disk holds only one batch at a time."""
+    caller that writes each part to disk holds only one batch at a time. The
+    scope is listed once up front, not once per batch."""
+    stored = _cached_digests(cache_dir, scope)
     batch = max(int(workers), 1)
     for start in range(0, len(paths), batch):
         stop = start + batch
-        yield from _cached_parts(
-            cache_dir, scope, keys[start:stop], paths[start:stop], fn, context, workers
+        yield from _cached_batch(
+            stored, cache_dir, scope, keys[start:stop], paths[start:stop], fn, context, workers
         )
 
 
@@ -530,39 +656,18 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
     of returning stale results. Entries are self-produced pickles in our own
     bucket/data dir — the same trust model as combined_wide.pkl.
     """
-    import pickle
-    import uuid
-
     if not cache_dir:
         return compute(), False
 
-    digest, rel = _cache_entry(scope, key_material)
-    cache_uri = str(cache_dir)
-
     # ponytail: no eviction — entries are one small pickle per (file, params,
     # ref); stale ref prefixes are deletable by hand if the bucket ever grows.
-    if cache_uri.startswith("gs://"):
-        blob = _cache_gcs_blob(f"{cache_uri.rstrip('/')}/{rel}")
-        if blob.exists():
-            print(f"==> cache hit {scope} {digest[:8]}", flush=True)
-            return pickle.loads(blob.download_as_bytes()), True
-        print(f"==> cache miss {scope} {digest[:8]}", flush=True)
-        obj = compute()
-        blob.upload_from_string(pickle.dumps(obj))
-        return obj, False
-
-    cache_file = Path(cache_uri) / rel
-    if cache_file.exists():
+    digest, rel = _cache_entry(scope, key_material)
+    if _cache_entry_exists(cache_dir, rel):
         print(f"==> cache hit {scope} {digest[:8]}", flush=True)
-        with cache_file.open("rb") as f:
-            return pickle.load(f), True
+        return _read_cache_entry(cache_dir, rel), True
     print(f"==> cache miss {scope} {digest[:8]}", flush=True)
     obj = compute()
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
-    with tmp_path.open("wb") as f:
-        pickle.dump(obj, f)
-    os.replace(tmp_path, cache_file)
+    _write_cache_entry(cache_dir, rel, obj)
     return obj, False
 
 
@@ -627,30 +732,26 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 forecast_dirs[key] = model_local
             print(f"==> Inputs staged in {time.perf_counter() - t0:.1f}s")
 
-            prep_kwargs = _intermediate_prep_kwargs(params)
-            if config.get("region_id"):
-                prep_kwargs["region_id"] = config["region_id"]
-            cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
-            cache_dir = f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
-            intermediates = build_intermediates_from_dirs(
+            intermediates = build_blend_intermediates(
                 obs_local,
                 forecast_dirs,
-                return_outputs=False,
-                cache_dir=cache_dir,
-                file_workers=RUN_BLEND_CPU,
-                climatology_workers=RUN_BLEND_CPU,
-                file_memory_budget_bytes=RUN_BLEND_FILE_BUDGET_BYTES,
+                params,
+                region_id=config.get("region_id"),
+                cache_dir=_blend_cache_dir(config),
+                resources=MODAL_INTERMEDIATE_RESOURCES,
                 model_layouts=config.get("model_layouts"),
-                **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             # Read from disk, never held as bytes: on large grids the combined
             # table is the biggest object the run handles.
             combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
 
-            train_kwargs = {"cores": RUN_BLEND_TRAINING_CORES}
+            train_kwargs = {
+                "cores": RUN_BLEND_TRAINING_CORES,
+                "memory_budget_bytes": RUN_BLEND_WORKER_BUDGET_BYTES,
+            }
             if params.get("formula_text"):
                 train_kwargs["formula_text"] = params["formula_text"]
             print("==> Training blend weights")
@@ -827,34 +928,35 @@ def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None
     out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
     output_paths: list[Path] = []
 
+    sources = sorted(input_dir.glob("*.nc"))
+    to_remap = [src for src in sources if not _has_adm3_dimension(src)]
     cache_prefix = None
-    if cache_dir and str(cache_dir).startswith("gs://"):
-        cache_prefix = (
-            f"{str(cache_dir).rstrip('/')}"
-            f"/v{BLEND_INTERMEDIATES_CACHE_VERSION}/{_blending_repo_ref()[:12]}/adm3_nc"
-        )
+    stored = frozenset()
+    file_hashes = {}
+    if to_remap and cache_dir and str(cache_dir).startswith("gs://"):
+        cache_prefix = _cache_uri(cache_dir, _cache_scope_rel("adm3_nc"))
+        stored = _cached_digests(cache_dir, "adm3_nc")
+        file_hashes = dict(zip(to_remap, _file_sha256s(to_remap), strict=True))
 
-    for src in sorted(input_dir.glob("*.nc")):
+    for src in sources:
         target = out_dir / src.name
 
-        if _has_adm3_dimension(src):
+        if src not in to_remap:
             target.write_bytes(src.read_bytes())
             output_paths.append(target)
             continue
 
-        cached_bytes = None
         cache_blob = None
-        if cache_prefix:
-            file_hash = _file_sha256(src)
+        file_hash = file_hashes.get(src)
+        if file_hash:
             cache_blob = _cache_gcs_blob(f"{cache_prefix}/{file_hash}.nc")
-            if cache_blob.exists():
-                print(f"==> cache hit adm3_nc {file_hash[:8]}", flush=True)
-                cached_bytes = cache_blob.download_as_bytes()
-            else:
-                print(f"==> cache miss adm3_nc {file_hash[:8]}", flush=True)
+            print(
+                f"==> cache {'hit' if file_hash in stored else 'miss'} adm3_nc {file_hash[:8]}",
+                flush=True,
+            )
 
-        if cached_bytes is not None:
-            target.write_bytes(cached_bytes)
+        if file_hash in stored:
+            cache_blob.download_to_filename(str(target))
         else:
             normalized = _normalize_grid_dims(src, remap_dir / src.name)
             batch_aggregate_to_adm3_matrix(
@@ -1721,6 +1823,36 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
     return {"wide": processed["wide"], "member_counts": member_counts, "has_spread": has_spread}
 
 
+def build_blend_intermediates(
+    obs_dir: Path,
+    forecast_dirs: dict[str, Path],
+    blend_params: dict,
+    *,
+    region_id: str | None,
+    cache_dir: str | None,
+    resources: IntermediateResources,
+    model_layouts: dict[str, dict] | None = None,
+    climatology_test_year_min: int | None = None,
+) -> dict:
+    """A blend's intermediates, built the same way whether it is training or
+    scoring a live season, on Modal or locally."""
+    prep_kwargs = _intermediate_prep_kwargs(blend_params)
+    if region_id:
+        prep_kwargs["region_id"] = region_id
+    return build_intermediates_from_dirs(
+        obs_dir,
+        forecast_dirs,
+        return_outputs=False,
+        cache_dir=cache_dir,
+        file_workers=resources.workers,
+        climatology_workers=resources.workers,
+        file_memory_budget_bytes=resources.file_memory_budget_bytes,
+        model_layouts=model_layouts,
+        climatology_test_year_min=climatology_test_year_min,
+        **prep_kwargs,
+    )
+
+
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
 def build_lat_lon_intermediates_bundle(
     obs_bundle: bytes, forecast_bundles: dict[str, bytes], **params
@@ -1898,7 +2030,7 @@ def build_intermediates_from_dirs(
     cache_hits = 0
     cache_misses = 0
     obs_paths = sorted(obs_dir.glob("*.nc"))
-    obs_file_digests = [_file_sha256(path) for path in obs_paths] if cache_dir else []
+    obs_file_digests = _file_sha256s(obs_paths) if cache_dir else []
 
     obs_long_parts = []
     if cache_dir and not include_long:
@@ -1972,6 +2104,9 @@ def build_intermediates_from_dirs(
         }
         # The key carries the layout and kept cells, not the model name:
         # identical files with the same layout reuse one entry across models.
+        file_digests = (
+            _file_sha256s(forecast_paths_in) if cache_dir else [None] * len(forecast_paths_in)
+        )
         forecast_keys = [
             {
                 **static_cache_params,
@@ -1979,9 +2114,9 @@ def build_intermediates_from_dirs(
                 "forecast_dims": layout.get("forecast_dims"),
                 "unit_cvt": model_context["unit_cvt"],
                 "blendable_ids_sha256": blendable_ids_digest,
-                "file_sha256": _file_sha256(path) if cache_dir else None,
+                "file_sha256": digest,
             }
-            for path in forecast_paths_in
+            for digest in file_digests
         ]
         # Each processed part goes to disk as soon as it exists: holding every
         # year of every model at once is what outgrew memory on large grids.
@@ -2370,6 +2505,26 @@ def _prepare_blend_workspace(
     )
 
 
+def _training_cores(table_bytes: int, cores: int | None, memory_budget_bytes: int | None):
+    """How many CV fold workers the training script may run so its copies of
+    the weekly table fit the budget; 1 runs the folds serially, with no pool."""
+    if cores is None or memory_budget_bytes is None:
+        return cores
+    spare = memory_budget_bytes - TRAINING_MAIN_TABLE_COPIES * table_bytes
+    fold_workers = spare // max(TRAINING_FOLD_WORKER_TABLE_COPIES * table_bytes, 1)
+    return max(1, min(int(cores), int(fold_workers)))
+
+
+def _weekly_summary(weekly) -> dict:
+    return {
+        "rows": int(len(weekly)),
+        "columns": int(len(weekly.columns)),
+        "years": sorted(int(year) for year in weekly["year"].dropna().unique()),
+        "outcome_counts": weekly["outcome"].value_counts(dropna=False).to_dict(),
+        "first_columns": list(weekly.columns[:80]),
+    }
+
+
 def _default_formula_text(model_names: list[str]) -> str:
     formula_terms = ["prob_clim_mr_qx"] + [f"diff_{name}_qx" for name in model_names]
     return "outcome ~ " + " * ".join(formula_terms)
@@ -2501,6 +2656,16 @@ def _try_day_level(step: str, run):
         message = f"day-level blend {step} failed: {type(exc).__name__}: {exc}"
         print(f"WARNING: {message}; continuing with the week-level blend only")
         return None, message
+
+
+def _shipped_forest(
+    forest_pkl: bytes | None, weekly_finished: bool, day_level_error: str | None
+) -> tuple[bytes | None, str | None]:
+    """(forest model to ship, day-level error): the day-level blend ships only
+    alongside a finished week-level blend."""
+    if forest_pkl is not None and not weekly_finished:
+        return None, "day-level blend not shipped: the week-level blend did not finish"
+    return forest_pkl, day_level_error
 
 
 def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
@@ -2647,14 +2812,16 @@ def train_blending_model_bundle(
     return_outputs: bool = True,
     combined_wide_path: str | None = None,
     train_forest: bool = True,
+    memory_budget_bytes: int | None = None,
 ) -> dict:
     """Train/evaluate the weekly blend and, with train_forest, the day-level
     blend from a combined wide pickle. Both are cross-validated and scored by
     1_blend_evaluation.py, and both final fits ship in the outputs.
 
     In-process callers pass combined_wide_path (and None for the bytes) so the
-    table is read from disk instead of held in memory as a second copy."""
-    import pickle
+    table is read from disk instead of held in memory as a second copy.
+    memory_budget_bytes, when set, caps `cores` so the training script's
+    copies of the weekly table fit it."""
     import subprocess
     import sys
     import uuid
@@ -2687,14 +2854,17 @@ def train_blending_model_bundle(
         make_cutoff_tag(cutoff_mode), cv_holdout_years + (true_holdout_years or [])
     )
 
-    forest_frame = None
+    weekly_summary = _weekly_summary(weekly)
+    weekly_bytes = int(weekly.memory_usage(deep=True).sum())
+
+    forest_pkl = None
     external_predictions = None
     day_level_error = None
     if train_forest:
         cv_preds_filename = _forest_cv_preds_filename(output_tag)
 
-        def cross_validate_forest():
-            frame = _forest_frame(weekly, _forest_inputs(combined_path))
+        def cross_validate_forest(weekly_table):
+            frame = _forest_frame(weekly_table, _forest_inputs(combined_path))
             # 1_blend_evaluation.py scores these alongside the weekly model's CV.
             _cross_validate_forest(
                 frame,
@@ -2704,9 +2874,28 @@ def train_blending_model_bundle(
             ).to_pickle(results_dir / cv_preds_filename)
             return frame
 
-        forest_frame, day_level_error = _try_day_level("cross-validation", cross_validate_forest)
+        forest_frame, day_level_error = _try_day_level(
+            "cross-validation", partial(cross_validate_forest, weekly)
+        )
         if forest_frame is not None:
             external_predictions = _forest_external_predictions(cv_preds_filename)
+            # Fit now so the frame is gone before the training script loads
+            # its own copies of the weekly table.
+            forest_pkl, day_level_error = _try_day_level(
+                "final fit",
+                lambda: _fit_final_forest(
+                    forest_frame,
+                    dissemination_path,
+                    _final_forest_years(training_years, true_holdout_years),
+                    model_names,
+                ),
+            )
+        del forest_frame
+    # The training script reads the table from pipeline_input_path itself.
+    del weekly
+
+    cores = _training_cores(weekly_bytes, cores, memory_budget_bytes)
+    print(f"==> Training on a {weekly_bytes / 2**30:.1f} GiB weekly table with cores={cores}")
 
     formula_text = formula_text or _default_formula_text(model_names)
     blend_spec = _build_blend_spec(
@@ -2775,20 +2964,10 @@ def train_blending_model_bundle(
         with suppress(FileNotFoundError):
             spec_path.unlink()
 
-    if forest_frame is not None and final_fit is not None and final_fit.returncode == 0:
-        forest_pkl, day_level_error = _try_day_level(
-            "final fit",
-            lambda: _fit_final_forest(
-                forest_frame,
-                dissemination_path,
-                _final_forest_years(training_years, true_holdout_years),
-                model_names,
-            ),
-        )
-        if forest_pkl is not None:
-            (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
-    elif forest_frame is not None:
-        day_level_error = "day-level blend final fit skipped: the week-level blend did not finish"
+    weekly_finished = final_fit is not None and final_fit.returncode == 0
+    forest_pkl, day_level_error = _shipped_forest(forest_pkl, weekly_finished, day_level_error)
+    if forest_pkl is not None:
+        (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
@@ -2807,13 +2986,7 @@ def train_blending_model_bundle(
         "formula_text": formula_text,
         "day_level_blend_error": day_level_error,
         "combined": combined_summary,
-        "weekly": {
-            "rows": int(len(weekly)),
-            "columns": int(len(weekly.columns)),
-            "years": sorted(int(year) for year in weekly["year"].dropna().unique()),
-            "outcome_counts": weekly["outcome"].value_counts(dropna=False).to_dict(),
-            "first_columns": list(weekly.columns[:80]),
-        },
+        "weekly": weekly_summary,
         "outputs": {
             path.name: {"bytes": path.stat().st_size}
             for path in sorted(results_dir.iterdir())
@@ -2832,9 +3005,9 @@ def train_blending_model_bundle(
     outputs_tar = None
     if return_outputs:
         output_dir = Path(tempfile.mkdtemp(prefix="blend-training-artifacts-"))
-        weekly_path = output_dir / "weekly_training_input.pkl"
-        with weekly_path.open("wb") as f:
-            pickle.dump(weekly, f)
+        # The connector pickles exactly the table it returns to output_rds, and
+        # 1_blend_evaluation.py / 3_fit_final_model.py only read it.
+        shutil.copyfile(pipeline_input_path, output_dir / "weekly_training_input.pkl")
         (output_dir / "training_spec.yml").write_text(
             yaml.dump(blend_spec, default_flow_style=False)
         )
@@ -3005,16 +3178,19 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
     return matches[0]
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
+@app.function(image=blending_image, cpu=(RUN_BLEND_CPU, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
 def score_live_forecast(
     obs_bundle: bytes,
     forecast_bundles: dict[str, bytes],
     model_names: list[str],
     blend_params: dict,
     live_year: int,
+    *,
+    resources: IntermediateResources,
     coef_pkl: bytes | None = None,
     cache_dir: str | None = None,
     forest_pkl: bytes | None = None,
+    climatology_test_year_min: int | None = None,
 ) -> LiveScores:
     """Score a live/in-progress season against an already-trained blend, given
     already-staged bundles (no GCS or local-file knowledge here — that's the
@@ -3032,9 +3208,11 @@ def score_live_forecast(
     (see plan §"Key finding" — compute_cv_global already predicts holdout
     years using only their feature columns, never their outcome).
 
-    forecast_bundles: one tar.gz bundle per blend model name, each already
-    merged (historical `{year}.nc` files + the live season's file) by the
-    caller via _merge_forecast_bundle.
+    forecast_bundles: one tar.gz bundle per blend model name, chosen by
+    score_live_season: the live season's file alone when applying coef_pkl,
+    merged with the historical `{year}.nc` files when retraining.
+    climatology_test_year_min pins the climatology to the trained blend's
+    window when the historical years are absent.
 
     forest_pkl (the blend's FOREST_MODEL_FILENAME) adds day-level scores; it
     only applies alongside coef_pkl — the retrain fallback is weekly-only.
@@ -3047,11 +3225,16 @@ def score_live_forecast(
 
     print("==> Building blending intermediates (including live season)")
     t0 = time.perf_counter()
-    prep_kwargs = _intermediate_prep_kwargs(blend_params)
-    if blend_params.get("region_id"):
-        prep_kwargs["region_id"] = blend_params["region_id"]
-    intermediates = build_lat_lon_intermediates_bundle.local(
-        obs_bundle, forecast_bundles, return_outputs=False, cache_dir=cache_dir, **prep_kwargs
+    # No model_layouts: the live file is assembled in the standard layout and
+    # already in millimetres (forecast_pipeline.assemble_season_netcdf).
+    intermediates = build_blend_intermediates(
+        _extract_bundle(obs_bundle),
+        {name: _extract_bundle(bundle) for name, bundle in forecast_bundles.items()},
+        blend_params,
+        region_id=blend_params.get("region_id"),
+        cache_dir=cache_dir,
+        resources=resources,
+        climatology_test_year_min=climatology_test_year_min,
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
     combined_path = str(Path(intermediates["output_dir"]) / "combined_wide.pkl")
@@ -3121,6 +3304,74 @@ def _with_live_centroids(scores: LiveScores, region_id: str | None) -> LiveScore
     )
 
 
+def _first_trained_forecast_year(blend_config: dict) -> int | None:
+    """The blend's earliest historical forecast year, or None when its config
+    predates recording them. Its climatology trained on obs before this year."""
+    years = blend_config.get("forecast_years") or []
+    return min(int(year) for year in years) if years else None
+
+
+def score_live_season(
+    blend_config: dict,
+    live_bundles: dict[str, bytes],
+    live_year: int,
+    *,
+    obs_bundle: bytes,
+    load_historical: Callable[[str], bytes],
+    read_artifact: Callable[[str], bytes | None],
+    cache_dir: str | None,
+    resources: IntermediateResources,
+) -> LiveScores:
+    """Score a live season against its trained blend. The Modal and local
+    runners differ only in the I/O they pass in.
+
+    load_historical(model_name) returns a model's historical `{year}.nc` bundle;
+    read_artifact(filename) one of the blend's published outputs, or None.
+    Applying trained coefficients scores only the live season, so historical
+    forecasts are loaded only for the retrain fallback. Either way the
+    climatology keeps the trained blend's window.
+    """
+    model_names = blend_config["model_names"]
+    missing = [name for name in model_names if name not in live_bundles]
+    if missing:
+        raise ValueError(f"No live forecast bundle provided for models: {missing}")
+    params = {
+        **(blend_config.get("blend_params") or {}),
+        "region_id": blend_config.get("region_id"),
+    }
+
+    coef_pkl = read_artifact(FINAL_COEF_FILENAME)
+    forest_pkl = None
+    if coef_pkl is None:
+        print("==> Blend outputs have no final coef bundle; falling back to retrain-based scoring")
+    else:
+        print("==> Using trained blend coefficients (skipping CV retrain)")
+        # Blends trained before the day-level model have no forest.
+        forest_pkl = read_artifact(FOREST_MODEL_FILENAME)
+
+    climatology_start = _first_trained_forecast_year(blend_config)
+    if coef_pkl is not None and climatology_start is not None:
+        print("==> Building intermediates from the live season's forecasts only")
+        forecast_bundles = {name: live_bundles[name] for name in model_names}
+    else:
+        forecast_bundles = {
+            name: _merge_forecast_bundle(load_historical(name), live_bundles[name])
+            for name in model_names
+        }
+    return score_live_forecast.local(
+        obs_bundle,
+        forecast_bundles,
+        model_names,
+        params,
+        live_year,
+        resources=resources,
+        coef_pkl=coef_pkl,
+        cache_dir=cache_dir,
+        forest_pkl=forest_pkl,
+        climatology_test_year_min=climatology_start,
+    )
+
+
 def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | None:
     bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
     blob = client.bucket(bucket_name).blob(f"{prefix.rstrip('/')}/{filename}")
@@ -3128,7 +3379,11 @@ def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | Non
 
 
 @app.function(
-    image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600, secrets=[gcp_secret]
+    image=blending_image,
+    cpu=(RUN_BLEND_CPU, 8),
+    memory=RUN_BLEND_MEMORY,
+    timeout=21600,
+    secrets=[gcp_secret],
 )
 def score_live_forecast_bundle(
     job_id: str,
@@ -3137,11 +3392,9 @@ def score_live_forecast_bundle(
     live_year: int,
     outputs_bucket: str,
 ) -> None:
-    """GCS-staging wrapper around score_live_forecast, mirroring run_blend's
-    relationship to build_lat_lon_intermediates_bundle/train_blending_model_bundle:
-    this function only stages inputs from/publishes outputs to GCS; all the
-    actual scoring logic lives in score_live_forecast so it's reusable from a
-    local (non-GCS) execution path too.
+    """GCS shell around score_live_season: stages inputs from and publishes
+    outputs to GCS; the scoring decisions live in score_live_season, shared
+    with the local runner (envs/forecast_entrypoint.py).
     """
     import sys
     import traceback
@@ -3161,60 +3414,36 @@ def score_live_forecast_bundle(
             _write_gcp_credentials_from_secret()
             client = gcs.Client()
 
-            params = blend_config.get("blend_params") or {}
-            params = {**params, "region_id": blend_config.get("region_id")}
-            model_names = blend_config["model_names"]
-            model_files = blend_config["model_files"]
-            missing = [name for name in model_names if name not in live_forecast_bundles]
-            if missing:
-                raise ValueError(f"No live forecast bundle provided for models: {missing}")
-
             stage_root = Path(tempfile.mkdtemp(prefix="blend-live-"))
             obs_local = stage_root / "obs"
             obs_local.mkdir()
             print(f"==> Staging obs from {blend_config['obs_dir']}")
             _stage_gcs_prefix(client, blend_config["obs_dir"], obs_local, "obs")
-            obs_bundle = _bundle_files(sorted(obs_local.glob("*.nc")))
 
-            forecast_bundles: dict[str, bytes] = {}
-            for name in model_names:
+            def load_historical(name: str) -> bytes:
                 model_local = stage_root / f"fc_{name}"
                 model_local.mkdir()
-                uris = model_files[name]
+                uris = blend_config["model_files"][name]
                 print(f"==> Staging historical forecast {name}: {len(uris)} files")
                 _stage_uris(client, uris, model_local, f"forecast {name}")
-                historical_bundle = _bundle_files(sorted(model_local.glob("*.nc")))
-                forecast_bundles[name] = _merge_forecast_bundle(
-                    historical_bundle, live_forecast_bundles[name]
-                )
+                return _bundle_files(sorted(model_local.glob("*.nc")))
 
-            coef_pkl = None
-            forest_pkl = None
             blend_output_uri = blend_config.get("blend_output_uri")
-            if blend_output_uri:
-                coef_pkl = _blend_artifact(client, blend_output_uri, FINAL_COEF_FILENAME)
-                if coef_pkl is not None:
-                    print("==> Staged trained blend coefficients (skipping CV retrain)")
-                    # Blends trained before the day-level model have no forest.
-                    forest_pkl = _blend_artifact(client, blend_output_uri, FOREST_MODEL_FILENAME)
-                    if forest_pkl is not None:
-                        print("==> Staged trained day-level blend")
-                else:
-                    print(
-                        "==> Blend outputs have no final coef bundle; "
-                        "falling back to retrain-based scoring"
-                    )
 
-            cache_bucket = (blend_config.get("gcs_cache_bucket") or "").strip()
-            scores = score_live_forecast.local(
-                obs_bundle,
-                forecast_bundles,
-                model_names,
-                params,
+            def read_artifact(filename: str) -> bytes | None:
+                if not blend_output_uri:
+                    return None
+                return _blend_artifact(client, blend_output_uri, filename)
+
+            scores = score_live_season(
+                blend_config,
+                live_forecast_bundles,
                 live_year,
-                coef_pkl=coef_pkl,
-                cache_dir=f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None,
-                forest_pkl=forest_pkl,
+                obs_bundle=_bundle_files(sorted(obs_local.glob("*.nc"))),
+                load_historical=load_historical,
+                read_artifact=read_artifact,
+                cache_dir=_blend_cache_dir(blend_config),
+                resources=MODAL_INTERMEDIATE_RESOURCES,
             )
 
             out_local = stage_root / "output"

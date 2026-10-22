@@ -84,6 +84,15 @@ artifacts = ["web/build", "modal/blending_app.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# The single source of ruff's scope: pixi tasks, autofix.yml, and
+# claude-mention.yml all run bare `ruff format` / `ruff check` against it.
+include = [
+    "src/**/*.{py,pyi}",
+    "tests/**/*.{py,pyi}",
+    "modal/**/*.{py,pyi}",
+    "scripts/**/*.{py,pyi}",
+    "evals/**/*.{py,pyi}",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -113,9 +122,9 @@ ai-almanac = { path = ".", editable = false }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
-lint-python = { cmd = "ruff check src tests modal scripts evals", default-environment = "dev", description = "Lint Python sources and tests" }
-format-python = { cmd = "ruff format src tests modal scripts evals", default-environment = "dev", description = "Format Python sources and tests" }
-format-python-check = { cmd = "ruff format --check src tests modal scripts evals", default-environment = "dev", description = "Check Python formatting without modifying files" }
+lint-python = { cmd = "ruff check", default-environment = "dev", description = "Lint Python sources and tests" }
+format-python = { cmd = "ruff format", default-environment = "dev", description = "Format Python sources and tests" }
+format-python-check = { cmd = "ruff format --check", default-environment = "dev", description = "Check Python formatting without modifying files" }
 install-hooks = { cmd = "git config core.hooksPath .githooks", description = "Enable the repo's git hooks (pre-commit format/lint, pre-push check/test)" }
 install-web = { cmd = "npm install", cwd = "web", description = "Install frontend dependencies" }
 build-web = { cmd = "npm run build", depends-on = ["install-web"], cwd = "web", description = "Build the production frontend bundle" }
@@ -140,7 +149,9 @@ deploy-modal = { cmd = "modal deploy --env staging modal/app.py", description = 
 deploy-blending = { cmd = "modal deploy --env staging modal/blending_app.py", description = "Deploy the Modal blending app to staging (prod deploys from CI)" }
 deploy-forecasts = { cmd = "modal deploy --env staging modal/forecasts_app.py", description = "Deploy the Modal forecasts app to staging (prod deploys from CI)" }
 test = { depends-on = [{ task = "test-python" }, { task = "test-web" }], description = "Run backend and frontend tests" }
-check = { depends-on = [{ task = "lint-python" }, { task = "format-python-check" }, { task = "check-web" }, { task = "lint-web" }], description = "Run backend lint + format checks and frontend type + format checks" }
+check-python = { depends-on = [{ task = "lint-python" }, { task = "format-python-check" }], description = "Run backend lint + format checks" }
+check-frontend = { depends-on = [{ task = "check-web" }, { task = "lint-web" }], description = "Run frontend type + format checks" }
+check = { depends-on = [{ task = "check-python" }, { task = "check-frontend" }], description = "Run backend lint + format checks and frontend type + format checks" }
 format = { depends-on = [{ task = "format-python" }, { task = "format-web" }], description = "Format backend and frontend sources" }
 build = { depends-on = [{ task = "package" }], description = "Build frontend and Python distributions" }
 frontend = { cmd = "npm run dev -- --host localhost", cwd = "web", env = { VITE_API_URL = "http://localhost:8765" }, description = "Run the Vite development server" }

@@ -31,6 +31,7 @@ const TOOL_LABELS: Record<string, ToolLabel> = {
 	validate_blend_config: { active: 'Checking the blend plan', done: 'Checked the blend plan' },
 	submit_blend: { active: 'Submitting the blend', done: 'Submitted the blend' },
 	get_blend_results: { active: 'Reading blend results', done: 'Read blend results' },
+	open_setup: { active: 'Preparing the setup link', done: 'Prepared the setup link' },
 	list_jobs: { active: 'Listing runs', done: 'Listed runs' },
 	list_failed_jobs: { active: 'Checking failed runs', done: 'Checked failed runs' },
 	get_job_info: { active: 'Reading run details', done: 'Read run details' },
