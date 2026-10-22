@@ -139,7 +139,7 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     assert (output_dir / "forest.pkl").exists() is day_level
     if day_level:
         [(combined_wide_path, model_names, kwargs)] = day_level_calls
-        assert combined_wide_path == train_kwargs["combined_wide_path"]
+        assert combined_wide_path == str(output_dir / "combined_wide.pkl")
         assert model_names == ["aifs"]
         assert kwargs["cv_holdout_years"] == [2022]
         assert kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
@@ -361,3 +361,23 @@ def test_local_forecast_writes_daily_scores_only_when_the_blend_has_a_day_level_
     assert (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_bytes() == b"weekly"
     daily = output_dir / workflow.DAILY_FORECAST_FILENAME
     assert daily.exists() is has_day_level_model
+
+
+def test_a_failed_local_day_level_blend_leaves_the_weekly_blend_published(
+    tmp_path: Path, capsys
+) -> None:
+    from ai_almanac.envs.blend_entrypoint import _train_day_level
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "weights.pkl").write_bytes(b"weights")
+
+    def failing_bundle(*args, **kwargs):
+        raise RuntimeError("forest exploded")
+
+    workflow = SimpleNamespace(train_day_level_bundle=failing_bundle)
+
+    _train_day_level(workflow, output_dir / "combined_wide.pkl", ["aifs"], {}, {}, output_dir)
+
+    assert sorted(path.name for path in output_dir.iterdir()) == ["weights.pkl"]
+    assert "forest exploded" in capsys.readouterr().err

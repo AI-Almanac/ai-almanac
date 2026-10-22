@@ -4,6 +4,7 @@ weekly blend, and its live scores keep every live-season row."""
 from __future__ import annotations
 
 import datetime as dt
+import io
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -348,3 +349,78 @@ def test_a_restarted_blend_reuses_the_day_level_call_it_started(
     assert first == restarted == "fc-1"
     assert spawned == [("job-1", {"k": 1}, "outputs")]
     assert len(uploads) == 1  # the running call's input is not rewritten
+
+
+def test_day_level_scores_ship_only_the_forest_rows(workflow, tmp_path: Path) -> None:
+    table = pd.DataFrame(
+        {"id": ["ALL", "ALL", "c1"], "model": ["clim_raw", "blended_forest", "blended_forest"]}
+    )
+    csv_path, pkl_path = tmp_path / "summary_models_x.csv", tmp_path / "summary_models_x.pkl"
+    table.to_csv(csv_path, index=False)
+    table.to_pickle(pkl_path)
+
+    from_csv = pd.read_csv(io.BytesIO(workflow._forest_score_rows(csv_path)))
+    from_pkl = pd.read_pickle(io.BytesIO(workflow._forest_score_rows(pkl_path)))
+
+    for shipped in (from_csv, from_pkl):
+        assert shipped["model"].tolist() == ["blended_forest", "blended_forest"]
+        assert shipped["id"].tolist() == ["ALL", "c1"]
+
+
+def test_an_unwritten_marker_cancels_the_day_level_call_it_was_for(
+    workflow, monkeypatch, tmp_path: Path
+) -> None:
+    canceled: list = []
+
+    class _FailingMarkerBucket(_MarkerBucket):
+        def blob(self, name: str):
+            marker = super().blob(name)
+            marker.upload_from_string = lambda text: (_ for _ in ()).throw(OSError("503"))
+            return marker
+
+    bucket = _FailingMarkerBucket()
+    call = SimpleNamespace(object_id="fc-1", cancel=lambda: canceled.append("fc-1"))
+    monkeypatch.setattr(workflow, "run_day_level_blend", SimpleNamespace(spawn=lambda *a: call))
+    monkeypatch.setattr(workflow, "_upload_combined_table", lambda *args: None)
+
+    with pytest.raises(OSError, match="503"):
+        workflow._start_day_level_blend(
+            SimpleNamespace(bucket=lambda _name: bucket), "job-1", {}, "outputs", tmp_path / "c.pkl"
+        )
+
+    assert canceled == ["fc-1"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_blend_run_log_is_published_whether_or_not_the_run_fails(
+    workflow, monkeypatch, fails: bool
+) -> None:
+    from google.cloud import storage as gcs
+
+    uploaded: dict = {}
+    monkeypatch.setattr(workflow, "_write_gcp_credentials_from_secret", lambda: None)
+    monkeypatch.setattr(gcs, "Client", lambda: "client")
+    monkeypatch.setattr(
+        workflow,
+        "_upload_run_log_to_gcs",
+        lambda client, bucket, job_id, text, log_name: uploaded.update(
+            {"where": (client, bucket, job_id, log_name), "text": text}
+        ),
+    )
+
+    def body(client):
+        print(f"working with {client}")
+        if fails:
+            raise ValueError("forest exploded")
+        return {"day_level_call_id": "fc-1"}
+
+    if fails:
+        with pytest.raises(RuntimeError, match="day_level_run.log.*forest exploded"):
+            workflow._with_published_run_log("job-1", "outputs", "day_level_run.log", body)
+    else:
+        result = workflow._with_published_run_log("job-1", "outputs", "day_level_run.log", body)
+        assert result == {"day_level_call_id": "fc-1"}
+
+    assert uploaded["where"] == ("client", "outputs", "job-1", "day_level_run.log")
+    assert "working with client" in uploaded["text"]
+    assert ("forest exploded" in uploaded["text"]) is fails

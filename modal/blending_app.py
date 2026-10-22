@@ -435,7 +435,13 @@ def _start_day_level_blend(
         return call_id
     _upload_combined_table(client, outputs_bucket, job_id, combined_path)
     call = run_day_level_blend.spawn(job_id, config, outputs_bucket)
-    marker.upload_from_string(json.dumps({"call_id": call.object_id}))
+    try:
+        marker.upload_from_string(json.dumps({"call_id": call.object_id}))
+    except Exception:
+        # Without the marker a restart would spawn a second call; this one
+        # would run on unobserved.
+        call.cancel()
+        raise
     print(f"==> Day-level blend started as {call.object_id}", flush=True)
     return call.object_id
 

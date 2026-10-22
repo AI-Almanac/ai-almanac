@@ -161,17 +161,30 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     if training.get("outputs_tar"):
         _extract_tar(training["outputs_tar"], output_dir)
+    published_combined = output_dir / "combined_wide.pkl"
+    shutil.move(combined_path, published_combined)
     if config.get("train_day_level_blend"):
-        # Modal trains this in its own container alongside the weekly blend;
-        # locally it follows it, into the same output dir.
-        print("==> Training the day-level blend", flush=True)
+        _train_day_level(workflow, published_combined, model_names, years, config, output_dir)
+    print("==> Model blending complete", flush=True)
+
+
+def _train_day_level(workflow, combined_path, model_names, years, config, output_dir) -> None:
+    """The day-level blend into output_dir, after the weekly one. As on Modal,
+    where it trains in its own container, its failure leaves the weekly blend
+    standing: it is logged here, not raised."""
+    import traceback
+
+    print("==> Training the day-level blend", flush=True)
+    try:
         day_level = workflow.train_day_level_bundle(
             str(combined_path), model_names, cache_dir=config.get("cache_dir"), **years
         )
-        for path in Path(day_level["output_dir"]).iterdir():
-            shutil.move(path, output_dir / path.name)
-    shutil.move(combined_path, output_dir / "combined_wide.pkl")
-    print("==> Model blending complete", flush=True)
+    except Exception:
+        traceback.print_exc()
+        print("==> Day-level blend failed; the weekly blend is unaffected", flush=True)
+        return
+    for path in Path(day_level["output_dir"]).iterdir():
+        shutil.move(path, output_dir / path.name)
 
 
 def main() -> None:
