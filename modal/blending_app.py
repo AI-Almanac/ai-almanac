@@ -2484,7 +2484,14 @@ def _connect_in_chunks(connect, connect_spec: dict, chunk_paths: list[Path]):
     The connector derives every weekly column from its own row's day-level
     columns, so concatenating per-chunk outputs in order reproduces a one-shot
     run, while only one chunk's intermediate columns exist at a time. Its attrs
-    come from the spec and the columns, which every chunk shares."""
+    come from the spec and the columns, which every chunk shares.
+
+    External contract, checked at DEFAULT_REPO_REF 0a216aa: connect_utils'
+    make_cv_rds_from_daylevel has no groupby, ranking, or cross-row step, and
+    on testdata/ethiopia its chunked output (1 to 1047 chunks) equals a one-shot
+    connect under assert_frame_equal(check_exact=True), attrs included. Its own
+    writer pickle.dump()s the frame it returns, as the caller now does. After
+    bumping the pin, re-run that comparison before relying on chunking."""
     import pandas as pd
 
     parts = []
