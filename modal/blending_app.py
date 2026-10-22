@@ -46,7 +46,7 @@ import tarfile
 import tempfile
 import traceback
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
@@ -80,6 +80,11 @@ RUN_BLEND_MEMORY = (RUN_BLEND_MEMORY_MB // 2, RUN_BLEND_MEMORY_MB)
 # Memory run_blend's worker processes may share: the per-file intermediates
 # workers, then the training script and its CV fold workers.
 RUN_BLEND_WORKER_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+# run_day_level_blend's cpu request: the forest grows its trees on a thread per
+# core, so cores shorten every CV fold. Its CV fits a forest per holdout year,
+# which on a 26-year India 0.25° blend ran past two hours, hence Modal's 24h cap.
+DAY_LEVEL_CPU = 8
+DAY_LEVEL_TIMEOUT_SECONDS = 24 * 60 * 60
 # Weekly-table copies 1_blend_evaluation.py holds, read off onset_blending's
 # compute_cv_global: its main process keeps wide_df, the allowed-cells subset,
 # and a fold's training rows; each spawned CV fold worker unpickles its own
@@ -146,6 +151,14 @@ FINAL_COEF_FILENAME = "coefs_blended_model_global_final.pkl"
 # next to FINAL_COEF_FILENAME; forecasts apply it to write DAILY_FORECAST_FILENAME.
 FOREST_MODEL_NAME = "blended_forest"
 FOREST_MODEL_FILENAME = "forest_blended_forest_global_final.pkl"
+# The day-level blend trains in its own container (run_day_level_blend) while
+# run_blend trains the weekly one, and publishes to the same output dir; its
+# scores carry this prefix so they never overwrite the weekly ones.
+DAY_LEVEL_SCORE_PREFIX = "day_level_"
+DAY_LEVEL_RUN_LOG = "day_level_run.log"
+# Where run_blend records the day-level call it spawned, so a run restarted
+# after preemption reuses that call instead of starting a second one.
+DAY_LEVEL_CALL_MARKER = "work/day_level_call.json"
 WEEKLY_FORECAST_FILENAME = "blended_forecast_probabilities.csv"
 DAILY_FORECAST_FILENAME = "daily_onset_probabilities.csv"
 
@@ -351,12 +364,86 @@ def _upload_output_dir_to_gcs(client, outputs_bucket: str, job_id: str, local_di
             print(f"  uploaded: output/{name}")
 
 
-def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) -> None:
+def _upload_run_log_to_gcs(
+    client, outputs_bucket: str, job_id: str, text: str, log_name: str = "run.log"
+) -> None:
     if not text or not outputs_bucket:
         return
-    client.bucket(outputs_bucket).blob(f"{job_id}/run.log").upload_from_string(
+    client.bucket(outputs_bucket).blob(f"{job_id}/{log_name}").upload_from_string(
         text, content_type="text/plain"
     )
+
+
+def _with_published_run_log(job_id: str, outputs_bucket: str, log_name: str, body):
+    """body(client) with stdout and stderr also captured to
+    gs://{outputs_bucket}/{job_id}/{log_name}, uploaded even when body fails;
+    a failure is raised again once the log is up."""
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from google.cloud import storage as gcs
+
+    log_buffer = io.StringIO()
+    client = None
+    failure: Exception | None = None
+    result = None
+    with (
+        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
+        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
+    ):
+        try:
+            _write_gcp_credentials_from_secret()
+            client = gcs.Client()
+            result = body(client)
+        except Exception as exc:  # noqa: BLE001 — surfaced via the log + raise
+            failure = exc
+            traceback.print_exc()
+        finally:
+            if client is not None:
+                try:
+                    _upload_run_log_to_gcs(
+                        client, outputs_bucket, job_id, log_buffer.getvalue(), log_name
+                    )
+                except Exception:
+                    traceback.print_exc()
+    if failure is not None:
+        raise RuntimeError(
+            f"Blend job {job_id} failed; see {log_name} for details: {failure}"
+        ) from failure
+    return result
+
+
+def _upload_combined_table(client, outputs_bucket: str, job_id: str, combined_path: Path) -> None:
+    """Publish combined_wide.pkl as soon as it exists: it is a final output,
+    and the day-level job trains from it."""
+    from google.cloud.storage import transfer_manager
+
+    blob = client.bucket(outputs_bucket).blob(f"{job_id}/output/{combined_path.name}")
+    transfer_manager.upload_chunks_concurrently(str(combined_path), blob)
+
+
+def _start_day_level_blend(
+    client, job_id: str, config: dict, outputs_bucket: str, combined_path: Path
+) -> str:
+    """The id of this job's day-level call, spawned once per job: a run_blend
+    restarted after preemption finds the call it spawned and leaves the
+    combined table that call is reading untouched."""
+    marker = client.bucket(outputs_bucket).blob(f"{job_id}/{DAY_LEVEL_CALL_MARKER}")
+    if marker.exists():
+        call_id = json.loads(marker.download_as_text())["call_id"]
+        print(f"==> Day-level blend already running as {call_id}", flush=True)
+        return call_id
+    _upload_combined_table(client, outputs_bucket, job_id, combined_path)
+    call = run_day_level_blend.spawn(job_id, config, outputs_bucket)
+    try:
+        marker.upload_from_string(json.dumps({"call_id": call.object_id}))
+    except Exception:
+        # Without the marker a restart would spawn a second call; this one
+        # would run on unobserved.
+        call.cancel()
+        raise
+    print(f"==> Day-level blend started as {call.object_id}", flush=True)
+    return call.object_id
 
 
 def _print_manifest_tails(manifest: dict, label: str) -> None:
@@ -682,125 +769,143 @@ def _cached_pickle(cache_dir: str | None, scope: str, key_material: dict, comput
     timeout=21600,  # 6h ceiling. The build/train phases run via .local() in THIS container, so this is the only timeout that applies; billed on actual runtime, not the ceiling.
     secrets=[gcp_secret],
 )
-def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Stage obs + forecasts from GCS, build intermediates, train the blend, and
-    publish weights/summary artifacts to gs://{outputs_bucket}/{job_id}/output/.
+def run_blend(job_id: str, config: dict, outputs_bucket: str) -> dict:
+    """Stage obs + forecasts from GCS, build intermediates, train the weekly
+    blend, and publish weights/summary artifacts to
+    gs://{outputs_bucket}/{job_id}/output/. With config["train_day_level_blend"]
+    the day-level blend trains alongside it in its own container
+    (run_day_level_blend); the result names that call as day_level_call_id.
 
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark so
     the platform's ModalRunner dispatches it the same way.
     """
-    import sys
+    return _with_published_run_log(
+        job_id, outputs_bucket, "run.log", partial(_run_blend, job_id, config, outputs_bucket)
+    )
+
+
+def _run_blend(job_id: str, config: dict, outputs_bucket: str, client) -> dict:
     import time
-    import traceback
-    from contextlib import redirect_stderr, redirect_stdout
 
-    from google.cloud import storage as gcs
+    params = config.get("blend_params") or {}
+    model_names = config["model_names"]
+    # Per-model {year}.nc URIs, year-filtered and backend-resolved by the
+    # server (data_catalog.year_uris). The run stages exactly these.
+    model_files = config["model_files"]
+    missing = [name for name in model_names if not model_files.get(name)]
+    if missing:
+        raise ValueError(f"No staging files provided for models: {missing}")
 
-    log_buffer = io.StringIO()
-    client = None
-    failure: Exception | None = None
+    stage_root = Path(tempfile.mkdtemp(prefix="blend-prod-"))
+    obs_local = stage_root / "obs"
+    obs_local.mkdir()
+    t0 = time.perf_counter()
+    # Obs is staged in full: the climatology needs the historical record,
+    # and obs files are ~MB/year (forecasts are GB/year).
+    print(f"==> Staging obs from {config['obs_dir']}")
+    _stage_gcs_prefix(client, config["obs_dir"], obs_local, "obs")
 
-    with (
-        redirect_stdout(_LogTee(sys.stdout, log_buffer)),
-        redirect_stderr(_LogTee(sys.stderr, log_buffer)),
-    ):
-        try:
-            _write_gcp_credentials_from_secret()
-            client = gcs.Client()
+    forecast_dirs: dict[str, Path] = {}
+    for key in model_names:
+        model_local = stage_root / f"fc_{key}"
+        model_local.mkdir()
+        uris = model_files[key]
+        print(f"==> Staging forecast {key}: {len(uris)} files")
+        _stage_uris(client, uris, model_local, f"forecast {key}")
+        forecast_dirs[key] = model_local
+    print(f"==> Inputs staged in {time.perf_counter() - t0:.1f}s")
 
-            params = config.get("blend_params") or {}
-            model_names = config["model_names"]
-            # Per-model {year}.nc URIs, year-filtered and backend-resolved by the
-            # server (data_catalog.year_uris). The run stages exactly these.
-            model_files = config["model_files"]
-            missing = [name for name in model_names if not model_files.get(name)]
-            if missing:
-                raise ValueError(f"No staging files provided for models: {missing}")
+    print("==> Building blending intermediates")
+    t0 = time.perf_counter()
+    intermediates = build_blend_intermediates(
+        obs_local,
+        forecast_dirs,
+        params,
+        region_id=config.get("region_id"),
+        cache_dir=_blend_cache_dir(config),
+        resources=MODAL_INTERMEDIATE_RESOURCES,
+        model_layouts=config.get("model_layouts"),
+    )
+    print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
+    # Read from disk, never held as bytes: on large grids the combined
+    # table is the biggest object the run handles.
+    combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
+    day_level_call_id = None
+    if config.get("train_day_level_blend"):
+        day_level_call_id = _start_day_level_blend(
+            client, job_id, config, outputs_bucket, combined_path
+        )
+    else:
+        _upload_combined_table(client, outputs_bucket, job_id, combined_path)
 
-            stage_root = Path(tempfile.mkdtemp(prefix="blend-prod-"))
-            obs_local = stage_root / "obs"
-            obs_local.mkdir()
-            t0 = time.perf_counter()
-            # Obs is staged in full: the climatology needs the historical record,
-            # and obs files are ~MB/year (forecasts are GB/year).
-            print(f"==> Staging obs from {config['obs_dir']}")
-            _stage_gcs_prefix(client, config["obs_dir"], obs_local, "obs")
-
-            forecast_dirs: dict[str, Path] = {}
-            for key in model_names:
-                model_local = stage_root / f"fc_{key}"
-                model_local.mkdir()
-                uris = model_files[key]
-                print(f"==> Staging forecast {key}: {len(uris)} files")
-                _stage_uris(client, uris, model_local, f"forecast {key}")
-                forecast_dirs[key] = model_local
-            print(f"==> Inputs staged in {time.perf_counter() - t0:.1f}s")
-
-            print("==> Building blending intermediates")
-            t0 = time.perf_counter()
-            intermediates = build_blend_intermediates(
-                obs_local,
-                forecast_dirs,
-                params,
-                region_id=config.get("region_id"),
-                cache_dir=_blend_cache_dir(config),
-                resources=MODAL_INTERMEDIATE_RESOURCES,
-                model_layouts=config.get("model_layouts"),
-            )
-            print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
-            # Read from disk, never held as bytes: on large grids the combined
-            # table is the biggest object the run handles.
-            combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
-
-            train_kwargs = {
-                "cores": RUN_BLEND_TRAINING_CORES,
-                "memory_budget_bytes": RUN_BLEND_WORKER_BUDGET_BYTES,
-                "cache_dir": _blend_cache_dir(config),
-            }
-            if params.get("formula_text"):
-                train_kwargs["formula_text"] = params["formula_text"]
-            print("==> Training blend weights")
-            t0 = time.perf_counter()
-            training = train_blending_model_bundle.local(
-                None,
-                combined_wide_path=str(combined_path),
-                model_names=model_names,
-                training_years=_parse_years(params.get("training_years") or "") or [],
-                cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
-                true_holdout_years=_parse_years(params.get("true_holdout_years") or ""),
-                return_outputs=True,
-                train_forest=bool(config.get("train_day_level_blend")),
-                **train_kwargs,
-            )
-            print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
-            if not training["manifest"].get("ok"):
-                _print_manifest_tails(training["manifest"], "Blend training pipeline")
-                raise RuntimeError(
-                    "Blend training pipeline failed; stderr tail printed above (see run.log)"
-                )
-
-            out_local = stage_root / "output"
-            out_local.mkdir()
-            shutil.move(combined_path, out_local / "combined_wide.pkl")
-            if training.get("outputs_tar"):
-                with tarfile.open(fileobj=io.BytesIO(training["outputs_tar"]), mode="r:gz") as tar:
-                    tar.extractall(out_local)
-            _upload_output_dir_to_gcs(client, outputs_bucket, job_id, out_local)
-            print("==> Done.")
-        except Exception as exc:  # noqa: BLE001 — surfaced via run.log + raise
-            failure = exc
-            traceback.print_exc()
-        finally:
-            if client is not None:
-                try:
-                    _upload_run_log_to_gcs(client, outputs_bucket, job_id, log_buffer.getvalue())
-                except Exception:
-                    traceback.print_exc()
-
-    if failure is not None:
+    train_kwargs = {
+        "cores": RUN_BLEND_TRAINING_CORES,
+        "memory_budget_bytes": RUN_BLEND_WORKER_BUDGET_BYTES,
+    }
+    if params.get("formula_text"):
+        train_kwargs["formula_text"] = params["formula_text"]
+    print("==> Training blend weights")
+    t0 = time.perf_counter()
+    training = train_blending_model_bundle.local(
+        None,
+        combined_wide_path=str(combined_path),
+        model_names=model_names,
+        training_years=_parse_years(params.get("training_years") or "") or [],
+        cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
+        true_holdout_years=_parse_years(params.get("true_holdout_years") or ""),
+        return_outputs=True,
+        **train_kwargs,
+    )
+    print(f"==> Training finished in {time.perf_counter() - t0:.1f}s")
+    if not training["manifest"].get("ok"):
+        _print_manifest_tails(training["manifest"], "Blend training pipeline")
         raise RuntimeError(
-            f"Blend job {job_id} failed; see run.log for details: {failure}"
-        ) from failure
+            "Blend training pipeline failed; stderr tail printed above (see run.log)"
+        )
+
+    _upload_output_dir_to_gcs(client, outputs_bucket, job_id, Path(training["output_dir"]))
+    print("==> Done.")
+    return {"day_level_call_id": day_level_call_id}
+
+
+@app.function(
+    image=blending_image,
+    cpu=(DAY_LEVEL_CPU, DAY_LEVEL_CPU * 2),
+    memory=RUN_BLEND_MEMORY,
+    timeout=DAY_LEVEL_TIMEOUT_SECONDS,
+    secrets=[gcp_secret],
+)
+def run_day_level_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
+    """Train the day-level blend for blend job `job_id` from the combined table
+    run_blend published, and publish its outputs next to the weekly ones, with
+    its log as DAY_LEVEL_RUN_LOG."""
+    _with_published_run_log(
+        job_id,
+        outputs_bucket,
+        DAY_LEVEL_RUN_LOG,
+        partial(_run_day_level_blend, job_id, config, outputs_bucket),
+    )
+
+
+def _run_day_level_blend(job_id: str, config: dict, outputs_bucket: str, client) -> None:
+    from google.cloud.storage import transfer_manager
+
+    params = config.get("blend_params") or {}
+    combined_path = Path(tempfile.mkdtemp(prefix="day-level-input-")) / "combined_wide.pkl"
+    blob = client.bucket(outputs_bucket).blob(f"{job_id}/output/{combined_path.name}")
+    lap = _lap_timer()
+    transfer_manager.download_chunks_concurrently(blob, str(combined_path))
+    lap("Downloaded the combined table")
+    result = train_day_level_bundle(
+        str(combined_path),
+        model_names=config["model_names"],
+        training_years=_parse_years(params.get("training_years") or "") or [],
+        cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
+        true_holdout_years=_parse_years(params.get("true_holdout_years") or ""),
+        cache_dir=_blend_cache_dir(config),
+    )
+    _upload_output_dir_to_gcs(client, outputs_bucket, job_id, Path(result["output_dir"]))
+    print("==> Day-level blend done.")
 
 
 def _candidate_files(input_dir: Path, year: int | None, max_files: int) -> list[Path]:
@@ -2761,16 +2866,6 @@ def _try_day_level(step: str, run):
         return None, message
 
 
-def _shipped_forest(
-    forest_pkl: bytes | None, weekly_finished: bool, day_level_error: str | None
-) -> tuple[bytes | None, str | None]:
-    """(forest model to ship, day-level error): the day-level blend ships only
-    alongside a finished week-level blend."""
-    if forest_pkl is not None and not weekly_finished:
-        return None, "day-level blend not shipped: the week-level blend did not finish"
-    return forest_pkl, day_level_error
-
-
 def _forest_external_predictions(cv_preds_filename: str) -> list[dict]:
     return [{"name": FOREST_MODEL_NAME, "file": cv_preds_filename, "method": "global"}]
 
@@ -2914,6 +3009,46 @@ def _write_live_scores(scores: LiveScores, output_dir: Path) -> None:
         (output_dir / DAILY_FORECAST_FILENAME).write_bytes(scores.daily_csv)
 
 
+@contextmanager
+def _blend_spec_file(blend_spec: dict):
+    """Yield the spec_id 1_blend_evaluation.py and 3_fit_final_model.py look up
+    blend_spec by, for as long as the block runs."""
+    import uuid
+
+    import yaml
+
+    spec_id = f"almanac_training_{uuid.uuid4().hex}"
+    spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
+    spec_path.write_text(yaml.dump(blend_spec, default_flow_style=False))
+    try:
+        yield spec_id
+    finally:
+        with suppress(FileNotFoundError):
+            spec_path.unlink()
+
+
+def _run_blend_evaluation(spec_id: str, work_dir: Path, results_dir: Path, cores: int | None):
+    """1_blend_evaluation.py over work_dir's pipeline input, writing results_dir."""
+    import subprocess
+    import sys
+
+    command = [
+        sys.executable,
+        "python/pipelines/blending_process/1_blend_evaluation.py",
+        "--spec_id",
+        spec_id,
+        "--work_dir",
+        str(work_dir),
+        "--results_dir",
+        str(results_dir),
+    ]
+    if cores is not None:
+        command.extend(["--cores", str(cores)])
+    return subprocess.run(
+        command, cwd=str(BLENDING_ROOT), capture_output=True, text=True, check=False
+    )
+
+
 def _build_blend_spec(
     model_names: list[str],
     training_years: list[int],
@@ -2996,22 +3131,18 @@ def train_blending_model_bundle(
     cores: int | None = None,
     return_outputs: bool = True,
     combined_wide_path: str | None = None,
-    train_forest: bool = True,
     memory_budget_bytes: int | None = None,
-    cache_dir: str | None = None,
 ) -> dict:
-    """Train/evaluate the weekly blend and, with train_forest, the day-level
-    blend from a combined wide pickle. Both are cross-validated and scored by
-    1_blend_evaluation.py, and both final fits ship in the outputs.
+    """Train/evaluate the weekly blend from a combined wide pickle: cross-validated
+    and scored by 1_blend_evaluation.py, with its final fit in the outputs. The
+    day-level blend trains apart from it (train_day_level_bundle).
 
     In-process callers pass combined_wide_path (and None for the bytes) so the
     table is read from disk instead of held in memory as a second copy.
     memory_budget_bytes, when set, caps `cores` so the training script's
-    copies of the weekly table fit it. cache_dir, when set, keeps each finished
-    day-level CV fold (see _cross_validate_forest)."""
+    copies of the weekly table fit it."""
     import subprocess
     import sys
-    import uuid
 
     import pandas as pd
     import yaml
@@ -3043,44 +3174,6 @@ def train_blending_model_bundle(
 
     weekly_summary = _weekly_summary(weekly)
     weekly_bytes = int(weekly.memory_usage(deep=True).sum())
-
-    forest_pkl = None
-    external_predictions = None
-    day_level_error = None
-    lap = _lap_timer()
-    if train_forest:
-        cv_preds_filename = _forest_cv_preds_filename(output_tag)
-
-        def cross_validate_forest(weekly_table):
-            frame = _forest_frame(weekly_table, _forest_inputs(combined_path))
-            # 1_blend_evaluation.py scores these alongside the weekly model's CV.
-            _cross_validate_forest(
-                frame,
-                dissemination_path,
-                _cv_folds(training_years, cv_holdout_years, true_holdout_years),
-                model_names,
-                cache_dir=cache_dir,
-            ).to_pickle(results_dir / cv_preds_filename)
-            return frame
-
-        forest_frame, day_level_error = _try_day_level(
-            "cross-validation", partial(cross_validate_forest, weekly)
-        )
-        if forest_frame is not None:
-            external_predictions = _forest_external_predictions(cv_preds_filename)
-            # Fit now so the frame is gone before the training script loads
-            # its own copies of the weekly table.
-            forest_pkl, day_level_error = _try_day_level(
-                "final fit",
-                lambda: _fit_final_forest(
-                    forest_frame,
-                    dissemination_path,
-                    _final_forest_years(training_years, true_holdout_years),
-                    model_names,
-                ),
-            )
-        del forest_frame
-        lap("Day-level blend")
     # The training script reads the table from pipeline_input_path itself.
     del weekly
 
@@ -3100,32 +3193,10 @@ def train_blending_model_bundle(
         work_dir=work_dir,
         results_dir=results_dir,
         dissemination_path=dissemination_path,
-        external_predictions=external_predictions,
     )
 
-    spec_id = f"almanac_training_{uuid.uuid4().hex}"
-    spec_path = BLENDING_ROOT / "specs" / "2025_blend" / f"{spec_id}.yml"
-    spec_path.write_text(yaml.dump(blend_spec, default_flow_style=False))
-    try:
-        command = [
-            sys.executable,
-            "python/pipelines/blending_process/1_blend_evaluation.py",
-            "--spec_id",
-            spec_id,
-            "--work_dir",
-            str(work_dir),
-            "--results_dir",
-            str(results_dir),
-        ]
-        if cores is not None:
-            command.extend(["--cores", str(cores)])
-        completed = subprocess.run(
-            command,
-            cwd=str(BLENDING_ROOT),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    with _blend_spec_file(blend_spec) as spec_id:
+        completed = _run_blend_evaluation(spec_id, work_dir, results_dir, cores)
         # Fit the production model on all training years (no holdout) so the
         # coef bundle (FINAL_COEF_FILENAME) ships with the training outputs —
         # live forecasts apply it directly instead of retraining (see
@@ -3150,14 +3221,6 @@ def train_blending_model_bundle(
                 text=True,
                 check=False,
             )
-    finally:
-        with suppress(FileNotFoundError):
-            spec_path.unlink()
-
-    weekly_finished = final_fit is not None and final_fit.returncode == 0
-    forest_pkl, day_level_error = _shipped_forest(forest_pkl, weekly_finished, day_level_error)
-    if forest_pkl is not None:
-        (results_dir / FOREST_MODEL_FILENAME).write_bytes(forest_pkl)
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"
@@ -3174,7 +3237,6 @@ def train_blending_model_bundle(
         "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
         "true_holdout_years": sorted(int(year) for year in (true_holdout_years or [])),
         "formula_text": formula_text,
-        "day_level_blend_error": day_level_error,
         "combined": combined_summary,
         "weekly": weekly_summary,
         "outputs": {
@@ -3193,6 +3255,7 @@ def train_blending_model_bundle(
     }
 
     outputs_tar = None
+    output_dir = None
     if return_outputs:
         output_dir = Path(tempfile.mkdtemp(prefix="blend-training-artifacts-"))
         # The connector pickles exactly the table it returns to output_rds, and
@@ -3207,7 +3270,181 @@ def train_blending_model_bundle(
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
         outputs_tar = _tar_directory(output_dir)
 
-    return {"manifest": manifest, "outputs_tar": outputs_tar}
+    # In-process callers publish straight from output_dir rather than
+    # unpacking a copy from outputs_tar.
+    return {
+        "manifest": manifest,
+        "outputs_tar": outputs_tar,
+        "output_dir": str(output_dir) if output_dir else None,
+    }
+
+
+def _day_level_scoring_spec(blend_spec: dict, cv_preds_filename: str) -> dict:
+    """blend_spec narrowed to scoring the forest's CV predictions alone.
+
+    With no formula enabled, 1_blend_evaluation.py fits nothing and scores
+    external predictions each from their own rows and the dissemination cells,
+    so the forest's per-cell and yearly metrics match a combined run. The
+    clim_raw task stays only because the script reads its week bins from that
+    task's prefix; that baseline is scored on more rows than in the weekly
+    run, so only the forest's rows ship (_forest_score_rows). The pooled skill
+    needs the weekly run's unc_clim_raw baseline, which the server pairs
+    with them."""
+    formulas = blend_spec["models"]["formulas"]
+    clim_raw = [task for task in blend_spec["extras"]["clim_logits"] if task["name"] == "clim_raw"]
+    return {
+        **blend_spec,
+        "models": {
+            **blend_spec["models"],
+            "formulas": {name: {**formula, "enabled": False} for name, formula in formulas.items()},
+        },
+        "extras": {
+            "clim_logits": clim_raw,
+            "external_predictions": _forest_external_predictions(cv_preds_filename),
+        },
+    }
+
+
+def _day_level_output_name(results_name: str) -> str | None:
+    """The output name for a day-level results file, or None to leave it out:
+    the model, its CV predictions, and its per-cell and yearly scores under
+    DAY_LEVEL_SCORE_PREFIX (not the pooled summary, which pairs the forest
+    with this run's own baseline)."""
+    if results_name == FOREST_MODEL_FILENAME or results_name.startswith("cv_preds_"):
+        return results_name
+    if results_name.startswith("summary_models_pooled"):
+        return None
+    if results_name.startswith(("summary_models", "yearly_metrics_global")):
+        return DAY_LEVEL_SCORE_PREFIX + results_name
+    return None
+
+
+def _forest_score_rows(path: Path) -> bytes:
+    """A day-level score file (.csv or .pkl) cut to the forest's own rows.
+
+    CSV cells are kept as written: pandas' default float parser is not
+    round-trip exact, so re-parsing the scores would shift their last digit."""
+    import pandas as pd
+
+    if path.suffix == ".csv":
+        table = pd.read_csv(path, dtype=str, keep_default_na=False)
+        return table[table["model"] == FOREST_MODEL_NAME].to_csv(index=False).encode()
+    table = pd.read_pickle(path)
+    buffer = io.BytesIO()
+    table[table["model"] == FOREST_MODEL_NAME].to_pickle(buffer)
+    return buffer.getvalue()
+
+
+def train_day_level_bundle(
+    combined_wide_path: str,
+    model_names: list[str],
+    training_years: list[int],
+    cv_holdout_years: list[int],
+    true_holdout_years: list[int] | None = None,
+    cutoff_mode: str = BLEND_CUTOFF_MODE,
+    day_max: int = 28,
+    days_per_week: int = 7,
+    n_weeks: int = 4,
+    rain_window: int = 3,
+    cache_dir: str | None = None,
+) -> dict:
+    """Cross-validate, fit, and score the day-level blend from a combined wide
+    pickle, apart from the weekly blend it is compared with.
+
+    Returns {"manifest", "output_dir"}; output_dir holds FOREST_MODEL_FILENAME,
+    its CV predictions, and its scores (see _day_level_output_name). cache_dir,
+    when set, keeps each finished CV fold (see _cross_validate_forest). A
+    failing step raises: this runs as its own job, so nothing is left to ship."""
+    import sys
+
+    sys.path.insert(0, str(BLENDING_ROOT))
+    from python.blending_process.blend_evaluation_utils import make_cutoff_tag
+
+    if not training_years:
+        raise ValueError("training_years must not be empty")
+    if not cv_holdout_years:
+        raise ValueError("cv_holdout_years must not be empty")
+
+    work_dir, _, weekly, _, dissemination_path, combined_path = _prepare_blend_workspace(
+        None,
+        model_names,
+        cutoff_mode,
+        day_max,
+        days_per_week,
+        n_weeks,
+        rain_window,
+        combined_wide_path=combined_wide_path,
+    )
+    lap = _lap_timer()
+    results_dir = Path(tempfile.mkdtemp(prefix="day-level-results-"))
+    output_tag = _blend_output_tag(
+        make_cutoff_tag(cutoff_mode), cv_holdout_years + (true_holdout_years or [])
+    )
+    cv_preds_filename = _forest_cv_preds_filename(output_tag)
+
+    frame = _forest_frame(weekly, _forest_inputs(combined_path))
+    del weekly
+    lap("Day-level inputs")
+    _cross_validate_forest(
+        frame,
+        dissemination_path,
+        _cv_folds(training_years, cv_holdout_years, true_holdout_years),
+        model_names,
+        cache_dir=cache_dir,
+    ).to_pickle(results_dir / cv_preds_filename)
+    (results_dir / FOREST_MODEL_FILENAME).write_bytes(
+        _fit_final_forest(
+            frame,
+            dissemination_path,
+            _final_forest_years(training_years, true_holdout_years),
+            model_names,
+        )
+    )
+    del frame
+    lap("Day-level final fit")
+
+    scoring_spec = _day_level_scoring_spec(
+        _build_blend_spec(
+            model_names=model_names,
+            training_years=training_years,
+            cv_holdout_years=cv_holdout_years,
+            true_holdout_years=true_holdout_years,
+            cutoff_mode=cutoff_mode,
+            formula_text=_default_formula_text(model_names),
+            include_raw_forecasts=False,
+            include_calibrated_forecasts=False,
+            work_dir=work_dir,
+            results_dir=results_dir,
+            dissemination_path=dissemination_path,
+        ),
+        cv_preds_filename,
+    )
+    with _blend_spec_file(scoring_spec) as spec_id:
+        scored = _run_blend_evaluation(spec_id, work_dir, results_dir, cores=None)
+    lap("Day-level scoring")
+    if scored.returncode != 0:
+        tail = "\n".join(scored.stderr.splitlines()[-40:])
+        raise RuntimeError(f"Day-level scoring failed (exit {scored.returncode}):\n{tail}")
+
+    output_dir = Path(tempfile.mkdtemp(prefix="day-level-artifacts-"))
+    for path in sorted(results_dir.iterdir()):
+        name = _day_level_output_name(path.name) if path.is_file() else None
+        if name is None:
+            continue
+        if name != path.name:
+            path.write_bytes(_forest_score_rows(path))
+        (output_dir / name).write_bytes(_with_area_centroids(path))
+    manifest = {
+        "model_names": model_names,
+        "training_years": sorted(int(year) for year in training_years),
+        "cv_holdout_years": sorted(int(year) for year in cv_holdout_years),
+        "true_holdout_years": sorted(int(year) for year in (true_holdout_years or [])),
+        "outputs": {path.name: {"bytes": path.stat().st_size} for path in output_dir.iterdir()},
+    }
+    (output_dir / f"{DAY_LEVEL_SCORE_PREFIX}manifest.json").write_text(
+        json.dumps(manifest, indent=2, default=str)
+    )
+    return {"manifest": manifest, "output_dir": str(output_dir)}
 
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
@@ -3462,7 +3699,6 @@ def score_live_forecast(
         cv_holdout_years=_parse_years(blend_params.get("cv_holdout_years") or "") or [],
         true_holdout_years=true_holdout_years,
         return_outputs=True,
-        train_forest=False,
         **train_kwargs,
     )
     print(f"==> Scoring finished in {time.perf_counter() - t0:.1f}s")
