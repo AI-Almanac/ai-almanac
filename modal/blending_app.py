@@ -45,6 +45,7 @@ import shutil
 import tarfile
 import tempfile
 import traceback
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple
@@ -76,6 +77,20 @@ RUN_BLEND_MAIN_PROCESS_MB = 16384
 # (request, limit) in MiB for the functions that build intermediates and train.
 RUN_BLEND_MEMORY = (RUN_BLEND_MEMORY_MB // 2, RUN_BLEND_MEMORY_MB)
 RUN_BLEND_FILE_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB) * 2**20
+
+
+class IntermediateResources(NamedTuple):
+    """Processes that build intermediates, and the memory their files may share."""
+
+    workers: int
+    file_memory_budget_bytes: int | None
+
+
+# Training and live scoring both build intermediates in containers sized by RUN_BLEND_*.
+MODAL_INTERMEDIATE_RESOURCES = IntermediateResources(RUN_BLEND_CPU, RUN_BLEND_FILE_BUDGET_BYTES)
+# The local runners load this module under a synthetic name, which worker
+# processes cannot re-import (see _map_parts), so they build serially.
+LOCAL_INTERMEDIATE_RESOURCES = IntermediateResources(1, None)
 # Peak memory per forecast value while one file is processed: the reader
 # expands every value into a wide frame before onset processing. Measured at
 # 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files.
@@ -413,6 +428,12 @@ def _cache_entry(scope: str, key_material: dict) -> tuple[str, str]:
     return digest, rel
 
 
+def _blend_cache_dir(config: dict) -> str | None:
+    """The shared intermediates cache in a job's data bucket, when it names one."""
+    bucket = (config.get("gcs_cache_bucket") or "").strip()
+    return f"gs://{bucket}/blend-intermediates" if bucket else None
+
+
 def _cache_has(cache_dir: str | None, scope: str, key_material: dict) -> bool:
     if not cache_dir:
         return False
@@ -627,23 +648,16 @@ def run_blend(job_id: str, config: dict, outputs_bucket: str) -> None:
                 forecast_dirs[key] = model_local
             print(f"==> Inputs staged in {time.perf_counter() - t0:.1f}s")
 
-            prep_kwargs = _intermediate_prep_kwargs(params)
-            if config.get("region_id"):
-                prep_kwargs["region_id"] = config["region_id"]
-            cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
-            cache_dir = f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None
             print("==> Building blending intermediates")
             t0 = time.perf_counter()
-            intermediates = build_intermediates_from_dirs(
+            intermediates = build_blend_intermediates(
                 obs_local,
                 forecast_dirs,
-                return_outputs=False,
-                cache_dir=cache_dir,
-                file_workers=RUN_BLEND_CPU,
-                climatology_workers=RUN_BLEND_CPU,
-                file_memory_budget_bytes=RUN_BLEND_FILE_BUDGET_BYTES,
+                params,
+                region_id=config.get("region_id"),
+                cache_dir=_blend_cache_dir(config),
+                resources=MODAL_INTERMEDIATE_RESOURCES,
                 model_layouts=config.get("model_layouts"),
-                **prep_kwargs,
             )
             print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
             # Read from disk, never held as bytes: on large grids the combined
@@ -1719,6 +1733,36 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
         thr_dt=context["threshold_mm"],
     )
     return {"wide": processed["wide"], "member_counts": member_counts, "has_spread": has_spread}
+
+
+def build_blend_intermediates(
+    obs_dir: Path,
+    forecast_dirs: dict[str, Path],
+    blend_params: dict,
+    *,
+    region_id: str | None,
+    cache_dir: str | None,
+    resources: IntermediateResources,
+    model_layouts: dict[str, dict] | None = None,
+    climatology_test_year_min: int | None = None,
+) -> dict:
+    """A blend's intermediates, built the same way whether it is training or
+    scoring a live season, on Modal or locally."""
+    prep_kwargs = _intermediate_prep_kwargs(blend_params)
+    if region_id:
+        prep_kwargs["region_id"] = region_id
+    return build_intermediates_from_dirs(
+        obs_dir,
+        forecast_dirs,
+        return_outputs=False,
+        cache_dir=cache_dir,
+        file_workers=resources.workers,
+        climatology_workers=resources.workers,
+        file_memory_budget_bytes=resources.file_memory_budget_bytes,
+        model_layouts=model_layouts,
+        climatology_test_year_min=climatology_test_year_min,
+        **prep_kwargs,
+    )
 
 
 @app.function(image=blending_image, cpu=4, memory=16384, timeout=3600)
@@ -3005,16 +3049,19 @@ def _find_result_file(result_files: list[str], prefix: str) -> str:
     return matches[0]
 
 
-@app.function(image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
+@app.function(image=blending_image, cpu=(RUN_BLEND_CPU, 8), memory=RUN_BLEND_MEMORY, timeout=21600)
 def score_live_forecast(
     obs_bundle: bytes,
     forecast_bundles: dict[str, bytes],
     model_names: list[str],
     blend_params: dict,
     live_year: int,
+    *,
+    resources: IntermediateResources,
     coef_pkl: bytes | None = None,
     cache_dir: str | None = None,
     forest_pkl: bytes | None = None,
+    climatology_test_year_min: int | None = None,
 ) -> LiveScores:
     """Score a live/in-progress season against an already-trained blend, given
     already-staged bundles (no GCS or local-file knowledge here — that's the
@@ -3032,9 +3079,11 @@ def score_live_forecast(
     (see plan §"Key finding" — compute_cv_global already predicts holdout
     years using only their feature columns, never their outcome).
 
-    forecast_bundles: one tar.gz bundle per blend model name, each already
-    merged (historical `{year}.nc` files + the live season's file) by the
-    caller via _merge_forecast_bundle.
+    forecast_bundles: one tar.gz bundle per blend model name, chosen by
+    score_live_season: the live season's file alone when applying coef_pkl,
+    merged with the historical `{year}.nc` files when retraining.
+    climatology_test_year_min pins the climatology to the trained blend's
+    window when the historical years are absent.
 
     forest_pkl (the blend's FOREST_MODEL_FILENAME) adds day-level scores; it
     only applies alongside coef_pkl — the retrain fallback is weekly-only.
@@ -3047,11 +3096,16 @@ def score_live_forecast(
 
     print("==> Building blending intermediates (including live season)")
     t0 = time.perf_counter()
-    prep_kwargs = _intermediate_prep_kwargs(blend_params)
-    if blend_params.get("region_id"):
-        prep_kwargs["region_id"] = blend_params["region_id"]
-    intermediates = build_lat_lon_intermediates_bundle.local(
-        obs_bundle, forecast_bundles, return_outputs=False, cache_dir=cache_dir, **prep_kwargs
+    # No model_layouts: the live file is assembled in the standard layout and
+    # already in millimetres (forecast_pipeline.assemble_season_netcdf).
+    intermediates = build_blend_intermediates(
+        _extract_bundle(obs_bundle),
+        {name: _extract_bundle(bundle) for name, bundle in forecast_bundles.items()},
+        blend_params,
+        region_id=blend_params.get("region_id"),
+        cache_dir=cache_dir,
+        resources=resources,
+        climatology_test_year_min=climatology_test_year_min,
     )
     print(f"==> Intermediates built in {time.perf_counter() - t0:.1f}s")
     combined_path = str(Path(intermediates["output_dir"]) / "combined_wide.pkl")
@@ -3121,6 +3175,74 @@ def _with_live_centroids(scores: LiveScores, region_id: str | None) -> LiveScore
     )
 
 
+def _first_trained_forecast_year(blend_config: dict) -> int | None:
+    """The blend's earliest historical forecast year, or None when its config
+    predates recording them. Its climatology trained on obs before this year."""
+    years = blend_config.get("forecast_years") or []
+    return min(int(year) for year in years) if years else None
+
+
+def score_live_season(
+    blend_config: dict,
+    live_bundles: dict[str, bytes],
+    live_year: int,
+    *,
+    obs_bundle: bytes,
+    load_historical: Callable[[str], bytes],
+    read_artifact: Callable[[str], bytes | None],
+    cache_dir: str | None,
+    resources: IntermediateResources,
+) -> LiveScores:
+    """Score a live season against its trained blend. The Modal and local
+    runners differ only in the I/O they pass in.
+
+    load_historical(model_name) returns a model's historical `{year}.nc` bundle;
+    read_artifact(filename) one of the blend's published outputs, or None.
+    Applying trained coefficients scores only the live season, so historical
+    forecasts are loaded only for the retrain fallback. Either way the
+    climatology keeps the trained blend's window.
+    """
+    model_names = blend_config["model_names"]
+    missing = [name for name in model_names if name not in live_bundles]
+    if missing:
+        raise ValueError(f"No live forecast bundle provided for models: {missing}")
+    params = {
+        **(blend_config.get("blend_params") or {}),
+        "region_id": blend_config.get("region_id"),
+    }
+
+    coef_pkl = read_artifact(FINAL_COEF_FILENAME)
+    forest_pkl = None
+    if coef_pkl is None:
+        print("==> Blend outputs have no final coef bundle; falling back to retrain-based scoring")
+    else:
+        print("==> Using trained blend coefficients (skipping CV retrain)")
+        # Blends trained before the day-level model have no forest.
+        forest_pkl = read_artifact(FOREST_MODEL_FILENAME)
+
+    climatology_start = _first_trained_forecast_year(blend_config)
+    if coef_pkl is not None and climatology_start is not None:
+        print("==> Building intermediates from the live season's forecasts only")
+        forecast_bundles = {name: live_bundles[name] for name in model_names}
+    else:
+        forecast_bundles = {
+            name: _merge_forecast_bundle(load_historical(name), live_bundles[name])
+            for name in model_names
+        }
+    return score_live_forecast.local(
+        obs_bundle,
+        forecast_bundles,
+        model_names,
+        params,
+        live_year,
+        resources=resources,
+        coef_pkl=coef_pkl,
+        cache_dir=cache_dir,
+        forest_pkl=forest_pkl,
+        climatology_test_year_min=climatology_start,
+    )
+
+
 def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | None:
     bucket_name, prefix = _split_gcs_uri(blend_output_uri, "blend_output_uri")
     blob = client.bucket(bucket_name).blob(f"{prefix.rstrip('/')}/{filename}")
@@ -3128,7 +3250,11 @@ def _blend_artifact(client, blend_output_uri: str, filename: str) -> bytes | Non
 
 
 @app.function(
-    image=blending_image, cpu=(4, 8), memory=RUN_BLEND_MEMORY, timeout=21600, secrets=[gcp_secret]
+    image=blending_image,
+    cpu=(RUN_BLEND_CPU, 8),
+    memory=RUN_BLEND_MEMORY,
+    timeout=21600,
+    secrets=[gcp_secret],
 )
 def score_live_forecast_bundle(
     job_id: str,
@@ -3137,11 +3263,9 @@ def score_live_forecast_bundle(
     live_year: int,
     outputs_bucket: str,
 ) -> None:
-    """GCS-staging wrapper around score_live_forecast, mirroring run_blend's
-    relationship to build_lat_lon_intermediates_bundle/train_blending_model_bundle:
-    this function only stages inputs from/publishes outputs to GCS; all the
-    actual scoring logic lives in score_live_forecast so it's reusable from a
-    local (non-GCS) execution path too.
+    """GCS shell around score_live_season: stages inputs from and publishes
+    outputs to GCS; the scoring decisions live in score_live_season, shared
+    with the local runner (envs/forecast_entrypoint.py).
     """
     import sys
     import traceback
@@ -3161,60 +3285,36 @@ def score_live_forecast_bundle(
             _write_gcp_credentials_from_secret()
             client = gcs.Client()
 
-            params = blend_config.get("blend_params") or {}
-            params = {**params, "region_id": blend_config.get("region_id")}
-            model_names = blend_config["model_names"]
-            model_files = blend_config["model_files"]
-            missing = [name for name in model_names if name not in live_forecast_bundles]
-            if missing:
-                raise ValueError(f"No live forecast bundle provided for models: {missing}")
-
             stage_root = Path(tempfile.mkdtemp(prefix="blend-live-"))
             obs_local = stage_root / "obs"
             obs_local.mkdir()
             print(f"==> Staging obs from {blend_config['obs_dir']}")
             _stage_gcs_prefix(client, blend_config["obs_dir"], obs_local, "obs")
-            obs_bundle = _bundle_files(sorted(obs_local.glob("*.nc")))
 
-            forecast_bundles: dict[str, bytes] = {}
-            for name in model_names:
+            def load_historical(name: str) -> bytes:
                 model_local = stage_root / f"fc_{name}"
                 model_local.mkdir()
-                uris = model_files[name]
+                uris = blend_config["model_files"][name]
                 print(f"==> Staging historical forecast {name}: {len(uris)} files")
                 _stage_uris(client, uris, model_local, f"forecast {name}")
-                historical_bundle = _bundle_files(sorted(model_local.glob("*.nc")))
-                forecast_bundles[name] = _merge_forecast_bundle(
-                    historical_bundle, live_forecast_bundles[name]
-                )
+                return _bundle_files(sorted(model_local.glob("*.nc")))
 
-            coef_pkl = None
-            forest_pkl = None
             blend_output_uri = blend_config.get("blend_output_uri")
-            if blend_output_uri:
-                coef_pkl = _blend_artifact(client, blend_output_uri, FINAL_COEF_FILENAME)
-                if coef_pkl is not None:
-                    print("==> Staged trained blend coefficients (skipping CV retrain)")
-                    # Blends trained before the day-level model have no forest.
-                    forest_pkl = _blend_artifact(client, blend_output_uri, FOREST_MODEL_FILENAME)
-                    if forest_pkl is not None:
-                        print("==> Staged trained day-level blend")
-                else:
-                    print(
-                        "==> Blend outputs have no final coef bundle; "
-                        "falling back to retrain-based scoring"
-                    )
 
-            cache_bucket = (blend_config.get("gcs_cache_bucket") or "").strip()
-            scores = score_live_forecast.local(
-                obs_bundle,
-                forecast_bundles,
-                model_names,
-                params,
+            def read_artifact(filename: str) -> bytes | None:
+                if not blend_output_uri:
+                    return None
+                return _blend_artifact(client, blend_output_uri, filename)
+
+            scores = score_live_season(
+                blend_config,
+                live_forecast_bundles,
                 live_year,
-                coef_pkl=coef_pkl,
-                cache_dir=f"gs://{cache_bucket}/blend-intermediates" if cache_bucket else None,
-                forest_pkl=forest_pkl,
+                obs_bundle=_bundle_files(sorted(obs_local.glob("*.nc"))),
+                load_historical=load_historical,
+                read_artifact=read_artifact,
+                cache_dir=_blend_cache_dir(blend_config),
+                resources=MODAL_INTERMEDIATE_RESOURCES,
             )
 
             out_local = stage_root / "output"
