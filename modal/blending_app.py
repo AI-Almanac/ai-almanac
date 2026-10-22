@@ -2791,7 +2791,15 @@ def _frame_sha256(frame) -> str:
 def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_names, params):
     """onset_forest.cross_validate's predictions for fold `fold_index` alone,
     seeded as a run over every fold seeds it (random_state + index + 1); None
-    when predict_on has no rows in the fold's test year, which that run skips."""
+    when predict_on has no rows in the fold's test year, which that run skips.
+
+    External contract, checked at FOREST_REPO_REF c3a8223: ForestParams is a
+    frozen dataclass with random_state; cross_validate(train, predict_on,
+    folds, model_names, params) seeds fold i with random_state + i + 1 and
+    drops folds with no test rows. On a synthetic 5-year frame, per-fold CV
+    through this function equalled one cross_validate over every fold under
+    assert_frame_equal(check_exact=True). Re-run that comparison when the
+    forest ref moves; the ref is in the cache key, so old entries are not reused."""
     from dataclasses import replace
 
     import onset_forest
