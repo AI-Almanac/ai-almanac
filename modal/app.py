@@ -1295,7 +1295,7 @@ def run_benchmark_local(
 
 # Minimal image for sandboxed code: scientific Python stack only, no GCS credentials.
 _sandbox_image = modal.Image.debian_slim().pip_install(
-    "xarray", "numpy", "h5netcdf", "scipy", "pandas", "matplotlib", "Pillow"
+    "xarray", "numpy", "h5netcdf[h5py]", "scipy", "pandas", "matplotlib", "Pillow"
 )
 
 
