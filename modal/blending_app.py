@@ -69,8 +69,8 @@ FOREST_REPO_REF = "c3a822306d16c81f4c48ae62d68e464a405bb30c"
 # run_blend's own container, so size to its cpu request.
 RUN_BLEND_CPU = 4
 RUN_BLEND_TRAINING_CORES = RUN_BLEND_CPU
-# run_blend's memory limit. Training on a 26-year India 0.25° blend needs
-# ~44 GB (the weekly connector holds ~3.7x the combined table).
+# run_blend's memory limit. A one-shot weekly connect held ~3.7x the combined
+# table (~44 GB on a 26-year India 0.25° blend), so it now runs in row chunks.
 RUN_BLEND_MEMORY_MB = 65536
 # Held back from the worker budget for the main process (obs table, blendable
 # cells, the batch of parts it is writing out).
@@ -87,6 +87,10 @@ RUN_BLEND_WORKER_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB
 # Read off DEFAULT_REPO_REF 0a216aa; recheck them when the pin moves.
 TRAINING_MAIN_TABLE_COPIES = 3
 TRAINING_FOLD_WORKER_TABLE_COPIES = 3
+# Rows of the combined table the weekly connector reads at once. A one-shot
+# connect peaks at ~3.7x its input (see RUN_BLEND_MEMORY_MB), so a chunk this
+# size peaks near 7.5 GiB however large the combined table grows.
+CONNECT_CHUNK_BYTES = 2 * 2**30
 
 
 class IntermediateResources(NamedTuple):
@@ -1602,6 +1606,34 @@ def _forecast_family_conf(max_day: int, has_spread: bool) -> dict:
     }
 
 
+def _memory_note() -> str:
+    """This process's resident memory now and at its peak, where Linux reports
+    them; worker processes and subprocesses are not included."""
+    try:
+        status = Path("/proc/self/status").read_text()
+    except OSError:
+        return ""
+    fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+    rss, peak = (int(fields[name].split()[0]) / 2**20 for name in ("VmRSS", "VmHWM"))
+    return f" (rss {rss:.1f} GiB, peak {peak:.1f} GiB)"
+
+
+def _lap_timer():
+    """lap(label) logs the time since the previous lap and the process's
+    memory: call it as each phase ends."""
+    import time
+
+    last = time.perf_counter()
+
+    def lap(label: str) -> None:
+        nonlocal last
+        now = time.perf_counter()
+        print(f"==> {label} in {now - last:.1f}s{_memory_note()}", flush=True)
+        last = now
+
+    return lap
+
+
 def _write_year_slices(table, out_dir: Path, name: str, partitions: list[list[int]]) -> list[Path]:
     """One pickle per partition of `table`'s rows, each keeping its row positions as index."""
     paths = []
@@ -2029,8 +2061,10 @@ def build_intermediates_from_dirs(
     )
     cache_hits = 0
     cache_misses = 0
+    lap = _lap_timer()
     obs_paths = sorted(obs_dir.glob("*.nc"))
     obs_file_digests = _file_sha256s(obs_paths) if cache_dir else []
+    lap(f"Hashed {len(obs_paths)} obs files")
 
     obs_long_parts = []
     if cache_dir and not include_long:
@@ -2051,6 +2085,7 @@ def build_intermediates_from_dirs(
     else:
         obs_wide_parts = _map_parts(_process_obs_wide, obs_paths, part_context, file_workers)
 
+    lap("Obs parts")
     obs_wide = pd.concat(obs_wide_parts, ignore_index=True)
     obs_wide_path = output_dir / "ground_truth_wide.pkl"
     with obs_wide_path.open("wb") as f:
@@ -2107,6 +2142,7 @@ def build_intermediates_from_dirs(
         file_digests = (
             _file_sha256s(forecast_paths_in) if cache_dir else [None] * len(forecast_paths_in)
         )
+        lap(f"Hashed {len(forecast_paths_in)} {model_name} files")
         forecast_keys = [
             {
                 **static_cache_params,
@@ -2154,6 +2190,7 @@ def build_intermediates_from_dirs(
             del entry
         forecast_parts_by_model[model_name] = model_parts
         manifest["forecasts"][model_name] = summary.manifest()
+        lap(f"{model_name} forecast parts")
 
     clim = clim_unc = None
     if build_climatology:
@@ -2264,6 +2301,7 @@ def build_intermediates_from_dirs(
         )
         cache_hits += was_cached
         cache_misses += not was_cached
+        lap("Climatology")
         clim = climatology.pop("clim")
         clim_unc = climatology.pop("clim_unc")
         manifest["climatology"] = {
@@ -2328,6 +2366,7 @@ def build_intermediates_from_dirs(
         )
         del clim, clim_unc
         truth = read_ground_truth_wide(str(obs_wide_path))
+        lap("Climatology year slices")
 
         combined_dir = parts_root / "combined"
         combined_dir.mkdir()
@@ -2354,11 +2393,14 @@ def build_intermediates_from_dirs(
             part.to_pickle(part_path)
             combined_part_paths.append(part_path)
             del part
+        lap(f"Combined {len(combined_part_paths)} partition(s)")
         combined = _assemble_combined(combined_part_paths, restore_clim_order=join_how == "inner")
+        lap("Assembled the combined table")
 
         combined_path = output_dir / "combined_wide.pkl"
         with combined_path.open("wb") as f:
             pickle.dump(combined, f)
+        lap("Wrote combined_wide.pkl")
         manifest["outputs"][combined_path.name] = {"bytes": combined_path.stat().st_size}
         manifest["combined"] = {
             "rows": int(len(combined)),
@@ -2404,19 +2446,8 @@ def _combined_input_path(
     return path
 
 
-def _combined_summary(combined_path: Path, model_names: list[str]) -> dict:
-    """Check the combined table has every model's columns and summarize it.
-
-    The table is released on return, before the weekly connector reads it,
-    so the two never hold a copy at the same time."""
-    import pickle
-
-    import pandas as pd
-
-    with combined_path.open("rb") as f:
-        combined = pickle.load(f)
-    if not isinstance(combined, pd.DataFrame):
-        combined = pd.DataFrame(combined)
+def _combined_summary(combined, model_names: list[str]) -> dict:
+    """Check the combined table has every model's columns and summarize it."""
     missing_model_cols = [
         f"{name}_onset_thresh"
         for name in model_names
@@ -2431,6 +2462,47 @@ def _combined_summary(combined_path: Path, model_names: list[str]) -> dict:
         "columns": int(len(combined.columns)),
         "years": sorted(int(year) for year in combined["year"].dropna().unique()),
     }
+
+
+def _write_row_chunks(table, out_dir: Path, chunk_bytes: int) -> list[Path]:
+    """Contiguous row ranges of `table`, about chunk_bytes each in memory,
+    pickled in order."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    row_bytes = max(int(table.memory_usage(deep=True).sum()) // max(len(table), 1), 1)
+    rows_per_chunk = max(int(chunk_bytes) // row_bytes, 1)
+    paths = []
+    for index, start in enumerate(range(0, max(len(table), 1), rows_per_chunk)):
+        path = out_dir / f"{index}.pkl"
+        table.iloc[start : start + rows_per_chunk].to_pickle(path)
+        paths.append(path)
+    return paths
+
+
+def _connect_in_chunks(connect, connect_spec: dict, chunk_paths: list[Path]):
+    """The weekly table connect(spec) writes, built one row chunk at a time.
+
+    The connector derives every weekly column from its own row's day-level
+    columns, so concatenating per-chunk outputs in order reproduces a one-shot
+    run, while only one chunk's intermediate columns exist at a time. Its attrs
+    come from the spec and the columns, which every chunk shares.
+
+    External contract, checked at DEFAULT_REPO_REF 0a216aa: connect_utils'
+    make_cv_rds_from_daylevel has no groupby, ranking, or cross-row step, and
+    on testdata/ethiopia its chunked output (1 to 1047 chunks) equals a one-shot
+    connect under assert_frame_equal(check_exact=True), attrs included. Its own
+    writer pickle.dump()s the frame it returns, as the caller now does. After
+    bumping the pin, re-run that comparison before relying on chunking."""
+    import pandas as pd
+
+    parts = []
+    for path in chunk_paths:
+        spec = {**connect_spec, "input_rds": str(path), "output_rds": str(path) + ".weekly"}
+        parts.append(connect(spec))
+        Path(spec["output_rds"]).unlink(missing_ok=True)
+        path.unlink()
+    weekly = pd.concat(parts, ignore_index=True)
+    weekly.attrs.update(parts[0].attrs)
+    return weekly
 
 
 def _prepare_blend_workspace(
@@ -2448,6 +2520,7 @@ def _prepare_blend_workspace(
     input every blending script reads), and the dissemination cells CSV.
     Returns (work_dir, combined_summary, weekly, pipeline_input_path,
     dissemination_path, combined_path)."""
+    import pickle
     import sys
 
     import pandas as pd
@@ -2459,15 +2532,20 @@ def _prepare_blend_workspace(
     if not model_names:
         raise ValueError("model_names must not be empty")
 
+    lap = _lap_timer()
     work_dir = Path(tempfile.mkdtemp(prefix="blend-training-work-"))
     pipeline_input_path = work_dir / input_rds_from_cutoff(cutoff_mode)
     combined_path = _combined_input_path(work_dir, combined_wide_pkl, combined_wide_path)
-    combined_summary = _combined_summary(combined_path, model_names)
+    with combined_path.open("rb") as f:
+        combined = pd.DataFrame(pickle.load(f))
+    combined_summary = _combined_summary(combined, model_names)
+    lap("Loaded the combined table")
+    chunk_paths = _write_row_chunks(combined, work_dir / "connect-chunks", CONNECT_CHUNK_BYTES)
+    del combined
+    lap(f"Wrote {len(chunk_paths)} row chunk(s)")
 
     connect_spec = {
         "mode": cutoff_mode,
-        "input_rds": str(combined_path),
-        "output_rds": str(pipeline_input_path),
         "day_max": int(day_max),
         "days_per_week": int(days_per_week),
         "n_weeks": int(n_weeks),
@@ -2488,7 +2566,10 @@ def _prepare_blend_workspace(
             for name in model_names
         ],
     }
-    weekly = make_cv_rds_from_daylevel(connect_spec)
+    weekly = _connect_in_chunks(make_cv_rds_from_daylevel, connect_spec, chunk_paths)
+    lap(f"Connected {len(chunk_paths)} row chunk(s) into the weekly table")
+    with pipeline_input_path.open("wb") as f:
+        pickle.dump(weekly, f)
 
     dissemination_path = work_dir / "dissemination_cells.csv"
     pd.DataFrame({"adm3_name": sorted(weekly["id"].astype(str).unique())}).to_csv(
@@ -2860,6 +2941,7 @@ def train_blending_model_bundle(
     forest_pkl = None
     external_predictions = None
     day_level_error = None
+    lap = _lap_timer()
     if train_forest:
         cv_preds_filename = _forest_cv_preds_filename(output_tag)
 
@@ -2891,6 +2973,7 @@ def train_blending_model_bundle(
                 ),
             )
         del forest_frame
+        lap("Day-level blend")
     # The training script reads the table from pipeline_input_path itself.
     del weekly
 
