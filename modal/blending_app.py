@@ -1606,16 +1606,37 @@ def _forecast_family_conf(max_day: int, has_spread: bool) -> dict:
     }
 
 
+def _format_memory_note(proc_status: str, max_rss_kib: int) -> str:
+    """' (rss …, peak …)' from /proc/self/status text, with only the figures it
+    has. gVisor, which Modal containers run on, reports VmRSS but no VmHWM, so
+    the peak falls back to getrusage's max RSS (KiB on Linux)."""
+    fields = dict(line.split(":", 1) for line in proc_status.splitlines() if ":" in line)
+
+    def kib(name: str) -> int | None:
+        value = fields.get(name, "").split()
+        return int(value[0]) if value and value[0].isdigit() else None
+
+    rss = kib("VmRSS")
+    peak = kib("VmHWM") or max_rss_kib or None
+    figures = [
+        f"{label} {value / 2**20:.1f} GiB"
+        for label, value in (("rss", rss), ("peak", peak))
+        if value is not None
+    ]
+    return f" ({', '.join(figures)})" if figures else ""
+
+
 def _memory_note() -> str:
     """This process's resident memory now and at its peak, where Linux reports
-    them; worker processes and subprocesses are not included."""
+    them; worker processes and subprocesses are not included. Diagnostics
+    only, so it never raises."""
+    import resource
+
     try:
         status = Path("/proc/self/status").read_text()
-    except OSError:
+        return _format_memory_note(status, resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:
         return ""
-    fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
-    rss, peak = (int(fields[name].split()[0]) / 2**20 for name in ("VmRSS", "VmHWM"))
-    return f" (rss {rss:.1f} GiB, peak {peak:.1f} GiB)"
 
 
 def _lap_timer():
