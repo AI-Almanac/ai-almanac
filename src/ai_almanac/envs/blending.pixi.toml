@@ -24,4 +24,4 @@ cartopy = ">=0.25.0,<0.26"
 kdepy = ">=1.1.12,<2"
 
 [pypi-dependencies]
-onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "c3a822306d16c81f4c48ae62d68e464a405bb30c" }
+onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "fdda211333d91e8d32b5ddb3a89279d371bba6b1" }

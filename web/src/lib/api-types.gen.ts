@@ -2359,6 +2359,7 @@ export interface components {
             ref_onset_month_day?: string | null;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+            day_level?: components["schemas"]["DayLevelSettings"] | null;
         };
         /**
          * BlendRunSpec
@@ -2859,6 +2860,46 @@ export interface components {
             obs_year_end?: number | null;
             /** Grid Step Deg */
             grid_step_deg?: number | null;
+        };
+        /**
+         * DayLevelSettings
+         * @description How the day-level blend is cross-validated and how its forest grows.
+         *
+         *     The defaults are the forest's original settings. Its cross-validation fits
+         *     one forest per fold, so holding several CV years out per fold cuts the
+         *     fits (and run time) by that factor, at the cost of training on fewer years
+         *     per fold; the week-level blend still leaves one year out at a time.
+         */
+        DayLevelSettings: {
+            /**
+             * Years Per Fold
+             * @description CV holdout years held out together per day-level fold, in contiguous blocks; 1 leaves one year out at a time.
+             * @default 1
+             */
+            years_per_fold: number;
+            /**
+             * Trees
+             * @description Trees in the forest.
+             * @default 100
+             */
+            trees: number;
+            /**
+             * Max Depth
+             * @description Deepest a tree may grow; None for no limit.
+             */
+            max_depth?: number | null;
+            /**
+             * Min Samples Leaf
+             * @description Fewest training rows a leaf may hold.
+             * @default 20
+             */
+            min_samples_leaf: number;
+            /**
+             * Max Samples
+             * @description Share of the training rows each tree's bootstrap sample draws.
+             * @default 1
+             */
+            max_samples: number;
         };
         /**
          * Feature

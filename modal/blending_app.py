@@ -32,7 +32,7 @@ these during Modal build if needed:
     ALMANAC_BLENDING_REPO_URL=https://github.com/hholb/onset_blending-adm3.git
     ALMANAC_BLENDING_REPO_REF=0a216aa436b36d83375407de64c803169beccd57
     ALMANAC_FOREST_REPO_URL=https://github.com/AI-Almanac/onset-forest.git
-    ALMANAC_FOREST_REPO_REF=c3a822306d16c81f4c48ae62d68e464a405bb30c
+    ALMANAC_FOREST_REPO_REF=fdda211333d91e8d32b5ddb3a89279d371bba6b1
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ DEFAULT_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
 DEFAULT_REPO_REF = "0a216aa436b36d83375407de64c803169beccd57"
 # The day-level blend's model library, installed into the same image.
 FOREST_REPO_URL = "https://github.com/AI-Almanac/onset-forest.git"
-FOREST_REPO_REF = "c3a822306d16c81f4c48ae62d68e464a405bb30c"
+FOREST_REPO_REF = "fdda211333d91e8d32b5ddb3a89279d371bba6b1"
 
 # Worker count for run_blend's intermediates process pools (per-file onset
 # processing, climatology) and 1_blend_evaluation.py --cores. Both phases run in
@@ -84,7 +84,19 @@ RUN_BLEND_WORKER_BUDGET_BYTES = (RUN_BLEND_MEMORY_MB - RUN_BLEND_MAIN_PROCESS_MB
 # core, so cores shorten every CV fold. Its CV fits a forest per holdout year,
 # which on a 26-year India 0.25° blend ran past two hours, hence Modal's 24h cap.
 DAY_LEVEL_CPU = 8
+DAY_LEVEL_CPU_LIMIT = DAY_LEVEL_CPU * 2
 DAY_LEVEL_TIMEOUT_SECONDS = 24 * 60 * 60
+# Peak working memory of one tree being grown, per training row, with
+# onset-forest growing trees from row indices: 400k rows x 86 features on 4
+# threads peaked 621 MiB above the input, ~390 bytes per row per thread.
+FOREST_BYTES_PER_ROW_PER_THREAD = 400
+# A blend's day-level settings (server DayLevelSettings) -> ForestParams fields.
+_FOREST_SETTINGS = {
+    "trees": "n_estimators",
+    "max_depth": "max_depth",
+    "min_samples_leaf": "min_samples_leaf",
+    "max_samples": "max_samples",
+}
 # Weekly-table copies 1_blend_evaluation.py holds, read off onset_blending's
 # compute_cv_global: its main process keeps wide_df, the allowed-cells subset,
 # and a fold's training rows; each spawned CV fold worker unpickles its own
@@ -870,7 +882,7 @@ def _run_blend(job_id: str, config: dict, outputs_bucket: str, client) -> dict:
 
 @app.function(
     image=blending_image,
-    cpu=(DAY_LEVEL_CPU, DAY_LEVEL_CPU * 2),
+    cpu=(DAY_LEVEL_CPU, DAY_LEVEL_CPU_LIMIT),
     memory=RUN_BLEND_MEMORY,
     timeout=DAY_LEVEL_TIMEOUT_SECONDS,
     secrets=[gcp_secret],
@@ -903,6 +915,9 @@ def _run_day_level_blend(job_id: str, config: dict, outputs_bucket: str, client)
         cv_holdout_years=_parse_years(params.get("cv_holdout_years") or "") or [],
         true_holdout_years=_parse_years(params.get("true_holdout_years") or ""),
         cache_dir=_blend_cache_dir(config),
+        settings=params.get("day_level"),
+        cpus=DAY_LEVEL_CPU_LIMIT,
+        memory_budget_bytes=RUN_BLEND_WORKER_BUDGET_BYTES,
     )
     _upload_output_dir_to_gcs(client, outputs_bucket, job_id, Path(result["output_dir"]))
     print("==> Day-level blend done.")
@@ -2761,29 +2776,38 @@ def _cv_folds(
     training_years: list[int],
     cv_holdout_years: list[int],
     true_holdout_years: list[int] | None,
-) -> list[tuple[int, tuple[int, ...]]]:
-    """compute_cv_global's leave-one-year-out folds as (test_year, train_years).
+    years_per_fold: int = 1,
+) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    """The day-level blend's CV folds as (test_years, train_years).
 
-    Test years are the true holdouts then the CV holdouts, in configured order
-    (configured_holdout_years); each trains on the training years minus the
-    test year and every true holdout.
+    True holdouts come first, one fold each. The CV holdouts follow, held out
+    in contiguous blocks of up to years_per_fold in year order; 1 is
+    compute_cv_global's leave-one-year-out, in configured order
+    (configured_holdout_years). Each fold trains on the training years minus
+    its test years and every true holdout.
     """
     true_holdouts = [int(year) for year in true_holdout_years or []]
-    test_years = true_holdouts + [int(year) for year in cv_holdout_years]
+    cv_years = [int(year) for year in cv_holdout_years]
+    if years_per_fold > 1:
+        cv_years = sorted(cv_years)
+    blocks = [(year,) for year in true_holdouts] + [
+        tuple(cv_years[start : start + years_per_fold])
+        for start in range(0, len(cv_years), years_per_fold)
+    ]
     return [
         (
-            test_year,
+            block,
             tuple(
                 sorted(
                     {
                         int(year)
                         for year in training_years
-                        if int(year) != test_year and int(year) not in true_holdouts
+                        if int(year) not in block and int(year) not in true_holdouts
                     }
                 )
             ),
         )
-        for test_year in test_years
+        for block in blocks
     ]
 
 
@@ -2883,31 +2907,57 @@ def _frame_sha256(frame) -> str:
     return digest.hexdigest()
 
 
-def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_names, params):
-    """onset_forest.cross_validate's predictions for fold `fold_index` alone,
-    seeded as a run over every fold seeds it (random_state + index + 1); None
-    when predict_on has no rows in the fold's test year, which that run skips.
+def _forest_params(settings: dict | None, n_jobs: int | None = None):
+    """onset_forest.ForestParams from a blend's day-level settings
+    (server DayLevelSettings); settings left unset keep onset_forest's defaults."""
+    import onset_forest
 
-    External contract, checked at FOREST_REPO_REF c3a8223: ForestParams is a
-    frozen dataclass with random_state; cross_validate(train, predict_on,
-    folds, model_names, params) seeds fold i with random_state + i + 1 and
-    drops folds with no test rows. On a synthetic 5-year frame, per-fold CV
-    through this function equalled one cross_validate over every fold under
-    assert_frame_equal(check_exact=True). Re-run that comparison when the
-    forest ref moves; the ref is in the cache key, so old entries are not reused."""
+    settings = settings or {}
+    overrides = {
+        param: settings[key]
+        for key, param in _FOREST_SETTINGS.items()
+        if settings.get(key) is not None
+    }
+    if n_jobs is not None:
+        overrides["n_jobs"] = n_jobs
+    return onset_forest.ForestParams(**overrides)
+
+
+def _forest_jobs(train_rows: int, cpus: int, memory_budget_bytes: int) -> int:
+    """How many trees to grow at once so their working memory fits the budget."""
+    per_thread = max(int(train_rows) * FOREST_BYTES_PER_ROW_PER_THREAD, 1)
+    return max(1, min(int(cpus), int(memory_budget_bytes) // per_thread))
+
+
+def _forest_fold_predictions(train, predict_on, fold, fold_index: int, model_names, params):
+    """Day-level predictions for one fold's test years, from a forest fit on its
+    training years and seeded random_state + fold_index + 1; None when
+    predict_on has no rows in those years.
+
+    For a one-year fold this is onset_forest.cross_validate's prediction for
+    fold `fold_index` of a run over every fold, which seeds fold i with
+    random_state + i + 1 and skips folds with no test rows (checked at
+    FOREST_REPO_REF). Multi-year folds fit once for the whole block, which
+    cross_validate's single-test-year folds cannot express."""
     from dataclasses import replace
 
     import onset_forest
+    import pandas as pd
 
-    if not (predict_on["year"] == fold[0]).any():
+    test_years, train_years = fold
+    rows = predict_on.loc[predict_on["year"].isin(test_years)]
+    if rows.empty:
         return None
-    return onset_forest.cross_validate(
-        train,
-        predict_on,
-        [fold],
+    fitted = onset_forest.fit(
+        train.loc[train["year"].isin(train_years)],
         model_names,
-        replace(params, random_state=params.random_state + fold_index),
+        replace(params, random_state=params.random_state + fold_index + 1),
     )
+    return pd.concat([rows, onset_forest.predict(fitted, rows)], axis=1)
+
+
+def _years_label(years: tuple[int, ...]) -> str:
+    return str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}"
 
 
 def _cross_validate_forest(
@@ -2915,6 +2965,7 @@ def _cross_validate_forest(
     dissemination_path: Path,
     folds: list,
     model_names: list[str],
+    params,
     cache_dir: str | None = None,
 ):
     """Out-of-fold day-level predictions on the rows the weekly model is scored
@@ -2922,42 +2973,46 @@ def _cross_validate_forest(
 
     Folds run one at a time, each logged as it finishes and cached under its
     inputs, so a run restarted after preemption refits only unfinished folds.
-    The result equals onset_forest.cross_validate over every fold at once."""
+    With one-year folds the result equals onset_forest.cross_validate over every
+    fold at once. Thread count is left out of the key: a seeded fit grows the
+    same trees on any number of threads."""
     from dataclasses import asdict
 
-    import onset_forest
     import pandas as pd
 
     lap = _lap_timer()
     train = _dissemination_rows(forest_frame, dissemination_path)
     predict_on = _multinomial_scoreable(forest_frame)
-    params = onset_forest.ForestParams()
     inputs_key = {
         "train_sha256": _frame_sha256(train) if cache_dir else None,
         "predict_on_sha256": _frame_sha256(predict_on) if cache_dir else None,
         "model_names": list(model_names),
-        "params": asdict(params),
+        "params": {name: value for name, value in asdict(params).items() if name != "n_jobs"},
         "forest_repo_ref": FOREST_REPO_REF,
     }
-    lap(f"Day-level CV inputs: {len(train)} training rows, {len(folds)} folds")
+    lap(
+        f"Day-level CV inputs: {len(train)} training rows, {len(folds)} folds, "
+        f"{params.n_estimators} trees on "
+        f"{'every core' if params.n_jobs == -1 else f'{params.n_jobs} thread(s)'}"
+    )
     parts = []
-    for index, (test_year, train_years) in enumerate(folds):
+    for index, (test_years, train_years) in enumerate(folds):
         part, was_cached = _cached_pickle(
             cache_dir,
             "forest_cv",
-            {**inputs_key, "fold_index": index, "fold": [test_year, list(train_years)]},
+            {**inputs_key, "fold_index": index, "fold": [list(test_years), list(train_years)]},
             partial(
                 _forest_fold_predictions,
                 train,
                 predict_on,
-                (test_year, train_years),
+                (test_years, train_years),
                 index,
                 model_names,
                 params,
             ),
         )
         lap(
-            f"Day-level CV fold {index + 1}/{len(folds)} (test year {test_year}"
+            f"Day-level CV fold {index + 1}/{len(folds)} (test years {_years_label(test_years)}"
             f"{', cached' if was_cached else ''})"
         )
         if part is not None:
@@ -2968,12 +3023,12 @@ def _cross_validate_forest(
 
 
 def _fit_final_forest(
-    forest_frame, dissemination_path: Path, years: list[int], model_names: list[str]
+    forest_frame, dissemination_path: Path, years: list[int], model_names: list[str], params
 ) -> bytes:
     import onset_forest
 
     allowed = _dissemination_rows(forest_frame, dissemination_path)
-    fitted = onset_forest.fit(allowed[allowed["year"].isin(years)], model_names)
+    fitted = onset_forest.fit(allowed[allowed["year"].isin(years)], model_names, params)
     return onset_forest.to_bytes(fitted)
 
 
@@ -3347,14 +3402,20 @@ def train_day_level_bundle(
     n_weeks: int = 4,
     rain_window: int = 3,
     cache_dir: str | None = None,
+    settings: dict | None = None,
+    cpus: int | None = None,
+    memory_budget_bytes: int | None = None,
 ) -> dict:
     """Cross-validate, fit, and score the day-level blend from a combined wide
     pickle, apart from the weekly blend it is compared with.
 
     Returns {"manifest", "output_dir"}; output_dir holds FOREST_MODEL_FILENAME,
-    its CV predictions, and its scores (see _day_level_output_name). cache_dir,
-    when set, keeps each finished CV fold (see _cross_validate_forest). A
-    failing step raises: this runs as its own job, so nothing is left to ship."""
+    its CV predictions, and its scores (see _day_level_output_name). settings
+    are the blend's day-level settings (CV years per fold and forest size).
+    cpus and memory_budget_bytes, when both set, size how many trees grow at
+    once; otherwise onset_forest uses every core. cache_dir, when set, keeps
+    each finished CV fold (see _cross_validate_forest). A failing step raises:
+    this runs as its own job, so nothing is left to ship."""
     import sys
 
     sys.path.insert(0, str(BLENDING_ROOT))
@@ -3385,12 +3446,18 @@ def train_day_level_bundle(
     frame = _forest_frame(weekly, _forest_inputs(combined_path))
     del weekly
     lap("Day-level inputs")
+    n_jobs = None
+    if cpus is not None and memory_budget_bytes is not None:
+        n_jobs = _forest_jobs(len(frame), cpus, memory_budget_bytes)
+    params = _forest_params(settings, n_jobs)
+    folds = _cv_folds(
+        training_years,
+        cv_holdout_years,
+        true_holdout_years,
+        years_per_fold=int((settings or {}).get("years_per_fold") or 1),
+    )
     _cross_validate_forest(
-        frame,
-        dissemination_path,
-        _cv_folds(training_years, cv_holdout_years, true_holdout_years),
-        model_names,
-        cache_dir=cache_dir,
+        frame, dissemination_path, folds, model_names, params, cache_dir=cache_dir
     ).to_pickle(results_dir / cv_preds_filename)
     (results_dir / FOREST_MODEL_FILENAME).write_bytes(
         _fit_final_forest(
@@ -3398,6 +3465,7 @@ def train_day_level_bundle(
             dissemination_path,
             _final_forest_years(training_years, true_holdout_years),
             model_names,
+            params,
         )
     )
     del frame

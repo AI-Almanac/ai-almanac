@@ -177,7 +177,11 @@ def _train_day_level(workflow, combined_path, model_names, years, config, output
     print("==> Training the day-level blend", flush=True)
     try:
         day_level = workflow.train_day_level_bundle(
-            str(combined_path), model_names, cache_dir=config.get("cache_dir"), **years
+            str(combined_path),
+            model_names,
+            cache_dir=config.get("cache_dir"),
+            settings=(config.get("blend_params") or {}).get("day_level"),
+            **years,
         )
     except Exception:
         traceback.print_exc()

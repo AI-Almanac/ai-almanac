@@ -17,6 +17,7 @@
 		fetchResultBlob,
 		type Blend,
 		type BlendCreate,
+		type DayLevelSettings,
 		type BlendRunSpec,
 		type ChatScope,
 		type DataSource,
@@ -41,6 +42,14 @@
 	} from './year-coverage';
 	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
+	import {
+		DAY_LEVEL_DEFAULTS,
+		dayLevelFits,
+		dayLevelParamsBody,
+		dayLevelParamsError,
+		dayLevelRunNote
+	} from './day-level-params';
+	import { parseYearSpec } from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
@@ -61,6 +70,13 @@
 	let creating = $state(false);
 	let loaded = $state(false);
 	let chatAvailable = $state(false);
+	// Whether new blends train the day-level blend, so its settings are offered.
+	let dayLevelAvailable = $state(false);
+	let yearsPerFold = $state('');
+	let forestTrees = $state('');
+	let forestMaxDepth = $state('');
+	let forestMinSamplesLeaf = $state('');
+	let forestMaxSamples = $state('');
 	// A comparison needs a wider assistant column than the normal rail.
 	let chatComparing = $state(false);
 	let splitEl = $state<HTMLElement | null>(null);
@@ -231,6 +247,23 @@
 	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
 	const onsetError = $derived(onsetParamsError(onsetInput));
 
+	const dayLevelInput = $derived({
+		yearsPerFold,
+		trees: forestTrees,
+		maxDepth: forestMaxDepth,
+		minSamplesLeaf: forestMinSamplesLeaf,
+		maxSamples: forestMaxSamples
+	});
+	const dayLevelError = $derived(dayLevelAvailable ? dayLevelParamsError(dayLevelInput) : null);
+	// What the chosen day-level cross-validation costs. Advisory only.
+	const dayLevelNoteText = $derived.by(() => {
+		const cvYears = parseYearSpec(cvHoldoutYears.trim());
+		if (!dayLevelAvailable || !cvYears?.length || dayLevelError) return null;
+		const folds = Number(yearsPerFold.trim() || DAY_LEVEL_DEFAULTS.years_per_fold);
+		const trueHoldouts = parseYearSpec(trueHoldoutYears.trim())?.length ?? 0;
+		return dayLevelRunNote(dayLevelFits(cvYears.length, trueHoldouts, folds), folds);
+	});
+
 	// Advisory only — never feeds formValid.
 	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
 
@@ -251,6 +284,7 @@
 			cvHoldoutYears.trim() !== '' &&
 			!yearError &&
 			!onsetError &&
+			!dayLevelError &&
 			!insufficientData
 	);
 
@@ -267,7 +301,10 @@
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
-		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		if (caps.status === 'fulfilled') {
+			chatAvailable = caps.value.chat;
+			dayLevelAvailable = caps.value.day_level_blend ?? false;
+		}
 		if (thresholds.status === 'fulfilled') minTrainingYears = thresholds.value.min_training_years;
 		loaded = true;
 	}
@@ -508,6 +545,11 @@
 		modelIds = modelIds.includes(id) ? modelIds.filter((m) => m !== id) : [...modelIds, id];
 	}
 
+	function dayLevelBody(): { day_level?: DayLevelSettings } {
+		const settings = dayLevelAvailable ? dayLevelParamsBody(dayLevelInput) : undefined;
+		return settings ? { day_level: settings } : {};
+	}
+
 	async function submit() {
 		if (!formValid || submitting) return;
 		submitting = true;
@@ -523,7 +565,8 @@
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
 				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
 				...(focusArea ? { focus_area: focusArea } : {}),
-				...onsetParamsBody(onsetInput)
+				...onsetParamsBody(onsetInput),
+				...dayLevelBody()
 			}
 		};
 		try {
@@ -533,6 +576,7 @@
 			selectedId = blend.id;
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
+			yearsPerFold = forestTrees = forestMaxDepth = forestMinSamplesLeaf = forestMaxSamples = '';
 			focusArea = null;
 			modelIds = [];
 			yearsDirty = false;
@@ -865,6 +909,83 @@
 						</div>
 						{#if onsetError}
 							<p class="error">{onsetError}</p>
+						{/if}
+
+						{#if dayLevelAvailable}
+							<p class="muted advanced-group">
+								Day-level blend — leave blank to use the defaults (one year out per fold,
+								{DAY_LEVEL_DEFAULTS.trees} trees, no depth limit, {DAY_LEVEL_DEFAULTS.min_samples_leaf}
+								rows per leaf, every row per tree).
+							</p>
+							<div class="field-row">
+								<label class="field">
+									{@render fieldLabel(
+										'Years held out per fold',
+										'CV holdout years held out together in each day-level fold, in contiguous blocks. 1 leaves one year out at a time, as the week-level blend does; more years per fold means fewer forests to fit.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={yearsPerFold}
+										placeholder={String(DAY_LEVEL_DEFAULTS.years_per_fold)}
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Trees',
+										'Trees in each day-level forest. Fewer trees train faster.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestTrees}
+										placeholder={String(DAY_LEVEL_DEFAULTS.trees)}
+									/>
+								</label>
+							</div>
+							<div class="field-row">
+								<label class="field">
+									{@render fieldLabel(
+										'Deepest tree',
+										'Most levels a tree may grow. Leave blank for no limit; a limit trains faster.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestMaxDepth}
+										placeholder="no limit"
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Fewest rows per leaf',
+										'A tree stops splitting where a leaf would hold fewer rows than this.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestMinSamplesLeaf}
+										placeholder={String(DAY_LEVEL_DEFAULTS.min_samples_leaf)}
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Share of rows per tree',
+										'Share of the training rows each tree draws, from more than 0 up to 1. Smaller shares train faster.'
+									)}
+									<input
+										type="text"
+										inputmode="decimal"
+										bind:value={forestMaxSamples}
+										placeholder={String(DAY_LEVEL_DEFAULTS.max_samples)}
+									/>
+								</label>
+							</div>
+							{#if dayLevelError}
+								<p class="error">{dayLevelError}</p>
+							{:else if dayLevelNoteText}
+								<p class="caution">{dayLevelNoteText}</p>
+							{/if}
 						{/if}
 					</details>
 

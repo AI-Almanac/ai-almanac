@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from pydantic import (
     AfterValidator,
     BaseModel,
+    ConfigDict,
     Field,
     FiniteFloat,
     ValidationError,
@@ -355,6 +356,39 @@ def onset_param_errors(
     return errors
 
 
+class DayLevelSettings(BaseModel):
+    """How the day-level blend is cross-validated and how its forest grows.
+
+    The defaults are the forest's original settings. Its cross-validation fits
+    one forest per fold, so holding several CV years out per fold cuts the
+    fits (and run time) by that factor, at the cost of training on fewer years
+    per fold; the week-level blend still leaves one year out at a time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    years_per_fold: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description="CV holdout years held out together per day-level fold, in "
+        "contiguous blocks; 1 leaves one year out at a time.",
+    )
+    trees: int = Field(default=100, ge=10, le=500, description="Trees in the forest.")
+    max_depth: int | None = Field(
+        default=None, ge=1, le=64, description="Deepest a tree may grow; None for no limit."
+    )
+    min_samples_leaf: int = Field(
+        default=20, ge=1, le=1000, description="Fewest training rows a leaf may hold."
+    )
+    max_samples: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=1.0,
+        description="Share of the training rows each tree's bootstrap sample draws.",
+    )
+
+
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
@@ -384,6 +418,8 @@ class BlendParams(BaseModel):
         "onset-before-reference probability is scored against.",
     )
     focus_area: FocusArea | None = None
+    # Omitted, the day-level blend trains with DayLevelSettings' defaults.
+    day_level: DayLevelSettings | None = None
 
     @model_validator(mode="before")
     @classmethod

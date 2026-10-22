@@ -39,6 +39,17 @@ export type BlendParams = {
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
 	focus_area?: FocusAreaValue;
+	// The day-level blend's CV and forest settings; omitted ones keep its defaults.
+	day_level?: DayLevelSettings;
+};
+
+// The day-level blend's CV and forest settings (server DayLevelSettings).
+export type DayLevelSettings = {
+	years_per_fold?: number;
+	trees?: number;
+	max_depth?: number;
+	min_samples_leaf?: number;
+	max_samples?: number;
 };
 
 export type BlendCreate = {
