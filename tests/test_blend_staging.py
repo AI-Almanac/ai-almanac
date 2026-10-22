@@ -4,6 +4,7 @@ intermediates cache doesn't already hold."""
 from __future__ import annotations
 
 import importlib.util
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,69 @@ def test_cached_parts_only_compute_cache_misses_and_keep_file_order(tmp_path: Pa
     rerun = app._cached_parts(cache_dir, "obs", keys, paths, process, {"label": "fresh"}, 1)
     assert all(was_cached for _, was_cached in rerun)
     assert computed == ["2001.nc", "2003.nc"]
+
+
+class _CountingCacheBucket:
+    """An in-memory GCS bucket that records every request the cache makes."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.requests: list[str] = []
+
+    def list_blobs(self, bucket: str, prefix: str):
+        self.requests.append("list")
+        return [_NamedBlob(name) for name in self.objects if name.startswith(prefix)]
+
+    def bucket(self, bucket: str):
+        outer = self
+
+        class _Bucket:
+            def blob(self, name: str):
+                return _CountingBlob(outer, name)
+
+        return _Bucket()
+
+
+class _NamedBlob:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _CountingBlob:
+    def __init__(self, bucket: _CountingCacheBucket, name: str) -> None:
+        self._bucket, self.name = bucket, name
+
+    def exists(self) -> bool:
+        self._bucket.requests.append("exists")
+        return self.name in self._bucket.objects
+
+    def download_as_bytes(self) -> bytes:
+        self._bucket.requests.append("download")
+        return self._bucket.objects[self.name]
+
+    def upload_from_string(self, data: bytes) -> None:
+        self._bucket.requests.append("upload")
+        self._bucket.objects[self.name] = data
+
+
+def test_a_cached_season_costs_one_listing_not_a_lookup_per_file(tmp_path: Path) -> None:
+    app = _load_blending_app()
+    bucket = _CountingCacheBucket()
+    app._cache_gcs_client = bucket
+    cache_dir = "gs://data/blend-intermediates"
+    paths = [tmp_path / f"{year}.nc" for year in range(2000, 2010)]
+    keys = [{"file": path.name} for path in paths]
+
+    def process(path: Path, context: dict) -> str:
+        return f"part {path.stem}"
+
+    first = list(app._iter_cached_parts(cache_dir, "fc", keys, paths, process, {}, 3))
+    bucket.requests.clear()
+    rerun = list(app._iter_cached_parts(cache_dir, "fc", keys, paths, process, {}, 3))
+
+    assert [was_cached for _, was_cached in first] == [False] * len(paths)
+    assert rerun == [(f"part {path.stem}", True) for path in paths]
+    assert Counter(bucket.requests) == {"list": 1, "download": len(paths)}
 
 
 def test_parts_run_in_order_when_workers_cannot_import_the_module(tmp_path: Path) -> None:
@@ -341,3 +405,17 @@ def test_ensemble_sized_files_are_processed_fewer_at_a_time() -> None:
     assert 1 <= ensemble_at_once < at_once
     assert app._part_workers([10**13], workers=4, memory_budget_bytes=budget) == 1
     assert app._part_workers(ensemble, workers=4, memory_budget_bytes=None) == 4
+
+
+def test_a_large_weekly_table_trains_with_fewer_cv_workers() -> None:
+    app = _load_blending_app()
+    budget = 48 * 2**30
+
+    small = app._training_cores(500 * 2**20, cores=4, memory_budget_bytes=budget)
+    large = app._training_cores(4 * 2**30, cores=4, memory_budget_bytes=budget)
+
+    assert small == 4
+    assert 1 <= large < small
+    # A table too big for even one fold worker trains its folds serially.
+    assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=budget) == 1
+    assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=None) == 4
