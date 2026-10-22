@@ -27,13 +27,13 @@ def workflow():
         (
             [2002, 2010],
             {
-                2002: (2000, 2001, 2003, 2004),
-                2010: (2000, 2001, 2003, 2004),
-                2003: (2000, 2001, 2004),
-                2004: (2000, 2001, 2003),
+                (2002,): (2000, 2001, 2003, 2004),
+                (2010,): (2000, 2001, 2003, 2004),
+                (2003,): (2000, 2001, 2004),
+                (2004,): (2000, 2001, 2003),
             },
         ),
-        (None, {2003: (2000, 2001, 2002, 2004), 2004: (2000, 2001, 2002, 2003)}),
+        (None, {(2003,): (2000, 2001, 2002, 2004), (2004,): (2000, 2001, 2002, 2003)}),
     ],
 )
 def test_cv_folds_test_every_holdout_and_never_train_on_true_holdouts(
@@ -46,6 +46,25 @@ def test_cv_folds_test_every_holdout_and_never_train_on_true_holdouts(
     )
 
     assert dict(folds) == expected
+
+
+def test_cv_years_held_out_together_train_one_forest_per_block(workflow) -> None:
+    folds = workflow._cv_folds(
+        training_years=list(range(2000, 2012)),
+        cv_holdout_years=[2009, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008],
+        true_holdout_years=[2011],
+        years_per_fold=4,
+    )
+
+    assert [test_years for test_years, _ in folds] == [
+        (2011,),
+        (2000, 2001, 2002, 2003),
+        (2004, 2005, 2006, 2007),
+        (2008, 2009),
+    ]
+    test_years, train_years = folds[1]
+    assert train_years == (2004, 2005, 2006, 2007, 2008, 2009, 2010)
+    assert all(2011 not in train for _, train in folds)
 
 
 def _weekly() -> pd.DataFrame:
@@ -188,8 +207,9 @@ def test_a_failing_day_level_step_reports_why_instead_of_raising(workflow) -> No
 
 
 def _fold_counting_onset_forest(calls: list, fail_on_year: int | None = None) -> ModuleType:
-    """cross_validate with onset_forest's seeding (random_state + i + 1) and
-    skipping of folds with no test rows; records each fit's test year."""
+    """onset_forest's fit/predict, recording each fit's years and seed, plus a
+    cross_validate with its seeding (random_state + i + 1) and its skipping of
+    folds with no test rows."""
     from dataclasses import dataclass
 
     module = ModuleType("onset_forest")
@@ -197,23 +217,45 @@ def _fold_counting_onset_forest(calls: list, fail_on_year: int | None = None) ->
     @dataclass(frozen=True)
     class ForestParams:
         n_estimators: int = 100
+        min_samples_leaf: int = 20
+        max_samples: float = 1.0
+        max_depth: int | None = None
         random_state: int = 123
+        n_jobs: int = -1
+
+    def fit(train, model_names, params):
+        years = sorted(train["year"].unique().tolist())
+        calls.append(years)
+        return {"seed": params.random_state, "trained_on": len(years)}
+
+    def predict(fitted, rows):
+        if fail_on_year is not None and (rows["year"] == fail_on_year).any():
+            raise RuntimeError("preempted")
+        return pd.DataFrame(
+            {"seed": fitted["seed"], "trained_on": fitted["trained_on"]}, index=rows.index
+        )
 
     def cross_validate(train, predict_on, folds, model_names, params):
+        from dataclasses import replace
+
         parts = []
         for i, (test_year, train_years) in enumerate(folds):
             rows = predict_on.loc[predict_on["year"] == test_year]
             if rows.empty:
                 continue
-            if test_year == fail_on_year:
-                raise RuntimeError("preempted")
-            calls.append(test_year)
-            parts.append(rows.assign(seed=params.random_state + i + 1, trained_on=len(train_years)))
+            fitted = fit(
+                train.loc[train["year"].isin(train_years)],
+                model_names,
+                replace(params, random_state=params.random_state + i + 1),
+            )
+            parts.append(pd.concat([rows, predict(fitted, rows)], axis=1))
         if not parts:
             raise ValueError("No predict_on rows fall in any fold's test year.")
         return pd.concat(parts, ignore_index=True)
 
     module.ForestParams = ForestParams
+    module.fit = fit
+    module.predict = predict
     module.cross_validate = cross_validate
     return module
 
@@ -229,7 +271,7 @@ def _forest_frame_for_folds() -> pd.DataFrame:
     )
 
 
-_FOLDS = [(2001, (2000, 2002, 2003)), (2009, (2000,)), (2003, (2000, 2001, 2002))]
+_FOLDS = [((2001,), (2000, 2002, 2003)), ((2009,), (2000,)), ((2003,), (2000, 2001, 2002))]
 
 
 def test_forest_cv_by_fold_equals_one_run_over_every_fold(
@@ -241,13 +283,62 @@ def test_forest_cv_by_fold_equals_one_run_over_every_fold(
     monkeypatch.setattr(workflow, "_dissemination_rows", lambda frame, _path: frame)
     frame = _forest_frame_for_folds()
 
-    by_fold = workflow._cross_validate_forest(frame, tmp_path / "cells.csv", _FOLDS, ["aifs"])
+    params = fake.ForestParams()
+    by_fold = workflow._cross_validate_forest(
+        frame, tmp_path / "cells.csv", _FOLDS, ["aifs"], params
+    )
+    one_year_folds = [(test_years[0], train_years) for test_years, train_years in _FOLDS]
     at_once = fake.cross_validate(
-        frame, workflow._multinomial_scoreable(frame), _FOLDS, ["aifs"], fake.ForestParams()
+        frame, workflow._multinomial_scoreable(frame), one_year_folds, ["aifs"], params
     )
 
     pd.testing.assert_frame_equal(by_fold, at_once)
     assert by_fold["seed"].unique().tolist() == [124, 126]  # fold 2 (2009) has no rows
+
+
+def test_a_block_of_cv_years_is_predicted_by_one_forest(workflow, monkeypatch, tmp_path) -> None:
+    calls: list = []
+    fake = _fold_counting_onset_forest(calls)
+    monkeypatch.setitem(sys.modules, "onset_forest", fake)
+    monkeypatch.setattr(workflow, "_dissemination_rows", lambda frame, _path: frame)
+    folds = [((2000, 2001), (2002, 2003)), ((2002, 2003), (2000, 2001))]
+
+    result = workflow._cross_validate_forest(
+        _forest_frame_for_folds(), tmp_path / "cells.csv", folds, ["aifs"], fake.ForestParams()
+    )
+
+    assert calls == [[2002, 2003], [2000, 2001]]  # one fit per block, on its training years
+    assert sorted(result["year"].unique().tolist()) == [2000, 2001, 2002, 2003]
+    assert result.groupby("year")["seed"].first().to_dict() == {
+        2000: 124,
+        2001: 124,
+        2002: 125,
+        2003: 125,
+    }
+
+
+def test_the_thread_count_never_changes_a_folds_cache_entry(
+    workflow, monkeypatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    calls: list = []
+    fake = _fold_counting_onset_forest(calls)
+    monkeypatch.setitem(sys.modules, "onset_forest", fake)
+    monkeypatch.setattr(workflow, "_dissemination_rows", lambda frame, _path: frame)
+    frame, cache_dir = _forest_frame_for_folds(), str(tmp_path / "cache")
+
+    for n_jobs in (4, 16):
+        workflow._cross_validate_forest(
+            frame,
+            tmp_path / "c.csv",
+            _FOLDS,
+            ["aifs"],
+            replace(fake.ForestParams(), n_jobs=n_jobs),
+            cache_dir,
+        )
+
+    assert len(calls) == 2  # the second run read both folds from the cache
 
 
 def test_a_restarted_forest_cv_refits_only_the_folds_it_had_not_finished(
@@ -259,16 +350,20 @@ def test_a_restarted_forest_cv_refits_only_the_folds_it_had_not_finished(
     first: list = []
     monkeypatch.setitem(sys.modules, "onset_forest", _fold_counting_onset_forest(first, 2003))
 
+    params = _fold_counting_onset_forest([]).ForestParams()
+
     with pytest.raises(RuntimeError, match="preempted"):
-        workflow._cross_validate_forest(frame, tmp_path / "cells.csv", _FOLDS, ["aifs"], cache_dir)
+        workflow._cross_validate_forest(
+            frame, tmp_path / "cells.csv", _FOLDS, ["aifs"], params, cache_dir
+        )
     restarted: list = []
     monkeypatch.setitem(sys.modules, "onset_forest", _fold_counting_onset_forest(restarted))
     result = workflow._cross_validate_forest(
-        frame, tmp_path / "cells.csv", _FOLDS, ["aifs"], cache_dir
+        frame, tmp_path / "cells.csv", _FOLDS, ["aifs"], params, cache_dir
     )
 
-    assert first == [2001]
-    assert restarted == [2003]
+    assert first == [[2000, 2002, 2003], [2000, 2001, 2002]]  # fit 2 failed before caching
+    assert restarted == [[2000, 2001, 2002]]  # only the unfinished fold is refit
     assert sorted(result["year"].unique().tolist()) == [2001, 2003]
 
 
@@ -435,3 +530,25 @@ def test_a_blend_run_log_is_published_whether_or_not_the_run_fails(
     assert uploaded["where"] == ("client", "outputs", "job-1", "day_level_run.log")
     assert "working with client" in uploaded["text"]
     assert ("forest exploded" in uploaded["text"]) is fails
+
+
+def test_day_level_settings_become_forest_params(workflow, monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "onset_forest", _fold_counting_onset_forest([]))
+
+    tuned = workflow._forest_params(
+        {"years_per_fold": 5, "trees": 50, "max_depth": 12, "min_samples_leaf": 40}, n_jobs=8
+    )
+    untouched = workflow._forest_params(None)
+
+    assert (tuned.n_estimators, tuned.max_depth, tuned.n_jobs) == (50, 12, 8)
+    assert untouched == workflow._forest_params({})  # the forest's own defaults
+
+
+@pytest.mark.parametrize(
+    ("train_rows", "cpus", "jobs"),
+    [(100_000, 16, 16), (2_854_955, 16, 16), (40_000_000, 16, 3), (10**12, 16, 1)],
+)
+def test_trees_grow_as_many_at_once_as_the_memory_budget_holds(
+    workflow, train_rows: int, cpus: int, jobs: int
+) -> None:
+    assert workflow._forest_jobs(train_rows, cpus, 48 * 2**30) == jobs

@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from pydantic import (
     AfterValidator,
     BaseModel,
+    ConfigDict,
     Field,
     FiniteFloat,
     ValidationError,
@@ -355,6 +356,41 @@ def onset_param_errors(
     return errors
 
 
+class DayLevelSettings(BaseModel):
+    """How the day-level blend is cross-validated and how its forest grows.
+
+    Every setting is optional and forwarded only when given, so an unset one
+    keeps the day-level run's default: one CV year out per fold, and
+    onset_forest.ForestParams' own forest settings. Holding several CV years
+    out per fold cuts the forests fitted (and run time) by that factor, at the
+    cost of training on fewer years per fold; the week-level blend still
+    leaves one year out at a time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    years_per_fold: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="CV holdout years held out together per day-level fold, in "
+        "contiguous blocks; 1 (the default) leaves one year out at a time.",
+    )
+    trees: int | None = Field(default=None, ge=10, le=500, description="Trees in the forest.")
+    max_depth: int | None = Field(
+        default=None, ge=1, le=64, description="Deepest a tree may grow; unset for no limit."
+    )
+    min_samples_leaf: int | None = Field(
+        default=None, ge=1, le=1000, description="Fewest training rows a leaf may hold."
+    )
+    max_samples: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Share of the training rows each tree's bootstrap sample draws.",
+    )
+
+
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
@@ -384,6 +420,8 @@ class BlendParams(BaseModel):
         "onset-before-reference probability is scored against.",
     )
     focus_area: FocusArea | None = None
+    # Omitted, the day-level blend trains with DayLevelSettings' defaults.
+    day_level: DayLevelSettings | None = None
 
     @model_validator(mode="before")
     @classmethod

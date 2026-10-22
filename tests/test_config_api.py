@@ -20,6 +20,20 @@ async def test_capabilities_report_chat_unavailable_without_llm(
     assert response.json()["chat"] is False
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.asyncio
+async def test_capabilities_say_whether_blends_train_a_day_level_blend(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "enable_day_level_blend", enabled)
+
+    response = await client.get("/config/capabilities")
+
+    assert response.json()["day_level_blend"] is enabled
+
+
 def _spa_is_built() -> bool:
     from ai_almanac.server.app import _STATIC_READY
 
