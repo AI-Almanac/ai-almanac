@@ -334,10 +334,11 @@
 											<strong>
 												{job.model_display_name || modelDisplayName(job.model_name)}
 												{#if earlier.length}
-													<span
-														class="retry-tag"
-														title={`Retried after ${earlier.length === 1 ? 'an earlier attempt' : `${earlier.length} earlier attempts`} (${earlier.map((attempt) => attempt.status).join(', ')})`}
-														>retry</span
+													<!-- Plain text, not a pill, so it doesn't read as a button beside the status badge. -->
+													<small
+														class="attempt-note"
+														title={`Earlier ${earlier.length === 1 ? 'attempt' : 'attempts'}: ${earlier.map((attempt) => attempt.status).join(', ')}`}
+														>attempt {earlier.length + 1}</small
 													>
 												{/if}
 											</strong>
@@ -763,15 +764,11 @@
 		background: var(--color-bg);
 	}
 
-	.retry-tag {
+	.attempt-note {
 		margin-left: 0.4rem;
-		padding: 0.05rem 0.4rem;
-		border-radius: 999px;
-		background: var(--color-surface-raised);
 		color: var(--color-text-muted);
-		font-size: 0.7rem;
+		font-size: 0.72rem;
 		font-weight: 500;
-		cursor: help;
 	}
 
 	.model-run-item strong {
