@@ -165,15 +165,23 @@ async def _reconcile_modal_job(row: dict) -> None:
             await runner.cancel(handle)
         except Exception:  # noqa: BLE001 — finalize regardless of cancel outcome
             logger.exception("Failed to cancel Modal job %s", row["id"])
-        await _finalize_remote_job(row["id"], "canceled", None)
+        await _finish_modal_job(row["id"], "canceled", None)
         return
 
     snapshot = await runner.inspect(handle)
     if snapshot.status == "complete":
-        await _finalize_remote_job(row["id"], "complete", None)
+        await _finish_modal_job(row["id"], "complete", None)
     elif snapshot.status == "failed":
-        await _finalize_remote_job(row["id"], "failed", await _modal_failure_log(row["id"]))
+        await _finish_modal_job(row["id"], "failed", await _modal_failure_log(row["id"]))
     # running/unknown: leave the job active for the next reconcile pass
+
+
+async def _finish_modal_job(job_id: str, status: str, error: str | None) -> None:
+    """Finalize the job, then follow or stop a day-level blend it started."""
+    from ai_almanac.server.services import day_level_blends
+
+    await _finalize_remote_job(job_id, status, error)
+    await day_level_blends.hand_off(job_id, status)
 
 
 async def reconcile_jobs() -> None:

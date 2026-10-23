@@ -42,6 +42,8 @@ export type RompDefaults = {
 
 export type AppCapabilities = {
 	chat: boolean;
+	// Whether new blends train the day-level blend alongside the week-level one.
+	day_level_blend?: boolean;
 };
 
 export async function getMetricDefinitions() {

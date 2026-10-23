@@ -74,12 +74,12 @@ output "ci_service_account_email" {
   value = google_service_account.ci.email
 }
 
-# hholb/ROMP publishes the romp image Modal runs. It gets its own account that
+# AI-Almanac/ROMP publishes the romp image Modal runs. It gets its own account that
 # can only push images, rather than almanac-ci, which also deploys both
 # environments.
 resource "google_service_account" "romp_publisher" {
   account_id   = "romp-publisher"
-  display_name = "ROMP image publisher (hholb/ROMP GitHub Actions)"
+  display_name = "ROMP image publisher (AI-Almanac/ROMP GitHub Actions)"
 }
 
 resource "google_artifact_registry_repository_iam_member" "romp_publisher_push" {

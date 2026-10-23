@@ -181,6 +181,19 @@ describe('BlendSkillMap', () => {
 		);
 	});
 
+	it('reloads in place when a day-level blend that trained apart finishes', async () => {
+		api.getBlendCellMetrics.mockResolvedValue(metrics());
+		const { rerender, findByText } = render(BlendSkillMap, { jobId: 'job-1', revision: 'running' });
+		await findByText(/week-level blend beats it/i);
+		expect(api.getBlendCellMetrics).toHaveBeenCalledTimes(1);
+
+		await rerender({ jobId: 'job-1', revision: 'complete' });
+
+		await waitFor(() => expect(api.getBlendCellMetrics).toHaveBeenCalledTimes(2));
+		// The map stays up while the larger table loads.
+		expect(await findByText(/week-level blend beats it/i)).toBeTruthy();
+	});
+
 	it('offers no blend choice when the job trained only the week-level blend', async () => {
 		api.getBlendCellMetrics.mockResolvedValue(metrics());
 		const { findByText, queryByRole } = render(BlendSkillMap, { jobId: 'job-1' });

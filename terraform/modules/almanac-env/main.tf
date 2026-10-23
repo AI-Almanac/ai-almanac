@@ -184,12 +184,14 @@ resource "google_cloud_run_v2_service" "backend" {
   deletion_protection = false
 
   # CI deploys image revisions out of band and stamps client metadata,
-  # labels, and service-level scaling; don't let Terraform fight it.
+  # labels, and service-level scaling; don't let Terraform fight it. Traffic
+  # belongs to CI and scripts/rollback.sh, so an apply never undoes a rollback.
   lifecycle {
     ignore_changes = [
       client,
       client_version,
       scaling,
+      traffic,
       template[0].labels,
       template[0].containers[0].image,
     ]

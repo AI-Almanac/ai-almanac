@@ -167,3 +167,17 @@ variable "job_runner" {
   type        = string
   default     = "modal"
 }
+
+# ---------------------------------------------------------------------------
+# Monitoring (monitoring.tf)
+# ---------------------------------------------------------------------------
+
+variable "alert_email" {
+  description = "Address that receives uptime, 5xx, and Cloud SQL alerts."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
+}

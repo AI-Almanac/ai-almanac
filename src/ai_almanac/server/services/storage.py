@@ -223,7 +223,11 @@ class LocalStorage:
         return p
 
     def read_log(self, job_id: str) -> str:
-        p = self._outputs_dir / job_id / "run.log"
+        return self.read_job_text(job_id, "run.log")
+
+    def read_job_text(self, job_id: str, name: str) -> str:
+        """A text file the run wrote under the job's prefix, or "" if absent."""
+        p = self._outputs_dir / job_id / name
         return p.read_text() if p.exists() else ""
 
 

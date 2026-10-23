@@ -99,18 +99,12 @@ def _run_blend(job_id: str, config: dict) -> None:
 def _group_forecast_models_by_env(config: dict) -> dict[str, list[str]]:
     """Group a job's blend members by execution environment, so each
     incompatible AIFS family is rolled out in its own subprocess (see
-    FORECAST_ENVIRONMENTS). Members run their linked registry model."""
-    from ai_almanac.settings import (
-        forecast_model_by_id,
-        get_packaged_forecast_models,
-        member_forecast_model_id,
-    )
+    FORECAST_ENVIRONMENTS). Members run the registry model their plan names."""
+    from ai_almanac.server.services.forecast_pipeline import SeasonPlan
 
-    registry = get_packaged_forecast_models()
     groups: dict[str, list[str]] = {}
-    for member in config.get("forecast_model_ids") or []:
-        entry = forecast_model_by_id(registry, member_forecast_model_id(config, member)) or {}
-        groups.setdefault(entry.get("env", "base"), []).append(member)
+    for run in SeasonPlan.parse(config.get("season_plan")).runs:
+        groups.setdefault(run.model.env, []).append(run.member)
     return groups
 
 
@@ -197,20 +191,20 @@ def _mark_trajectory_coverage(config: dict) -> None:
     `(model, init_source, season)` set, and mark the set complete.
 
     Runs in the server environment (sync DB) after the rollout subprocess, so
-    the forecast pixi env / Modal container never needs database access. The
-    init dates are recomputed from the same deterministic inputs the season
-    loop used. Modal-runner jobs do not reach this path yet — their coverage
-    marking is a follow-up in the completion reconciler.
+    the forecast pixi env never needs database access. The dates are the job's
+    season plan, the same ones the rollout covered. Modal-runner jobs are marked
+    by the completion reconciler (trajectory_sets.mark_coverage_from_config).
     """
     from datetime import UTC, datetime
 
-    from ai_almanac.server.services.forecast_pipeline import season_covered_dates
+    from ai_almanac.server.services.forecast_pipeline import SeasonPlan
     from ai_almanac.server.tables import forecast_runs
 
-    init_source = config.get("init_source", "gfs")
-    season = config.get("season") or str(datetime.now(UTC).year)
+    plan = SeasonPlan.parse(config.get("season_plan"))
+    init_source = plan.init_source
+    season = str(plan.season)
     now = datetime.now(UTC).isoformat()
-    covered_by_model = season_covered_dates(config)
+    covered_by_model = plan.covered_dates()
 
     with sync_engine().begin() as conn:
         for name, dates in covered_by_model.items():

@@ -25,45 +25,26 @@ import json
 import shutil
 import tempfile
 import traceback
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
 from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
+from ai_almanac.server.services.forecast_pipeline import SeasonPlan
 
 
-def _registry_entry(config: dict, member: str) -> dict:
-    # Inference-only import: ai_almanac.settings needs pydantic-settings, which
-    # the blending env (score phase) doesn't install.
-    from ai_almanac.settings import (
-        forecast_model_by_id,
-        get_packaged_forecast_models,
-        member_forecast_model_id,
-    )
-
-    model_id = member_forecast_model_id(config, member)
-    entry = forecast_model_by_id(get_packaged_forecast_models(), model_id)
-    if entry is None:
-        raise KeyError(f"Unknown forecast model id: {model_id!r}")
-    return entry
-
-
-def _run_season_bundle(model_id: str, config: dict, season_params: dict) -> Path:
-    """Season-scoring deliverable: loop this model across the season-to-date
-    and write one NetCDF matching the historical `{year}.nc` schema."""
-    model_entry = _registry_entry(config, model_id)
-    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{model_id}-"))
-    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{model_id}-"))
-    year = datetime.now(UTC).year
-    out_path = stage_root / f"{year}.nc"
+def _run_season_bundle(plan: SeasonPlan, member: str) -> Path:
+    """Season-scoring deliverable: roll this member's model across its planned
+    issue dates and write one NetCDF matching the historical `{year}.nc` schema."""
+    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{member}-"))
+    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{member}-"))
+    out_path = stage_root / f"{plan.season}.nc"
     return forecast_pipeline.generate_season_forecast_netcdf(
-        model_entry,
-        config,
-        season_params,
+        plan,
+        member,
         scratch_root,
         out_path,
-        cache_dir=cache_dir() / "season-forecasts",
+        store=cache_dir() / "season-forecasts",
     )
 
 
@@ -76,45 +57,26 @@ def _local_blend_artifact(blend_output_uri: str, filename: str) -> bytes | None:
     return path.read_bytes() if path.is_file() else None
 
 
-def _score_live(config: dict, live_forecast_paths: dict[str, Path], output_dir: Path) -> None:
-    """Merge each model's live season file with its local historical archive
-    and score against the trained blend, reusing blending_app.py's pure
-    score_live_forecast (no GCS involved — that function never touches GCS,
-    only the Modal-side score_live_forecast_bundle wrapper does)."""
+def _score_live(
+    config: dict, live_year: int, live_forecast_paths: dict[str, Path], output_dir: Path
+) -> None:
+    """Score the staged live season files against the trained blend through
+    blending_app.py's score_live_season, the same path the Modal runner takes,
+    reading inputs from local files instead of GCS."""
     workflow = _load_workflow()
     blend_config = config["blend_config_snapshot"]
-    params = {
-        **(blend_config.get("blend_params") or {}),
-        "region_id": blend_config.get("region_id"),
-    }
-    model_names = blend_config["model_names"]
-
-    obs_bundle = workflow._bundle_files(_netcdf_files(blend_config["obs_dir"]))
-    forecast_bundles: dict[str, bytes] = {}
-    for name in model_names:
-        historical_bundle = workflow._bundle_files(_forecast_files(blend_config, name))
-        live_bundle = workflow._bundle_files([live_forecast_paths[name]])
-        forecast_bundles[name] = workflow._merge_forecast_bundle(historical_bundle, live_bundle)
-
     blend_output_uri = str(blend_config.get("blend_output_uri") or "")
-    coef_pkl = _local_blend_artifact(blend_output_uri, workflow.FINAL_COEF_FILENAME)
-    forest_pkl = None
-    if coef_pkl is not None:
-        print("==> Using trained blend coefficients (skipping CV retrain)", flush=True)
-        # Blends trained before the day-level model have no forest.
-        forest_pkl = _local_blend_artifact(blend_output_uri, workflow.FOREST_MODEL_FILENAME)
 
-    live_year = datetime.now(UTC).year
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
-    scores = workflow.score_live_forecast.local(
-        obs_bundle,
-        forecast_bundles,
-        model_names,
-        params,
+    scores = workflow.score_live_season(
+        blend_config,
+        {name: workflow._bundle_files([path]) for name, path in live_forecast_paths.items()},
         live_year,
-        coef_pkl=coef_pkl,
+        obs_bundle=workflow._bundle_files(_netcdf_files(blend_config["obs_dir"])),
+        load_historical=lambda name: workflow._bundle_files(_forecast_files(blend_config, name)),
+        read_artifact=lambda filename: _local_blend_artifact(blend_output_uri, filename),
         cache_dir=str(cache_dir() / "blend-intermediates"),
-        forest_pkl=forest_pkl,
+        resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     workflow._write_live_scores(scores, output_dir)
@@ -132,23 +94,20 @@ def _release_gpu_memory() -> None:
         torch.cuda.empty_cache()
 
 
-def run_inference(config: dict, model_ids: list[str], staging_dir: Path) -> None:
-    """Roll each requested model across the season-to-date (serving cached issue
+def run_inference(plan: SeasonPlan, members: list[str], staging_dir: Path) -> None:
+    """Roll each requested member across its planned issue dates (serving stored
     dates and rolling out only misses) and stage its season file as
-    `<staging_dir>/<model_id>.nc` for the later scoring phase."""
-    season_model_params = config.get("season_model_params") or {}
+    `<staging_dir>/<member>.nc` for the later scoring phase."""
     staging_dir.mkdir(parents=True, exist_ok=True)
     failures: dict[str, str] = {}
 
-    print(f"==> Season inference for {model_ids}", flush=True)
-    for model_id in model_ids:
+    print(f"==> Season inference for {members}", flush=True)
+    for member in members:
         try:
-            season_path = _run_season_bundle(
-                model_id, config, season_model_params.get(model_id) or {}
-            )
-            shutil.copy(season_path, staging_dir / f"{model_id}.nc")
+            season_path = _run_season_bundle(plan, member)
+            shutil.copy(season_path, staging_dir / f"{member}.nc")
         except Exception as exc:  # noqa: BLE001
-            failures[f"{model_id} (season)"] = str(exc)
+            failures[f"{member} (season)"] = str(exc)
             traceback.print_exc()
         _release_gpu_memory()
 
@@ -156,7 +115,7 @@ def run_inference(config: dict, model_ids: list[str], staging_dir: Path) -> None
         raise RuntimeError(f"Forecast inference failed for {sorted(failures)}: {failures}")
 
 
-def run_scoring(config: dict, staging_dir: Path, output_dir: Path) -> None:
+def run_scoring(config: dict, plan: SeasonPlan, staging_dir: Path, output_dir: Path) -> None:
     """Score the assembled season (all staged model files) against the trained
     blend. The raw short-lead map deliverable was dropped (D1): it re-ran a
     rollout already contained in the season loop's latest issue date."""
@@ -164,13 +123,12 @@ def run_scoring(config: dict, staging_dir: Path, output_dir: Path) -> None:
     if not blend_config:
         raise RuntimeError("Forecast job config is missing its blend snapshot")
 
-    model_ids = config["forecast_model_ids"]
-    live_forecast_paths = {m: staging_dir / f"{m}.nc" for m in model_ids}
+    live_forecast_paths = {run.member: staging_dir / f"{run.member}.nc" for run in plan.runs}
     missing = [m for m, p in live_forecast_paths.items() if not p.is_file()]
     if missing:
         raise RuntimeError(f"Cannot score; missing staged season data for {missing}")
 
-    _score_live(config, live_forecast_paths, output_dir)
+    _score_live(config, plan.season, live_forecast_paths, output_dir)
     print("==> Forecast generation complete", flush=True)
 
 
@@ -183,14 +141,15 @@ def main() -> None:
     parser.add_argument("--models", help="Comma-separated model ids for the inference phase.")
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
+    plan = SeasonPlan.parse(config.get("season_plan"))
 
     if args.phase == "inference":
-        model_ids = [m for m in (args.models or "").split(",") if m]
-        run_inference(config, model_ids, args.staging_dir)
+        members = [m for m in (args.models or "").split(",") if m]
+        run_inference(plan, members, args.staging_dir)
     else:
         if not args.output_dir:
             parser.error("--output-dir is required for the score phase")
-        run_scoring(config, args.staging_dir, args.output_dir)
+        run_scoring(config, plan, args.staging_dir, args.output_dir)
 
 
 if __name__ == "__main__":

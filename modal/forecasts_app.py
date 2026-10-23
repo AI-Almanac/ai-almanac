@@ -10,24 +10,26 @@ for the download inline (each has its own image — see INFERENCE_IMAGES):
     modal run modal/forecasts_app.py::warm_model_weights_aifs2
     modal run modal/forecasts_app.py::warm_model_weights_aifs2ens
 
-Runs one or more AI weather models (from server/config/forecast_models.yaml)
-against the latest GFS initial conditions via earth2studio, renders each
-variable/lead-hour combination as a Cloud-Optimized GeoTIFF, and publishes
-them to gs://{outputs_bucket}/{job_id}/output/{model_id}/ — the same output
-contract run_benchmark/run_blend use, so job_artifacts indexes them the same
-way.
+To try a season end-to-end with this checkout before deploying (see
+smoke_season_forecast):
+    modal run --env staging modal/forecasts_app.py::smoke_season_forecast --reset
+
+run_forecast executes a forecast job's season plan: each blend member's AI
+weather model (from server/config/forecast_models.yaml) is rolled out with
+earth2studio across its planned issue dates, and the season is scored against
+the trained blend by the almanac-blending app.
 
 Shares the (job_id, config, outputs_bucket) signature with run_benchmark and
 run_blend so the platform's ModalRunner dispatches it identically.
 
-This file is intentionally thin: the actual earth2studio inference, season
-looping, and COG rendering logic lives in
+This file is intentionally thin: the planning, earth2studio inference, store,
+and season assembly logic lives in
 `ai_almanac.server.services.forecast_pipeline` (a self-contained module with
 no Modal dependency), bundled into the image as a single file and imported
 directly. The exact same module also runs inside the local `forecast` pixi
 environment (see envs/forecast_entrypoint.py) — this file only adds the
-Modal-specific plumbing: GPU/image selection, Volume scratch space for the
-GPU->CPU handoff, GCS staging/upload, secrets, and cross-app calls.
+Modal-specific plumbing: GPU/image selection, the CPU/GPU split, the weights
+Volume, GCS credentials, and cross-app calls.
 
 Secrets required:
     modal secret create gcp-service-account SERVICE_ACCOUNT_JSON="$(cat key.json)"
@@ -39,8 +41,10 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import tempfile
 import time
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -55,10 +59,8 @@ FORECAST_PIPELINE_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_pip
 app = modal.App(APP_NAME)
 
 # Two unrelated things share this volume, at different subtrees:
-#  - /cache/runs/{job_id}/{model_id}: scratch space for passing the raw
-#    earth2studio zarr output between the GPU inference function and the CPU
-#    render function (different containers). Cleaned up per job+model once
-#    rendering finishes — see _cleanup_volume_scratch.
+#  - /cache/season-forecasts: the trajectory store for jobs that name no GCS
+#    bucket — in practice only smoke tests (see _VOLUME_STORE).
 #  - /cache/earth2studio: downloaded model weights (EARTH2STUDIO_CACHE below).
 #    A few GB per model, well under Modal's per-volume soft limit, and never
 #    cleaned up — see warm_model_weights. Baking weights into the image was
@@ -103,7 +105,7 @@ def _inference_image(extras: list[str]) -> modal.Image:
             f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git"
             "@96a9bd607013783da8560fbb7a0bb13a00018b66'",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs h5netcdf onnxruntime-gpu pyyaml",
+            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs 'h5netcdf[h5py]' onnxruntime-gpu pyyaml",
         )
         .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
@@ -112,22 +114,18 @@ def _inference_image(extras: list[str]) -> modal.Image:
 
 INFERENCE_IMAGES = {env: _inference_image(extras) for env, extras in _INFERENCE_EXTRAS.items()}
 
-render_image = (
+# CPU work: orchestration, the store sweep, and season assembly.
+cpu_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install(
-        "libexpat1",
-        "libgdal-dev",
-        "libgeos-dev",
-        "libproj-dev",
-        "proj-data",
-        "proj-bin",
-    )
     .pip_install(
+        "dask",
         "google-cloud-storage",
         "gcsfs",
-        "h5netcdf",
+        "h5netcdf[h5py]",
+        # Same pin as earth2studio, so season assembly picks the same netCDF
+        # engine here as it did in the inference image.
+        "netCDF4<1.7.3",
         "numpy",
-        "rasterio",
         "xarray<2026.0.0",
         "zarr",
         "pyyaml",
@@ -137,15 +135,25 @@ render_image = (
 )
 
 
-def _load_pipeline():
-    """Load the bundled forecast_pipeline.py module by explicit path — the
-    container has no `ai_almanac` package installed, only this one file.
+def _load_pipeline(path: Path = Path("/almanac/forecast_pipeline.py")):
+    """Load forecast_pipeline.py by explicit path — the container has no
+    `ai_almanac` package installed, only this one file, bundled at `path`.
+
+    The module is registered in sys.modules before it runs: dataclasses resolve
+    its string annotations through sys.modules, so an unregistered module fails
+    on its first @dataclass. The first load wins; later calls return it whatever
+    `path` they pass.
     """
-    spec = importlib.util.spec_from_file_location(
-        "forecast_pipeline", "/almanac/forecast_pipeline.py"
-    )
+    if (loaded := sys.modules.get("forecast_pipeline")) is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location("forecast_pipeline", path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[spec.name]
+        raise
     return module
 
 
@@ -176,33 +184,6 @@ def _write_gcp_credentials_from_secret() -> None:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
 
 
-def _upload_output_dir_to_gcs(
-    client, outputs_bucket: str, job_id: str, model_id: str, local_dir: Path
-) -> None:
-    from google.cloud.storage import transfer_manager
-
-    if not outputs_bucket:
-        raise ValueError("outputs_bucket is required for Modal production runs")
-    files = [str(p.relative_to(local_dir)) for p in sorted(local_dir.rglob("*")) if p.is_file()]
-    if not files:
-        return
-    prefix = f"{job_id}/output/{model_id}/"
-    print(f"==> Uploading {len(files)} files to gs://{outputs_bucket}/{prefix}")
-    bucket = client.bucket(outputs_bucket)
-    results = transfer_manager.upload_many_from_filenames(
-        bucket,
-        files,
-        source_directory=str(local_dir),
-        blob_name_prefix=prefix,
-        worker_type="thread",
-    )
-    for name, result in zip(files, results, strict=True):
-        if isinstance(result, Exception):
-            print(f"  upload FAILED: {prefix}{name}: {result}")
-        else:
-            print(f"  uploaded: {prefix}{name}")
-
-
 def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) -> None:
     if not text or not outputs_bucket:
         return
@@ -217,56 +198,9 @@ def _load_model_registry() -> dict:
     return yaml.safe_load(Path("/almanac/forecast_models.yaml").read_text())
 
 
-def _registry_entry(config: dict, member: str) -> dict:
-    """Registry entry a blend member runs: the id the server linked it to in
-    `forecast_models`. Mirrors settings.member_forecast_model_id (this app runs
-    standalone in its image and doesn't import ai_almanac)."""
-    model_id = (config.get("forecast_models") or {}).get(member, member)
-    for entry in _load_model_registry().get("models") or []:
-        if entry["id"] == model_id:
-            return entry
-    raise KeyError(f"Unknown forecast model id: {model_id!r}")
-
-
-def _model_env(config: dict, member: str) -> str:
-    """Execution-environment name for a member's model (base/aifs2/aifs2ens)."""
-    return _registry_entry(config, member).get("env", "base")
-
-
-_VOLUME_RUNS_ROOT = Path("/cache/runs")
-
-
-def _zarr_volume_path(job_id: str, model_id: str) -> Path:
-    return _VOLUME_RUNS_ROOT / job_id / model_id / "forecast.zarr"
-
-
-def _cleanup_volume_scratch(job_id: str, model_id: str) -> None:
-    import shutil
-
-    shutil.rmtree(_VOLUME_RUNS_ROOT / job_id / model_id, ignore_errors=True)
-    forecast_volume.commit()
-
-
 # ---------------------------------------------------------------------------
 # Modal functions
 # ---------------------------------------------------------------------------
-
-
-def _forecast_inference_impl(job_id: str, model_id: str, config: dict) -> dict:
-    """Run one AI weather model against the latest GFS conditions; write its
-    raw output to scratch volume space for render_forecast_products to read."""
-    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
-    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
-
-    pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    zarr_path = _zarr_volume_path(job_id, model_id)
-    run_info = pipeline.run_forecast_inference(config, model_entry, zarr_path)
-    print("==> Committing volume (uploads any newly-downloaded model weights)")
-    t0 = time.perf_counter()
-    forecast_volume.commit()
-    print(f"==> Volume commit done in {time.perf_counter() - t0:.1f}s")
-    return run_info
 
 
 def _warm_model_weights_impl(env_name: str) -> None:
@@ -287,26 +221,12 @@ def _warm_model_weights_impl(env_name: str) -> None:
     print(f"==> Weight cache warmed; volume commit took {time.perf_counter() - t0:.1f}s")
 
 
-# Per-env inference and weight-warming functions, one pair per image. Defined
-# in a module-level loop rather than a factory: Modal requires @app.function
-# targets in global scope (a def inside a module-level for loop qualifies; one
-# inside a helper function does not). Callers dispatch by registered name —
-# the server via Function.from_name, warming via `modal run ...::warm_model_
-# weights_<env>` — so nothing needs the Python handles.
+# Per-env weight-warming functions, one per image. Defined in a module-level
+# loop rather than a factory: Modal requires @app.function targets in global
+# scope (a def inside a module-level for loop qualifies; one inside a helper
+# function does not). Warming dispatches by registered name, via `modal run
+# ...::warm_model_weights_<env>`, so nothing needs the Python handles.
 for _env, _image in INFERENCE_IMAGES.items():
-
-    @app.function(
-        name=f"run_forecast_inference_{_env}",
-        image=_image,
-        gpu="A100-80GB",
-        cpu=(8, 16),
-        memory=(32768, 65536),
-        timeout=36000,
-        secrets=[gcp_secret],
-        volumes={"/cache": forecast_volume},
-    )
-    def run_forecast_inference(job_id: str, model_id: str, config: dict) -> dict:
-        return _forecast_inference_impl(job_id, model_id, config)
 
     @app.function(
         name=f"warm_model_weights_{_env}",
@@ -321,123 +241,298 @@ for _env, _image in INFERENCE_IMAGES.items():
         _warm_model_weights_impl(env_name)
 
 
-@app.function(
-    image=render_image,
-    cpu=(4, 8),
-    memory=(16384, 32768),
-    timeout=36000,
-    secrets=[gcp_secret],
-    volumes={"/cache": forecast_volume},
-)
-def render_forecast_products(
-    job_id: str, model_id: str, config: dict, run_info: dict, outputs_bucket: str
-) -> None:
-    """Render COGs + manifest.json for one model's forecast and publish them
-    to gs://{outputs_bucket}/{job_id}/output/{model_id}/, then free the
-    scratch volume space run_forecast_inference wrote."""
-    from google.cloud import storage as gcs
-
-    _write_gcp_credentials_from_secret()
-    client = gcs.Client()
-    pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    zarr_path = _zarr_volume_path(job_id, model_id)
-
-    with tempfile.TemporaryDirectory(prefix=f"forecast-products-{job_id}-{model_id}-") as tmp:
-        root = Path(tmp)
-        pipeline.render_forecast_products(
-            {**config, "job_id": job_id}, model_id, model_entry, run_info, zarr_path, root
-        )
-        _upload_output_dir_to_gcs(client, outputs_bucket, job_id, model_id, root)
-
-    _cleanup_volume_scratch(job_id, model_id)
+# Volume-backed trajectory store, used when a job names no GCS bucket. Deployed
+# jobs always name one, so in practice this holds only smoke-test rollouts.
+_VOLUME_STORE = Path("/cache/season-forecasts")
 
 
-def _season_bundle_impl(job_id: str, model_id: str, config: dict, season_params: dict) -> bytes:
-    """Loop one model across the current season's issue dates and return a
-    tar.gz bundle containing one NetCDF matching the historical `{year}.nc`
-    schema, the same bundle shape run_blend's forecast_bundles expect."""
-    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
-    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
-
-    cache_dir_uri = config.get("trajectory_cache_uri")
-    if not cache_dir_uri:
+def _trajectory_store(config: dict) -> str:
+    """Root of the shared trajectory store: the job's gs:// trajectory cache
+    when it names one, otherwise this app's Volume."""
+    store = str(config.get("trajectory_cache_uri") or "").strip()
+    if not store:
         # gcs_cache_bucket fallback: remove next release
         cache_bucket = (config.get("gcs_cache_bucket") or "").strip()
-        cache_dir_uri = f"gs://{cache_bucket}/season-forecasts" if cache_bucket else None
-    if cache_dir_uri and str(cache_dir_uri).startswith("gs://"):
+        store = f"gs://{cache_bucket}/season-forecasts" if cache_bucket else ""
+    if store.startswith("gs://"):
         _write_gcp_credentials_from_secret()
-        cache_dir = cache_dir_uri
-    else:
-        cache_dir = Path("/cache/season-forecasts")
+        return store
+    return str(_VOLUME_STORE)
+
+
+def _season_plan(pipeline, config: dict):
+    """The job's frozen season plan (see forecast_pipeline.SeasonPlan): which
+    model each member runs, on which issue dates, to which horizon."""
+    return pipeline.SeasonPlan.parse(config.get("season_plan"))
+
+
+# A season's missing issue dates are split into chunks, one GPU container each,
+# all spawned at once. Each container pays one model load (~1-2 min) for its
+# chunk, so a few dates keeps that small against ~12 min per 45-day date.
+DATES_PER_ROLLOUT = 4
+# Most GPU containers one rollout function (one image) runs at once, shared by
+# every forecast job running concurrently. Chunks beyond this queue until a
+# container frees up, so cold seasons submitted together can each wait on the
+# other's chunks.
+MAX_PARALLEL_ROLLOUTS = 12
+
+# Each season function waits on the ones it calls, so each ceiling must outlast
+# them plus its own work, or a long cold season is killed from above.
+ROLLOUT_TIMEOUT_S = 6 * 3600  # one chunk on one GPU
+# The rollout phase waits on every chunk, including those queued behind the
+# cap. Waiting costs a fraction of a CPU, so it gets as many full-length rounds
+# as Modal's 24 h ceiling leaves room for: a cold ensemble season is ~45
+# one-date chunks per model (~4 rounds of ~1.5 h each).
+ROLLOUT_ROUNDS_PER_PHASE = 3
+ROLLOUTS_PHASE_TIMEOUT_S = ROLLOUT_ROUNDS_PER_PHASE * ROLLOUT_TIMEOUT_S
+ASSEMBLE_TIMEOUT_S = 3600
+FORECAST_TIMEOUT_S = ROLLOUTS_PHASE_TIMEOUT_S + ASSEMBLE_TIMEOUT_S + 30 * 60  # + scoring
+
+
+def _season_rollouts_impl(member: str, config: dict, issue_dates: list[str]) -> None:
+    """Roll one member's model out for the given issue dates, writing each
+    trajectory to the store. The only season step that needs a GPU."""
+    os.environ.setdefault("EARTH2STUDIO_CACHE", "/cache/earth2studio")
+    os.environ.setdefault("XDG_CACHE_HOME", "/cache")
+    # Data-source temp downloads go to container disk, not the weights Volume
+    # (earth2studio.data.utils.datasource_cache_root reads this variable).
+    os.environ.setdefault("EARTH2STUDIO_DATA_CACHE", "/tmp/earth2studio-data")
 
     pipeline = _load_pipeline()
-    model_entry = _registry_entry(config, model_id)
-    year = datetime.now(UTC).year
-    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{model_id}-"))
-    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-scratch-{job_id}-{model_id}-"))
-    out_path = stage_root / f"{year}.nc"
-    pipeline.generate_season_forecast_netcdf(
-        model_entry,
-        config,
-        season_params,
-        scratch_root,
-        out_path,
-        cache_dir=cache_dir,
-    )
-    print(f"==> [{model_id}] Committing volume (model weight cache)")
+    plan = _season_plan(pipeline, config)
+    run = plan.run(member)
+    key = plan.key(run)
+    store = _trajectory_store(config)
+    # Another job for the same model may have stored some of these dates since
+    # the caller swept; one more listing keeps the GPU off work already done.
+    _refresh_volume_store(store)
+    requested = [datetime.fromisoformat(d).date() for d in issue_dates]
+    missing = pipeline.unstored_issue_dates(store, key, requested)
+    if len(missing) < len(requested):
+        print(
+            f"==> [{member}] {len(requested) - len(missing)} date(s) were stored meanwhile; "
+            f"rolling out {len(missing)}",
+            flush=True,
+        )
+    scratch_root = Path(tempfile.mkdtemp(prefix=f"season-rollouts-{member}-"))
+    try:
+        pipeline.roll_out_issue_dates(run, key, missing, scratch_root, store)
+    except BaseException:
+        # Keep the dates already rolled out on a Volume-backed store, without
+        # letting a failed commit replace the rollout's own error. A hard kill
+        # (timeout, preemption) skips this; the GCS store is durable per date.
+        try:
+            _commit_volume(member)
+        except Exception:
+            traceback.print_exc()
+        raise
+    _commit_volume(member)
+
+
+def _commit_volume(member: str) -> None:
+    print(f"==> [{member}] Committing volume (model weights, volume-backed store)")
     t0 = time.perf_counter()
     forecast_volume.commit()
-    print(f"==> [{model_id}] Volume commit done in {time.perf_counter() - t0:.1f}s")
-    return pipeline.bundle_files([out_path])
+    print(f"==> [{member}] Volume commit done in {time.perf_counter() - t0:.1f}s")
 
 
 # Per-env variants, module-level loop for the same global-scope reason as the
-# inference/warm functions above; the orchestrator spawns these by env.
-SEASON_BUNDLE_FNS = {}
+# inference/warm functions above; roll_out_missing_dates spawns these by env.
+SEASON_ROLLOUT_FNS = {}
 for _env, _image in INFERENCE_IMAGES.items():
 
     @app.function(
-        name=f"run_season_forecast_bundle_{_env}",
+        name=f"run_season_rollouts_{_env}",
         image=_image,
         gpu="A100-80GB",
         cpu=(8, 16),
         memory=(32768, 65536),
-        # Many sequential issue-date runs per season, not one — a much longer
-        # ceiling than the single-run map-visualization inference function.
-        timeout=36000,
+        timeout=ROLLOUT_TIMEOUT_S,
+        max_containers=MAX_PARALLEL_ROLLOUTS,
         secrets=[gcp_secret],
         volumes={"/cache": forecast_volume},
     )
-    def run_season_forecast_bundle(
-        job_id: str, model_id: str, config: dict, season_params: dict
-    ) -> bytes:
-        return _season_bundle_impl(job_id, model_id, config, season_params)
+    def run_season_rollouts(member: str, config: dict, issue_dates: list[str]) -> None:
+        _season_rollouts_impl(member, config, issue_dates)
 
-    SEASON_BUNDLE_FNS[_env] = run_season_forecast_bundle
+    SEASON_ROLLOUT_FNS[_env] = run_season_rollouts
+
+
+def _rollout_function(run):
+    """The GPU rollout function for the image a run's model needs."""
+    try:
+        return SEASON_ROLLOUT_FNS[run.model.env]
+    except KeyError:
+        raise ValueError(
+            f"{run.member} runs in environment {run.model.env!r}, which has no rollout "
+            f"image; known: {sorted(SEASON_ROLLOUT_FNS)}"
+        ) from None
+
+
+def _refresh_volume_store(store: str) -> None:
+    """See the Volume as other containers last committed it, when it holds the
+    store: a reused warm container otherwise sweeps a stale view."""
+    if not store.startswith("gs://"):
+        forecast_volume.reload()
+
+
+def _warn_if_chunks_outrun_the_phase(plan, chunks) -> None:
+    """ROLLOUTS_PHASE_TIMEOUT_S allows ROLLOUT_ROUNDS_PER_PHASE full-length
+    rounds of MAX_PARALLEL_ROLLOUTS containers per image. More chunks than that
+    still run, but slow ones could outlast the phase; say so up front so a
+    timeout is easy to explain."""
+    from collections import Counter
+
+    per_image = Counter(plan.run(chunk.member).model.env for chunk in chunks)
+    capacity = ROLLOUT_ROUNDS_PER_PHASE * MAX_PARALLEL_ROLLOUTS
+    crowded = {env: n for env, n in per_image.items() if n > capacity}
+    if crowded:
+        print(
+            f"==> warning: chunks per image {crowded} exceed {ROLLOUT_ROUNDS_PER_PHASE} "
+            f"rounds of {MAX_PARALLEL_ROLLOUTS} containers; slow ones may outlast the "
+            "rollout phase",
+            flush=True,
+        )
 
 
 @app.function(
-    image=render_image,
+    image=cpu_image,
     cpu=(0.25, 1),
     memory=1024,
-    timeout=36000,
+    timeout=ROLLOUTS_PHASE_TIMEOUT_S,
+    secrets=[gcp_secret],
+    volumes={"/cache": forecast_volume},
+)
+def roll_out_missing_dates(config: dict) -> dict[str, str]:
+    """Roll out every issue date the job's plan needs and the store lacks,
+    spread over parallel GPU containers. Returns {member: error} for members
+    whose store key had a chunk fail; every other member's season is stored.
+
+    Runs on CPU: one store sweep per key, then chunk_rollouts decides the GPU
+    containers. A fully stored season spawns none.
+    """
+    pipeline = _load_pipeline()
+    plan = _season_plan(pipeline, config)
+    store = _trajectory_store(config)
+    _refresh_volume_store(store)
+
+    missing_by_key = {}
+    for key, issue_dates in plan.dates_by_key().items():
+        missing = pipeline.unstored_issue_dates(store, key, list(issue_dates))
+        print(f"==> [{key.model_id}] {len(issue_dates) - len(missing)}/{len(issue_dates)} stored")
+        if missing:
+            missing_by_key[key] = missing
+    chunks = pipeline.chunk_rollouts(plan, missing_by_key, DATES_PER_ROLLOUT)
+    print(f"==> Rolling out on {len(chunks)} GPU container(s)", flush=True)
+    _warn_if_chunks_outrun_the_phase(plan, chunks)
+
+    # Resolve every chunk's image first, so a bad env spawns nothing.
+    targets = [(chunk, _rollout_function(plan.run(chunk.member))) for chunk in chunks]
+    pending = []
+    failed_keys: dict = {}
+    try:
+        for chunk, rollout in targets:
+            dates = [d.isoformat() for d in chunk.issue_dates]
+            pending.append((chunk, rollout.spawn(chunk.member, config, dates)))
+        while pending:
+            chunk, call = pending[0]
+            try:
+                call.get()
+            except Exception as exc:
+                dates = ", ".join(d.isoformat() for d in chunk.issue_dates)
+                # The GPU container's own log lives in Modal; name the chunk here.
+                print(f"==> [{chunk.member}] rollout chunk failed ({dates}): {exc!r}")
+                failed_keys.setdefault(plan.key(plan.run(chunk.member)), f"{exc} ({dates})")
+                traceback.print_exc()
+            pending.pop(0)
+    finally:
+        # If this phase dies (an error, an interrupt), stop the GPUs still running.
+        for _, call in pending:
+            call.cancel()
+    _refresh_volume_store(store)
+    return {
+        run.member: failed_keys[plan.key(run)] for run in plan.runs if plan.key(run) in failed_keys
+    }
+
+
+@app.function(
+    image=cpu_image,
+    cpu=(1, 2),
+    # Assembly streams one slice at a time, but a season with no bounds reads
+    # global native-grid trajectories (~190 MB each at 0.25 deg).
+    memory=(4096, 32768),
+    timeout=ASSEMBLE_TIMEOUT_S,
+    secrets=[gcp_secret],
+    volumes={"/cache": forecast_volume},
+)
+def assemble_season_bundle(job_id: str, member: str, config: dict) -> bytes:
+    """One member's season, from the store, as a tar.gz bundle holding one
+    NetCDF in the historical `{year}.nc` schema — the bundle shape run_blend's
+    forecast_bundles expect. Runs after roll_out_missing_dates, on CPU."""
+    pipeline = _load_pipeline()
+    plan = _season_plan(pipeline, config)
+    run = plan.run(member)
+    key = plan.key(run)
+    store = _trajectory_store(config)
+    _refresh_volume_store(store)
+    missing = pipeline.unstored_issue_dates(store, key, list(run.issue_dates))
+    if missing:
+        raise RuntimeError(
+            f"{member} has no stored trajectory for {[d.isoformat() for d in missing]}"
+        )
+
+    stage_root = Path(tempfile.mkdtemp(prefix=f"season-{job_id}-{member}-"))
+    out_path = pipeline.assemble_season_netcdf(
+        store, key, run, stage_root / "slices", stage_root / f"{plan.season}.nc"
+    )
+    return pipeline.bundle_files([out_path])
+
+
+def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -> dict[str, bytes]:
+    """Roll out what the store lacks, then assemble every member in parallel.
+    Records each failure in `failures`; any failed rollout skips assembly."""
+    try:
+        rollout_failures = roll_out_missing_dates.remote(config)
+    except Exception as exc:
+        failures["rollouts"] = str(exc)
+        traceback.print_exc()
+        return {}
+    failures.update({f"{member} (season)": error for member, error in rollout_failures.items()})
+    if rollout_failures:
+        # Scoring needs every member, so assembling the rest would be wasted.
+        return {}
+
+    calls = {
+        run.member: assemble_season_bundle.spawn(job_id, run.member, config) for run in plan.runs
+    }
+    bundles = {}
+    for member, call in calls.items():
+        try:
+            bundles[member] = call.get()
+        except Exception as exc:
+            failures[f"{member} (season)"] = str(exc)
+            traceback.print_exc()
+    return bundles
+
+
+@app.function(
+    image=cpu_image,
+    cpu=(0.25, 1),
+    memory=1024,
+    timeout=FORECAST_TIMEOUT_S,
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Run every requested model's inference + rendering concurrently and
-    publish a run.log alongside the per-model output directories.
+    """Build every blend member's season, score it against the trained blend,
+    and publish a run.log.
 
-    Models are independent of each other, so each phase fans out with
-    .spawn()/.get() instead of awaiting one model's .remote() call before
-    starting the next — otherwise this function's own timeout is spent
-    waiting on models one at a time instead of in parallel.
+    Two phases: roll out the store's missing issue dates across parallel GPU
+    containers (roll_out_missing_dates), then assemble each member's season on
+    CPU in parallel (assemble_season_bundle).
 
     Shares the (job_id, config, outputs_bucket) signature with run_benchmark
     and run_blend so the platform's ModalRunner dispatches it the same way.
     """
-    import sys
-    import traceback
     from contextlib import redirect_stderr, redirect_stdout
 
     from google.cloud import storage as gcs
@@ -455,35 +550,26 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
         except Exception:
             traceback.print_exc()
 
-        model_ids = config["forecast_model_ids"]
         failures: dict[str, str] = {}
+        plan = None
+        try:
+            plan = _season_plan(_load_pipeline(), config)
+        except ValueError as exc:
+            failures["season_plan"] = str(exc)
+            traceback.print_exc()
 
         # The raw short-lead map deliverable was dropped (D1): its rollout is
         # already contained in the season loop's latest issue date.
         blend_config = config.get("blend_config_snapshot")
-        season_model_params = config.get("season_model_params") or {}
-        if blend_config:
-            season_model_ids = list(model_ids)
-            print(f"==> Running season-long inference for blend scoring: {season_model_ids}")
-            season_calls = {
-                model_id: SEASON_BUNDLE_FNS[_model_env(config, model_id)].spawn(
-                    job_id, model_id, config, season_model_params.get(model_id) or {}
-                )
-                for model_id in season_model_ids
-            }
-            live_forecast_bundles: dict[str, bytes] = {}
-            for model_id, call in season_calls.items():
-                try:
-                    live_forecast_bundles[model_id] = call.get()
-                except Exception as exc:
-                    failures[f"{model_id} (season)"] = str(exc)
-                    traceback.print_exc()
+        if blend_config and plan is not None:
+            members = [run.member for run in plan.runs]
+            print(f"==> Running season-long inference for blend scoring: {members}")
+            live_forecast_bundles = _season_bundles(job_id, plan, config, failures)
 
-            missing = [name for name in model_ids if name not in live_forecast_bundles]
+            missing = [member for member in members if member not in live_forecast_bundles]
             if not missing:
                 try:
                     print("==> Scoring live season against the trained blend")
-                    live_year = datetime.now(UTC).year
                     modal.Function.from_name(
                         "almanac-blending", "score_live_forecast_bundle"
                     ).remote(
@@ -496,7 +582,7 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
                             ),  # fallback: remove next release
                         },
                         live_forecast_bundles,
-                        live_year,
+                        plan.season,
                         outputs_bucket,
                     )
                 except Exception as exc:
@@ -516,3 +602,170 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             f"Forecast job {job_id} failed for model(s) {sorted(failures)}; "
             f"see run.log for details: {failures}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Smoke test: run the season pipeline from a laptop before deploying.
+# ---------------------------------------------------------------------------
+
+# The local entrypoint needs nothing beyond the modal client, so it runs from a
+# standalone `modal` install; registry checks happen inside the containers.
+
+# Ethiopia's bbox from server/config/regions.yaml (lat_min,lat_max,lon_min,
+# lon_max) — small enough that the returned bundle stays a few MB.
+_SMOKE_BOUNDS = "3,15,33,48"
+
+
+@app.function(image=cpu_image, timeout=600, volumes={"/cache": forecast_volume})
+def reset_volume_store(model_id: str, init_source: str) -> None:
+    """Delete one model's volume-backed trajectories so the next smoke run
+    starts cold. Never touches the GCS store deployed jobs use."""
+    import shutil
+
+    registry_ids = {entry["id"] for entry in _load_model_registry().get("models") or []}
+    if model_id not in registry_ids:
+        raise ValueError(f"Unknown model {model_id!r}; choose one of {sorted(registry_ids)}")
+    init_sources = _load_pipeline().INIT_SOURCES
+    if init_source not in init_sources:
+        raise ValueError(
+            f"Unknown init source {init_source!r}; choose one of {sorted(init_sources)}"
+        )
+    forecast_volume.reload()
+    shutil.rmtree(_VOLUME_STORE / model_id / init_source, ignore_errors=True)
+    forecast_volume.commit()
+
+
+@app.function(image=cpu_image, timeout=600)
+def plan_smoke_season(
+    model_id: str,
+    archive_metadata: dict,
+    season_start: str,
+    init_source: str,
+    max_issue_dates: int,
+    lead_days: int,
+) -> dict:
+    """A one-member season plan built the way submission builds one, from the
+    bundled registry and archive metadata given on the command line."""
+    pipeline = _load_pipeline()
+    try:
+        plan = _smoke_season_plan(
+            pipeline,
+            model_id,
+            archive_metadata,
+            season_start,
+            init_source,
+            max_issue_dates,
+            lead_days,
+        )
+    except pipeline.PlanError as exc:
+        # PlanError lives in the path-loaded pipeline module, which the local
+        # client can't import to unpickle; a builtin keeps the message intact.
+        raise ValueError(str(exc)) from None
+    return plan.to_dict()
+
+
+def _smoke_season_plan(
+    pipeline, model_id, archive_metadata, season_start, init_source, max_issue_dates, lead_days
+):
+    entry = next(
+        (e for e in _load_model_registry().get("models") or [] if e["id"] == model_id), None
+    )
+    if entry is None:
+        raise pipeline.PlanError(f"Unknown forecast model id: {model_id!r}")
+    today = datetime.now(UTC).date()
+    return pipeline.plan_season(
+        {
+            model_id: (
+                pipeline.ForecastModel.parse(entry),
+                pipeline.ArchiveLayout.parse(archive_metadata),
+            )
+        },
+        season=today.year,
+        season_start_month_day=season_start,
+        init_source=init_source,
+        today=today,
+        max_issue_dates=max_issue_dates,
+        lead_day=lead_days,
+    )
+
+
+@app.function(image=cpu_image, cpu=1, memory=4096, timeout=600)
+def describe_season_bundle(bundle: bytes) -> dict:
+    """Shape and value range of a season bundle's NetCDF, for eyeballing."""
+    import tarfile
+
+    import xarray as xr
+
+    with tempfile.TemporaryDirectory(prefix="season-bundle-") as tmp:
+        with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
+            tar.extractall(tmp, filter="data")
+        (path,) = Path(tmp).glob("*.nc")
+        with xr.open_dataset(path) as ds:
+            tp = ds["tp"].load()
+    return {
+        "file": path.name,
+        "dims": dict(tp.sizes),
+        "issue_dates": [str(t)[:10] for t in tp["time"].values],
+        "min": float(tp.min()),
+        "max": float(tp.max()),
+        "nan_fraction": float(tp.isnull().mean()),
+    }
+
+
+def _parse_bounds(bounds: str) -> dict:
+    keys = ("lat_min", "lat_max", "lon_min", "lon_max")
+    values = [float(part) for part in bounds.split(",")]
+    if len(values) != len(keys):
+        raise SystemExit(f"--bounds needs {','.join(keys)}; got {bounds!r}")
+    return dict(zip(keys, values, strict=True))
+
+
+@app.local_entrypoint()
+def smoke_season_forecast(
+    model: str = "fuxi",
+    bounds: str = _SMOKE_BOUNDS,
+    max_issue_dates: int = 2,
+    lead_days: int = 2,
+    init_source: str = "gfs",
+    init_days: str = "0,3",
+    season_start: str = "05-01",
+    gcs_bucket: str = "",
+    reset: bool = False,
+) -> None:
+    """Run one model's season through the store sweep, GPU rollouts, and CPU
+    assembly with this checkout's code (an ephemeral app, no deploy needed).
+
+    Without --gcs-bucket the trajectories go to the Volume store, so the shared
+    GCS store is untouched. Run it twice: the second run should report every
+    issue date as stored and start no GPU container. --reset clears
+    the Volume store for this model first, to exercise the cold path again;
+    it cannot clear the GCS store, so it is refused with --gcs-bucket.
+
+    --lead-days keeps rollouts short (2 days is 8 steps for a 6-hourly model).
+    Short rollouts are stored under their own `lead{N}d` key, so they are never
+    served as full-length trajectories; --lead-days 45 runs the real horizon.
+
+        modal run --env staging modal/forecasts_app.py::smoke_season_forecast \\
+            --model fuxi --max-issue-dates 2 --lead-days 2 --reset
+    """
+    if reset and gcs_bucket:
+        raise SystemExit("--reset clears only the Volume store; drop --gcs-bucket for a cold run")
+    archive_metadata = {"init_days": init_days, "spatial_bounds": _parse_bounds(bounds)}
+    plan = plan_smoke_season.remote(
+        model, archive_metadata, season_start, init_source, max_issue_dates, lead_days
+    )
+    print(f"==> Planned issue dates: {plan['runs'][0]['issue_dates']}")
+    if reset:
+        print(f"==> Clearing the Volume store for {model}/{init_source}")
+        reset_volume_store.remote(model, init_source)
+
+    config = {"season_plan": plan, "gcs_cache_bucket": gcs_bucket}
+    t0 = time.perf_counter()
+    rollout_failures = roll_out_missing_dates.remote(config)
+    print(f"==> Rollouts done in {time.perf_counter() - t0:.0f}s")
+    if rollout_failures:
+        raise SystemExit(f"Rollouts failed: {rollout_failures}")
+    bundle = assemble_season_bundle.remote(f"smoke-{int(time.time())}", model, config)
+    print(f"==> Season bundle ({len(bundle) / 1e6:.1f} MB) in {time.perf_counter() - t0:.0f}s")
+    for key, value in describe_season_bundle.remote(bundle).items():
+        print(f"    {key}: {value}")

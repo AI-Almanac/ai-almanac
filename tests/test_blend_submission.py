@@ -589,11 +589,16 @@ async def _link_forecast_model(source_id: str, forecast_model_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_linking_member_data_after_training_makes_the_blend_forecastable(
-    client, user_id: str, as_new_user: dict[str, str], _stub_runner
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch
 ) -> None:
     """Archive names say nothing about the live model; the link on each member's
     data source decides, so a blend trained before linking forecasts once linked."""
+    from datetime import date
+
     from ai_almanac.server.db import get_db
+    from ai_almanac.server.services.forecast_pipeline import SeasonPlan
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 6, 15))
 
     obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
     aifs_id = await _seed_source(
@@ -631,7 +636,51 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
             .mappings()
             .fetchone()
         )
-    assert json.loads(row["config_json"])["forecast_models"] == linked
+    plan = SeasonPlan.parse(json.loads(row["config_json"])["season_plan"])
+    assert {run.member: run.model.registry_id for run in plan.runs} == linked
+    assert plan.season == 2026
+    assert all(run.issue_dates[-1] <= date(2026, 6, 15) for run in plan.runs)
+
+
+@pytest.mark.asyncio
+async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
+    client, user_id: str, _stub_runner, monkeypatch
+) -> None:
+    """With no issue dates yet there is nothing to roll out or score, so the
+    job is refused up front instead of failing after it is queued."""
+    from datetime import date
+
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 1, 15))
+    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await _seed_source(
+        "model",
+        "AIFS v2 India 0.25",
+        "gs://data/models/aifs2",
+        grid_step=0.25,
+        extra_metadata={"forecast_model_id": "aifs2"},
+    )
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="india early",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.create_forecast_for_user(
+            job_submission.ForecastCreate(blend_id=blend.id), user_id
+        )
+    assert exc.value.status_code == 409
+    assert "No issue dates" in exc.value.detail
 
 
 @pytest.mark.parametrize("link", [["aifs"], "", "  "])

@@ -1,10 +1,10 @@
 # Pixi spec for the ai-almanac live-forecast execution environment.
 #
-# Holds earth2studio, its PyTorch/CUDA stack, and the geo stack needed to
-# render Cloud-Optimized GeoTIFFs (rasterio/GDAL/PROJ). Separate from the
-# benchmark/blending environments since this is by far the heaviest of the
-# three — kept out of the default install so `pip install ai-almanac` and
-# `ai-almanac env prepare`'s other environments stay light.
+# Holds earth2studio and its PyTorch/CUDA stack, plus the netCDF/zarr stack the
+# season rollouts write and read. Separate from the benchmark/blending
+# environments since this is by far the heaviest of the three — kept out of the
+# default install so `pip install ai-almanac` and `ai-almanac env prepare`'s
+# other environments stay light.
 #
 # Multiple environments, one manifest: the AIFS model families pin mutually
 # incompatible `anemoi-models` versions (v1 needs 0.5.1, AIFS2 needs 0.9.x,
@@ -39,7 +39,7 @@ libc = { family = "glibc", version = "2.34" }
 # cuda-nvcc, and flash-attn build all on the same CUDA major.
 cuda = "13"
 
-# Shared conda base — the PyTorch/CUDA + geo stack every environment needs. Only
+# Shared conda base — the PyTorch/CUDA + netCDF stack every environment needs. Only
 # the earth2studio extras (with their conflicting anemoi pins) differ per group.
 [dependencies]
 python = "3.11.*"
@@ -51,9 +51,6 @@ pytorch = "*"
 # conda package onto the pypi requirement — and is ABI-matched to conda-forge
 # pytorch, unlike upstream's release wheels (pypi-torch-only, no py311 aarch64).
 flash-attn = "*"
-gdal = "*"
-proj = "*"
-rasterio = "*"
 netcdf4 = "<1.7.3"
 h5netcdf = "*"
 # earth2studio's gencast/graphcast extras cap xarray<2026.4.0

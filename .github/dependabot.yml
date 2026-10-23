@@ -25,6 +25,12 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # openapi-typescript's peer range stops at the current major, so a
+      # TypeScript major bump fails to resolve (ERESOLVE). Drop this once
+      # openapi-typescript supports the next major.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"

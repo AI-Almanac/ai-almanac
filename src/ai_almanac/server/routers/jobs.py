@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from ai_almanac.server.auth import AdminUser, CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
-from ai_almanac.server.services import blend_cells, derived_outputs, job_access
+from ai_almanac.server.services import blend_cells, blend_summaries, derived_outputs, job_access
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.blend_cells import BlendCellMetrics
@@ -281,9 +281,6 @@ def _build_blend_forecast(job_id: str, artifact: dict, view: ForecastView) -> by
     return json.dumps(parse_blend_forecast(text, view.columns)).encode() if text else None
 
 
-_BLEND_SUMMARY_PREFIXES = {"pooled": "summary_models_pooled", "yearly": "yearly_metrics_global"}
-
-
 @router.get("/{job_id}/blend-summary")
 async def get_blend_summary(
     job_id: str, job: ReadableJob, table: Literal["pooled", "yearly"] = "pooled"
@@ -295,21 +292,9 @@ async def get_blend_summary(
     the client (mirroring how metrics read outputs).
     """
     _require_complete(job)
-    prefix = _BLEND_SUMMARY_PREFIXES[table]
-    summary = next(
-        (
-            a
-            for a in await list_job_artifacts(job_id)
-            if a["filename"].startswith(prefix) and a["filename"].endswith(".csv")
-        ),
-        None,
-    )
-    if summary is None:
-        return {"csv": ""}
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
-    )
-    return {"csv": text or ""}
+    return {
+        "csv": await blend_summaries.read_summary(job_id, await list_job_artifacts(job_id), table)
+    }
 
 
 @router.get("/{job_id}/blend-cell-metrics")
@@ -328,27 +313,9 @@ async def get_blend_cell_metrics(
     offers no choice.
     """
     _require_complete(job)
-    summary = next(
-        (
-            a
-            for a in await list_job_artifacts(job_id)
-            if blend_cells.is_per_cell_summary(a["filename"])
-        ),
-        None,
-    )
-    if summary is None:
-        return blend_cells.build_cell_metrics(
-            job_id, "", region_id=_job_region_id(job), model=model
-        )
-    text = await asyncio.to_thread(
-        get_storage().read_result_text, job_id, summary["kind"], summary["filename"]
-    )
+    text = await blend_summaries.read_summary(job_id, await list_job_artifacts(job_id), "cells")
     return await asyncio.to_thread(
-        blend_cells.build_cell_metrics,
-        job_id,
-        text or "",
-        region_id=_job_region_id(job),
-        model=model,
+        blend_cells.build_cell_metrics, job_id, text, region_id=_job_region_id(job), model=model
     )
 
 

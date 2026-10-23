@@ -14,11 +14,19 @@ import re
 import uuid
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
-from typing import NamedTuple
+from typing import Annotated, NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    ValidationError,
+    model_validator,
+)
 
 from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
@@ -30,6 +38,14 @@ from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     linked_forecast_model_id,
     live_forecast_compatibility,
+    parse_init_source,
+)
+from ai_almanac.server.services.forecast_pipeline import (
+    ArchiveLayout,
+    ForecastModel,
+    PlanError,
+    SeasonPlan,
+    plan_season,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
@@ -50,6 +66,7 @@ from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
     blend_model_key,
+    forecast_model_by_id,
     get_packaged_forecast_models,
     settings,
 )
@@ -338,6 +355,41 @@ def onset_param_errors(
     return errors
 
 
+class DayLevelSettings(BaseModel):
+    """How the day-level blend is cross-validated and how its forest grows.
+
+    Every setting is optional and forwarded only when given, so an unset one
+    keeps the day-level run's default: one CV year out per fold, and
+    onset_forest.ForestParams' own forest settings. Holding several CV years
+    out per fold cuts the forests fitted (and run time) by that factor, at the
+    cost of training on fewer years per fold; the week-level blend still
+    leaves one year out at a time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    years_per_fold: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="CV holdout years held out together per day-level fold, in "
+        "contiguous blocks; 1 (the default) leaves one year out at a time.",
+    )
+    trees: int | None = Field(default=None, ge=10, le=500, description="Trees in the forest.")
+    max_depth: int | None = Field(
+        default=None, ge=1, le=64, description="Deepest a tree may grow; unset for no limit."
+    )
+    min_samples_leaf: int | None = Field(
+        default=None, ge=1, le=1000, description="Fewest training rows a leaf may hold."
+    )
+    max_samples: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Share of the training rows each tree's bootstrap sample draws.",
+    )
+
+
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
@@ -367,6 +419,8 @@ class BlendParams(BaseModel):
         "onset-before-reference probability is scored against.",
     )
     focus_area: FocusArea | None = None
+    # Omitted, the day-level blend trains with DayLevelSettings' defaults.
+    day_level: DayLevelSettings | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -418,6 +472,12 @@ class BlendOut(BaseModel):
     forecast_models: dict[str, str] = {}
     # Years kept out of every fit, so results can show their scores apart.
     true_holdout_years: list[int] = []
+    # The day-level blend, when it trains in its own run alongside this one:
+    # "running" (the blend can be complete while it still trains), then
+    # "complete", "failed", or "canceled". None when it trains with the blend
+    # or not at all.
+    day_level_status: str | None = None
+    day_level_error: str | None = None
 
 
 _blend_model_key = blend_model_key
@@ -821,6 +881,8 @@ def blend_row_to_out(
         true_holdout_years=_years_or_empty(
             (cfg.get("blend_params") or {}).get("true_holdout_years")
         ),
+        day_level_status=row.get("day_level_status"),
+        day_level_error=row.get("day_level_error"),
     )
 
 
@@ -1026,10 +1088,58 @@ class ForecastParams(BaseModel):
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
     # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: str = "gfs"
+    init_source: Annotated[str, AfterValidator(parse_init_source)] = "gfs"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
-    max_issue_dates: int | None = None
+    max_issue_dates: Annotated[int, Field(ge=1)] | None = None
+
+
+def utc_today() -> date:
+    """The date a forecast is planned against; the one clock read in planning."""
+    return datetime.now(UTC).date()
+
+
+def plan_live_season(
+    members: list[str],
+    sources_by_name: Mapping[str, dict | None],
+    registry: dict,
+    blend_config: dict,
+    params: ForecastParams,
+    *,
+    today: date,
+) -> SeasonPlan:
+    """The frozen season plan a forecast job executes (see SeasonPlan).
+
+    Each member runs the registry model its archive links to, laid out like that
+    archive — cadence, units, extent — so the live season has the shape the
+    blend was trained on. Issue dates start at the blend's monsoon cutoff.
+    """
+    try:
+        inputs = {
+            name: (
+                _member_forecast_model(name, sources_by_name.get(name) or {}, registry),
+                ArchiveLayout.parse((sources_by_name.get(name) or {}).get("metadata") or {}),
+            )
+            for name in members
+        }
+        return plan_season(
+            inputs,
+            season=today.year,
+            season_start_month_day=(blend_config.get("blend_params") or {}).get("cutoff_month_day")
+            or "05-01",
+            init_source=params.init_source,
+            today=today,
+            max_issue_dates=params.max_issue_dates,
+        )
+    except PlanError as exc:
+        raise HTTPException(status_code=409, detail=f"This forecast can't run: {exc}") from exc
+
+
+def _member_forecast_model(member: str, source: dict, registry: dict) -> ForecastModel:
+    entry = forecast_model_by_id(registry, linked_forecast_model_id(source))
+    if entry is None:
+        raise PlanError(f"{member} isn't linked to a live forecast model")
+    return ForecastModel.parse(entry)
 
 
 def forecast_generation_gpus(model_ready: dict[str, bool]) -> int:
@@ -1178,40 +1288,22 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         )
     lead_hours = body.params.lead_hours or list(registry.get("default_lead_hours") or [])
 
-    # The season-long scoring loop (run_season_forecast) needs each model's
-    # archived issue-day cadence, unit conversion, and spatial extent so its
-    # output matches the shape/units the blend was trained against — these
-    # live on the original archived data source, not the live registry.
-    from ai_almanac.server.services.forecast_pipeline import (
-        season_covered_dates,
-        shared_issue_schedule,
+    plan = plan_live_season(
+        forecast_model_ids,
+        sources_by_name,
+        registry,
+        blend_config,
+        body.params,
+        today=utc_today(),
     )
-
-    season_model_params: dict[str, dict] = {}
-    for name in forecast_model_ids:
-        metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
-        season_model_params[name] = {
-            "init_days": metadata.get("init_days") or "0,3",
-            # The archive's fixed calendar (MM-DD) issue-date schedule, when
-            # inferred at registration. Preferred over init_days weekdays so a
-            # live rollout reproduces the training dates (see season_issue_dates).
-            "init_month_days": metadata.get("init_month_days"),
-            "unit_cvt": metadata.get("unit_cvt", 1.0),
-            "spatial_bounds": metadata.get("spatial_bounds"),
-        }
-    season_model_params = shared_issue_schedule(season_model_params)
-
-    # The season loop must start counting issue dates from the same monsoon
-    # cutoff the blend was trained against, not an unrelated hardcoded date.
-    season_start_month_day = (blend_config.get("blend_params") or {}).get(
-        "cutoff_month_day"
-    ) or "05-01"
 
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
-    # when cold) and every later run scores against the cache for free.
-    init_source = body.params.init_source or "gfs"
-    season = str(datetime.now(UTC).year)
+    # when cold) and every later run scores against the cache for free. The
+    # coverage markers record the same plan, so a set they mark complete
+    # satisfies this gate on the next run.
+    init_source = plan.init_source
+    season = str(plan.season)
     from ai_almanac.paths import cache_dir as _cache_dir
 
     season_store_prefix = (
@@ -1219,19 +1311,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         if settings.shared_cache_dir
         else f"{_cache_dir()}/season-forecasts"
     )
-
-    # Same computation the completion markers use, so a set the rollout marks
-    # complete actually satisfies this gate on the next run (see
-    # season_covered_dates).
-    needed = season_covered_dates(
-        {
-            "season": season,
-            "season_start_month_day": season_start_month_day,
-            "season_model_params": season_model_params,
-            "forecast_model_ids": forecast_model_ids,
-            "max_issue_dates": body.params.max_issue_dates,
-        }
-    )
+    needed = plan.covered_dates()
     async with get_db() as conn:
         model_ready = {
             name: await trajectory_sets.set_is_ready(
@@ -1256,15 +1336,10 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         # retroactively change a forecast job already queued.
         "blend_config_snapshot": blend_config,
         "forecast_model_ids": forecast_model_ids,
-        # Member name → registry id the runners execute for it.
-        "forecast_models": {
-            name: linked_forecast_model_id(sources_by_name[name] or {})
-            for name in forecast_model_ids
-        },
-        "season_model_params": season_model_params,
-        "season_start_month_day": season_start_month_day,
+        # What the runners execute and the coverage markers record. The fields
+        # beside it are the request as submitted, kept for display and re-runs.
+        "season_plan": plan.to_dict(),
         "init_source": init_source,
-        "season": season,
         "max_issue_dates": body.params.max_issue_dates,
         "region_id": blend_config.get("region_id"),
         "init_time": body.params.init_time,
@@ -1388,16 +1463,31 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     body = ForecastCreate(
         blend_id=cfg.get("blend_id") or "",
         forecast_model_ids=cfg.get("forecast_model_ids") or None,
-        params=ForecastParams(
-            init_time=cfg.get("init_time"),
-            init_source=cfg.get("init_source") or "gfs",
-            max_issue_dates=cfg.get("max_issue_dates"),
-            lead_hours=cfg.get("lead_hours"),
-            variables=cfg.get("variables"),
-        ),
+        params=_saved_forecast_params(cfg),
         run_id=row["run_id"],
     )
     return await create_forecast_for_user(body, user_id)
+
+
+def _saved_forecast_params(cfg: dict) -> ForecastParams:
+    """The request a stored forecast was submitted with. Jobs saved before a
+    setting was restricted (e.g. an init source no longer offered) can't be
+    re-run as they were, so they are refused rather than silently changed."""
+    try:
+        return ForecastParams(
+            init_time=cfg.get("init_time"),
+            init_source=cfg.get("init_source") or "gfs",
+            # Older jobs saved 0 to mean "no trim", which None now means.
+            max_issue_dates=cfg.get("max_issue_dates") or None,
+            lead_hours=cfg.get("lead_hours"),
+            variables=cfg.get("variables"),
+        )
+    except ValidationError as exc:
+        fields = ", ".join(sorted({str(error["loc"][0]) for error in exc.errors()}))
+        raise HTTPException(
+            status_code=409,
+            detail=f"This forecast can't be updated: its saved {fields} is no longer supported.",
+        ) from exc
 
 
 class InvalidBenchmarkSettings(ValueError):
