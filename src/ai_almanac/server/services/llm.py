@@ -222,8 +222,42 @@ def _trim_tool_content(value: object) -> object:
     if isinstance(value, list):
         return [_trim_tool_content(item) for item in value]
     if isinstance(value, dict):
-        return {key: _trim_tool_content(item) for key, item in value.items() if key != "artifacts"}
+        return {
+            key: _without_outline(item) if key == "focus_area" else _trim_tool_content(item)
+            for key, item in value.items()
+            if key != "artifacts"
+        }
     return value
+
+
+def _without_outline(focus_area: object) -> object:
+    """An area of interest without its GeoJSON outline, which can run to megabytes.
+
+    The level and unit names say what the area is; the outline is for drawing it.
+    """
+    if not isinstance(focus_area, dict):
+        return _trim_tool_content(focus_area)
+    return _trim_tool_content({key: item for key, item in focus_area.items() if key != "geometry"})
+
+
+# One tool result may take this many times the per-string cap in total, and at
+# least the floor. String trimming alone misses bulk made of numbers and
+# nesting, such as an outline; the largest useful results (a run's metrics) are
+# about 19K characters.
+_TOOL_RESULT_TOTAL_FACTOR = 3
+_TOOL_RESULT_TOTAL_FLOOR = 32_000
+
+
+def _compact_tool_content(value: object) -> object:
+    """A tool result as the model sees it: trimmed, and capped as a whole."""
+    trimmed = _trim_tool_content(value)
+    cap = max(
+        settings.llm_tool_result_max_chars * _TOOL_RESULT_TOTAL_FACTOR, _TOOL_RESULT_TOTAL_FLOOR
+    )
+    text = trimmed if isinstance(trimmed, str) else json.dumps(trimmed, default=str)
+    if len(text) <= cap:
+        return trimmed
+    return f"{text[:cap]}\n\n{_TRUNCATED_TOOL_RESULT}"
 
 
 async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
@@ -237,7 +271,7 @@ async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
             trimmed.append(message)
             continue
         parts = [
-            replace(part, content=_trim_tool_content(part.content))
+            replace(part, content=_compact_tool_content(part.content))
             if isinstance(part, ToolReturnPart)
             else part
             for part in message.parts
