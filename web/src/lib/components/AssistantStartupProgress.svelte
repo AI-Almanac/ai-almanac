@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { AssistantStartup } from '$lib/api';
-	import { formatElapsed, startupSteps } from '$lib/chat/startup';
+	import { formatElapsed, startupOverall, startupSteps } from '$lib/chat/startup';
 
 	let { progress }: { progress: AssistantStartup } = $props();
 
 	const steps = $derived(startupSteps(progress));
 	const elapsed = $derived(formatElapsed(progress.elapsed_seconds));
+	const overall = $derived(startupOverall(progress));
 </script>
 
 <div class="startup" role="status" aria-live="polite">
@@ -13,6 +14,20 @@
 		<strong>Starting the assistant</strong>
 		{#if elapsed}<span class="elapsed">{elapsed}</span>{/if}
 	</div>
+	{#if overall}
+		<div class="overall">
+			<span
+				class="bar overall-bar"
+				role="progressbar"
+				aria-label="Overall startup progress"
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={Math.round(overall.fraction * 100)}
+				><span style={`width: ${Math.round(overall.fraction * 100)}%`}></span></span
+			>
+			<span class="overall-label">{overall.label}</span>
+		</div>
+	{/if}
 	<p class="note">Your message is queued and will be answered as soon as the model is ready.</p>
 	{#if progress.previous_failure}
 		<p class="retry">The last start failed ({progress.previous_failure}); trying again.</p>
@@ -111,6 +126,18 @@
 	.detail,
 	.hint {
 		font-weight: 400;
+		color: var(--color-text-muted);
+		font-size: 0.8rem;
+	}
+	.overall {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.bar.overall-bar {
+		height: 0.45rem;
+	}
+	.overall-label {
 		color: var(--color-text-muted);
 		font-size: 0.8rem;
 	}

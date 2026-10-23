@@ -177,8 +177,16 @@ export type AssistantStartup = {
 	stage: 'starting' | 'loading_weights' | 'compiling' | 'capturing' | 'tuning' | 'finishing';
 	elapsed_seconds: number | null;
 	detail: string | null;
+	// The bar for the work in hand (one tuning pass, the graph captures).
 	done: number | null;
 	total: number | null;
+	// Tuning: passes run, and how many the last start with these settings ran.
+	passes_done: number | null;
+	passes_expected: number | null;
+	// 0–1 through the whole start; measured against the last start's timeline
+	// when `expected_seconds` (its length) is set, otherwise a rough stage count.
+	overall: number | null;
+	expected_seconds: number | null;
 	// Why the previous launch failed, when this turn is waiting on a retry.
 	previous_failure: string | null;
 };
