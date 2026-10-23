@@ -33,7 +33,11 @@ from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import boundaries, day_level_blends, guardrails, trajectory_sets
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
-from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.execution import (
+    ExecutionRequest,
+    ResourceRequest,
+    RunnerHandle,
+)
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
@@ -869,6 +873,21 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
     return source
 
 
+async def _record_submission(job_id: str, handle: RunnerHandle) -> None:
+    """Persist the runner handle once submit returns.
+
+    The local runner's supervisor advances status itself; a remote runner is
+    already executing once spawned, so its job moves to running — but only from
+    queued. A cancel that landed while submit was in flight must win, and the
+    handle must still be stored so the reconciler can cancel the remote call.
+    """
+    values: dict = {"runner_handle": handle.as_dict()}
+    if handle.runner != "local":
+        values["status"] = sa.case((jobs.c.status == "queued", "running"), else_=jobs.c.status)
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+
+
 async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     """Submit a blend-training job: prepare intermediates and train weights."""
     if not body.model_ids:
@@ -971,6 +990,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "warnings": warnings,
     }
 
+    runner = get_job_runner()
     async with get_db() as conn:
         await lock_for_update(conn)
         await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
@@ -994,6 +1014,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                 dataset_id=body.obs_dataset_id,
                 job_type="blend",
                 status="queued",
+                runner=runner.name,
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
@@ -1020,7 +1041,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         )
 
     try:
-        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+        handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
         async with get_db() as conn:
             await conn.execute(
@@ -1034,11 +1055,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
             )
         raise HTTPException(status_code=400, detail=f"Blend submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return blend_row_to_out(row, user_id, {source["id"]: source for source in model_sources})
 
 
@@ -1363,6 +1380,7 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
+    runner = get_job_runner()
     async with get_db() as conn:
         await lock_for_update(conn)
         await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
@@ -1386,6 +1404,7 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
                 dataset_id=job.dataset_id,
                 job_type="forecast",
                 status="queued",
+                runner=runner.name,
                 config_json=json.dumps(job.config),
                 run_id=job.run_id,
                 created_at=now,
@@ -1424,7 +1443,7 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
         )
 
     try:
-        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+        handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
         async with get_db() as conn:
             await conn.execute(
@@ -1438,11 +1457,7 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
             )
         raise HTTPException(status_code=400, detail=f"Forecast submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return forecast_row_to_out(row, user_id)
 
 
@@ -1710,6 +1725,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "romp_params": romp_params,
     }
 
+    runner = get_job_runner()
     async with get_db() as conn:
         # On SQLite this takes the write lock up front; on PostgreSQL the
         # FOR UPDATE below serializes concurrent submissions per user.
@@ -1739,6 +1755,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
                 user_id=user_id,
                 dataset_id=body.dataset_id,
                 status="queued",
+                runner=runner.name,
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
@@ -1768,7 +1785,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     # Remote runners (Modal) have no local workspace; only the local runner does.
     workspace = storage.job_dir(job_id) if storage.is_local else None
     try:
-        handle = await get_job_runner().submit(
+        handle = await runner.submit(
             ExecutionRequest(
                 job_id=job_id,
                 workspace=workspace,
@@ -1789,11 +1806,5 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             )
         raise HTTPException(status_code=400, detail=f"Job submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    # The local runner's supervisor advances status itself; a remote runner is
-    # already executing once spawned, and the reconciler tracks it from here.
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return row_to_job_out(row, user_id, catalog)

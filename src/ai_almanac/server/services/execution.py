@@ -69,6 +69,7 @@ class RunnerHandle:
 class ExecutionSnapshot:
     status: str  # queued|starting|running|canceling|complete|failed|canceled|unknown
     exit_code: int | None = None
+    detail: str | None = None  # why the status is unknown, for logs
 
 
 class JobRunner(Protocol):
