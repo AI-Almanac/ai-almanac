@@ -11,7 +11,7 @@ registry.
 from __future__ import annotations
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 
 from ai_almanac.server.auth import (
     AdminUser,
@@ -28,6 +28,7 @@ from ai_almanac.server.services.forecast_models import (
 from ai_almanac.server.services.job_submission import (
     ForecastCreate,
     ForecastOut,
+    ForecastRefreshOut,
     create_forecast_for_user,
     forecast_row_to_out,
     refresh_forecast_for_user,
@@ -49,12 +50,16 @@ async def create_forecast(body: ForecastCreate, user: CurrentUser):
 
 @router.post(
     "/{forecast_id}/refresh",
-    response_model=ForecastOut,
+    response_model=ForecastRefreshOut,
     status_code=status.HTTP_201_CREATED,
 )
-async def refresh_forecast(forecast_id: str, user: CurrentUser):
-    """Re-run a forecast with its original spec so it reuses the cached season."""
-    return await refresh_forecast_for_user(forecast_id, user.id)
+async def refresh_forecast(forecast_id: str, user: CurrentUser, response: Response):
+    """Re-run a forecast with its original spec so it reuses the cached season.
+    An up-to-date forecast starts no run and answers 200 with itself."""
+    refreshed = await refresh_forecast_for_user(forecast_id, user.id)
+    if refreshed.up_to_date:
+        response.status_code = status.HTTP_200_OK
+    return refreshed
 
 
 @router.get("/trajectories")

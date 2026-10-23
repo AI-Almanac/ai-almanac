@@ -13,6 +13,7 @@ import math
 import re
 import uuid
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Annotated, NamedTuple
 
@@ -29,7 +30,7 @@ from pydantic import (
 )
 
 from ai_almanac.server.db import get_db, lock_for_update
-from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
+from ai_almanac.server.services import boundaries, day_level_blends, guardrails, trajectory_sets
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
@@ -1178,18 +1179,53 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
     return dict(row)
 
 
+class ForecastRefreshOut(BaseModel):
+    forecast: ForecastOut
+    # True when nothing the forecast scores has changed since it ran, so no new
+    # run was started and `forecast` is the one that was asked to update.
+    up_to_date: bool
+
+
+@dataclass(frozen=True)
+class ForecastJob:
+    """A forecast job built from a request, ready to submit."""
+
+    dataset_id: str
+    run_id: str | None
+    plan: SeasonPlan
+    config: dict
+
+
+# What a forecast's scores depend on: the seasons it rolls out, the blend it
+# scores them against, and whether that blend's day-level forest had landed
+# (live scoring applies the forest only once it exists).
+_SCORED_INPUTS = ("season_plan", "blend_config_snapshot", "blend_day_level_completed_at")
+
+
+def scores_same_inputs(config: dict, saved_config: dict) -> bool:
+    """Whether a forecast job config scores exactly what a saved one already
+    scored. Compared as JSON, the form a saved config is read back in."""
+
+    def scored(cfg: dict) -> dict:
+        return json.loads(json.dumps({key: cfg.get(key) for key in _SCORED_INPUTS}))
+
+    return scored(config) == scored(saved_config)
+
+
+def _day_level_completed_at(blend_row: dict) -> str | None:
+    if blend_row.get("day_level_status") != day_level_blends.COMPLETE:
+        return None
+    return blend_row.get("day_level_completed_at")
+
+
 async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
-    """Submit a live-forecast job: run the blend's models forward and score them.
+    """Submit a live-forecast job: run the blend's models forward and score them."""
+    return await submit_forecast_job(await build_forecast_job(body, user_id), user_id)
 
-    A run whose season is fully cached scores for free (GPU-free); any run that
-    needs a rollout — a cold model's full season or a stale set's gap-fill —
-    requests one GPU. See forecast_generation_gpus.
 
-    Works with either job runner: locally via the `forecast` pixi environment
-    (envs/forecast_entrypoint.py, requires a GPU host — see the
-    `self-host-local-gpu` deployment profile) or via the Modal app, exactly
-    like blend/benchmark submission already does.
-    """
+async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
+    """The forecast job a request asks for: its blend and members checked, its
+    season planned as of today, and its job config frozen."""
     blend_row = await _resolve_parent_blend(body.blend_id, user_id)
     blend_config = json.loads(blend_row.get("config_json") or "{}")
     # Where the blend's training run published its artifacts. The live-scoring
@@ -1260,19 +1296,58 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         today=utc_today(),
     )
 
+    config = {
+        "job_type": "forecast",
+        "modal_app": settings.modal_forecast_app_name,
+        "modal_function": settings.modal_forecast_function_name,
+        "blend_id": body.blend_id,
+        # Frozen at submission time so a later edit to the blend doesn't
+        # retroactively change a forecast job already queued.
+        "blend_config_snapshot": blend_config,
+        "blend_day_level_completed_at": _day_level_completed_at(blend_row),
+        "forecast_model_ids": forecast_model_ids,
+        # What the runners execute and the coverage markers record. The fields
+        # beside it are the request as submitted, kept for display and re-runs.
+        "season_plan": plan.to_dict(),
+        "init_source": plan.init_source,
+        "max_issue_dates": body.params.max_issue_dates,
+        "region_id": blend_config.get("region_id"),
+        "init_time": body.params.init_time,
+        "lead_hours": lead_hours,
+        "variables": variables,
+        "gcs_cache_bucket": settings.gcs_data_bucket,
+    }
+    return ForecastJob(
+        dataset_id=blend_row["dataset_id"], run_id=body.run_id, plan=plan, config=config
+    )
+
+
+async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
+    """Queue a built forecast job and hand it to the job runner.
+
+    A run whose season is fully cached scores for free (GPU-free); any run that
+    needs a rollout — a cold model's full season or a stale set's gap-fill —
+    requests one GPU. See forecast_generation_gpus.
+
+    Works with either job runner: locally via the `forecast` pixi environment
+    (envs/forecast_entrypoint.py, requires a GPU host — see the
+    `self-host-local-gpu` deployment profile) or via the Modal app, exactly
+    like blend/benchmark submission already does.
+    """
+    forecast_model_ids: list[str] = job.config["forecast_model_ids"]
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
     # when cold) and every later run scores against the cache for free. The
     # coverage markers record the same plan, so a set they mark complete
     # satisfies this gate on the next run.
-    init_source = plan.init_source
-    season = str(plan.season)
+    init_source = job.plan.init_source
+    season = str(job.plan.season)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
         if settings.gcs_data_bucket
         else "season-forecasts"
     )
-    needed = plan.covered_dates()
+    needed = job.plan.covered_dates()
     async with get_db() as conn:
         model_ready = {
             name: await trajectory_sets.set_is_ready(
@@ -1288,27 +1363,6 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    config = {
-        "job_type": "forecast",
-        "modal_app": settings.modal_forecast_app_name,
-        "modal_function": settings.modal_forecast_function_name,
-        "blend_id": body.blend_id,
-        # Frozen at submission time so a later edit to the blend doesn't
-        # retroactively change a forecast job already queued.
-        "blend_config_snapshot": blend_config,
-        "forecast_model_ids": forecast_model_ids,
-        # What the runners execute and the coverage markers record. The fields
-        # beside it are the request as submitted, kept for display and re-runs.
-        "season_plan": plan.to_dict(),
-        "init_source": init_source,
-        "max_issue_dates": body.params.max_issue_dates,
-        "region_id": blend_config.get("region_id"),
-        "init_time": body.params.init_time,
-        "lead_hours": lead_hours,
-        "variables": variables,
-        "gcs_cache_bucket": settings.gcs_data_bucket,
-    }
-
     async with get_db() as conn:
         await lock_for_update(conn)
         await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
@@ -1329,11 +1383,11 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             .values(
                 id=job_id,
                 user_id=user_id,
-                dataset_id=blend_row["dataset_id"],
+                dataset_id=job.dataset_id,
                 job_type="forecast",
                 status="queued",
-                config_json=json.dumps(config),
-                run_id=body.run_id,
+                config_json=json.dumps(job.config),
+                run_id=job.run_id,
                 created_at=now,
                 runner_request={"job_id": job_id, "resources": {"gpus": gpus}},
             )
@@ -1358,7 +1412,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             user_id=user_id,
             resource_type="job",
             resource_id=job_id,
-            metadata={"blend_id": body.blend_id, "forecast_model_ids": forecast_model_ids},
+            metadata={"blend_id": job.config["blend_id"], "forecast_model_ids": forecast_model_ids},
         )
         await usage(
             conn,
@@ -1392,8 +1446,9 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     return forecast_row_to_out(row, user_id)
 
 
-async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastOut:
-    """Re-run an existing forecast with its ORIGINAL generation parameters.
+async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastRefreshOut:
+    """Re-run an existing forecast with its ORIGINAL generation parameters,
+    unless it already scored everything a re-run would.
 
     The season rollout is cumulative and cache-backed, so an "update" should
     land on the same trajectory set as the first run — reusing every cached
@@ -1402,15 +1457,17 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     falling back to submission defaults would target a different set (e.g. the
     full season instead of the original's recent-N window) and miss the cache.
     Mirrors the benchmark rerun path: read the frozen config, rebuild the
-    request, delegate to create_forecast_for_user.
+    request, and rebuild the job from it.
+
+    A completed forecast whose rebuilt job scores the same inputs (no issue
+    date has elapsed and its blend is unchanged) is returned as up to date
+    without starting a run: a re-run would only reproduce it.
     """
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    sa.select(
-                        jobs.c.user_id, jobs.c.config_json, jobs.c.visibility, jobs.c.run_id
-                    ).where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
+                    sa.select(jobs).where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
                 )
             )
             .mappings()
@@ -1428,7 +1485,10 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
         params=_saved_forecast_params(cfg),
         run_id=row["run_id"],
     )
-    return await create_forecast_for_user(body, user_id)
+    job = await build_forecast_job(body, user_id)
+    if row["status"] == "complete" and scores_same_inputs(job.config, cfg):
+        return ForecastRefreshOut(forecast=forecast_row_to_out(dict(row), user_id), up_to_date=True)
+    return ForecastRefreshOut(forecast=await submit_forecast_job(job, user_id), up_to_date=False)
 
 
 def _saved_forecast_params(cfg: dict) -> ForecastParams:

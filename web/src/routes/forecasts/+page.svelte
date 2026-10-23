@@ -177,6 +177,8 @@
 	});
 
 	let actionError = $state<string | null>(null);
+	// The forecast an update found already current; its notice shows while it stays selected.
+	let upToDateId = $state<string | null>(null);
 
 	async function cancelForecast(id: string) {
 		actionError = null;
@@ -355,9 +357,14 @@
 		if (!selected || updating) return;
 		updating = true;
 		actionError = null;
+		upToDateId = null;
 		try {
-			const forecast = await refreshForecastRun(selected.id);
-			forecasts = [forecast, ...forecasts];
+			const { forecast, up_to_date } = await refreshForecastRun(selected.id);
+			if (up_to_date) {
+				upToDateId = forecast.id;
+			} else {
+				forecasts = [forecast, ...forecasts];
+			}
 			selectedId = forecast.id;
 		} catch (err) {
 			actionError = friendlyError(err);
@@ -600,6 +607,12 @@
 
 				{#if actionError}
 					<p class="error">{actionError}</p>
+				{/if}
+
+				{#if upToDateId === selected.id}
+					<p class="notice muted">
+						Already up to date — no new forecast data is available since this forecast ran.
+					</p>
 				{/if}
 
 				{#if newerRunFailed}

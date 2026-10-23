@@ -805,6 +805,7 @@ export interface paths {
         /**
          * Refresh Forecast
          * @description Re-run a forecast with its original spec so it reuses the cached season.
+         *     An up-to-date forecast starts no run and answers 200 with itself.
          */
         post: operations["refresh_forecast_forecasts__forecast_id__refresh_post"];
         delete?: never;
@@ -3163,6 +3164,12 @@ export interface components {
             init_source: string;
             /** Max Issue Dates */
             max_issue_dates?: number | null;
+        };
+        /** ForecastRefreshOut */
+        ForecastRefreshOut: {
+            forecast: components["schemas"]["ForecastOut"];
+            /** Up To Date */
+            up_to_date: boolean;
         };
         /** FsEntry */
         FsEntry: {
@@ -6514,7 +6521,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ForecastOut"];
+                    "application/json": components["schemas"]["ForecastRefreshOut"];
                 };
             };
             /** @description Validation Error */
