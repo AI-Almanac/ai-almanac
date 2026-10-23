@@ -49,8 +49,11 @@ def _run_pixi(job_id: str, config: dict) -> None:
     env = build_job_env(config, output_dir_raw, figure_dir_raw)
     process_env = os.environ.copy()
     process_env.update(env)
+    # Kept under the data dir so the borders survive container rebuilds.
+    process_env["CARTOPY_DATA_DIR"] = str(cache_dir() / "cartopy")
 
     print(f"==> Benchmark config: {config_path}", flush=True)
+    _prefetch_boundaries(process_env)
     print("==> Starting onset scoring...", flush=True)
     process = pixi_run(["momp-run", "-p", str(config_path)], env=process_env)
     _stream_process(process)
@@ -67,6 +70,22 @@ def _run_pixi(job_id: str, config: dict) -> None:
                 "Onset scores are still available.",
                 flush=True,
             )
+
+
+def _prefetch_boundaries(process_env: dict) -> None:
+    """Fetch the country borders once, so ROMP's parallel workers don't race to download them.
+
+    A failure is left for ROMP to report: runs that don't mask by country never need them.
+    """
+    script = Path(__file__).parents[2] / "envs" / "prefetch_boundaries.py"
+    try:
+        _stream_process(pixi_run(["python", str(script)], env=process_env))
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"WARNING: Could not download country borders (exit code {exc.returncode}); "
+            "continuing.",
+            flush=True,
+        )
 
 
 def _run_blend(job_id: str, config: dict) -> None:

@@ -120,12 +120,39 @@ def test_benchmark_workload_hands_romp_a_config_of_the_job_inputs(
 
     job_workload._run_pixi("job-1", _job_config())
 
-    (command,) = commands
+    (command,) = [command for command in commands if command[0] == "momp-run"]
     config_path = next(Path(arg) for arg in command if arg.endswith(".in"))
     namespace: dict = {}
     exec(config_path.read_text(), {}, namespace)
     assert namespace["model_list"] == ("fuxi",)
     assert namespace["obs_dir"] == "/data/observations with spaces"
+
+
+@pytest.mark.parametrize("prefetch_exit_code", [0, 1])
+def test_country_borders_are_fetched_once_before_romps_workers_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefetch_exit_code: int
+) -> None:
+    runs: list[tuple[list[str], dict]] = []
+
+    def fake_pixi_run(command: list[str], env=None) -> _Process:
+        runs.append((command, env))
+        prefetch = command[-1].endswith("prefetch_boundaries.py")
+        return _Process(exit_code=prefetch_exit_code if prefetch else 0)
+
+    monkeypatch.setattr(
+        job_workload, "get_storage", lambda: _local_storage(tmp_path / "out", tmp_path / "fig")
+    )
+    monkeypatch.setattr(job_workload, "pixi_run", fake_pixi_run)
+
+    job_workload._run_pixi("job-1", _job_config())
+
+    # A failed fetch is left for ROMP to report, since not every run masks by country.
+    (prefetch, prefetch_env), (romp, romp_env) = runs
+    assert Path(prefetch[-1]).is_file()
+    assert romp[0] == "momp-run"
+    # The workers read the borders from where the fetch put them, under the data dir.
+    assert prefetch_env["CARTOPY_DATA_DIR"] == romp_env["CARTOPY_DATA_DIR"]
+    assert Path(romp_env["CARTOPY_DATA_DIR"]) == job_workload.cache_dir() / "cartopy"
 
 
 @pytest.mark.parametrize("workload", ["benchmark", "blend"])
