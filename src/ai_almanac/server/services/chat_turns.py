@@ -14,12 +14,18 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from pydantic_ai import DeferredToolResults, ToolDenied
-from pydantic_ai.messages import ModelRequest, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db, lock_for_update
@@ -342,6 +348,96 @@ async def resume_deferred_setup_tool(
     return final_provider_state, payload
 
 
+class TurnStopped(Exception):
+    """The user asked to stop the reply being streamed."""
+
+
+# Replies this process is streaming, by session: (assistant turn id, stop signal).
+# A stop reaches the reply through this, so it works from any page, not only
+# the one holding the stream.
+_running_turns: dict[str, tuple[str, asyncio.Event]] = {}
+
+
+def request_stop(session_id: str) -> bool:
+    """Ask the reply streaming in this session to stop. False if none is, here."""
+    running = _running_turns.get(session_id)
+    if running is None:
+        return False
+    running[1].set()
+    return True
+
+
+async def _next_event_or_stop(events: AsyncIterator[str], stop: asyncio.Event) -> str:
+    """The stream's next event, or TurnStopped if a stop is asked for first.
+
+    The pending read is cancelled on a stop, which closes the request to the
+    model, so it stops generating at once rather than after its next token.
+    """
+    if stop.is_set():
+        raise TurnStopped
+    reading = asyncio.ensure_future(anext(events))
+    stopping = asyncio.ensure_future(stop.wait())
+    try:
+        done, _ = await asyncio.wait({reading, stopping}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        reading.cancel()
+        raise
+    finally:
+        stopping.cancel()
+    if reading in done:
+        return reading.result()
+    reading.cancel()
+    with suppress(BaseException):
+        await reading
+    raise TurnStopped
+
+
+def _stopped_turn(turn: ChatTurn) -> ChatTurn:
+    """The turn as saved after a stop: what it said, and tool calls it cut short."""
+    calls = [
+        call.model_copy(update={"status": "failed"})
+        if call.status in ("pending", "running")
+        else call
+        for call in turn.tool_calls
+    ]
+    return turn.model_copy(
+        update={"status": "completed", "stopped": True, "error": None, "tool_calls": calls}
+    )
+
+
+def _stopped_turn_history(provider_state: list, prompt: str, turn: ChatTurn) -> list[dict]:
+    """The model's history after a stopped reply: the question, and a reply saying
+    what it had said and done.
+
+    A failed turn leaves the history as it was before the question, but a
+    stopped one may already have acted (started a rerun, say); without a record
+    of that the next turn would not know, and might do it again.
+    """
+    done = [call for call in turn.tool_calls if call.status in ("completed", "failed")]
+    cut_short = [call for call in turn.tool_calls if call.status in ("pending", "running")]
+    note = ["The user stopped this reply before it finished."]
+    if done:
+        note.append(
+            "Already done in it: "
+            + ", ".join(f"{call.name} ({call.status})" for call in done)
+            + "."
+        )
+    if cut_short:
+        note.append(
+            "Stopped mid-call, so possibly done or not: "
+            + ", ".join(call.name for call in cut_short)
+            + "."
+        )
+    said = turn.content.strip()
+    reply = (f"{said}\n\n" if said else "") + f"[{' '.join(note)}]"
+    messages = [
+        *provider_state,
+        ModelRequest(parts=[UserPromptPart(content=prompt)]),
+        ModelResponse(parts=[TextPart(content=reply)]),
+    ]
+    return serialize_model_messages(messages)
+
+
 async def stream_chat_turn(
     session_id: str,
     user_id: str,
@@ -430,6 +526,8 @@ async def stream_chat_turn(
 
     # --- Stream without holding a DB connection ---
     terminal_event: str | None = None
+    stop = asyncio.Event()
+    _running_turns[session_id] = (assistant_turn.id, stop)
     try:
         # `aclosing` because the loop below breaks on the terminal event, leaving
         # the LLM generator suspended. Its `finally` writes the turn log, so
@@ -450,7 +548,11 @@ async def stream_chat_turn(
                 turn_id=assistant_turn.id,
             )
         ) as llm_events:
-            async for event in llm_events:
+            while True:
+                try:
+                    event = await _next_event_or_stop(llm_events, stop)
+                except StopAsyncIteration:
+                    raise RuntimeError("Chat stream ended without a terminal event") from None
                 data = parse_llm_event(event)
                 if data is None:
                     continue
@@ -501,8 +603,27 @@ async def stream_chat_turn(
 
                 apply_stream_event(assistant_turn, data)
                 yield f"data: {event}\n\n"
-            else:
-                raise RuntimeError("Chat stream ended without a terminal event")
+    except TurnStopped:
+        stopped_turn = _stopped_turn(assistant_turn)
+        try:
+            async with get_db() as conn:
+                await _update_session_state(
+                    conn,
+                    session_id,
+                    provider_state=_stopped_turn_history(provider_state, content, assistant_turn),
+                    transcript=_replace_turn(pending_transcript, stopped_turn),
+                    updated_at=_now(),
+                    scope=scope,
+                )
+            hydrated = hydrate_turn_artifact_urls(stopped_turn, user_id)
+            terminal_event = _stream_event("stopped", turn=hydrated.model_dump(mode="json"))
+        except Exception:
+            logger.exception("Could not save the stopped turn for session %s", session_id)
+            terminal_event = _stream_event(
+                "error",
+                error_type="internal_persistence_error",
+                message="The reply was stopped but could not be saved",
+            )
     except asyncio.CancelledError as exc:
         try:
             async with get_db() as conn:
@@ -551,5 +672,9 @@ async def stream_chat_turn(
                 error_type="internal_persistence_error",
                 message="Chat response failed and could not be persisted",
             )
+    finally:
+        # Only this turn's entry: a newer turn in the session may have replaced it.
+        if _running_turns.get(session_id, (None,))[0] == assistant_turn.id:
+            del _running_turns[session_id]
     if terminal_event is not None:
         yield terminal_event

@@ -669,6 +669,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/sessions/{session_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Reply
+         * @description Stop the reply being streamed in a session, keeping what it had said.
+         */
+        post: operations["stop_reply_chat_sessions__session_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/sessions/{session_id}/turns/{turn_id}/rating": {
         parameters: {
             query?: never;
@@ -2875,6 +2895,11 @@ export interface components {
             status: "completed" | "failed" | "streaming";
             /** Error */
             error?: string | null;
+            /**
+             * Stopped
+             * @default false
+             */
+            stopped: boolean;
             /** Tool Calls */
             tool_calls?: components["schemas"]["ChatToolCall"][];
             /** Artifacts */
@@ -4862,6 +4887,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** StopOut */
+        StopOut: {
+            /** Stopped */
+            stopped: boolean;
+        };
         /** StorageInput */
         StorageInput: {
             /** Output Dir */
@@ -6551,6 +6581,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_reply_chat_sessions__session_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopOut"];
                 };
             };
             /** @description Validation Error */

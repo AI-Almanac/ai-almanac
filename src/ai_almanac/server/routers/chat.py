@@ -63,6 +63,7 @@ from ..services.chat_turns import (
     get_session_provider_scope,
     json_dict,
     json_list,
+    request_stop,
     resume_deferred_setup_tool,
     save_provider_state,
     stream_chat_turn,
@@ -687,6 +688,27 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class StopOut(BaseModel):
+    # False when no reply is streaming in this process (it finished, or another
+    # instance is serving it), in which case the client drops its connection.
+    stopped: bool
+
+
+@router.post("/sessions/{session_id}/stop", response_model=StopOut)
+async def stop_reply(session_id: str, user: CurrentUser):
+    """Stop the reply being streamed in a session, keeping what it had said."""
+    async with get_db() as conn:
+        owned = (
+            await conn.execute(
+                text("SELECT 1 FROM chat_sessions WHERE id = :id AND user_id = :uid"),
+                {"id": session_id, "uid": user.id},
+            )
+        ).fetchone()
+    if not owned:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return StopOut(stopped=request_stop(session_id))
 
 
 @router.post(

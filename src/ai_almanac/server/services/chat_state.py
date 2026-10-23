@@ -79,6 +79,9 @@ class ChatTurn(BaseModel):
     created_at: datetime
     status: Literal["streaming", "completed", "failed"] = "completed"
     error: str | None = None
+    # The user stopped this reply part way; `content` is what it had said. A flag
+    # rather than a status, so code that predates it reads the turn as completed.
+    stopped: bool = False
     tool_calls: list[ChatToolCall] = Field(default_factory=list)
     artifacts: list[ChatArtifact] = Field(default_factory=list)
     guardrails: list[GuardrailNotice] = Field(default_factory=list)
