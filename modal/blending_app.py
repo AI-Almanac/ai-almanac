@@ -146,7 +146,15 @@ def _ref_onset_for(ref_onset_month_day: str | None) -> dict | None:
 # Blend params that shape the intermediates. `mok_month_day` is the pre-rename
 # spelling of `ref_onset_month_day`; job configs written before the rename still
 # carry it, so both are read (the new name wins when both are present).
-_INTERMEDIATE_PREP_KEYS = ("threshold_mm", "cutoff_month_day", "ref_onset_month_day", "focus_area")
+# `min_onset_years` is not a submission field (the guardrails own it); local
+# configs set it to build from records shorter than the default ten years.
+_INTERMEDIATE_PREP_KEYS = (
+    "threshold_mm",
+    "cutoff_month_day",
+    "ref_onset_month_day",
+    "focus_area",
+    "min_onset_years",
+)
 
 
 def _intermediate_prep_kwargs(params: dict) -> dict:
@@ -1937,7 +1945,14 @@ def _blendable_ids(obs_wide, min_onset_years: int) -> frozenset[str]:
 
     has_onset = pd.to_numeric(obs_wide["onset_day"], errors="coerce").notna()
     onset_years = obs_wide.loc[has_onset, "id"].astype(str).value_counts()
-    return frozenset(onset_years[onset_years >= int(min_onset_years)].index)
+    blendable = frozenset(onset_years[onset_years >= int(min_onset_years)].index)
+    if not blendable:
+        raise ValueError(
+            "No cells have enough observed onset years to blend. "
+            f"min_onset_years={min_onset_years}, "
+            f"most onset years in any cell={int(onset_years.max()) if len(onset_years) else 0}"
+        )
+    return blendable
 
 
 def _only_cells(df, ids: frozenset[str] | None):

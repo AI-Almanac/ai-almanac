@@ -227,6 +227,19 @@ def test_only_cells_with_enough_observed_onset_years_are_blendable() -> None:
     assert app._blendable_ids(obs_wide, min_onset_years=2) == {"land", "edge"}
 
 
+def test_a_record_too_short_for_any_cell_to_blend_is_rejected_by_name() -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    # Three years of onsets everywhere, against the default ten-year minimum.
+    obs_wide = pd.DataFrame(
+        {"id": ["a", "a", "a"], "year": [1998, 1999, 2000], "onset_day": [40, 50, 45]}
+    )
+
+    with pytest.raises(ValueError, match="min_onset_years=10.*most onset years in any cell=3"):
+        app._blendable_ids(obs_wide, min_onset_years=10)
+
+
 def test_spread_needs_two_members_with_values_at_one_cell_and_start_date() -> None:
     import numpy as np
     import pandas as pd
