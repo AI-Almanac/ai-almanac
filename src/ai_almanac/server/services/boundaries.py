@@ -23,6 +23,10 @@ from ai_almanac.server.services.focus_area import FocusArea, FocusUnits
 # certifi's bundle makes the geoBoundaries fetch work everywhere.
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
+# GeoJSON downloads go through a github.com redirect whose Content-Security-Policy
+# header alone runs past 9 KB, over aiohttp's 8190-byte default.
+_MAX_HEADER_BYTES = 64 * 1024
+
 BOUNDARY_LEVELS = {
     "adm0": "ADM0",
     "adm1": "ADM1",
@@ -54,9 +58,7 @@ async def load_boundary(iso: str, level: str) -> dict[str, Any]:
     cached = _CACHE.get(cache_key)
     if cached:
         return cached
-    timeout = aiohttp.ClientTimeout(total=30)
-    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+    async with _client_session() as session:
         metadata = await _fetch_metadata(session, iso, boundary_type)
         geojson = await _fetch_json(session, _geojson_url(metadata) or "")
     result = {
@@ -75,6 +77,15 @@ async def load_boundary(iso: str, level: str) -> dict[str, Any]:
     }
     _CACHE[cache_key] = result
     return result
+
+
+def _client_session() -> aiohttp.ClientSession:
+    return aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=30),
+        connector=aiohttp.TCPConnector(ssl=_SSL_CONTEXT),
+        max_line_size=_MAX_HEADER_BYTES,
+        max_field_size=_MAX_HEADER_BYTES,
+    )
 
 
 def normalize_area_name(value: str) -> str:
@@ -148,15 +159,15 @@ async def _fetch_metadata(
 
 
 async def _fetch_json(session: aiohttp.ClientSession, url: str) -> Any:
-    async with session.get(url) as response:
-        body = await response.text()
-        if response.status >= 400:
-            raise BoundaryUnavailable(
-                f"Boundary upstream request failed ({response.status}): {body[:300]}"
-            )
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise BoundaryUnavailable(
-                f"Boundary upstream response was not JSON: {body[:300]}"
-            ) from exc
+    try:
+        async with session.get(url) as response:
+            body = await response.text()
+            status = response.status
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        raise BoundaryUnavailable(f"Boundary upstream request failed: {exc}") from exc
+    if status >= 400:
+        raise BoundaryUnavailable(f"Boundary upstream request failed ({status}): {body[:300]}")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise BoundaryUnavailable(f"Boundary upstream response was not JSON: {body[:300]}") from exc

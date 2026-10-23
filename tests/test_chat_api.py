@@ -1149,3 +1149,28 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     cleared = await client.patch(url, headers=as_new_user, json={"region_id": None})
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["benchmark_config"]["region_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_refused_rerun_is_reported_to_the_assistant_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from ai_almanac.server.services import benchmark_domain
+    from ai_almanac.server.services.benchmark_state import BenchmarkScope
+
+    await _insert_job("user-1", "job-1")
+
+    async def refuse(body, user_id):
+        raise HTTPException(status_code=502, detail="Boundary upstream request failed")
+
+    monkeypatch.setattr("ai_almanac.server.services.job_submission.create_job_for_user", refuse)
+
+    payload = await benchmark_domain._exec_rerun_job(
+        {"job_id": "job-1"},
+        "user-1",
+        BenchmarkScope(kind="benchmark_run_group", key="run-1", title="Run", job_ids=["job-1"]),
+    )
+
+    assert payload == {"error": "Could not rerun job job-1: Boundary upstream request failed"}

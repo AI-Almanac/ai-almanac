@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 import sqlalchemy as sa
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from ai_almanac.server.services import guardrails, job_submission
@@ -651,16 +652,29 @@ async def _exec_submit_benchmark(
     except job_submission.InvalidBenchmarkSettings as exc:
         return benchmark_payload(spec, validation, error=str(exc))
     for model, romp_params in params_by_model:
-        job = await job_submission.create_job_for_user(
-            job_submission.JobCreate(
-                dataset_id=spec.dataset_id or "",
-                model_name=model["id"],
-                params=romp_params,
-                run_id=run_id,
-            ),
-            user_id,
-        )
+        try:
+            job = await job_submission.create_job_for_user(
+                job_submission.JobCreate(
+                    dataset_id=spec.dataset_id or "",
+                    model_name=model["id"],
+                    params=romp_params,
+                    run_id=run_id,
+                ),
+                user_id,
+            )
+        except HTTPException as exc:
+            if not jobs:
+                return benchmark_payload(spec, validation, error=str(exc.detail))
+            # Models already submitted keep running; record the run so the chat follows them.
+            started = ", ".join(job["model_display_name"] for job in jobs)
+            failed_error = (
+                f"Started {started}, but {model.get('display_name') or model['id']} "
+                f"could not be submitted: {exc.detail}"
+            )
+            break
         jobs.append(job.model_dump(mode="json"))
+    else:
+        failed_error = None
     submitted = spec.model_copy(update={"status": "running"})
     submitted_validation = validation.model_copy(update={"status": "running"})
     await _save_benchmark_state(session_id, user_id, submitted, submitted_validation, run_id)
@@ -685,7 +699,8 @@ async def _exec_submit_benchmark(
                 "uid": user_id,
             },
         )
-    return benchmark_payload(submitted, submitted_validation, run_id=run_id, jobs=jobs)
+    extra = {"error": failed_error} if failed_error else {}
+    return benchmark_payload(submitted, submitted_validation, run_id=run_id, jobs=jobs, **extra)
 
 
 def _model_display_name(cfg: dict) -> str | None:
@@ -961,17 +976,21 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
         )
     except job_submission.InvalidBenchmarkSettings as exc:
         return {"error": str(exc)}
-    rerun = await job_submission.create_job_for_user(
-        job_submission.JobCreate(
-            dataset_id=row["dataset_id"],
-            model_name=cfg.get("model_source_id")
-            or (cfg.get("model_config") or {}).get("id")
-            or cfg.get("model_name", ""),
-            params=romp_params,
-            run_id=row["run_id"],
-        ),
-        user_id,
-    )
+    try:
+        rerun = await job_submission.create_job_for_user(
+            job_submission.JobCreate(
+                dataset_id=row["dataset_id"],
+                model_name=cfg.get("model_source_id")
+                or (cfg.get("model_config") or {}).get("id")
+                or cfg.get("model_name", ""),
+                params=romp_params,
+                run_id=row["run_id"],
+            ),
+            user_id,
+        )
+    except HTTPException as exc:
+        # Submission refusals are for the user to read, not a failed chat turn.
+        return {"error": f"Could not rerun job {job_id}: {exc.detail}"}
     return {
         "source_job_id": job_id,
         "job": rerun.model_dump(mode="json"),
