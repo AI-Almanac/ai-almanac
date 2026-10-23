@@ -156,6 +156,13 @@ Validation opens the first NetCDF and infers coverage years, spatial
 bounds, and initialization days; invalid sources are kept with a visible
 error and can be revalidated after fixing the data.
 
+To register many at once, use **Find sources** on the same page (admins) or
+`ai-almanac sources discover [DIR] [--register]`. Either scans a folder (the
+dataset mount roots by default) for directories of yearly NetCDF files and
+infers each one's kind, variable, file pattern, and region before running the
+same validation; `POST /data-sources/discover` backs the page and registers
+nothing itself.
+
 No code changes, env vars, or restarts required — the registry lives in
 the application database.
 

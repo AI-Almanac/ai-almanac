@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import webbrowser
 from contextlib import suppress
+from pathlib import Path
 from typing import Annotated
 
 import click
@@ -35,6 +36,110 @@ def db_upgrade() -> None:
     reload_settings()
     _apply_migrations()
     typer.echo("database upgraded")
+
+
+sources_app = typer.Typer(help="Find and register observation and model data sources.")
+app.add_typer(sources_app, name="sources")
+
+
+@sources_app.command("discover")
+def sources_discover(
+    root: Annotated[
+        Path | None,
+        typer.Argument(help="Directory to scan (default: the dataset mount roots)."),
+    ] = None,
+    register: Annotated[
+        bool,
+        typer.Option(
+            "--register",
+            help="Register every ready source found that has a region and isn't registered yet.",
+        ),
+    ] = False,
+) -> None:
+    """Find NetCDF data sources under a directory and show how each would register.
+
+    Sources registered here are shared, as an administrator's are in the UI.
+    """
+    import asyncio
+
+    from ai_almanac.server.app import _apply_migrations
+    from ai_almanac.server.services.dataset_resolver import mount_roots
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    roots = [root.expanduser().resolve()] if root else mount_roots()
+    if not roots:
+        typer.secho(
+            "no dataset mount roots are configured; give a directory to scan",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    missing = [str(path) for path in roots if not path.is_dir()]
+    if missing:
+        typer.secho(f"not a directory: {', '.join(missing)}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    _apply_migrations()
+    asyncio.run(_discover_sources(roots, register))
+
+
+async def _discover_sources(roots: list[Path], register: bool) -> None:
+    from ai_almanac.server import db
+    from ai_almanac.server.services import data_sources, region_catalog, source_discovery
+
+    try:
+        await region_catalog.seed_packaged_regions()
+        discovery = await source_discovery.discover_sources(roots)
+        typer.echo(f"scanned {', '.join(discovery.roots)}")
+        if discovery.truncated:
+            typer.secho(
+                f"stopped after {source_discovery.MAX_DIRECTORIES} directories; "
+                "scan a narrower directory to see the rest",
+                fg=typer.colors.YELLOW,
+            )
+        registered = 0
+        for source in discovery.sources:
+            metadata = source.metadata
+            years = f"{metadata.get('start_year')}–{metadata.get('end_year')}"
+            variable = metadata.get("obs_var") or metadata.get("model_var")
+            pattern = metadata.get("obs_file_pattern") or metadata.get("file_pattern")
+            typer.echo(
+                f"  {source.status:<7} {source.kind:<5} {source.name}  "
+                f"[{source.region or 'no region'}]  {source.path}  "
+                f"{pattern} · {variable} · {years}"
+            )
+            if source.validation_error:
+                typer.secho(f"          {source.validation_error}", fg=typer.colors.RED)
+            if source.registered_as:
+                typer.echo(f"          already registered as {source.registered_as!r}")
+            elif register and source.status == "ready" and source.region:
+                row = await data_sources.create_source(
+                    kind=source.kind,
+                    name=source.name,
+                    path=source.path,
+                    region=source.region,
+                    metadata=metadata,
+                    owner_id=None,
+                    visibility="shared",
+                )
+                registered += 1
+                typer.secho(f"          registered ({row['status']})", fg=typer.colors.GREEN)
+            elif register and source.status == "ready":
+                typer.secho(
+                    "          not registered: no region matched; register it from the UI",
+                    fg=typer.colors.YELLOW,
+                )
+        for skipped in discovery.skipped:
+            typer.echo(f"  skipped {skipped.path}: {skipped.reason}")
+        if not discovery.sources:
+            typer.echo("no data sources found")
+        elif register:
+            typer.echo(f"registered {registered} source(s)")
+        else:
+            typer.echo("re-run with --register to register the ready sources")
+    finally:
+        # asyncio.run closes its loop on return; release pooled connections first.
+        await db.engine.dispose()
 
 
 @app.command("execute-job", hidden=True)

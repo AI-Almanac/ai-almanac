@@ -61,6 +61,24 @@ files owned by you. Use a local disk: SQLite refuses a network filesystem.
 Environments are tied to the container's `/data` path, so this directory cannot
 be shared with a native install.
 
+## Registering datasets
+
+Put each dataset in its own directory of yearly NetCDF files under the datasets
+directory, e.g. `india/obs/` and `india/models/graphcast/`, then register them
+all at once:
+
+```bash
+scripts/spark.sh discover              # list what it finds and how each would register
+scripts/spark.sh discover --register   # register the ready ones
+```
+
+Or use **Find sources** on the Data Sources page, which lets you rename sources
+and pick a region before registering. Each directory's kind, variable, file
+pattern, and region are inferred from the files and path; a region is only
+suggested from coverage when it matches a configured region's box closely, so
+a source outside every region is left for you to assign. Symlinked directories
+are not followed, since their targets aren't mounted in the container.
+
 ## Security model
 
 - The port is published on `127.0.0.1` only; other machines cannot reach it.

@@ -37,6 +37,8 @@ usage: scripts/spark.sh <command>
   up        build the image, start the container, print the URL to open
   prepare   install the workload environments inside the container
   init ...  headless first-run setup (ai-almanac init --yes ...), then restart
+  discover [--register]
+            list the data sources found under /datasets; --register adds the ready ones
   url       print the access (and first-run setup) URL again
   logs      follow the container logs
   shell     open a shell in the running container
@@ -84,7 +86,7 @@ print_urls() {
 cmd=$1
 shift
 case "$cmd" in
-  init) ;;
+  init | discover) ;;
   *) [ "$#" -eq 0 ] || usage ;;
 esac
 
@@ -98,6 +100,8 @@ case "$cmd" in
     printf '\nInstall the workload environments with the setup wizard or: scripts/spark.sh prepare\n'
     ;;
   prepare) $compose exec almanac ai-almanac env prepare ;;
+  # Sources are read per request, so registered ones appear without a restart.
+  discover) $compose exec almanac ai-almanac sources discover "$@" ;;
   init)
     # The server reads settings at startup, so restart it to pick up the result.
     $compose exec almanac ai-almanac init --yes --dataset-mount-roots /datasets "$@"

@@ -831,6 +831,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/data-sources/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Data Sources
+         * @description Propose sources for every NetCDF directory under a root; registers nothing.
+         *
+         *     Admin-only, like the filesystem browser: a scan reveals directory layout.
+         */
+        post: operations["discover_data_sources_data_sources_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/data-sources/{source_id}": {
         parameters: {
             query?: never;
@@ -3044,6 +3066,49 @@ export interface components {
              */
             max_samples?: number | null;
         };
+        /** DiscoverIn */
+        DiscoverIn: {
+            /** Root */
+            root?: string | null;
+        };
+        /** DiscoveredSourceOut */
+        DiscoveredSourceOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "model" | "obs";
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Region */
+            region: string | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "invalid" | "ready";
+            /** Validation Error */
+            validation_error: string | null;
+            /** Registered As */
+            registered_as: string | null;
+        };
+        /** DiscoveryOut */
+        DiscoveryOut: {
+            /** Roots */
+            roots: string[];
+            /** Sources */
+            sources: components["schemas"]["DiscoveredSourceOut"][];
+            /** Skipped */
+            skipped: components["schemas"]["SkippedDirectoryOut"][];
+            /** Truncated */
+            truncated: boolean;
+        };
         /**
          * Feature
          * @description Feature Model
@@ -4764,6 +4829,13 @@ export interface components {
             brier_score_forecast: number | null;
             /** Brier Score Climatology */
             brier_score_climatology: number | null;
+        };
+        /** SkippedDirectoryOut */
+        SkippedDirectoryOut: {
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * StatisticsInGeoJSON
@@ -6727,6 +6799,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DataSourceValidationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_data_sources_data_sources_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscoverIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveryOut"];
                 };
             };
             /** @description Validation Error */

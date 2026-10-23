@@ -8,9 +8,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.auth import CurrentUser, require_data_management
+from ai_almanac.server.auth import AdminUser, CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
-from ai_almanac.server.services import region_catalog
+from ai_almanac.server.services import region_catalog, source_discovery
 from ai_almanac.server.services.dataset_resolver import mount_roots
 from ai_almanac.server.services.forecast_models import (
     LiveForecastStatus,
@@ -96,6 +96,67 @@ class DataSourceValidationOut(BaseModel):
     validation_error: str | None
 
 
+class DiscoverIn(BaseModel):
+    # Directory to scan; the dataset mount roots when omitted.
+    root: str | None = None
+
+
+class DiscoveredSourceOut(BaseModel):
+    kind: Literal["obs", "model"]
+    name: str
+    path: str
+    region: str | None
+    metadata: dict
+    status: Literal["ready", "invalid"]
+    validation_error: str | None
+    registered_as: str | None
+
+
+class SkippedDirectoryOut(BaseModel):
+    path: str
+    reason: str
+
+
+class DiscoveryOut(BaseModel):
+    roots: list[str]
+    sources: list[DiscoveredSourceOut]
+    skipped: list[SkippedDirectoryOut]
+    truncated: bool
+
+
+def _scan_roots(root: str | None) -> list[Path]:
+    """The directories a scan may cover: the one asked for, else the mount roots."""
+    allowed = mount_roots()
+    if not allowed and not settings.enable_fs_browser:
+        # Without mount roots a scan could read any directory, which is what
+        # disabling the filesystem browser is meant to prevent.
+        raise HTTPException(
+            status_code=403,
+            detail="configure dataset mount roots to scan for sources in this deployment",
+        )
+    if not root or not root.strip():
+        if not allowed:
+            raise HTTPException(
+                status_code=400,
+                detail="no dataset mount roots are configured; give a directory to scan",
+            )
+        roots = allowed
+    else:
+        from ai_almanac.server.services.dataset_resolver import is_within
+
+        requested = Path(_normalized_path(root))
+        if not is_within(requested, allowed):
+            raise HTTPException(
+                status_code=400,
+                detail="the directory to scan must be under the configured dataset mount roots",
+            )
+        roots = [requested]
+    missing = [str(path) for path in roots if not path.is_dir()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"not a directory: {', '.join(missing)}")
+    return roots
+
+
 def _live_forecast_out(kind: str, metadata: dict) -> LiveForecastOut | None:
     if kind != "model":
         return None
@@ -171,6 +232,25 @@ async def validate_data_source(body: DataSourceIn, user: CurrentUser):
         metadata=metadata,
         status=status,
         validation_error=validation_error,
+    )
+
+
+@router.post(
+    "/discover",
+    response_model=DiscoveryOut,
+    dependencies=[Depends(require_data_management)],
+)
+async def discover_data_sources(body: DiscoverIn, _admin: AdminUser):
+    """Propose sources for every NetCDF directory under a root; registers nothing.
+
+    Admin-only, like the filesystem browser: a scan reveals directory layout.
+    """
+    discovery = await source_discovery.discover_sources(_scan_roots(body.root))
+    return DiscoveryOut(
+        roots=discovery.roots,
+        sources=[DiscoveredSourceOut(**vars(source)) for source in discovery.sources],
+        skipped=[SkippedDirectoryOut(**vars(item)) for item in discovery.skipped],
+        truncated=discovery.truncated,
     )
 
 
