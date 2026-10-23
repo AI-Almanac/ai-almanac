@@ -164,6 +164,9 @@ async def validate_scope(scope: ChatScope, user: job_access.JobUser) -> ChatScop
 def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     message = str(exc).lower()
     name = exc.__class__.__name__.lower()
+    # Before the tool check: the overflow is often caused by a tool's result.
+    if "maximum context length" in message or "context_length_exceeded" in message:
+        return "context_overflow"
     if (
         "tool" in message
         or "tool" in name

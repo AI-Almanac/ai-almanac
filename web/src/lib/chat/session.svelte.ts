@@ -67,6 +67,9 @@ const EARLIER_REPLY_TIMEOUT_MS = 45 * 60 * 1000;
 function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string {
 	if (event.error_type === 'provider_error') return 'The chat provider failed. Please try again.';
 	if (event.error_type === 'tool_error') return 'A benchmark data lookup failed. Please try again.';
+	if (event.error_type === 'context_overflow') {
+		return "This conversation has grown too long for the assistant's memory. Start a new chat to continue.";
+	}
 	// The locally run model is paused for a forecast or still loading; the
 	// server's message says which.
 	if (event.error_type === 'assistant_unavailable') return event.message;

@@ -211,3 +211,16 @@ async def test_the_failing_rerun_turn_now_fits_the_local_model(monkeypatch) -> N
         "level": "adm1",
         "units": ["Kerala"],
     }
+
+
+def test_a_context_overflow_is_reported_as_such() -> None:
+    from ai_almanac.server.services.chat_state import ChatTurn
+    from ai_almanac.server.services.chat_turns import _classify_stream_error
+
+    error = RuntimeError(
+        "status_code: 400, body: {'message': \"This model's maximum context length is 65536 "
+        'tokens. However, your prompt contains at least 65537 input tokens"}'
+    )
+    turn = ChatTurn(id="t", role="assistant", created_at="2026-10-23T00:00:00Z")
+
+    assert _classify_stream_error(error, turn) == "context_overflow"
