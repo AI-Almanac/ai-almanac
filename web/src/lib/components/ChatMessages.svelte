@@ -9,6 +9,7 @@
 	import { setupHandoffs } from '$lib/chat/handoff';
 	import { conversationItems } from '$lib/chat/conversation';
 	import { renderMarkdown } from '$lib/chat/format';
+	import { hideIds, namesById } from '$lib/chat/ids';
 	import { turnTimeline } from '$lib/chat/timeline';
 	import { rateChatTurn } from '$lib/api';
 
@@ -36,6 +37,8 @@
 	const conversation = $derived(
 		conversationItems(chat.visibleTurns, chat.jobActivity.events, !chat.sending)
 	);
+	// Names for the IDs the assistant's tools returned, so its replies show those instead.
+	const idNames = $derived(namesById(chat.visibleTurns));
 	let ratings = $state<Record<string, 1 | -1>>({});
 
 	async function rate(turnId: string, value: 1 | -1) {
@@ -121,12 +124,15 @@
 				{#each timeline as item, ii (item.key)}
 					{#if item.kind === 'text'}
 						<div class="message assistant">
-							<div class="message-content prose">{@html renderMarkdown(item.text)}</div>
+							<div class="message-content prose">
+								{@html renderMarkdown(hideIds(item.text, idNames))}
+							</div>
 						</div>
 					{:else}
 						<ChatActivity
 							group={item}
 							live={streaming && ii === timeline.length - 1}
+							{idNames}
 							{onOpenArtifact}
 						/>
 					{/if}

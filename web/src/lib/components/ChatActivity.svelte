@@ -7,6 +7,7 @@
 		renderMarkdown,
 		toolLabel
 	} from '$lib/chat/format';
+	import { hideIds } from '$lib/chat/ids';
 	import {
 		groupFailed,
 		groupSummary,
@@ -19,10 +20,12 @@
 		group: ActivityGroup;
 		/** The assistant is still working in this group. */
 		live: boolean;
+		/** Names to show in place of IDs in the assistant's notes. */
+		idNames?: Map<string, string>;
 		onOpenArtifact: (artifactId: string) => void;
 	}
 
-	const { group, live, onOpenArtifact }: Props = $props();
+	const { group, live, idNames = new Map(), onOpenArtifact }: Props = $props();
 
 	let expanded = $state(false);
 	let shownCode = $state<Set<string>>(new Set());
@@ -56,14 +59,16 @@
 	</button>
 
 	{#if latestNote && !expanded}
-		<div class="note note-preview prose-sm">{@html renderMarkdown(latestNote)}</div>
+		<div class="note note-preview prose-sm">
+			{@html renderMarkdown(hideIds(latestNote, idNames))}
+		</div>
 	{/if}
 
 	{#if expanded}
 		<ol class="steps">
 			{#each group.steps as step, si (si)}
 				{#if step.kind === 'thinking'}
-					<li class="step note prose-sm">{@html renderMarkdown(step.text)}</li>
+					<li class="step note prose-sm">{@html renderMarkdown(hideIds(step.text, idNames))}</li>
 				{:else}
 					{@const toolCall = step.toolCall}
 					{@const code = codeForToolCall(toolCall)}
