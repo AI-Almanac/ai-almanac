@@ -308,17 +308,18 @@
 		</div>
 	{/if}
 
-	<div class="panel-tabs">
-		<button
-			class="panel-tab"
-			class:active={activeTab === 'chat'}
-			onclick={() => {
-				activeTab = 'chat';
-			}}
-		>
-			Chat
-		</button>
-		{#if hasArtifacts}
+	<!-- The bar only earns its space once there is something to switch to. -->
+	{#if hasArtifacts}
+		<div class="panel-tabs">
+			<button
+				class="panel-tab"
+				class:active={activeTab === 'chat'}
+				onclick={() => {
+					activeTab = 'chat';
+				}}
+			>
+				Chat
+			</button>
 			<button
 				class="panel-tab"
 				class:active={activeTab === 'artifacts'}
@@ -329,8 +330,8 @@
 				Artifacts
 				<span class="panel-tab-count">{galleryFigures.length}</span>
 			</button>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if comparing}
 		<ChatCompare {comparison} onClose={() => void closeCompare()} />
