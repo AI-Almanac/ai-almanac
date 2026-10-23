@@ -33,4 +33,8 @@ seaborn = "*"
 scipy = "*"
 
 [pypi-dependencies]
-momp = { git = "https://github.com/AI-Almanac/ROMP.git", rev = "af447626b95bd4385f8e961f27e8439411657e67" }
+# Tracks the branch that finds ensemble onsets block by block (AI-Almanac/ROMP
+# 8b8a28c): identical results to af44762, a fraction of its memory, about 5x
+# faster. An env locks the branch head it first solves against; to take later
+# commits, delete its pixi.lock and re-run `env prepare`. Pin `rev` once merged.
+momp = { git = "https://github.com/AI-Almanac/ROMP.git", branch = "memory-efficient-ensemble-onset" }
