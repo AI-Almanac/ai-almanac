@@ -312,6 +312,7 @@
 	function selectForecast(id: string) {
 		selectedId = id;
 		creating = false;
+		upToDateId = null;
 	}
 
 	function toggleModel(id: string) {
