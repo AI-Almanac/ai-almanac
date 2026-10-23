@@ -313,13 +313,22 @@ def test_startup_progress_reports_only_this_launchs_furthest_stage(managed, line
     assert local_llm.startup_progress().stage == stage
 
 
-def test_startup_progress_reads_the_latest_progress_bar_and_elapsed_time(managed) -> None:
+def _tuning_pass(op: str, buckets: int = 16) -> str:
+    """One autotune pass as tqdm draws it: an opening 0% frame, then the finish."""
+    return (
+        f"[AutoTuner]: Tuning {op}:   0%|          | 0/{buckets} [00:00<?]\r"
+        f"[AutoTuner]: Tuning {op}: 100%|##########| {buckets}/{buckets} [00:06<00:00]\r"
+    )
+
+
+def test_tuning_progress_counts_passes_rather_than_one_resetting_bar(managed) -> None:
     local_llm.log_path().write_text(
         _launch_log(
             "(EngineCore pid=7) INFO [model_runner.py:428] Model loading took 17.82 GiB memory",
             "(EngineCore pid=7) INFO [kernel_warmup.py:359] Running FlashInfer autotune",
         )
-        + "[AutoTuner]: Tuning fp8_gemm:  56%|#####6    | 9/16 [00:02<00:02]\r"
+        + _tuning_pass("fp8_gemm") * 2
+        + "[AutoTuner]: Tuning fp8_gemm:   0%|          | 0/16 [00:00<?]\r"
         + "[AutoTuner]: Tuning fp8_gemm:  69%|######9   | 11/16 [00:03<00:01]\r"
     )
     record = json.loads(local_llm.pid_path().read_text())
@@ -330,10 +339,26 @@ def test_startup_progress_reads_the_latest_progress_bar_and_elapsed_time(managed
     assert (progress.stage, progress.detail, progress.done, progress.total) == (
         "tuning",
         "fp8_gemm",
-        11,
-        16,
+        3,
+        None,
     )
     assert progress.elapsed_seconds is not None and 89 <= progress.elapsed_seconds < 100
+
+
+def test_graph_capture_progress_reads_its_bar(managed) -> None:
+    local_llm.log_path().write_text(
+        _launch_log("(EngineCore pid=7) INFO [model_runner.py:428] Model loading took 17.82 GiB")
+        + "Capturing CUDA graphs (decode, FULL):  57%|#####7    | 4/7 [00:01<00:00]\r"
+    )
+
+    progress = local_llm.startup_progress()
+
+    assert (progress.stage, progress.detail, progress.done, progress.total) == (
+        "capturing",
+        "CUDA graphs",
+        4,
+        7,
+    )
 
 
 async def _collect(stream) -> list[dict]:

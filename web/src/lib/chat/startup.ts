@@ -11,7 +11,7 @@ export const STARTUP_STAGES: { stage: AssistantStartup['stage']; label: string; 
 			hint: 'Several minutes the first time; much faster once they are cached.'
 		},
 		{ stage: 'capturing', label: 'Preparing the GPU' },
-		{ stage: 'tuning', label: 'Tuning kernels for this GPU', hint: 'Usually a few minutes.' },
+		{ stage: 'tuning', label: 'Tuning kernels for this GPU', hint: 'One pass per kernel shape.' },
 		{ stage: 'finishing', label: 'Almost ready' }
 	];
 
@@ -19,7 +19,7 @@ export type StartupStep = {
 	label: string;
 	state: 'done' | 'current' | 'pending';
 	hint?: string;
-	// e.g. "fp8_gemm · 11 of 16", only on the current step.
+	// e.g. "CUDA graphs · 4 of 7" or "fp8_gemm · 12 so far", only on the current step.
 	detail?: string;
 	// 0–1 through `detail`, when the server reports a count.
 	fraction?: number;
@@ -33,10 +33,14 @@ export function startupSteps(progress: AssistantStartup): StartupStep[] {
 	return STARTUP_STAGES.map((entry, index) => {
 		const state = index < current ? 'done' : index === current ? 'current' : 'pending';
 		const step: StartupStep = { label: entry.label, state, hint: entry.hint };
+		const prefix = progress.detail ? `${progress.detail} · ` : '';
 		if (state === 'current' && progress.total) {
 			const done = Math.min(progress.done ?? 0, progress.total);
-			step.detail = `${progress.detail ? `${progress.detail} · ` : ''}${done} of ${progress.total}`;
+			step.detail = `${prefix}${done} of ${progress.total}`;
 			step.fraction = done / progress.total;
+		} else if (state === 'current' && progress.done != null) {
+			// A count with no known end (tuning passes): no bar, which would only reset.
+			step.detail = `${prefix}${progress.done} so far`;
 		}
 		if (state !== 'current') delete step.hint;
 		return step;

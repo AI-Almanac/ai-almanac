@@ -226,6 +226,10 @@ _PROGRESS_BAR = re.compile(
 )
 
 
+# The first draw of each tuning pass's bar ("…: Tuning fp8_gemm:   0%|…| 0/16").
+_TUNING_PASS_START = re.compile(r"\[AutoTuner\]: Tuning ([\w.]+):\s+0%\|[^|]*\|\s*0/\d+")
+
+
 @dataclass
 class StartupProgress:
     stage: str
@@ -233,7 +237,8 @@ class StartupProgress:
     elapsed_seconds: float | None = None
     # What the stage is working on, e.g. the kernel being tuned.
     detail: str | None = None
-    # How far through `detail` it is, when vLLM reports a count.
+    # How far through `detail` it is: `done` of `total` when vLLM reports a
+    # bounded count, or just `done` (passes so far) when no total is known.
     done: int | None = None
     total: int | None = None
 
@@ -265,13 +270,21 @@ def startup_progress() -> StartupProgress:
     started_at = _read_record().get("started_at")
     if isinstance(started_at, int | float):
         progress.elapsed_seconds = max(0.0, time.time() - started_at)
-    if stage in ("capturing", "tuning"):
+    if stage == "capturing":
         # The newest bar is the work in hand; tqdm redraws it with "\r".
-        bars = list(_PROGRESS_BAR.finditer(text[-64 * 1024 :]))
+        bars = [bar for bar in _PROGRESS_BAR.finditer(text[-64 * 1024 :]) if bar.group("capture")]
         if bars:
-            bar = bars[-1]
-            progress.detail = bar.group("op") or "CUDA graphs"
-            progress.done, progress.total = int(bar.group("done")), int(bar.group("total"))
+            progress.detail = "CUDA graphs"
+            progress.done, progress.total = (
+                int(bars[-1].group("done")),
+                int(bars[-1].group("total")),
+            )
+    elif stage == "tuning":
+        # One pass per kernel shape, each with its own bar, and no total known
+        # up front: a per-pass bar would keep resetting, so count passes instead.
+        passes = _TUNING_PASS_START.findall(text)
+        if passes:
+            progress.detail, progress.done = passes[-1], len(passes)
     return progress
 
 

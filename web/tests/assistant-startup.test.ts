@@ -32,13 +32,21 @@ describe('assistant startup progress', () => {
 
 	it('shows the count and fraction of the work in hand on the current stage only', () => {
 		const steps = startupSteps(
-			progress({ stage: 'tuning', detail: 'fp8_gemm', done: 11, total: 16 })
+			progress({ stage: 'capturing', detail: 'CUDA graphs', done: 4, total: 7 })
 		);
+		const capturing = steps.find((step) => step.state === 'current');
+
+		expect(capturing?.detail).toBe('CUDA graphs · 4 of 7');
+		expect(capturing?.fraction).toBeCloseTo(4 / 7);
+		expect(steps.filter((step) => step.fraction !== undefined)).toHaveLength(1);
+	});
+
+	it('shows an open-ended count without a bar when the stage has no known total', () => {
+		const steps = startupSteps(progress({ stage: 'tuning', detail: 'fp8_gemm', done: 12 }));
 		const tuning = steps.find((step) => step.state === 'current');
 
-		expect(tuning?.detail).toBe('fp8_gemm · 11 of 16');
-		expect(tuning?.fraction).toBeCloseTo(11 / 16);
-		expect(steps.filter((step) => step.fraction !== undefined)).toHaveLength(1);
+		expect(tuning?.detail).toBe('fp8_gemm · 12 so far');
+		expect(tuning?.fraction).toBeUndefined();
 	});
 
 	it('formats elapsed time as m:ss, adding hours past an hour', () => {
