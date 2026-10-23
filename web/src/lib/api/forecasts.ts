@@ -50,10 +50,22 @@ export async function createForecast(body: ForecastCreate): Promise<Forecast> {
 	return request<Forecast>('/forecasts', { method: 'POST', body: JSON.stringify(body) });
 }
 
+// The outcome of updating a forecast: a new run, or — when nothing the forecast
+// scores has changed since it ran — the forecast itself, marked up to date.
+export type ForecastUpdate = {
+	forecast: Forecast;
+	up_to_date: boolean;
+};
+
 // Re-run an existing forecast with its original parameters, so the cumulative
 // season rollout reuses the cache and only fills in newly-elapsed init dates.
-export async function refreshForecast(forecastId: string): Promise<Forecast> {
-	return request<Forecast>(`/forecasts/${forecastId}/refresh`, { method: 'POST' });
+// `force` runs it even when nothing it scores has changed.
+export async function refreshForecast(
+	forecastId: string,
+	{ force = false }: { force?: boolean } = {}
+): Promise<ForecastUpdate> {
+	const query = force ? '?force=true' : '';
+	return request<ForecastUpdate>(`/forecasts/${forecastId}/refresh${query}`, { method: 'POST' });
 }
 
 export async function getForecastModels(): Promise<ForecastModel[]> {

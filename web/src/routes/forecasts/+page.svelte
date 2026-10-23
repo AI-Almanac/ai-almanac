@@ -177,6 +177,8 @@
 	});
 
 	let actionError = $state<string | null>(null);
+	// The forecast an update found already current; its notice shows while it stays selected.
+	let upToDateId = $state<string | null>(null);
 
 	async function cancelForecast(id: string) {
 		actionError = null;
@@ -310,6 +312,7 @@
 	function selectForecast(id: string) {
 		selectedId = id;
 		creating = false;
+		upToDateId = null;
 	}
 
 	function toggleModel(id: string) {
@@ -351,13 +354,18 @@
 	// rolls out only the ones that have elapsed since — cheap relative to a cold
 	// season (D5). Reusing the original params keeps it on the same trajectory
 	// set so the cache actually hits.
-	async function updateForecast() {
+	async function updateForecast(force = false) {
 		if (!selected || updating) return;
 		updating = true;
 		actionError = null;
+		upToDateId = null;
 		try {
-			const forecast = await refreshForecastRun(selected.id);
-			forecasts = [forecast, ...forecasts];
+			const { forecast, up_to_date } = await refreshForecastRun(selected.id, { force });
+			if (up_to_date) {
+				upToDateId = forecast.id;
+			} else {
+				forecasts = [forecast, ...forecasts];
+			}
 			selectedId = forecast.id;
 		} catch (err) {
 			actionError = friendlyError(err);
@@ -587,11 +595,21 @@
 							</button>
 						{/if}
 						{#if selected.status === 'complete'}
-							<button type="button" class="primary" disabled={updating} onclick={updateForecast}>
+							<button
+								type="button"
+								class="primary"
+								disabled={updating}
+								onclick={() => updateForecast()}
+							>
 								{updating ? 'Updating…' : 'Update forecast'}
 							</button>
 						{:else if selected.status === 'failed' || selected.status === 'canceled'}
-							<button type="button" class="primary" disabled={updating} onclick={updateForecast}>
+							<button
+								type="button"
+								class="primary"
+								disabled={updating}
+								onclick={() => updateForecast()}
+							>
 								{updating ? 'Retrying…' : 'Retry'}
 							</button>
 						{/if}
@@ -600,6 +618,22 @@
 
 				{#if actionError}
 					<p class="error">{actionError}</p>
+				{/if}
+
+				{#if upToDateId === selected.id}
+					<div class="up-to-date">
+						<p class="notice muted">
+							Already up to date — no new forecast data is available since this forecast ran.
+						</p>
+						<button
+							type="button"
+							class="ghost"
+							disabled={updating}
+							onclick={() => updateForecast(true)}
+						>
+							Run anyway
+						</button>
+					</div>
 				{/if}
 
 				{#if newerRunFailed}
@@ -960,6 +994,17 @@
 
 	.notice {
 		font-size: 0.85rem;
+	}
+
+	.up-to-date {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.up-to-date .notice {
+		margin: 0;
 	}
 
 	.error-block {

@@ -11,6 +11,31 @@ from ai_almanac.server.services import job_submission
 from ai_almanac.server.tables import jobs
 
 
+def _capture_rebuilt_request(monkeypatch) -> dict:
+    """Stub building and submitting the refreshed job, capturing the request
+    the refresh rebuilt from the saved forecast."""
+    captured: dict = {}
+
+    async def fake_build(body, user_id):
+        captured["body"] = body
+        return job_submission.ForecastJob(
+            dataset_id="ds-1", run_id=body.run_id, plan=None, config={"season_plan": {}}
+        )
+
+    async def fake_submit(job, user_id):
+        return job_submission.ForecastOut(
+            id="fc-new",
+            blend_id="blend-123",
+            status="queued",
+            forecast_model_ids=[],
+            created_at="2026-05-10T01:00:00",
+        )
+
+    monkeypatch.setattr(job_submission, "build_forecast_job", fake_build)
+    monkeypatch.setattr(job_submission, "submit_forecast_job", fake_submit)
+    return captured
+
+
 @pytest.mark.asyncio
 async def test_refresh_replays_original_params(monkeypatch):
     """An update must re-run with the ORIGINAL init source/window/time so it
@@ -41,20 +66,7 @@ async def test_refresh_replays_original_params(monkeypatch):
             )
         )
 
-    captured: dict = {}
-
-    async def fake_create(body, user_id, *, is_admin=False):
-        captured["body"] = body
-        captured["user_id"] = user_id
-        return job_submission.ForecastOut(
-            id="fc-2",
-            blend_id=body.blend_id,
-            status="queued",
-            forecast_model_ids=body.forecast_model_ids or [],
-            created_at="2026-05-10T01:00:00",
-        )
-
-    monkeypatch.setattr(job_submission, "create_forecast_for_user", fake_create)
+    captured = _capture_rebuilt_request(monkeypatch)
 
     await job_submission.refresh_forecast_for_user("fc-1", uid)
 
@@ -114,19 +126,7 @@ async def test_refresh_reads_a_saved_zero_issue_date_trim_as_no_trim(monkeypatch
                 created_at="2026-05-10T00:00:00",
             )
         )
-    captured: dict = {}
-
-    async def fake_create(body, user_id, *, is_admin=False):
-        captured["body"] = body
-        return job_submission.ForecastOut(
-            id="fc-zero-2",
-            blend_id=body.blend_id,
-            status="queued",
-            forecast_model_ids=[],
-            created_at="2026-05-10T01:00:00",
-        )
-
-    monkeypatch.setattr(job_submission, "create_forecast_for_user", fake_create)
+    captured = _capture_rebuilt_request(monkeypatch)
 
     await job_submission.refresh_forecast_for_user("fc-zero", user["id"])
 
