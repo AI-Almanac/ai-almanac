@@ -1,0 +1,193 @@
+"""GCSStorage — key/path construction and bucket routing against a fake client.
+
+The fake mimics the slice of the google-cloud-storage API that GCSStorage uses,
+so these run without the real dependency or network. The gcsfs/xarray methods
+(`open_nc_dataset`, `*_nc_output_files`) are thin library delegations and are
+left to integration testing.
+"""
+
+from __future__ import annotations
+
+import pytest
+from google.api_core.exceptions import NotFound
+from google.auth import credentials as ga_credentials
+
+from ai_almanac.server.services.storage import GCSStorage
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"rest-of-the-png"
+
+
+class _FakeBlob:
+    def __init__(self, bucket: _FakeBucket, name: str) -> None:
+        self._bucket = bucket
+        self.name = name
+        self.temporary_hold = name in bucket.held
+
+    def patch(self) -> None:
+        if self.temporary_hold:
+            self._bucket.held.add(self.name)
+        else:
+            self._bucket.held.discard(self.name)
+
+    @property
+    def content_type(self):
+        entry = self._bucket.store.get(self.name)
+        return entry[1] if entry else None
+
+    def exists(self) -> bool:
+        return self.name in self._bucket.store
+
+    @property
+    def size(self) -> int | None:
+        entry = self._bucket.store.get(self.name)
+        return len(entry[0]) if entry else None
+
+    @property
+    def md5_hash(self) -> str | None:
+        import base64
+        import hashlib
+
+        entry = self._bucket.store.get(self.name)
+        return base64.b64encode(hashlib.md5(entry[0]).digest()).decode() if entry else None
+
+    def reload(self) -> None:
+        pass
+
+    def upload_from_string(self, data: bytes, content_type: str | None = None) -> None:
+        self._bucket.store[self.name] = (data, content_type)
+
+    def download_as_bytes(self) -> bytes:
+        if self.name not in self._bucket.store:
+            raise NotFound(self.name)
+        return self._bucket.store[self.name][0]
+
+    def open(self, mode: str = "rb"):
+        import io
+
+        return io.BytesIO(self._bucket.store[self.name][0])
+
+    def download_as_text(self) -> str:
+        return self._bucket.store[self.name][0].decode()
+
+    def delete(self) -> None:
+        if self.name not in self._bucket.store:
+            raise FileNotFoundError(self.name)
+        if self.name in self._bucket.held:
+            raise PermissionError(f"{self.name} is under a temporary hold")
+        del self._bucket.store[self.name]
+
+    def generate_signed_url(self, **kwargs) -> str:
+        return f"https://signed/{self._bucket.name}/{self.name}?method={kwargs['method']}"
+
+
+class _FakeBucket:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.store: dict[str, tuple[bytes, str | None]] = {}
+        self.held: set[str] = set()
+
+    def blob(self, name: str) -> _FakeBlob:
+        return _FakeBlob(self, name)
+
+
+class _FakeSigningCredentials(ga_credentials.Credentials, ga_credentials.Signing):
+    """A credential that can sign locally, so `_signing_kwargs` stays empty and
+    URL signing doesn't reach for the IAM signBlob API."""
+
+    def refresh(self, request) -> None: ...
+    def sign_bytes(self, message):
+        return b""
+
+    @property
+    def signer_email(self):
+        return "fake@local"
+
+    @property
+    def signer(self):
+        return None
+
+
+class _FakeClient:
+    def __init__(self) -> None:
+        self.buckets: dict[str, _FakeBucket] = {}
+        self._credentials = _FakeSigningCredentials()
+
+    def bucket(self, name: str) -> _FakeBucket:
+        return self.buckets.setdefault(name, _FakeBucket(name))
+
+    def list_blobs(self, bucket_name: str, prefix: str = ""):
+        bucket = self.bucket(bucket_name)
+        return [_FakeBlob(bucket, n) for n in bucket.store if n.startswith(prefix)]
+
+
+@pytest.fixture
+def store() -> GCSStorage:
+    return GCSStorage(
+        uploads_bucket="up",
+        outputs_bucket="out",
+        data_bucket="data",
+        client=_FakeClient(),
+    )
+
+
+def test_job_output_uri_points_at_outputs_bucket(store: GCSStorage) -> None:
+    assert store.job_output_uri("job1") == (
+        "gs://out/job1/output",
+        "gs://out/job1/figure",
+    )
+
+
+def test_result_url_points_at_the_backend_proxy(store: GCSStorage) -> None:
+    # Result files are streamed through the backend, not the bucket directly, so
+    # the browser fetches them same-origin (no signed URL, no bucket CORS).
+    assert store.generate_result_url("job1", "figure", "p.png") == (
+        "/jobs/job1/results/figure/p.png"
+    )
+
+
+def test_open_result_stream_yields_bytes(store: GCSStorage) -> None:
+    store._bucket("out").blob("job1/output/m.nc").upload_from_string(b"hello")
+    stream = store.open_result_stream("job1", "output", "m.nc")
+    assert stream is not None
+    body, _media_type, size = stream
+    assert b"".join(body) == b"hello"
+    assert size == 5
+    assert store.open_result_stream("job1", "output", "missing.nc") is None
+
+
+def test_list_result_files_parses_kind_and_filename(store: GCSStorage) -> None:
+    out = store._bucket("out")
+    out.blob("job1/output/spatial_metrics_a.nc").upload_from_string(b"1")
+    out.blob("job1/figure/plot.png").upload_from_string(b"2")
+    out.blob("other/output/ignored.nc").upload_from_string(b"3")
+    assert store.list_result_files("job1") == [
+        ("output", "spatial_metrics_a.nc"),
+        ("figure", "plot.png"),
+    ]
+
+
+def test_chat_figure_roundtrip_and_delete(store: GCSStorage) -> None:
+    store.save_chat_figure("fig1", _PNG)
+
+    figure = store.read_chat_figure("fig1")
+    assert figure is not None
+    data, media_type = figure
+    assert data == _PNG and media_type == "image/png"
+
+    store.delete_chat_figure("fig1")
+    assert store.read_chat_figure("fig1") is None
+
+
+def test_derived_payload_is_absent_until_written(store: GCSStorage) -> None:
+    assert store.read_derived("job1", "map_grids.v1.json") is None
+
+    store.write_derived("job1", "map_grids.v1.json", b'{"grids": []}')
+
+    assert store.read_derived("job1", "map_grids.v1.json") == b'{"grids": []}'
+    assert ("output", "map_grids.v1.json") not in store.list_result_files("job1")
+
+
+def test_read_log(store: GCSStorage) -> None:
+    assert store.read_log("job1") == ""
+    store._bucket("out").blob("job1/run.log").upload_from_string(b"line one\n")
+    assert store.read_log("job1") == "line one\n"

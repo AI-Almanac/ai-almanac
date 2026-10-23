@@ -57,6 +57,9 @@ cloud = [
     "modal>=1.5.0,<2",
     "psycopg[binary]>=3.3.4,<4",
     "globus-sdk>=4.8.0,<5",
+    # Dormant GCSStorage backend, kept for parity with develop.
+    "google-cloud-storage>=3.12.0,<4",
+    "gcsfs>=2026.5.0,<2027",
     # Floor for a transitive dep (via globus-sdk): PyJWT <= 2.13.0 is vulnerable.
     "pyjwt>=2.14.0",
 ]

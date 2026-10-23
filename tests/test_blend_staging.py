@@ -131,7 +131,6 @@ class _CountingBlob:
 
 
 def test_a_cached_season_costs_one_listing_not_a_lookup_per_file(tmp_path: Path) -> None:
-    pytest.importorskip("google.cloud.storage", reason="Modal-only GCS path; not in the local env")
     app = _load_blending_app()
     bucket = _CountingCacheBucket()
     app._cache_gcs_client = bucket

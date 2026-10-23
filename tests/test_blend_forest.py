@@ -501,7 +501,6 @@ def test_an_unwritten_marker_cancels_the_day_level_call_it_was_for(
 def test_a_blend_run_log_is_published_whether_or_not_the_run_fails(
     workflow, monkeypatch, fails: bool
 ) -> None:
-    pytest.importorskip("google.cloud.storage", reason="Modal-only GCS path; not in the local env")
     from google.cloud import storage as gcs
 
     uploaded: dict = {}

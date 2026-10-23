@@ -329,7 +329,6 @@ def test_a_failed_volume_commit_does_not_hide_the_rollout_error(
 def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, monkeypatch):
     """A job submitted before season plans existed fails with a clear reason
     instead of starting any season work."""
-    pytest.importorskip("google.cloud.storage", reason="Modal-only GCS path; not in the local env")
     forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
     started: list = []
     monkeypatch.setattr(
