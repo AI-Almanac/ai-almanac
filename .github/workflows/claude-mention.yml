@@ -25,6 +25,9 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      # Fetches the Claude App token: commits pushed with the job token would
+      # not trigger CI or autofix.yml. The github-oidc WIF provider rejects
+      # this workflow, so the OIDC token cannot reach GCP.
       id-token: write
       actions: read
     steps:
