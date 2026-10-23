@@ -327,7 +327,9 @@
 								<h3>Models Run</h3>
 								<div class="model-run-list">
 									{#each group.jobs as job}
-										{@const earlier = group.earlierAttempts[job.id] ?? []}
+										<!-- A retry that worked needs no history; one still going or failed again does. -->
+										{@const earlier =
+											job.status === 'complete' ? [] : (group.earlierAttempts[job.id] ?? [])}
 										<div class="model-run-item">
 											<strong>
 												{job.model_display_name || modelDisplayName(job.model_name)}
