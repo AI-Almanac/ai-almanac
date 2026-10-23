@@ -8,6 +8,8 @@ import { request } from './core';
 export type DataSource = components['schemas']['DataSourceOut'];
 export type DataSourceCreate = components['schemas']['DataSourceIn'];
 export type DataSourceValidation = components['schemas']['DataSourceValidationOut'];
+export type DataSourceDiscovery = components['schemas']['DiscoveryOut'];
+export type DiscoveredSource = components['schemas']['DiscoveredSourceOut'];
 
 export async function listDataSources(kind?: 'obs' | 'model'): Promise<DataSource[]> {
 	const q = kind ? `?kind=${kind}` : '';
@@ -18,6 +20,14 @@ export async function validateDataSource(body: DataSourceCreate): Promise<DataSo
 	return request<DataSourceValidation>('/data-sources/validate', {
 		method: 'POST',
 		body: JSON.stringify(body)
+	});
+}
+
+/** Propose sources for the NetCDF directories under `root` (the mount roots when omitted). */
+export async function discoverDataSources(root?: string): Promise<DataSourceDiscovery> {
+	return request<DataSourceDiscovery>('/data-sources/discover', {
+		method: 'POST',
+		body: JSON.stringify(root ? { root } : {})
 	});
 }
 

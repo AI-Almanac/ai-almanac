@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import {
 		listDataSources,
 		validateDataSource,
@@ -21,6 +21,8 @@
 	import FilePicker from '$lib/FilePicker.svelte';
 	import { describeSourceCoverage, formatDegrees, missingYears } from '$lib/source-coverage';
 	import { groupSources } from './source-groups';
+	import SourceDiscovery from './SourceDiscovery.svelte';
+	import { linkableModels as modelsForGrid, withForecastModel } from './live-links';
 	import { account } from '$lib/account.svelte';
 
 	$effect(() => {
@@ -46,6 +48,7 @@
 	let pickerOpen = $state(false);
 	let editingId = $state<string | null>(null);
 	let revalidatingId = $state<string | null>(null);
+	let linkingId = $state<string | null>(null);
 	let validationDraft = $state<DataSourceValidation | null>(null);
 	let validatedSignature = $state('');
 	// Live forecast models a model archive can be linked to. Empty when live
@@ -206,7 +209,7 @@
 		validationDraft = null;
 	}
 
-	function onEdit(source: DataSource) {
+	async function onEdit(source: DataSource) {
 		editingId = source.id;
 		formKind = source.kind;
 		formName = source.name;
@@ -224,7 +227,32 @@
 		formInitDaysSource = String(source.metadata.init_days_source ?? '');
 		formForecastModelId = String(source.metadata.forecast_model_id ?? '');
 		validationDraft = null;
-		window.scrollTo({ top: 0, behavior: 'smooth' });
+		// The form opens inside the source's row; the add form above collapses,
+		// so keep the row in view rather than leaving it where it was.
+		await tick();
+		document
+			.getElementById(`edit-${source.id}`)
+			?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+	}
+
+	async function onLink(source: DataSource, modelId: string) {
+		linkingId = source.id;
+		error = null;
+		try {
+			const updated = await updateDataSource(source.id, {
+				name: source.name,
+				path: source.path,
+				region: source.region,
+				metadata: withForecastModel(source.metadata, modelId)
+			});
+			sources = sources.map((item) => (item.id === updated.id ? updated : item));
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			// Re-render so the menu shows the link the server still has.
+			sources = [...sources];
+		} finally {
+			linkingId = null;
+		}
 	}
 
 	function toggleInitializationDay(day: number, checked: boolean) {
@@ -279,12 +307,7 @@
 				: undefined) as number | undefined
 	);
 	const linkableModels = $derived(
-		forecastModels.filter(
-			(model) =>
-				model.id === formForecastModelId ||
-				typeof archiveGridStep !== 'number' ||
-				Math.abs(model.resolution_deg - archiveGridStep) < 1e-6
-		)
+		modelsForGrid(forecastModels, archiveGridStep, formForecastModelId)
 	);
 
 	function liveForecastSummary(source: DataSource): string | null {
@@ -367,230 +390,26 @@
 		<div class="banner err">{error}</div>
 	{/if}
 
+	{#if account.isAdmin}
+		<SourceDiscovery
+			{regions}
+			{forecastModels}
+			canBrowse={account.canBrowseFs}
+			startOpen={!loading && sources.length === 0}
+			onregistered={load}
+		/>
+	{/if}
+
 	<section class="add">
-		<h2>{editingId ? 'Edit source' : 'Add a source'}</h2>
-		<form onsubmit={onSubmit}>
-			<div class="row">
-				<label>
-					<span>Kind</span>
-					<select bind:value={formKind} disabled={editingId !== null} onchange={onKindChange}>
-						<option value="obs">Observations</option>
-						<option value="model">Model forecasts</option>
-					</select>
-				</label>
-				<label class="grow">
-					<span>Name</span>
-					<input
-						type="text"
-						bind:value={formName}
-						placeholder={formKind === 'obs' ? 'e.g. ERA5 Ethiopia' : 'e.g. FuXi Ethiopia 2018-2022'}
-						required
-					/>
-				</label>
-			</div>
-			<div class="path-row">
-				<label class="grow">
-					<span>Directory or gs:// URL</span>
-					<input
-						type="text"
-						bind:value={formPath}
-						placeholder="gs://my-bucket/forecasts/fuxi or /data/era5/ethiopia"
-						required
-					/>
-				</label>
-				{#if account.canBrowseFs}
-					<button type="button" class="browse" onclick={() => (pickerOpen = true)}>Browse</button>
-				{/if}
-			</div>
-			<div class="row">
-				<label class="grow">
-					<span>Region <em>(required)</em></span>
-					<select bind:value={formRegion} required>
-						<option value="" disabled>Choose the dataset coverage</option>
-						{#if formRegion && !regions.some((region) => region.id === formRegion)}
-							<option value={formRegion}>{formRegion} (no longer configured)</option>
-						{/if}
-						{#each regions as region}
-							<option value={region.id}>{region.display_name}</option>
-						{/each}
-					</select>
-					{#if selectedRegion}
-						<small>
-							{selectedRegion.romp_region === 'custom'
-								? selectedRegion.id === 'custom'
-									? 'Geographic bounds will be inferred from the NetCDF coordinates during validation.'
-									: 'Benchmarks use this region’s configured geographic bounds.'
-								: `Benchmarks use the built-in ${selectedRegion.romp_region} region definition.`}
-						</small>
-					{/if}
-				</label>
-				<label class="grow">
-					<span>File pattern</span>
-					<input type="text" bind:value={formFilePattern} placeholder={`{}.nc`} />
-				</label>
-			</div>
-			<div class="row">
-				<label class="grow">
-					<span>NetCDF variable</span>
-					<input type="text" bind:value={formVar} placeholder="tp" required />
-				</label>
-				{#if formKind === 'model'}
-					<label class="grow">
-						<span>Model type</span>
-						<select bind:value={formModelType}>
-							<option value="AIWP">AIWP (AI weather prediction)</option>
-							<option value="NWP">NWP (numerical)</option>
-							<option value="climatology">Climatology</option>
-						</select>
-					</label>
-					<label class="grow">
-						<span>Live forecast model</span>
-						<select bind:value={formForecastModelId}>
-							<option value="">None (past seasons only)</option>
-							{#each linkableModels as model (model.id)}
-								<option value={model.id}>{model.display_name} · {model.resolution_deg}°</option>
-							{/each}
-						</select>
-						<small
-							>The model that produced this data. Blends trained on it can then run live forecasts.</small
-						>
-					</label>
-					{#if editingId}
-						<label class="grow">
-							<span>Initialization days</span>
-							<input
-								type="text"
-								bind:value={formInitDays}
-								oninput={() => (formInitDaysSource = 'configured')}
-								placeholder="e.g. 0,3 for Monday and Thursday"
-								required
-							/>
-							<small>Use weekday numbers from 0 (Monday) through 6 (Sunday).</small>
-						</label>
-					{/if}
-				{/if}
-			</div>
-			{#if !editingId && validationDraft && validationIsCurrent}
-				<div class:invalid={validationDraft.status === 'invalid'} class="validation-review">
-					<div class="review-heading">
-						<div>
-							<span class="review-kicker">
-								{validationDraft.status === 'ready' ? 'Validation complete' : 'Validation failed'}
-							</span>
-							<strong>
-								{validationDraft.status === 'ready'
-									? 'Review before adding'
-									: 'Update the source details and try again'}
-							</strong>
-						</div>
-						<span class:warn={validationDraft.status === 'invalid'} class="tag">
-							{validationDraft.status}
-						</span>
-					</div>
-
-					{#if validationDraft.status === 'ready'}
-						<div class="review-facts">
-							<div>
-								<span>Files</span>
-								<strong>{formFilePattern}</strong>
-							</div>
-							<div>
-								<span>Variable</span>
-								<strong>{formVar}</strong>
-							</div>
-							{#if validationDraft.metadata.start_year && validationDraft.metadata.end_year}
-								<div>
-									<span>Detected years</span>
-									<strong>
-										{String(validationDraft.metadata.start_year)}–{String(
-											validationDraft.metadata.end_year
-										)}
-									</strong>
-								</div>
-							{/if}
-							{#if missingYears(validationDraft).length}
-								<div class="wide">
-									<span>Missing years</span>
-									<strong class="gap-warning">
-										No files for {missingYears(validationDraft).join(', ')}. The source can still be
-										saved; those years will be unavailable.
-									</strong>
-								</div>
-							{/if}
-							{#if spatialBoundsMetadata(validationDraft.metadata)}
-								<div class="wide">
-									<span>Detected coverage</span>
-									<strong>{spatialBoundsMetadata(validationDraft.metadata)}</strong>
-								</div>
-							{/if}
-						</div>
-
-						{#if formKind === 'model'}
-							<fieldset class="weekday-fieldset">
-								<legend>Forecast initialization days</legend>
-								<p>
-									Confirm the days this model initializes. Benchmarks will use this schedule by
-									default.
-								</p>
-								<div class="weekday-options">
-									{#each weekdayNames as weekday, day}
-										<label class="weekday-option">
-											<input
-												type="checkbox"
-												checked={initializationDaySelected(day)}
-												onchange={(event) =>
-													toggleInitializationDay(day, (event.target as HTMLInputElement).checked)}
-											/>
-											<span>{weekday.slice(0, 3)}</span>
-										</label>
-									{/each}
-								</div>
-								<small>
-									{formInitDaysSource === 'inferred'
-										? 'Inferred from the NetCDF initialization-time coordinate.'
-										: 'Using your configured schedule.'}
-								</small>
-							</fieldset>
-						{/if}
-					{:else}
-						<p class="validation-error">{validationDraft.validation_error}</p>
-					{/if}
-				</div>
-			{/if}
-			{#if !editingId && validationDraft && !validationIsCurrent}
-				<p class="draft-stale">Source details changed. Validate again to refresh the review.</p>
-			{/if}
-			<div class="actions">
-				{#if editingId}
-					<button type="button" class="secondary" onclick={resetForm}>Cancel</button>
-				{/if}
-				{#if !editingId && validationDraft?.status === 'ready' && validationIsCurrent}
-					<button type="button" class="secondary" onclick={validateDraft} disabled={submitting}>
-						Validate again
-					</button>
-					<button
-						type="button"
-						onclick={confirmAdd}
-						disabled={submitting || (formKind === 'model' && !formInitDays)}
-					>
-						{submitting ? 'Adding…' : 'Add data source'}
-					</button>
-				{:else}
-					<button
-						type="submit"
-						disabled={submitting || !formName.trim() || !formPath.trim() || !formRegion}
-					>
-						{submitting
-							? editingId
-								? 'Saving…'
-								: 'Validating…'
-							: editingId
-								? 'Save and validate'
-								: 'Validate directory'}
-					</button>
-				{/if}
-			</div>
-		</form>
+		<h2>Add a source</h2>
+		{#if editingId}
+			<p class="muted">
+				Editing a source below.
+				<button type="button" class="rm" onclick={resetForm}>Cancel editing</button>
+			</p>
+		{:else}
+			{@render sourceForm()}
+		{/if}
 	</section>
 
 	<section>
@@ -629,6 +448,231 @@
 	onselect={(p) => (formPath = p)}
 />
 
+{#snippet sourceForm()}
+	<form class="source-form" onsubmit={onSubmit}>
+		<div class="row">
+			<label>
+				<span>Kind</span>
+				<select bind:value={formKind} disabled={editingId !== null} onchange={onKindChange}>
+					<option value="obs">Observations</option>
+					<option value="model">Model forecasts</option>
+				</select>
+			</label>
+			<label class="grow">
+				<span>Name</span>
+				<input
+					type="text"
+					bind:value={formName}
+					placeholder={formKind === 'obs' ? 'e.g. ERA5 Ethiopia' : 'e.g. FuXi Ethiopia 2018-2022'}
+					required
+				/>
+			</label>
+		</div>
+		<div class="path-row">
+			<label class="grow">
+				<span>Directory or gs:// URL</span>
+				<input
+					type="text"
+					bind:value={formPath}
+					placeholder="gs://my-bucket/forecasts/fuxi or /data/era5/ethiopia"
+					required
+				/>
+			</label>
+			{#if account.canBrowseFs}
+				<button type="button" class="browse" onclick={() => (pickerOpen = true)}>Browse</button>
+			{/if}
+		</div>
+		<div class="row">
+			<label class="grow">
+				<span>Region <em>(required)</em></span>
+				<select bind:value={formRegion} required>
+					<option value="" disabled>Choose the dataset coverage</option>
+					{#if formRegion && !regions.some((region) => region.id === formRegion)}
+						<option value={formRegion}>{formRegion} (no longer configured)</option>
+					{/if}
+					{#each regions as region}
+						<option value={region.id}>{region.display_name}</option>
+					{/each}
+				</select>
+				{#if selectedRegion}
+					<small>
+						{selectedRegion.romp_region === 'custom'
+							? selectedRegion.id === 'custom'
+								? 'Geographic bounds will be inferred from the NetCDF coordinates during validation.'
+								: 'Benchmarks use this region’s configured geographic bounds.'
+							: `Benchmarks use the built-in ${selectedRegion.romp_region} region definition.`}
+					</small>
+				{/if}
+			</label>
+			<label class="grow">
+				<span>File pattern</span>
+				<input type="text" bind:value={formFilePattern} placeholder={`{}.nc`} />
+			</label>
+		</div>
+		<div class="row">
+			<label class="grow">
+				<span>NetCDF variable</span>
+				<input type="text" bind:value={formVar} placeholder="tp" required />
+			</label>
+			{#if formKind === 'model'}
+				<label class="grow">
+					<span>Model type</span>
+					<select bind:value={formModelType}>
+						<option value="AIWP">AIWP (AI weather prediction)</option>
+						<option value="NWP">NWP (numerical)</option>
+						<option value="climatology">Climatology</option>
+					</select>
+				</label>
+				<label class="grow">
+					<span>Live forecast model</span>
+					<select bind:value={formForecastModelId}>
+						<option value="">None (past seasons only)</option>
+						{#each linkableModels as model (model.id)}
+							<option value={model.id}>{model.display_name} · {model.resolution_deg}°</option>
+						{/each}
+					</select>
+					<small
+						>The model that produced this data. Blends trained on it can then run live forecasts.</small
+					>
+				</label>
+				{#if editingId}
+					<label class="grow">
+						<span>Initialization days</span>
+						<input
+							type="text"
+							bind:value={formInitDays}
+							oninput={() => (formInitDaysSource = 'configured')}
+							placeholder="e.g. 0,3 for Monday and Thursday"
+							required
+						/>
+						<small>Use weekday numbers from 0 (Monday) through 6 (Sunday).</small>
+					</label>
+				{/if}
+			{/if}
+		</div>
+		{#if !editingId && validationDraft && validationIsCurrent}
+			<div class:invalid={validationDraft.status === 'invalid'} class="validation-review">
+				<div class="review-heading">
+					<div>
+						<span class="review-kicker">
+							{validationDraft.status === 'ready' ? 'Validation complete' : 'Validation failed'}
+						</span>
+						<strong>
+							{validationDraft.status === 'ready'
+								? 'Review before adding'
+								: 'Update the source details and try again'}
+						</strong>
+					</div>
+					<span class:warn={validationDraft.status === 'invalid'} class="tag">
+						{validationDraft.status}
+					</span>
+				</div>
+
+				{#if validationDraft.status === 'ready'}
+					<div class="review-facts">
+						<div>
+							<span>Files</span>
+							<strong>{formFilePattern}</strong>
+						</div>
+						<div>
+							<span>Variable</span>
+							<strong>{formVar}</strong>
+						</div>
+						{#if validationDraft.metadata.start_year && validationDraft.metadata.end_year}
+							<div>
+								<span>Detected years</span>
+								<strong>
+									{String(validationDraft.metadata.start_year)}–{String(
+										validationDraft.metadata.end_year
+									)}
+								</strong>
+							</div>
+						{/if}
+						{#if missingYears(validationDraft).length}
+							<div class="wide">
+								<span>Missing years</span>
+								<strong class="gap-warning">
+									No files for {missingYears(validationDraft).join(', ')}. The source can still be
+									saved; those years will be unavailable.
+								</strong>
+							</div>
+						{/if}
+						{#if spatialBoundsMetadata(validationDraft.metadata)}
+							<div class="wide">
+								<span>Detected coverage</span>
+								<strong>{spatialBoundsMetadata(validationDraft.metadata)}</strong>
+							</div>
+						{/if}
+					</div>
+
+					{#if formKind === 'model'}
+						<fieldset class="weekday-fieldset">
+							<legend>Forecast initialization days</legend>
+							<p>
+								Confirm the days this model initializes. Benchmarks will use this schedule by
+								default.
+							</p>
+							<div class="weekday-options">
+								{#each weekdayNames as weekday, day}
+									<label class="weekday-option">
+										<input
+											type="checkbox"
+											checked={initializationDaySelected(day)}
+											onchange={(event) =>
+												toggleInitializationDay(day, (event.target as HTMLInputElement).checked)}
+										/>
+										<span>{weekday.slice(0, 3)}</span>
+									</label>
+								{/each}
+							</div>
+							<small>
+								{formInitDaysSource === 'inferred'
+									? 'Inferred from the NetCDF initialization-time coordinate.'
+									: 'Using your configured schedule.'}
+							</small>
+						</fieldset>
+					{/if}
+				{:else}
+					<p class="validation-error">{validationDraft.validation_error}</p>
+				{/if}
+			</div>
+		{/if}
+		{#if !editingId && validationDraft && !validationIsCurrent}
+			<p class="draft-stale">Source details changed. Validate again to refresh the review.</p>
+		{/if}
+		<div class="actions">
+			{#if editingId}
+				<button type="button" class="secondary" onclick={resetForm}>Cancel</button>
+			{/if}
+			{#if !editingId && validationDraft?.status === 'ready' && validationIsCurrent}
+				<button type="button" class="secondary" onclick={validateDraft} disabled={submitting}>
+					Validate again
+				</button>
+				<button
+					type="button"
+					onclick={confirmAdd}
+					disabled={submitting || (formKind === 'model' && !formInitDays)}
+				>
+					{submitting ? 'Adding…' : 'Add data source'}
+				</button>
+			{:else}
+				<button
+					type="submit"
+					disabled={submitting || !formName.trim() || !formPath.trim() || !formRegion}
+				>
+					{submitting
+						? editingId
+							? 'Saving…'
+							: 'Validating…'
+						: editingId
+							? 'Save and validate'
+							: 'Validate directory'}
+				</button>
+			{/if}
+		</div>
+	</form>
+{/snippet}
+
 {#snippet sourceGroups(list: DataSource[])}
 	{#each groupSources(list, (id) => regionName(id) ?? id) as group (group.region)}
 		<details class="region-group" open>
@@ -656,6 +700,8 @@
 {/snippet}
 
 {#snippet sourceRow(src: DataSource)}
+	{@const canEdit = account.isAdmin || src.is_owner}
+	{@const linked = String(src.metadata.forecast_model_id ?? '')}
 	<li class="source" class:missing={src.status === 'invalid'}>
 		<div class="meta">
 			<div class="name">
@@ -673,20 +719,50 @@
 			{#if initializationSchedule(src)}
 				<p class="coverage">{initializationSchedule(src)}</p>
 			{/if}
-			{#if liveForecastSummary(src)}
+			{#if canEdit && src.kind === 'model'}
+				<!-- The menu says what's linked; only a link that can't run needs words. -->
+				{#if src.live_forecast?.status === 'grid_mismatch'}
+					<p class="coverage">{src.live_forecast.detail}</p>
+				{/if}
+			{:else if liveForecastSummary(src)}
 				<p class="coverage">{liveForecastSummary(src)}</p>
 			{/if}
 			{#if src.validation_error}
 				<p class="validation-error">{src.validation_error}</p>
 			{/if}
 		</div>
-		{#if account.isAdmin || src.is_owner}
-			<div class="source-actions">
-				<button class="rm" onclick={() => onEdit(src)}>Edit</button>
-				<button class="rm" disabled={revalidatingId === src.id} onclick={() => onRevalidate(src)}>
-					{revalidatingId === src.id ? 'Checking…' : 'Revalidate'}
-				</button>
-				<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
+		{#if canEdit}
+			<div class="source-side">
+				{#if src.kind === 'model'}
+					<label class="live-link">
+						<span>Live forecasts</span>
+						<select
+							value={linked}
+							disabled={linkingId === src.id || editingId === src.id}
+							onchange={(event) => onLink(src, event.currentTarget.value)}
+						>
+							<option value="">None (past seasons only)</option>
+							{#each modelsForGrid(forecastModels, src.metadata.grid_step_deg, linked) as model (model.id)}
+								<option value={model.id}>{model.display_name} · {model.resolution_deg}°</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
+				<div class="source-actions">
+					<button class="rm" disabled={editingId === src.id} onclick={() => onEdit(src)}>
+						Edit
+					</button>
+					<button class="rm" disabled={revalidatingId === src.id} onclick={() => onRevalidate(src)}>
+						{revalidatingId === src.id ? 'Checking…' : 'Revalidate'}
+					</button>
+					<button class="rm" onclick={() => onDelete(src)} aria-label="Remove">Remove</button>
+				</div>
+			</div>
+		{/if}
+		{#if editingId === src.id}
+			<div class="inline-edit" id={`edit-${src.id}`}>
+				<h3>Edit source</h3>
+				{@render sourceForm()}
 			</div>
 		{/if}
 	</li>
@@ -721,7 +797,7 @@
 		font-weight: 400;
 		font-size: 0.95rem;
 	}
-	.add form {
+	.source-form {
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
@@ -836,6 +912,7 @@
 	}
 	.source {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 1rem;
 		align-items: center;
 		justify-content: space-between;
@@ -890,6 +967,30 @@
 	.secondary {
 		background: transparent;
 		color: var(--color-text);
+	}
+	.source-side {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.5rem;
+	}
+	.live-link {
+		min-width: 15rem;
+	}
+	.live-link select {
+		padding: 0.35rem 0.5rem;
+		font-size: 0.85rem;
+	}
+	.inline-edit {
+		flex: 1 1 100%;
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		scroll-margin: 1rem;
+	}
+	.inline-edit h3 {
+		margin: 0;
+		font-size: 0.95rem;
 	}
 	.source-actions {
 		display: flex;
