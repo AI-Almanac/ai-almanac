@@ -41,6 +41,11 @@ services:
       PIXI_CACHE_DIR: /data/cache/pixi
       HF_HOME: /data/cache/huggingface
       EARTH2STUDIO_CACHE: /data/cache/earth2studio
+      # The local LLM compiles GPU kernels on its first start (minutes); keep
+      # them too, or every rebuild repeats it. vLLM's own cache follows XDG.
+      XDG_CACHE_HOME: /data/cache
+      FLASHINFER_WORKSPACE_BASE: /data/cache/flashinfer-workspace
+      TRITON_CACHE_DIR: /data/cache/triton
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     # Loopback only: other machines cannot reach it, and the access token that
     # container mode requires keeps other local users of the Spark out.
