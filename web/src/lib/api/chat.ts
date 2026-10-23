@@ -170,6 +170,17 @@ export type ChatSessionDetail = ChatSession & {
 	transcript: ChatMessage[];
 };
 
+/** How far the locally run model has got through starting up (see local_llm.startup_progress). */
+export type AssistantStartup = {
+	stage: 'starting' | 'loading_weights' | 'compiling' | 'capturing' | 'tuning' | 'finishing';
+	elapsed_seconds: number | null;
+	detail: string | null;
+	done: number | null;
+	total: number | null;
+	// Why the previous launch failed, when this turn is waiting on a retry.
+	previous_failure: string | null;
+};
+
 export type ChatEvent =
 	| { type: 'text_delta'; turn_id: string; content: string }
 	| { type: 'thinking_delta'; turn_id: string; content: string }
@@ -227,6 +238,7 @@ export type ChatEvent =
 			validation?: BlendValidation | null;
 	  }
 	| { type: 'assistant_status'; status: 'waking' }
+	| ({ type: 'assistant_status'; status: 'loading' } & AssistantStartup)
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
 	| { type: 'done'; turn: ChatMessage };
 

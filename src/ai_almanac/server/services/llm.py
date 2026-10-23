@@ -715,6 +715,48 @@ async def _acquire_llm_slot(user_id: str) -> Semaphore:
     return semaphore
 
 
+# While the managed model starts, a turn waits for it rather than failing, and
+# reports progress this often. A first start compiles kernels for minutes; the
+# cap stops a server that never comes up from holding the turn open for good.
+_STARTUP_POLL_SECONDS = 3.0
+_STARTUP_WAIT_SECONDS = 30 * 60
+
+
+async def _wait_for_local_model() -> AsyncIterator[str]:
+    """Hold the turn until the managed model can answer, streaming startup progress.
+
+    Raises AssistantUnavailable when it can't: a forecast holds the GPU, the
+    launch this turn waited on failed, or it is still loading after
+    _STARTUP_WAIT_SECONDS. A failure left by an earlier launch only triggers a
+    retry, which the turn waits on and reports.
+    """
+    deadline = time.monotonic() + _STARTUP_WAIT_SECONDS
+    previous_failure: str | None = None
+    first_check = True
+    while True:
+        try:
+            await asyncio.to_thread(local_llm.ensure_awake)
+            return
+        except local_llm.AssistantStartFailed as exc:
+            if not first_check:
+                raise
+            previous_failure = exc.reason
+        except local_llm.AssistantLoading:
+            if time.monotonic() >= deadline:
+                raise
+        first_check = False
+        progress = await asyncio.to_thread(local_llm.startup_progress)
+        yield json.dumps(
+            {
+                "type": "assistant_status",
+                "status": "loading",
+                **vars(progress),
+                "previous_failure": previous_failure,
+            }
+        )
+        await asyncio.sleep(_STARTUP_POLL_SECONDS)
+
+
 async def stream_response(
     message_history: list[ModelMessage],
     user_id: str,
@@ -733,7 +775,8 @@ async def stream_response(
         # reloads the weights (tens of seconds), so say so before blocking on it.
         if await asyncio.to_thread(local_llm.needs_wake):
             yield json.dumps({"type": "assistant_status", "status": "waking"})
-        await asyncio.to_thread(local_llm.ensure_awake)
+        async for event in _wait_for_local_model():
+            yield event
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None

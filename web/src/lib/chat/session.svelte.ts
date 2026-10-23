@@ -10,6 +10,7 @@ import {
 	denyChatBenchmarkApproval,
 	submitChatBlend,
 	denyChatBlendApproval,
+	type AssistantStartup,
 	type BenchmarkRunSpec,
 	type BenchmarkValidation,
 	type Blend,
@@ -80,6 +81,8 @@ export class ChatSessionState {
 	streamingTurn = $state<ChatMessage | null>(null);
 	// Set while a locally run model reloads its weights before answering.
 	assistantWaking = $state(false);
+	// The latest progress while a locally run model starts; the message waits on it.
+	assistantStartup = $state<AssistantStartup | null>(null);
 	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
@@ -276,6 +279,7 @@ export class ChatSessionState {
 		}
 		this.sending = true;
 		this.assistantWaking = false;
+		this.assistantStartup = null;
 		this.error = null;
 		this.pendingSubmission = null;
 		this.pendingApproval = null;
@@ -324,9 +328,11 @@ export class ChatSessionState {
 	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
 		if (event.type === 'assistant_status') {
 			this.assistantWaking = event.status === 'waking';
+			this.assistantStartup = event.status === 'loading' ? event : null;
 			return;
 		}
 		this.assistantWaking = false;
+		this.assistantStartup = null;
 		if (startsTurn(event) && this.streamingTurn?.id !== event.turn_id) {
 			this.streamingTurn = emptyAssistantTurn(event.turn_id);
 		}

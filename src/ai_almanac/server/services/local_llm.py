@@ -204,6 +204,77 @@ def _startup_error() -> str | None:
     return None
 
 
+_LAUNCH_MARKER = "==> ai-almanac: starting the local model server"
+
+# Startup stages in the order vLLM goes through them, each with the log text
+# that shows it has begun. The furthest one seen is the current stage.
+STARTUP_STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("starting", ()),
+    ("loading_weights", ("Loading model from scratch", "Loading weights")),
+    # Kernel compilation (torch.compile, FlashInfer JIT) and the warmup run;
+    # minutes on a first start, seconds once the kernels are cached.
+    ("compiling", ("Model loading took",)),
+    ("capturing", ("Capturing CUDA graph", "Graph capturing")),
+    ("tuning", ("Running FlashInfer autotune", "[AutoTuner]: Tuning")),
+    ("finishing", ("Starting vLLM API server", "Available routes", "Application startup")),
+)
+# tqdm bars, e.g. "[AutoTuner]: Tuning fp8_gemm:  69%|######9   | 11/16"
+# or "Capturing CUDA graphs (decode, FULL): 57%|#####7    | 4/7".
+_PROGRESS_BAR = re.compile(
+    r"(?:\[AutoTuner\]: Tuning (?P<op>[\w.]+)|(?P<capture>Capturing CUDA graphs?)[^:]*):"
+    r"\s*\d+%\|[^|]*\|\s*(?P<done>\d+)/(?P<total>\d+)"
+)
+
+
+@dataclass
+class StartupProgress:
+    stage: str
+    # Seconds since this launch began, when the launch recorded it.
+    elapsed_seconds: float | None = None
+    # What the stage is working on, e.g. the kernel being tuned.
+    detail: str | None = None
+    # How far through `detail` it is, when vLLM reports a count.
+    done: int | None = None
+    total: int | None = None
+
+
+def _current_launch_log() -> str:
+    """The log written since this launch's marker (or the tail, before markers existed)."""
+    try:
+        with log_path().open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 4 * 2**20))
+            text = log.read().decode(errors="replace")
+    except OSError:
+        return ""
+    start = text.rfind(_LAUNCH_MARKER)
+    if start < 0:
+        # A launch from before the marker: vLLM's own first line starts it.
+        start = text.rfind("non-default args")
+    return text[start:] if start >= 0 else text
+
+
+def startup_progress() -> StartupProgress:
+    """Which startup stage the managed server is in, read from its log."""
+    text = _current_launch_log()
+    stage = "starting"
+    for name, markers in STARTUP_STAGES:
+        if any(marker in text for marker in markers):
+            stage = name
+    progress = StartupProgress(stage=stage)
+    started_at = _read_record().get("started_at")
+    if isinstance(started_at, int | float):
+        progress.elapsed_seconds = max(0.0, time.time() - started_at)
+    if stage in ("capturing", "tuning"):
+        # The newest bar is the work in hand; tqdm redraws it with "\r".
+        bars = list(_PROGRESS_BAR.finditer(text[-64 * 1024 :]))
+        if bars:
+            bar = bars[-1]
+            progress.detail = bar.group("op") or "CUDA graphs"
+            progress.done, progress.total = int(bar.group("done")), int(bar.group("total"))
+    return progress
+
+
 def _failed_start() -> str | None:
     """Why the recorded launch is gone without ever answering, or None.
 
@@ -359,8 +430,14 @@ def _start_locked(identity: dict | None = None) -> None:
 
     identity = identity or _launch_identity()
     env = {**os.environ, "VLLM_SERVER_DEV_MODE": "1"}
+    # Progress is read from the log after this line, so earlier launches'
+    # stages don't count toward this one.
+    with log_path().open("a") as log:
+        log.write(f"{_LAUNCH_MARKER} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
     _proc = run_llm_server(identity["args"], env=env, log_path=log_path())
-    pid_path().write_text(json.dumps({"pid": _proc.pid, **identity, "ready": False}))
+    pid_path().write_text(
+        json.dumps({"pid": _proc.pid, **identity, "ready": False, "started_at": time.time()})
+    )
     _last_used = time.monotonic()
     logger.info("started local model server (pid %s), log: %s", _proc.pid, log_path())
 

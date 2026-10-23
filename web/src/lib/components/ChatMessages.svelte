@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
+	import AssistantStartupProgress from '$lib/components/AssistantStartupProgress.svelte';
 	import ChatActivity from '$lib/components/ChatActivity.svelte';
 	import ChatJobNotice from '$lib/components/ChatJobNotice.svelte';
 	import ChatRunConfirmation from '$lib/components/ChatRunConfirmation.svelte';
@@ -168,7 +169,9 @@
 		/>
 	{/if}
 
-	{#if chat.sending && !chat.streamingTurn}
+	{#if chat.sending && !chat.streamingTurn && chat.assistantStartup}
+		<AssistantStartupProgress progress={chat.assistantStartup} />
+	{:else if chat.sending && !chat.streamingTurn}
 		<div class="thinking" aria-label="Assistant is working">
 			{#if chat.assistantWaking}
 				<span class="thinking-label">Waking the assistant — this can take up to a minute…</span>

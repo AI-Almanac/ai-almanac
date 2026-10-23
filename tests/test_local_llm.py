@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -268,6 +269,138 @@ def test_a_launch_is_marked_ready_once_it_answers(launchable, clean_jobs) -> Non
 
     assert launched, "start() launched a server"
     assert json.loads(local_llm.pid_path().read_text())["ready"] is True
+
+
+_EARLIER_LAUNCH_LOG = (
+    "(APIServer pid=5) INFO 10-23 18:00:00 [api_server.py:1] Available routes are:\n"
+    "(APIServer pid=5) INFO 10-23 18:00:01 [launcher.py:1] Application startup complete.\n"
+)
+
+
+def _launch_log(*lines: str) -> str:
+    """An earlier, finished launch followed by this launch's marker and `lines`."""
+    return (
+        _EARLIER_LAUNCH_LOG
+        + f"{local_llm._LAUNCH_MARKER} 2026-10-23T19:01:22\n"
+        + "".join(f"{line}\n" for line in lines)
+    )
+
+
+@pytest.mark.parametrize(
+    ("lines", "stage"),
+    [
+        ((), "starting"),
+        (
+            ("(EngineCore pid=7) INFO [model_runner.py:396] Loading model from scratch...",),
+            "loading_weights",
+        ),
+        (
+            ("(EngineCore pid=7) INFO [model_runner.py:428] Model loading took 17.82 GiB memory",),
+            "compiling",
+        ),
+        (
+            (
+                "(EngineCore pid=7) INFO [kernel_warmup.py:359] Running FlashInfer autotune with 2048 tokens",
+            ),
+            "tuning",
+        ),
+    ],
+    ids=["just-launched", "weights", "compiling", "tuning"],
+)
+def test_startup_progress_reports_only_this_launchs_furthest_stage(managed, lines, stage) -> None:
+    local_llm.log_path().write_text(_launch_log(*lines))
+
+    assert local_llm.startup_progress().stage == stage
+
+
+def test_startup_progress_reads_the_latest_progress_bar_and_elapsed_time(managed) -> None:
+    local_llm.log_path().write_text(
+        _launch_log(
+            "(EngineCore pid=7) INFO [model_runner.py:428] Model loading took 17.82 GiB memory",
+            "(EngineCore pid=7) INFO [kernel_warmup.py:359] Running FlashInfer autotune",
+        )
+        + "[AutoTuner]: Tuning fp8_gemm:  56%|#####6    | 9/16 [00:02<00:02]\r"
+        + "[AutoTuner]: Tuning fp8_gemm:  69%|######9   | 11/16 [00:03<00:01]\r"
+    )
+    record = json.loads(local_llm.pid_path().read_text())
+    local_llm.pid_path().write_text(json.dumps({**record, "started_at": time.time() - 90}))
+
+    progress = local_llm.startup_progress()
+
+    assert (progress.stage, progress.detail, progress.done, progress.total) == (
+        "tuning",
+        "fp8_gemm",
+        11,
+        16,
+    )
+    assert progress.elapsed_seconds is not None and 89 <= progress.elapsed_seconds < 100
+
+
+async def _collect(stream) -> list[dict]:
+    return [json.loads(event) async for event in stream]
+
+
+@pytest.fixture
+def startup_steps(monkeypatch):
+    """Script ensure_awake's outcomes in order; an exception class is raised."""
+    from ai_almanac.server.services import llm
+
+    monkeypatch.setattr(llm, "_STARTUP_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        local_llm, "startup_progress", lambda: local_llm.StartupProgress(stage="compiling")
+    )
+
+    def script(*steps):
+        queue = list(steps)
+
+        def ensure_awake() -> None:
+            step = queue.pop(0)
+            if step is not None:
+                raise step
+
+        monkeypatch.setattr(local_llm, "ensure_awake", ensure_awake)
+        return llm._wait_for_local_model()
+
+    return script
+
+
+@pytest.mark.asyncio
+async def test_a_turn_waits_for_a_starting_model_and_reports_progress(startup_steps) -> None:
+    loading = local_llm.AssistantLoading()
+
+    events = await _collect(startup_steps(loading, loading, None))
+
+    assert [(e["status"], e["stage"]) for e in events] == [("loading", "compiling")] * 2
+    assert events[0]["previous_failure"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_failure_left_by_an_earlier_launch_is_retried_and_waited_on(
+    startup_steps,
+) -> None:
+    earlier = local_llm.AssistantStartFailed("RuntimeError: no C compiler")
+
+    events = await _collect(startup_steps(earlier, local_llm.AssistantLoading(), None))
+
+    assert [e["previous_failure"] for e in events] == ["RuntimeError: no C compiler"] * 2
+
+
+@pytest.mark.asyncio
+async def test_the_launch_a_turn_waited_on_failing_ends_the_turn(startup_steps) -> None:
+    failed = local_llm.AssistantStartFailed("RuntimeError: out of memory")
+
+    with pytest.raises(local_llm.AssistantStartFailed):
+        await _collect(startup_steps(local_llm.AssistantLoading(), failed))
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stops_waiting_at_the_cap(startup_steps, monkeypatch) -> None:
+    from ai_almanac.server.services import llm
+
+    monkeypatch.setattr(llm, "_STARTUP_WAIT_SECONDS", 0)
+
+    with pytest.raises(local_llm.AssistantLoading):
+        await _collect(startup_steps(local_llm.AssistantLoading()))
 
 
 def test_idle_sleep_waits_for_timeout(managed, monkeypatch) -> None:
