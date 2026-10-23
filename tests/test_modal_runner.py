@@ -250,7 +250,8 @@ async def test_inspect_leaves_the_job_active_when_modal_is_unreachable(
         ValueError("raised by the function"),
         modal_exc.FunctionTimeoutError("exceeded its timeout"),
         modal_exc.RemoteError("terminated"),
-        modal_exc.InternalFailure("input lost"),
+        # A crash-looping (e.g. OOM-killed) container, as observed on staging.
+        modal_exc.InternalFailure("Server has lost track of input"),
         modal_exc.OutputExpiredError(),
         # Unknown or expired call ids: retrying would never succeed.
         modal_exc.NotFoundError("call not found"),
