@@ -52,18 +52,42 @@
 		}
 	}
 
-	// Scroll to bottom whenever messages update.
+	// Follow the conversation to the bottom as it grows, unless the reader has
+	// scrolled up to read something earlier. Returning to the bottom resumes it.
+	const FOLLOW_SLACK_PX = 32;
+	let following = true;
+	let lastScrollTop = 0;
+
+	function onScroll() {
+		if (!messagesEl) return;
+		const { scrollTop, scrollHeight, clientHeight } = messagesEl;
+		if (scrollHeight - scrollTop - clientHeight <= FOLLOW_SLACK_PX) following = true;
+		// Only an upward scroll stops following: content that grows between
+		// setting scrollTop and the scroll event must not read as the reader leaving.
+		else if (scrollTop < lastScrollTop) following = false;
+		lastScrollTop = scrollTop;
+	}
+
+	// Opening a conversation or sending a message jumps to the latest.
+	$effect(() => {
+		void chat.sessionId;
+		following = true;
+	});
+	$effect(() => {
+		if (chat.sending) following = true;
+	});
+
 	$effect(() => {
 		void chat.messages;
 		void chat.streamingTurn;
 		void chat.jobActivity;
 		tick().then(() => {
-			if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+			if (messagesEl && following) messagesEl.scrollTop = messagesEl.scrollHeight;
 		});
 	});
 </script>
 
-<div class="messages" bind:this={messagesEl}>
+<div class="messages" bind:this={messagesEl} onscroll={onScroll}>
 	{#if chat.loadingSession}
 		<div class="loading-msgs">
 			<div class="spinner-sm"></div>
