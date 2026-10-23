@@ -29,7 +29,9 @@ import re
 import tarfile
 import tempfile
 import time
+from collections import deque
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -757,17 +759,30 @@ def unstored_issue_dates(
     return [date for date in issue_dates if date not in stored]
 
 
-def read_stored_trajectory(store: Path | str, key: TrajectoryKey, issue_date: dt.date):
-    import xarray as xr
-
+def stored_trajectory_file(
+    store: Path | str, key: TrajectoryKey, issue_date: dt.date, downloads: Path
+) -> Path:
+    """A local file holding a stored trajectory: the store's own file, or for a
+    gs:// store a download of it into `downloads`."""
     uri = key.uri(store, issue_date)
     if not uri.startswith("gs://"):
-        with xr.open_dataarray(uri) as da:
-            return da.load()
+        return Path(uri)
+    local_path = downloads / f"{issue_date.isoformat()}.nc"
+    _gcs_blob(uri).download_to_filename(str(local_path))
+    return local_path
+
+
+def open_trajectory(path: Path):
+    """Open a stored trajectory lazily: indexing it reads only the chunks it needs."""
+    import xarray as xr
+
+    return xr.open_dataarray(path, engine="h5netcdf")
+
+
+def read_stored_trajectory(store: Path | str, key: TrajectoryKey, issue_date: dt.date):
     with tempfile.TemporaryDirectory(prefix="trajectory-") as tmp:
-        local_path = Path(tmp) / "trajectory.nc"
-        _gcs_blob(uri).download_to_filename(str(local_path))
-        with xr.open_dataarray(local_path, engine="h5netcdf") as da:
+        path = stored_trajectory_file(store, key, issue_date, Path(tmp))
+        with open_trajectory(path) as da:
             return da.load()
 
 
@@ -974,6 +989,36 @@ def chunk_rollouts(
     return chunks
 
 
+# Stored trajectories downloaded at once during assembly. Each is a global
+# native-grid file (~130 MB at 0.25 deg) read over one HTTP stream, so one at a
+# time leaves the container waiting on the network; this many in flight also
+# caps the scratch disk they hold.
+ASSEMBLY_DOWNLOADS = 8
+
+
+def _map_ahead(pool, fn, items, ahead: int):
+    """Like pool.map, in order, but with at most `ahead` calls in flight or
+    finished and unconsumed, so finished downloads can't pile up on disk."""
+    pending: deque = deque()
+    for item in items:
+        pending.append(pool.submit(fn, item))
+        if len(pending) >= ahead:
+            yield pending.popleft().result()
+    while pending:
+        yield pending.popleft().result()
+
+
+def season_slice(trajectory, issue_date: dt.date, run: ModelRun):
+    """One issue date's slice of the season: the stored trajectory cropped to
+    the run's bounds, in the archive's units. Cropping first means a lazily
+    opened trajectory only ever reads and converts the region."""
+    import numpy as np
+
+    if run.spatial_bounds:
+        trajectory = select_lat_lon_bounds(trajectory, run.spatial_bounds)
+    return trajectory.assign_coords(time=np.datetime64(issue_date)) * run.unit_cvt
+
+
 def assemble_season_netcdf(
     store: Path | str,
     key: TrajectoryKey,
@@ -985,25 +1030,35 @@ def assemble_season_netcdf(
     (time x day x lat x lon, variable tp) from the run's stored trajectories,
     applying its archive's unit conversion and spatial bounds."""
     import dask
-    import numpy as np
     import xarray as xr
 
-    scratch_root.mkdir(parents=True, exist_ok=True)
+    downloads = scratch_root / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
 
+    def fetch(issue_date: dt.date) -> Path:
+        return stored_trajectory_file(store, key, issue_date, downloads)
+
+    # Only the downloads run on threads: HDF5 isn't thread-safe, so every
+    # decode and slice write stays on this one.
+    started = time.perf_counter()
     slice_paths: list[Path] = []
-    for i, issue_date in enumerate(run.issue_dates, start=1):
-        trajectory = read_stored_trajectory(store, key, issue_date)
-        # Write each slice to scratch immediately and release the in-memory
-        # array — accumulating all N trajectories before xr.concat causes OOM
-        # on long seasons. open_mfdataset reassembles lazily via dask below.
-        traj = trajectory.assign_coords(time=np.datetime64(issue_date)) * run.unit_cvt
-        if run.spatial_bounds:
-            traj = select_lat_lon_bounds(traj, run.spatial_bounds)
-        slice_path = scratch_root / f"slice_{i:03d}.nc"
-        traj.rename("tp").to_netcdf(slice_path)
-        slice_paths.append(slice_path)
-        del trajectory, traj
-        gc.collect()
+    with ThreadPoolExecutor(ASSEMBLY_DOWNLOADS) as pool:
+        fetched = _map_ahead(pool, fetch, run.issue_dates, ASSEMBLY_DOWNLOADS)
+        for i, (issue_date, path) in enumerate(zip(run.issue_dates, fetched, strict=True), start=1):
+            # Each slice goes to scratch straight away: a season with no bounds
+            # holds global trajectories, and keeping them all in memory for one
+            # concat runs out of it. open_mfdataset reassembles them lazily below.
+            slice_path = scratch_root / f"slice_{i:03d}.nc"
+            with open_trajectory(path) as trajectory:
+                season_slice(trajectory, issue_date, run).rename("tp").to_netcdf(slice_path)
+            if path.parent == downloads:
+                path.unlink()
+            slice_paths.append(slice_path)
+            print(
+                f"==> [{run.member}] {issue_date.isoformat()} assembled "
+                f"({i}/{len(run.issue_dates)}, {time.perf_counter() - started:.0f}s)",
+                flush=True,
+            )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # HDF5/h5py is not thread-safe; open_mfdataset + to_netcdf under dask's
