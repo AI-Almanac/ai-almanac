@@ -213,6 +213,63 @@ def test_ensure_awake_restarts_a_stopped_server(managed, monkeypatch, clean_jobs
     assert started == [True]
 
 
+_CRASHED_START_LOG = """\
+(EngineCore pid=7) INFO 10-23 18:34:33 [model_runner.py:428] Model loading took 17.82 GiB
+(EngineCore pid=7) ERROR 10-23 18:34:37 [core.py:1366]     raise RuntimeError(
+(EngineCore pid=7) torch._inductor.exc.InductorError: RuntimeError: Failed to find C compiler.
+(APIServer pid=6)   File "/env/vllm/v1/engine/utils.py", line 1320, in wait_for_engine_startup
+(APIServer pid=6) RuntimeError: Engine core initialization failed. See root cause above.
+"""
+
+
+def test_a_launch_that_died_while_loading_is_reported_and_retried(
+    managed, monkeypatch, clean_jobs
+) -> None:
+    use, _ = managed
+    use(FakeVllm())
+    record = {"pid": _FAKE_PID, **local_llm._launch_identity(), "ready": False}
+    local_llm.pid_path().write_text(json.dumps(record))
+    local_llm.log_path().write_text(_CRASHED_START_LOG)
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: False)
+    started: list[bool] = []
+    monkeypatch.setattr(local_llm, "_start_locked", lambda: started.append(True))
+
+    with pytest.raises(local_llm.AssistantStartFailed) as failed:
+        local_llm.ensure_awake()
+
+    assert started == [True], "a failed start is still retried"
+    assert "Failed to find C compiler" in str(failed.value)
+    assert str(local_llm.log_path()) in str(failed.value)
+
+
+def test_a_server_that_answered_before_exiting_is_just_restarted(
+    managed, monkeypatch, clean_jobs
+) -> None:
+    use, _ = managed
+    use(FakeVllm())
+    record = {"pid": _FAKE_PID, **local_llm._launch_identity(), "ready": True}
+    local_llm.pid_path().write_text(json.dumps(record))
+    local_llm.log_path().write_text(_CRASHED_START_LOG)
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: False)
+    monkeypatch.setattr(local_llm, "_start_locked", lambda: None)
+
+    with pytest.raises(local_llm.AssistantLoading):
+        local_llm.ensure_awake()
+
+
+def test_a_launch_is_marked_ready_once_it_answers(launchable, clean_jobs) -> None:
+    use, _, launched = launchable
+    use(FakeVllm())
+    local_llm.pid_path().unlink()
+
+    local_llm.start()
+    assert json.loads(local_llm.pid_path().read_text())["ready"] is False
+    local_llm.ensure_awake()
+
+    assert launched, "start() launched a server"
+    assert json.loads(local_llm.pid_path().read_text())["ready"] is True
+
+
 def test_idle_sleep_waits_for_timeout(managed, monkeypatch) -> None:
     use, _ = managed
     fake = use(FakeVllm())

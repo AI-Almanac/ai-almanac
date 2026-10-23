@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -82,6 +83,17 @@ class AssistantPaused(AssistantUnavailable):
 class AssistantLoading(AssistantUnavailable):
     def __init__(self) -> None:
         super().__init__(LOADING_MESSAGE)
+
+
+class AssistantStartFailed(AssistantUnavailable):
+    """The last launch exited before it ever answered; it is being retried."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(
+            f"The assistant's local model failed to start ({reason}). Trying again now; "
+            f"if this keeps happening, see {log_path()}."
+        )
 
 
 def is_managed() -> bool:
@@ -158,6 +170,49 @@ def _is_our_server(pid: int) -> bool:
 def _live_pid() -> int | None:
     pid = _read_pid()
     return pid if pid is not None and _is_our_server(pid) else None
+
+
+def _mark_ready() -> None:
+    """Record that the current launch answered, so a later exit isn't a failed start."""
+    record = _read_record()
+    if record and record.get("ready") is False:
+        pid_path().write_text(json.dumps({**record, "ready": True}))
+
+
+# A Python exception line in vLLM's log, after any "(EngineCore pid=N) ERROR …]" prefix.
+_EXCEPTION_LINE = re.compile(r"(?:\]\s*|^|\)\s+)((?:\w+\.)*\w+(?:Error|Exception): .+)$")
+
+
+def _startup_error() -> str | None:
+    """The root-cause exception from the end of the log, if one is there.
+
+    vLLM ends a failed start with "Engine core initialization failed. See root
+    cause above", so the most recent exception other than that one is the cause.
+    """
+    try:
+        with log_path().open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 256 * 1024))
+            tail = log.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        match = _EXCEPTION_LINE.search(line.strip())
+        if match and "Engine core initialization failed" not in match.group(1):
+            reason = match.group(1)
+            return reason if len(reason) <= 240 else reason[:237] + "…"
+    return None
+
+
+def _failed_start() -> str | None:
+    """Why the recorded launch is gone without ever answering, or None.
+
+    Launches record `ready: false` until they first answer; records from before
+    that field existed don't say, so they aren't reported as failures.
+    """
+    if _read_record().get("ready") is not False:
+        return None
+    return _startup_error() or "it exited while loading"
 
 
 def _signal_group(pid: int, sig: signal.Signals) -> None:
@@ -305,7 +360,7 @@ def _start_locked(identity: dict | None = None) -> None:
     identity = identity or _launch_identity()
     env = {**os.environ, "VLLM_SERVER_DEV_MODE": "1"}
     _proc = run_llm_server(identity["args"], env=env, log_path=log_path())
-    pid_path().write_text(json.dumps({"pid": _proc.pid, **identity}))
+    pid_path().write_text(json.dumps({"pid": _proc.pid, **identity, "ready": False}))
     _last_used = time.monotonic()
     logger.info("started local model server (pid %s), log: %s", _proc.pid, log_path())
 
@@ -461,8 +516,13 @@ def ensure_awake() -> None:
         running = _live_pid()
         if running is None:
             # Stopped by a failed park (or crashed). Bring it back; the load
-            # takes minutes, so this turn cannot wait for it.
+            # takes minutes, so this turn cannot wait for it. A launch that
+            # died before ever answering is retried too, but said so: reporting
+            # "starting up" again would hide a server that can't start.
+            failure = _failed_start()
             _start_locked()
+            if failure:
+                raise AssistantStartFailed(failure)
             raise AssistantLoading()
         identity = _launch_identity()
         if {key: _read_record().get(key) for key in identity} != identity:
@@ -473,6 +533,7 @@ def ensure_awake() -> None:
             raise AssistantLoading()
         if not _healthy():
             raise AssistantLoading()
+        _mark_ready()
         if is_sleeping():
             started = time.monotonic()
             wake()
@@ -504,6 +565,7 @@ def status() -> AssistantStatus:
         return "off"
     if not _healthy():
         return "loading"
+    _mark_ready()
     try:
         if gpu_job_active():
             return "paused"
