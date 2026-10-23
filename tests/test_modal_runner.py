@@ -229,6 +229,8 @@ async def test_inspect_maps_modal_states(monkeypatch: pytest.MonkeyPatch) -> Non
         modal_exc.ServiceError("UNAVAILABLE"),
         modal_exc.InternalError("INTERNAL"),
         modal_exc.ResourceExhaustedError("rate limited"),
+        modal_exc.AuthError("token expired"),
+        modal_exc.PermissionDeniedError("token rotated"),
     ],
     ids=lambda error: type(error).__name__,
 )

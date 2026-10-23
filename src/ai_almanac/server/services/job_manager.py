@@ -206,6 +206,7 @@ async def _finish_modal_job(job_id: str, status: str, error: str | None) -> None
     """Finalize the job, then follow or stop a day-level blend it started."""
     from ai_almanac.server.services import day_level_blends
 
+    _unknown_poll_streaks.pop(job_id, None)
     await _finalize_remote_job(job_id, status, error)
     await day_level_blends.hand_off(job_id, status)
 

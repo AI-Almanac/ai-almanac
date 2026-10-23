@@ -99,18 +99,28 @@ def _transient_poll_errors() -> tuple[type[Exception], ...]:
     """Modal client errors that say nothing about the call's own outcome.
 
     These come from the RPC layer after its retries are exhausted: no
-    connection, gRPC UNAVAILABLE/DEADLINE_EXCEEDED/UNKNOWN, INTERNAL (5xx), and
-    RESOURCE_EXHAUSTED (rate limits). Anything else raised by `get` is the
-    call's result — the function raised, timed out, or was cancelled.
+    connection, gRPC UNAVAILABLE/DEADLINE_EXCEEDED/UNKNOWN, INTERNAL (5xx),
+    RESOURCE_EXHAUSTED (rate limits), and UNAUTHENTICATED/PERMISSION_DENIED (the
+    poller's own token is expired or rotated). Anything else raised by `get` is
+    the call's result — the function raised, timed out, or was cancelled.
     """
     from modal.exception import (
+        AuthError,
         ConnectionError,
         InternalError,
+        PermissionDeniedError,
         ResourceExhaustedError,
         ServiceError,
     )
 
-    return (ConnectionError, ServiceError, InternalError, ResourceExhaustedError)
+    return (
+        ConnectionError,
+        ServiceError,
+        InternalError,
+        ResourceExhaustedError,
+        AuthError,
+        PermissionDeniedError,
+    )
 
 
 async def _job_config(job_id: str) -> dict:
