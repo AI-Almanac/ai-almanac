@@ -53,10 +53,13 @@ async def create_forecast(body: ForecastCreate, user: CurrentUser):
     response_model=ForecastRefreshOut,
     status_code=status.HTTP_201_CREATED,
 )
-async def refresh_forecast(forecast_id: str, user: CurrentUser, response: Response):
+async def refresh_forecast(
+    forecast_id: str, user: CurrentUser, response: Response, force: bool = False
+):
     """Re-run a forecast with its original spec so it reuses the cached season.
-    An up-to-date forecast starts no run and answers 200 with itself."""
-    refreshed = await refresh_forecast_for_user(forecast_id, user.id)
+    An up-to-date forecast starts no run and answers 200 with itself, unless
+    `force` asks for a run anyway."""
+    refreshed = await refresh_forecast_for_user(forecast_id, user.id, force=force)
     if refreshed.up_to_date:
         response.status_code = status.HTTP_200_OK
     return refreshed

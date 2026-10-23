@@ -841,3 +841,19 @@ def test_blend_out_reports_true_holdout_years(blend_params: dict, expected: list
     }
 
     assert blend_row_to_out(row, None).true_holdout_years == expected
+
+
+@pytest.mark.asyncio
+async def test_forcing_an_update_of_an_up_to_date_forecast_starts_a_run(
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch
+) -> None:
+    _, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+
+    response = await client.post(
+        f"/forecasts/{forecast_id}/refresh", params={"force": "true"}, headers=as_new_user
+    )
+
+    assert response.status_code == 201
+    assert response.json()["up_to_date"] is False
+    assert response.json()["forecast"]["id"] != forecast_id
+    assert await _forecast_job_count() == 2

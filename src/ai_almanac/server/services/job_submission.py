@@ -1446,7 +1446,9 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
     return forecast_row_to_out(row, user_id)
 
 
-async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastRefreshOut:
+async def refresh_forecast_for_user(
+    forecast_id: str, user_id: str, *, force: bool = False
+) -> ForecastRefreshOut:
     """Re-run an existing forecast with its ORIGINAL generation parameters,
     unless it already scored everything a re-run would.
 
@@ -1461,7 +1463,9 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastR
 
     A completed forecast whose rebuilt job scores the same inputs (no issue
     date has elapsed and its blend is unchanged) is returned as up to date
-    without starting a run: a re-run would only reproduce it.
+    without starting a run: a re-run would only reproduce it. `force` runs it
+    anyway, for what the comparison can't see — a scoring fix in a deploy, or a
+    rebuilt trajectory cache.
     """
     async with get_db() as conn:
         row = (
@@ -1486,7 +1490,7 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastR
         run_id=row["run_id"],
     )
     job = await build_forecast_job(body, user_id)
-    if row["status"] == "complete" and scores_same_inputs(job.config, cfg):
+    if not force and row["status"] == "complete" and scores_same_inputs(job.config, cfg):
         return ForecastRefreshOut(forecast=forecast_row_to_out(dict(row), user_id), up_to_date=True)
     return ForecastRefreshOut(forecast=await submit_forecast_job(job, user_id), up_to_date=False)
 
