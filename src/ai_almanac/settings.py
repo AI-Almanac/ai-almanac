@@ -192,6 +192,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_history_max_messages: int = 80
     llm_tool_result_max_chars: int = 12000
+    # The model's context window in tokens, which the chat history is fitted
+    # into. 0 takes the managed local model's --max-model-len, and leaves the
+    # history unbudgeted for an external provider.
+    llm_context_tokens: int = 0
     # "managed" runs a bundled vLLM (server/services/local_llm.py) on this
     # machine and derives llm_base_url from llm_port; llm_model is then the
     # Hugging Face model id it serves. Personal installs only.

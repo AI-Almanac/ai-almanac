@@ -579,6 +579,21 @@ def _healthy() -> bool:
         return False
 
 
+def count_tokens(text: str) -> int | None:
+    """How many tokens `text` is in the served model's own tokenizer, or None if it can't say."""
+    try:
+        with _client(timeout=10.0) as client:
+            resp = client.post("/tokenize", json={"model": settings.llm_model, "prompt": text})
+            resp.raise_for_status()
+            data = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if isinstance(data.get("count"), int):
+        return data["count"]
+    tokens = data.get("tokens")
+    return len(tokens) if isinstance(tokens, list) else None
+
+
 def is_sleeping() -> bool:
     with _client() as client:
         resp = client.get("/is_sleeping")

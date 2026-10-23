@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 import time
 from asyncio import Lock, Semaphore
 from collections import defaultdict, deque
@@ -46,6 +47,7 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
@@ -260,6 +262,107 @@ def _compact_tool_content(value: object) -> object:
     return f"{text[:cap]}\n\n{_TRUNCATED_TOOL_RESULT}"
 
 
+# --- Fitting the history into the model's context window ---------------------
+
+# Room kept for what the history shares the window with: the instructions and
+# tool definitions (about 9.2K tokens today, counted with the local model's
+# tokenizer) and the reply.
+_RESERVED_CONTEXT_TOKENS = 20_000
+# Used when the served model can't count tokens itself. Measured on the local
+# Nemotron: a tool-heavy history (metrics JSON) came to 1.70 characters per
+# token, against 4.6 for the instructions' prose, so assume the worst.
+_CHARS_PER_TOKEN = 1.7
+_OMITTED_TOOL_RESULT = (
+    "[earlier tool result omitted to fit the conversation in the model's context; "
+    "call the tool again if you need it]"
+)
+
+
+def _context_window_tokens() -> int | None:
+    """The model's context length when known: the setting, else the local model's flags."""
+    if settings.llm_context_tokens > 0:
+        return settings.llm_context_tokens
+    if not local_llm.is_managed():
+        return None
+    args = shlex.split(local_llm.model_serve_args())
+    for index, arg in enumerate(args):
+        value = arg.split("=", 1)[1] if arg.startswith("--max-model-len=") else None
+        if arg == "--max-model-len" and index + 1 < len(args):
+            value = args[index + 1]
+        if value and value.isdigit():
+            return int(value)
+    return None
+
+
+def _part_text(part: object) -> str:
+    for attribute in ("content", "args"):
+        value = getattr(part, attribute, None)
+        if value is not None:
+            return value if isinstance(value, str) else json.dumps(value, default=str)
+    return ""
+
+
+def _history_chars(messages: Sequence[ModelMessage]) -> int:
+    return sum(len(_part_text(part)) for message in messages for part in message.parts)
+
+
+async def _chars_per_token(messages: Sequence[ModelMessage]) -> float:
+    """This history's characters per token: counted by the local model when it can, else the
+    conservative fallback."""
+    if local_llm.is_managed():
+        text = "\n".join(_part_text(part) for message in messages for part in message.parts)
+        if text:
+            tokens = await asyncio.to_thread(local_llm.count_tokens, text)
+            if tokens:
+                return len(text) / tokens
+    return _CHARS_PER_TOKEN
+
+
+def _starts_exchange(message: ModelMessage) -> bool:
+    """A request carrying the user's prompt: where a new exchange begins."""
+    return isinstance(message, ModelRequest) and any(
+        isinstance(part, UserPromptPart) for part in message.parts
+    )
+
+
+def fit_history_to_context(messages: list[ModelMessage], budget_chars: int) -> list[ModelMessage]:
+    """Shrink earlier exchanges until the history fits `budget_chars`.
+
+    The current exchange (from the latest user prompt on) is never touched.
+    Older tool results go first, oldest first, since they are the bulk and the
+    model can fetch them again; then whole exchanges, oldest first, which keeps
+    every tool call paired with its result.
+    """
+    if _history_chars(messages) <= budget_chars:
+        return messages
+    starts = [index for index, message in enumerate(messages) if _starts_exchange(message)]
+    current = starts[-1] if starts else len(messages)
+    messages = list(messages)
+    for index in range(current):
+        message = messages[index]
+        if _history_chars(messages) <= budget_chars:
+            return messages
+        if isinstance(message, ModelRequest) and any(
+            isinstance(part, ToolReturnPart) for part in message.parts
+        ):
+            messages[index] = replace(
+                message,
+                parts=[
+                    replace(part, content=_OMITTED_TOOL_RESULT)
+                    if isinstance(part, ToolReturnPart)
+                    else part
+                    for part in message.parts
+                ],
+            )
+    # Still over: drop whole exchanges from the front, keeping the current one.
+    while _history_chars(messages) > budget_chars:
+        starts = [index for index, message in enumerate(messages) if _starts_exchange(message)]
+        if len(starts) < 2:
+            break
+        messages = messages[starts[1] :]
+    return messages
+
+
 async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
     max_messages = settings.llm_history_max_messages
     if max_messages > 0 and len(messages) > max_messages:
@@ -277,6 +380,12 @@ async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
             for part in message.parts
         ]
         trimmed.append(replace(message, parts=parts))
+
+    window = _context_window_tokens()
+    if window:
+        tokens = max(window - _RESERVED_CONTEXT_TOKENS, window // 4)
+        budget = int(tokens * await _chars_per_token(trimmed))
+        trimmed = fit_history_to_context(trimmed, budget)
     return trimmed
 
 
