@@ -52,6 +52,9 @@ pytorch = "*"
 # pytorch, unlike upstream's release wheels (pypi-torch-only, no py311 aarch64).
 flash-attn = "*"
 netcdf4 = "<1.7.3"
+# python-dateutil 3 breaks the pypi solve: earth2studio needs s3fs, s3fs needs
+# aiobotocore, and every aiobotocore caps python-dateutil<3.
+python-dateutil = "<3"
 h5netcdf = "*"
 # earth2studio's gencast/graphcast extras cap xarray<2026.4.0
 # (google-deepmind/graphcast#213); an uncapped conda solve picks a newer
