@@ -95,6 +95,24 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
     return None
 
 
+def _transient_poll_errors() -> tuple[type[Exception], ...]:
+    """Modal client errors that say nothing about the call's own outcome.
+
+    These come from the RPC layer after its retries are exhausted: no
+    connection, gRPC UNAVAILABLE/DEADLINE_EXCEEDED/UNKNOWN, INTERNAL (5xx), and
+    RESOURCE_EXHAUSTED (rate limits). Anything else raised by `get` is the
+    call's result — the function raised, timed out, or was cancelled.
+    """
+    from modal.exception import (
+        ConnectionError,
+        InternalError,
+        ResourceExhaustedError,
+        ServiceError,
+    )
+
+    return (ConnectionError, ServiceError, InternalError, ResourceExhaustedError)
+
+
 async def _job_config(job_id: str) -> dict:
     async with get_db() as conn:
         row = (
@@ -146,12 +164,15 @@ class ModalRunner:
     def _inspect(self, call_id: str) -> ExecutionSnapshot:
         import modal
 
-        call = modal.FunctionCall.from_id(call_id)
         try:
-            call.get(timeout=0)
+            modal.FunctionCall.from_id(call_id).get(timeout=0)
         except TimeoutError:
+            # The builtin TimeoutError: no output yet. Modal's own
+            # FunctionTimeoutError is a different type and means the call failed.
             return ExecutionSnapshot(status="running")
-        except Exception:  # noqa: BLE001 — any other error means the call failed
+        except _transient_poll_errors() as exc:
+            return ExecutionSnapshot(status="unknown", detail=f"{type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001 — the call itself failed or was cancelled
             return ExecutionSnapshot(status="failed", exit_code=1)
         return ExecutionSnapshot(status="complete", exit_code=0)
 

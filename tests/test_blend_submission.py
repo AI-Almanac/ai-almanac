@@ -677,3 +677,77 @@ def test_blend_out_reports_true_holdout_years(blend_params: dict, expected: list
     }
 
     assert blend_row_to_out(row, None).true_holdout_years == expected
+
+
+class _RunnerInterruptedMidSubmit:
+    """A Modal runner whose spawn is overtaken by something else touching the row."""
+
+    name = "modal"
+
+    def __init__(self, interruption) -> None:  # noqa: ANN001 - test double
+        self._interruption = interruption
+
+    async def submit(self, request):  # noqa: ANN001 - test double
+        await self._interruption(request.job_id)
+        return RunnerHandle(runner="modal", external_id="fc-test")
+
+
+async def _submit_blend_interrupted_by(
+    monkeypatch: pytest.MonkeyPatch, user_id: str, interruption
+) -> dict:
+    from ai_almanac.server.db import get_db
+
+    runner = _RunnerInterruptedMidSubmit(interruption)
+    monkeypatch.setattr(job_submission, "get_job_runner", lambda: runner)
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await _seed_source("model", "GenCast", "gs://data/models/gencast")
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="raced blend",
+            obs_dataset_id=obs_id,
+            model_ids=[model_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().one()
+    return dict(row)
+
+
+@pytest.mark.asyncio
+async def test_reconciler_tick_mid_submit_does_not_launch_a_modal_job_locally(
+    client, user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    launched: list[str] = []
+
+    async def record_launch(job_id: str) -> None:
+        launched.append(job_id)
+
+    async def reconciler_tick(_job_id: str) -> None:
+        await job_manager.reconcile_jobs()
+
+    monkeypatch.setattr(job_manager, "launch_job", record_launch)
+
+    row = await _submit_blend_interrupted_by(monkeypatch, user_id, reconciler_tick)
+
+    assert launched == []
+    assert row["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_cancel_mid_submit_survives_the_submit_and_keeps_the_handle(
+    client, user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    async def cancel(job_id: str) -> None:
+        await job_manager.signal_cancel(job_id)
+
+    row = await _submit_blend_interrupted_by(monkeypatch, user_id, cancel)
+
+    assert row["status"] == "canceling"
+    # The reconciler needs the handle to cancel the call that was spawned.
+    assert row["runner_handle"]["external_id"] == "fc-test"

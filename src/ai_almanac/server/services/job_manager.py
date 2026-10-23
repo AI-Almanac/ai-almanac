@@ -18,6 +18,7 @@ import sqlalchemy as sa
 
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import trajectory_sets
+from ai_almanac.server.services.execution import ExecutionSnapshot
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.server.tables import jobs
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = ("queued", "starting", "running", "canceling")
 TERMINAL_STATUSES = ("complete", "failed", "canceled")
 HEARTBEAT_TIMEOUT_SECONDS = 15
+# ~5 minutes of failed Modal polls at the reconciler's 5 s tick.
+UNKNOWN_POLL_ESCALATION = 60
+
+_unknown_poll_streaks: dict[str, int] = {}
 
 
 def _now() -> str:
@@ -169,11 +174,32 @@ async def _reconcile_modal_job(row: dict) -> None:
         return
 
     snapshot = await runner.inspect(handle)
+    _track_unknown_polls(row["id"], snapshot)
     if snapshot.status == "complete":
         await _finish_modal_job(row["id"], "complete", None)
     elif snapshot.status == "failed":
         await _finish_modal_job(row["id"], "failed", await _modal_failure_log(row["id"]))
     # running/unknown: leave the job active for the next reconcile pass
+
+
+def _track_unknown_polls(job_id: str, snapshot: ExecutionSnapshot) -> None:
+    """Log polls that could not reach Modal, escalating a streak to an error.
+
+    An unknown poll leaves the job active, so without this a job whose status
+    can never be read would poll forever unnoticed.
+    """
+    if snapshot.status != "unknown":
+        _unknown_poll_streaks.pop(job_id, None)
+        return
+    streak = _unknown_poll_streaks.get(job_id, 0) + 1
+    _unknown_poll_streaks[job_id] = streak
+    log = logger.error if streak % UNKNOWN_POLL_ESCALATION == 0 else logger.warning
+    log(
+        "Could not read Modal status for job %s (%d consecutive polls): %s",
+        job_id,
+        streak,
+        snapshot.detail,
+    )
 
 
 async def _finish_modal_job(job_id: str, status: str, error: str | None) -> None:
