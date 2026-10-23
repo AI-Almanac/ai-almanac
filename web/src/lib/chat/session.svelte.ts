@@ -10,6 +10,7 @@ import {
 	denyChatBenchmarkApproval,
 	submitChatBlend,
 	denyChatBlendApproval,
+	getAssistantStartup,
 	type AssistantStartup,
 	type BenchmarkRunSpec,
 	type BenchmarkValidation,
@@ -57,6 +58,12 @@ function jobFromToolResult(result: unknown): Job | null {
 	return job as Job;
 }
 
+// How often a reopened chat checks on a reply still being written, and how long
+// before one is given up on: beyond the server's 30-minute wait for a starting
+// model, plus time to answer.
+const EARLIER_REPLY_POLL_MS = 3000;
+const EARLIER_REPLY_TIMEOUT_MS = 45 * 60 * 1000;
+
 function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string {
 	if (event.error_type === 'provider_error') return 'The chat provider failed. Please try again.';
 	if (event.error_type === 'tool_error') return 'A benchmark data lookup failed. Please try again.';
@@ -83,6 +90,9 @@ export class ChatSessionState {
 	assistantWaking = $state(false);
 	// The latest progress while a locally run model starts; the message waits on it.
 	assistantStartup = $state<AssistantStartup | null>(null);
+	// A reply sent before this page was (re)opened that the server is still
+	// writing; followed until it lands, and sending waits for it.
+	earlierReplyId = $state<string | null>(null);
 	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
@@ -115,6 +125,7 @@ export class ChatSessionState {
 
 	private sendLocked = false;
 	private loadedScopeToken: string | null = null;
+	private disposed = false;
 
 	constructor(
 		private getScope: () => ChatScope,
@@ -122,7 +133,67 @@ export class ChatSessionState {
 	) {}
 
 	get canSend(): boolean {
-		return !this.sending && !this.sendLocked && !this.loadingSession;
+		return !this.sending && !this.sendLocked && !this.loadingSession && !this.earlierReplyId;
+	}
+
+	/** Stop following an earlier reply once the panel showing it is gone. */
+	dispose() {
+		this.disposed = true;
+	}
+
+	/** Show a loaded transcript, following its last reply if the server is still writing it. */
+	private showTranscript(sessionId: string, transcript: ChatMessage[]) {
+		const last = transcript.at(-1);
+		if (this.sending || last?.role !== 'assistant' || last.status !== 'streaming') {
+			this.messages = transcript;
+			this.earlierReplyId = null;
+			return;
+		}
+		// The placeholder has nothing to show yet; the working indicator stands in for it.
+		this.messages = transcript.slice(0, -1);
+		if (Date.now() - Date.parse(last.created_at) > EARLIER_REPLY_TIMEOUT_MS) {
+			// Too old to still be running (the server restarted mid-reply, say).
+			this.earlierReplyId = null;
+			this.error = 'An earlier reply was interrupted. Send your message again.';
+			return;
+		}
+		void this.followEarlierReply(sessionId, last);
+	}
+
+	private async followEarlierReply(sessionId: string, turn: ChatMessage) {
+		this.earlierReplyId = turn.id;
+		const following = () =>
+			!this.disposed && this.sessionId === sessionId && this.earlierReplyId === turn.id;
+		const deadline = Date.parse(turn.created_at) + EARLIER_REPLY_TIMEOUT_MS;
+		while (following()) {
+			try {
+				const startup = await getAssistantStartup();
+				if (following()) this.assistantStartup = startup && { ...startup, previous_failure: null };
+			} catch {
+				// Progress is a nicety; the reply is still followed without it.
+			}
+			await new Promise((resolve) => setTimeout(resolve, EARLIER_REPLY_POLL_MS));
+			if (!following()) return;
+			try {
+				const detail = await getChatSession(sessionId);
+				const latest = detail.transcript.find((existing) => existing.id === turn.id);
+				if (!following()) return;
+				if (latest?.status !== 'streaming') {
+					this.messages = detail.transcript;
+					this.earlierReplyId = null;
+					this.assistantStartup = null;
+					return;
+				}
+			} catch {
+				// A failed refresh is retried on the next tick.
+			}
+			if (Date.now() > deadline) {
+				this.earlierReplyId = null;
+				this.assistantStartup = null;
+				this.error = 'An earlier reply was interrupted. Send your message again.';
+				return;
+			}
+		}
 	}
 
 	/** Reload the session list when the scope identity changes. */
@@ -172,7 +243,7 @@ export class ChatSessionState {
 			const detail = await getChatSession(id);
 			this.sessionId = id;
 			this.callbacks.onSessionReady?.(id);
-			this.messages = detail.transcript;
+			this.showTranscript(id, detail.transcript);
 			void this.refreshJobActivity();
 			if (detail.benchmark_config) {
 				this.callbacks.onBenchmarkConfig?.(

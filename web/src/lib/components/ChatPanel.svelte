@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import FigureLightbox from '$lib/components/FigureLightbox.svelte';
 	import ChatHeader from '$lib/components/ChatHeader.svelte';
 	import ChatMessages from '$lib/components/ChatMessages.svelte';
@@ -120,6 +120,8 @@
 		onBlendConfig: (config, validation) => onBlendConfig?.(config, validation),
 		onBlendSubmitted: (runId, created, sessionId) => onBlendSubmitted?.(runId, created, sessionId)
 	});
+
+	onDestroy(() => chat.dispose());
 
 	let input = $state('');
 	let initialMessageHandled = $state(false);

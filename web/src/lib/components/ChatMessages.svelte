@@ -169,12 +169,14 @@
 		/>
 	{/if}
 
-	{#if chat.sending && !chat.streamingTurn && chat.assistantStartup}
+	{#if (chat.sending || chat.earlierReplyId) && !chat.streamingTurn && chat.assistantStartup}
 		<AssistantStartupProgress progress={chat.assistantStartup} />
-	{:else if chat.sending && !chat.streamingTurn}
+	{:else if (chat.sending || chat.earlierReplyId) && !chat.streamingTurn}
 		<div class="thinking" aria-label="Assistant is working">
 			{#if chat.assistantWaking}
 				<span class="thinking-label">Waking the assistant — this can take up to a minute…</span>
+			{:else if chat.earlierReplyId}
+				<span class="thinking-label">Still working on your earlier message…</span>
 			{/if}
 			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
 		</div>

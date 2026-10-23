@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tabConversationKey } from '$lib/chat/conversation-key';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
@@ -80,8 +81,8 @@
 	// A comparison needs a wider assistant column than the normal rail.
 	let chatComparing = $state(false);
 	let splitEl = $state<HTMLElement | null>(null);
-	const blendSetupKey = crypto.randomUUID();
 	const initialPrompt = $page.url.searchParams.get('q')?.trim() ?? '';
+	const blendSetupKey = tabConversationKey('blend-setup', { fresh: Boolean(initialPrompt) });
 	// The new flag is dropped from the URL on load, so sign-in is sent back with it.
 	const setupReturnTo = initialPrompt ? $page.url.pathname + $page.url.search : '/blends?new=1';
 

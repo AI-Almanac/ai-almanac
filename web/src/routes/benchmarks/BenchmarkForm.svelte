@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { tabConversationKey } from '$lib/chat/conversation-key';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { type BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
@@ -33,7 +35,10 @@
 		onSubmitted: (groupKey: string, chatSessionId?: string | null) => void;
 	} = $props();
 
-	const setupKey = crypto.randomUUID();
+	// Chosen once, when the form opens: a later prompt change doesn't start a new chat.
+	const setupKey = tabConversationKey('benchmark-setup', {
+		fresh: Boolean(untrack(() => initialPrompt))
+	});
 	const form = new BenchmarkSetupForm(
 		() => store,
 		(runId, sessionId) => onSubmitted(runId, sessionId)

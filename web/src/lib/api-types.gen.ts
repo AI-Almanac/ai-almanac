@@ -470,6 +470,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/assistant-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Assistant Status
+         * @description Startup progress of the locally run model, for a chat reopened mid-reply.
+         *
+         *     A turn sent from this page streams its own progress; a page that comes back
+         *     to a reply already waiting on the model has no stream, so it polls this.
+         */
+        get: operations["assistant_status_chat_assistant_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/sessions": {
         parameters: {
             query?: never;
@@ -2068,6 +2091,26 @@ export interface components {
             created_at: string;
             /** Url */
             url: string;
+        };
+        /** AssistantStartupOut */
+        AssistantStartupOut: {
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "capturing" | "compiling" | "finishing" | "loading_weights" | "starting" | "tuning";
+            /** Elapsed Seconds */
+            elapsed_seconds: number | null;
+            /** Detail */
+            detail: string | null;
+            /** Done */
+            done: number | null;
+            /** Total */
+            total: number | null;
+        };
+        /** AssistantStatusOut */
+        AssistantStatusOut: {
+            startup: components["schemas"]["AssistantStartupOut"] | null;
         };
         /**
          * BandStatistics
@@ -5959,6 +6002,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assistant_status_chat_assistant_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantStatusOut"];
                 };
             };
         };

@@ -28,6 +28,7 @@ from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
 from ai_almanac.settings import settings
 
+from ..services import local_llm
 from ..services.benchmark_domain import (
     submit_benchmark_for_session,
     update_benchmark_config,
@@ -298,6 +299,32 @@ def _session_detail(row, user_id: str) -> SessionDetail:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+class AssistantStartupOut(BaseModel):
+    stage: Literal["starting", "loading_weights", "compiling", "capturing", "tuning", "finishing"]
+    elapsed_seconds: float | None
+    detail: str | None
+    done: int | None
+    total: int | None
+
+
+class AssistantStatusOut(BaseModel):
+    # Only set while a locally run model is starting; null otherwise.
+    startup: AssistantStartupOut | None
+
+
+@router.get("/assistant-status", response_model=AssistantStatusOut)
+async def assistant_status(_user: CurrentUser):
+    """Startup progress of the locally run model, for a chat reopened mid-reply.
+
+    A turn sent from this page streams its own progress; a page that comes back
+    to a reply already waiting on the model has no stream, so it polls this.
+    """
+    if not local_llm.is_managed() or await asyncio.to_thread(local_llm.status) != "loading":
+        return AssistantStatusOut(startup=None)
+    progress = await asyncio.to_thread(local_llm.startup_progress)
+    return AssistantStatusOut(startup=AssistantStartupOut(**vars(progress)))
 
 
 async def _require_selectable_ruleset(ruleset_id: str, *, for_admin: bool) -> None:

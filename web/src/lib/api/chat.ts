@@ -129,6 +129,8 @@ export type ChatMessage = {
 	guardrails?: GuardrailNotice[];
 	/** Absent on turns saved before blocks were recorded. */
 	blocks?: ChatTurnBlock[];
+	/** "streaming" while the server is still producing this reply. */
+	status?: 'streaming' | 'completed' | 'failed';
 };
 
 export type ChatArtifact = {
@@ -262,6 +264,17 @@ export async function getChatSessions(scope?: ChatScope): Promise<ChatSession[]>
 
 export async function getChatSession(id: string): Promise<ChatSessionDetail> {
 	return request<ChatSessionDetail>(`/chat/sessions/${id}`);
+}
+
+/** The locally run model's startup progress, or null when it isn't starting. */
+export async function getAssistantStartup(): Promise<Omit<
+	AssistantStartup,
+	'previous_failure'
+> | null> {
+	const status = await request<{ startup: Omit<AssistantStartup, 'previous_failure'> | null }>(
+		'/chat/assistant-status'
+	);
+	return status.startup;
 }
 
 export async function updateChatSession(

@@ -3,11 +3,12 @@
 	import { account } from '$lib/account.svelte';
 	import { getCapabilities } from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import { tabConversationKey } from '$lib/chat/conversation-key';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 
-	// Each visit is a fresh conversation, as each setup page's is.
-	const conversationKey = crypto.randomUUID();
 	const initialPrompt = $page.url.searchParams.get('q')?.trim() ?? '';
+	// The conversation survives navigating away and back; a `?q=` question starts its own.
+	const conversationKey = tabConversationKey('assistant', { fresh: Boolean(initialPrompt) });
 
 	let chatAvailable = $state<boolean | null>(null);
 
