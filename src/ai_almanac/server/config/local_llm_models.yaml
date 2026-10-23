@@ -14,6 +14,12 @@
 #
 # `--max-cudagraph-capture-size 32` and `--safetensors-load-strategy eager` are
 # the Spark startup/wake tuning from the design doc and are not model-specific.
+#
+# `--kernel-config.enable_flashinfer_autotune false` is Spark startup tuning too.
+# On the GB10 none of FlashInfer's tuned FP8 GEMM tactics run: a cold start spent
+# minutes profiling 736 shape/batch pairs, found no usable tactic for any, and
+# saved 0 configs, so every call used the default kernel anyway. Skipping the
+# search changes no kernel choice and saves those minutes on every cold start.
 
 models:
   - id: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
@@ -28,6 +34,7 @@ models:
       --max-model-len 65536 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
+      --kernel-config.enable_flashinfer_autotune false
     source: docs/local-llm-design.md
 
   - id: RedHatAI/Qwen3.6-35B-A3B-NVFP4
@@ -42,6 +49,7 @@ models:
       --max-model-len 65536 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser qwen3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
+      --kernel-config.enable_flashinfer_autotune false
     source: https://stevescargall.com/blog/2026/04/vllm-recipe-redhatai/qwen3.6-35b-a3b-nvfp4-on-dgx-spark/
 
   - id: nvidia/Qwen3.8-27B-NVFP4
@@ -56,6 +64,7 @@ models:
       --max-model-len 65536 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser qwen3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
+      --kernel-config.enable_flashinfer_autotune false
     source: https://build.nvidia.com/spark/vllm
 
   - id: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4
@@ -70,4 +79,5 @@ models:
       --max-model-len 65536 --max-num-seqs 4 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser nemotron_v3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
+      --kernel-config.enable_flashinfer_autotune false
     source: https://vllm.ai/blog/2026-06-01-vllm-dgx-spark
