@@ -131,6 +131,8 @@ export type ChatMessage = {
 	blocks?: ChatTurnBlock[];
 	/** "streaming" while the server is still producing this reply. */
 	status?: 'streaming' | 'completed' | 'failed';
+	/** The user stopped this reply part way; `content` is what it had said. */
+	stopped?: boolean;
 };
 
 export type ChatArtifact = {
@@ -250,7 +252,8 @@ export type ChatEvent =
 	| { type: 'assistant_status'; status: 'waking' }
 	| ({ type: 'assistant_status'; status: 'loading' } & AssistantStartup)
 	| { type: 'error'; message: string; error_type?: string; retryable?: boolean }
-	| { type: 'done'; turn: ChatMessage };
+	| { type: 'done'; turn: ChatMessage }
+	| { type: 'stopped'; turn: ChatMessage };
 
 export async function createChatSession(
 	scope: ChatScope,
@@ -272,6 +275,16 @@ export async function getChatSessions(scope?: ChatScope): Promise<ChatSession[]>
 
 export async function getChatSession(id: string): Promise<ChatSessionDetail> {
 	return request<ChatSessionDetail>(`/chat/sessions/${id}`);
+}
+
+/**
+ * Stop the reply streaming in a session, keeping what it had said. `stopped` is
+ * false when no reply is running where this request landed.
+ */
+export async function stopChatReply(sessionId: string): Promise<{ stopped: boolean }> {
+	return request<{ stopped: boolean }>(`/chat/sessions/${encodeURIComponent(sessionId)}/stop`, {
+		method: 'POST'
+	});
 }
 
 /** The locally run model's startup progress, or null when it isn't starting. */
@@ -398,12 +411,14 @@ export async function updateChatBlendConfig(
 export async function* sendChatMessage(
 	sessionId: string,
 	content: string,
-	scope?: ChatScope
+	scope?: ChatScope,
+	signal?: AbortSignal
 ): AsyncGenerator<ChatEvent> {
 	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', ...authHeaders() },
-		body: JSON.stringify({ content, scope })
+		body: JSON.stringify({ content, scope }),
+		signal
 	});
 	if (!res.ok) {
 		const body = await res.text();
@@ -412,7 +427,7 @@ export async function* sendChatMessage(
 
 	for await (const event of sseEvents<ChatEvent>(res)) {
 		yield event;
-		if (event.type === 'done' || event.type === 'error') return;
+		if (event.type === 'done' || event.type === 'stopped' || event.type === 'error') return;
 	}
 
 	throw new Error('Chat stream ended before a terminal event was received.');

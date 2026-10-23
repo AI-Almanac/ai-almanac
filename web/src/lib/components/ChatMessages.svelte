@@ -112,7 +112,11 @@
 					<ChatSetupHandoff {handoff} />
 				{/each}
 
-				{#if canRate && msg.content && msg.id !== chat.streamingTurn?.id}
+				{#if msg.stopped}
+					<p class="stopped-note">{msg.content ? 'Stopped' : 'Stopped before replying'}</p>
+				{/if}
+
+				{#if canRate && msg.content && !msg.stopped && msg.id !== chat.streamingTurn?.id}
 					<div class="rating">
 						<span class="rating-label">Was this useful?</span>
 						<button
@@ -184,6 +188,13 @@
 </div>
 
 <style>
+	.stopped-note {
+		margin: -0.35rem 0 0;
+		color: var(--color-text-muted);
+		font-size: 0.78rem;
+		font-style: italic;
+	}
+
 	.messages {
 		flex: 1;
 		overflow-y: auto;

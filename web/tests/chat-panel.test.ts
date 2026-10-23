@@ -18,7 +18,8 @@ const api = vi.hoisted(() => ({
 	getChatSession: vi.fn(),
 	updateChatSession: vi.fn(),
 	deleteChatSession: vi.fn(),
-	sendChatMessage: vi.fn()
+	sendChatMessage: vi.fn(),
+	stopChatReply: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
@@ -30,7 +31,8 @@ vi.mock('../src/lib/api', async () => {
 		getChatSession: api.getChatSession,
 		updateChatSession: api.updateChatSession,
 		deleteChatSession: api.deleteChatSession,
-		sendChatMessage: api.sendChatMessage
+		sendChatMessage: api.sendChatMessage,
+		stopChatReply: api.stopChatReply
 	};
 });
 
@@ -157,13 +159,87 @@ describe('ChatPanel', () => {
 
 		await fireEvent.click(sendButton);
 
-		await waitFor(() => expect(sendButton.disabled).toBe(true));
+		// Send turns into Stop while the reply runs, and Enter can't send again.
+		await screen.findByRole('button', { name: 'Stop' });
+		expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+		await fireEvent.input(input, { target: { value: 'And again.' } });
+		await fireEvent.keyDown(input, { key: 'Enter' });
 		expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
 
 		gate.resolve();
 
 		await screen.findByText('Completed');
 		expect(screen.queryByText('Run once.')).not.toBeNull();
+		expect((input as HTMLTextAreaElement).value).toBe('And again.');
+	});
+
+	it('stops a reply through the server, keeping what it had said', async () => {
+		api.getChatSessions.mockResolvedValue([baseSession()]);
+		api.getChatSession.mockResolvedValue(sessionDetail([]));
+		const stopped = deferred<void>();
+		api.stopChatReply.mockImplementation(async () => {
+			stopped.resolve();
+			return { stopped: true };
+		});
+		api.sendChatMessage.mockImplementation(async function* () {
+			yield { type: 'text_delta', turn_id: 'turn-assistant-1', content: 'Rerunning' };
+			await stopped.promise;
+			yield {
+				type: 'stopped',
+				turn: {
+					id: 'turn-assistant-1',
+					role: 'assistant',
+					content: 'Rerunning AIFSv2',
+					created_at: '2026-04-23T00:00:01Z',
+					stopped: true
+				}
+			};
+		});
+
+		render(ChatPanel, { jobs: jobs(), scopeKey: 'scope-a' });
+		await screen.findByText('Ask a question about the benchmark results above.');
+		const input = screen.getByRole('textbox');
+		await fireEvent.input(input, { target: { value: 'Rerun the failed models.' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+		await screen.findByText('Rerunning AIFSv2');
+		expect(screen.getByText('Stopped')).not.toBeNull();
+		expect(api.stopChatReply).toHaveBeenCalledWith('session-1');
+		await screen.findByRole('button', { name: 'Send' });
+		expect(screen.queryByRole('alert')).toBeNull();
+	});
+
+	it('drops the connection when the server has no reply to stop, and Esc stops too', async () => {
+		api.getChatSessions.mockResolvedValue([baseSession()]);
+		api.getChatSession.mockResolvedValue(sessionDetail([]));
+		api.stopChatReply.mockResolvedValue({ stopped: false });
+		let signal: AbortSignal | undefined;
+		api.sendChatMessage.mockImplementation(async function* (
+			_session: string,
+			_text: string,
+			_scope: unknown,
+			abortSignal?: AbortSignal
+		) {
+			signal = abortSignal;
+			await new Promise((_, reject) =>
+				abortSignal?.addEventListener('abort', () => reject(new Error('aborted')))
+			);
+			yield { type: 'done', turn: { id: 'x', role: 'assistant', content: '', created_at: '' } };
+		});
+
+		render(ChatPanel, { jobs: jobs(), scopeKey: 'scope-a' });
+		await screen.findByText('Ask a question about the benchmark results above.');
+		const input = screen.getByRole('textbox');
+		await fireEvent.input(input, { target: { value: 'Rerun the failed models.' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+		await screen.findByRole('button', { name: 'Stop' });
+		await fireEvent.keyDown(input, { key: 'Escape' });
+
+		await screen.findByRole('button', { name: 'Send' });
+		expect(signal?.aborted).toBe(true);
+		// Stopping on purpose is not reported as an error.
+		expect(screen.queryByText(/aborted/)).toBeNull();
 	});
 
 	it('shows a specific message for provider stream errors', async () => {

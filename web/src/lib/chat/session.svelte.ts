@@ -11,6 +11,7 @@ import {
 	submitChatBlend,
 	denyChatBlendApproval,
 	getAssistantStartup,
+	stopChatReply,
 	type AssistantStartup,
 	type BenchmarkRunSpec,
 	type BenchmarkValidation,
@@ -96,6 +97,8 @@ export class ChatSessionState {
 	// A reply sent before this page was (re)opened that the server is still
 	// writing; followed until it lands, and sending waits for it.
 	earlierReplyId = $state<string | null>(null);
+	// From a stop request until the reply has ended.
+	stopping = $state(false);
 	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
@@ -129,6 +132,7 @@ export class ChatSessionState {
 	private sendLocked = false;
 	private loadedScopeToken: string | null = null;
 	private disposed = false;
+	private abort: AbortController | null = null;
 
 	constructor(
 		private getScope: () => ChatScope,
@@ -137,6 +141,33 @@ export class ChatSessionState {
 
 	get canSend(): boolean {
 		return !this.sending && !this.sendLocked && !this.loadingSession && !this.earlierReplyId;
+	}
+
+	/** Whether there is a reply in progress that `stop()` can end. */
+	get canStop(): boolean {
+		return (this.sending || Boolean(this.earlierReplyId)) && !this.stopping;
+	}
+
+	/**
+	 * Stop the reply in progress, keeping what it had said. The server stops it
+	 * (closing its request to the model) and saves it as stopped; the reply's own
+	 * stream then ends with that turn. Only if the server has no such reply here
+	 * (another instance is serving it) does this drop the connection instead.
+	 */
+	async stop() {
+		const sessionId = this.sessionId;
+		if (!this.canStop || !sessionId) return;
+		this.stopping = true;
+		let stopped = false;
+		try {
+			stopped = (await stopChatReply(sessionId)).stopped;
+		} catch {
+			// Fall through to dropping the connection.
+		}
+		if (!stopped) this.abort?.abort();
+		// A reply followed from an earlier visit has no stream here: the follow
+		// loop shows the stopped turn on its next check, and clears this then.
+		if (!this.sending && !stopped) this.stopping = false;
 	}
 
 	/** Stop following an earlier reply once the panel showing it is gone. */
@@ -185,6 +216,7 @@ export class ChatSessionState {
 					this.messages = detail.transcript;
 					this.earlierReplyId = null;
 					this.assistantStartup = null;
+					this.stopping = false;
 					return;
 				}
 			} catch {
@@ -369,17 +401,21 @@ export class ChatSessionState {
 			}
 		];
 
+		this.abort = new AbortController();
 		try {
 			const scope = this.getScope();
-			for await (const event of sendChatMessage(activeSessionId, text, scope)) {
+			for await (const event of sendChatMessage(activeSessionId, text, scope, this.abort.signal)) {
 				this.applyStreamEvent(event, activeSessionId, scope);
 			}
 		} catch (e) {
 			const message = (e as Error).message ?? 'An error occurred.';
 			this.streamingTurn = null;
 			await this.loadSession(activeSessionId);
-			this.error = message;
+			// A stop the user asked for ends the reply; it isn't an error.
+			if (!this.stopping) this.error = message;
 		} finally {
+			this.abort = null;
+			this.stopping = false;
 			this.sending = false;
 			this.sendLocked = false;
 			// A turn can start or rerun a job, or move the chat onto a new run.
@@ -446,7 +482,7 @@ export class ChatSessionState {
 			if (event.run_id && event.jobs?.length) {
 				this.pendingSubmission = { kind: 'blend', runId: event.run_id, jobs: event.jobs };
 			}
-		} else if (event.type === 'done') {
+		} else if (event.type === 'done' || event.type === 'stopped') {
 			this.messages = [...this.messages, mergeArtifacts(this.streamingTurn, event.turn)];
 			this.streamingTurn = null;
 			if (this.pendingSubmission) {

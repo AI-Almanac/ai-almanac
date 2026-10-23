@@ -180,6 +180,9 @@
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
 			send();
+		} else if (e.key === 'Escape' && chat.canStop) {
+			e.preventDefault();
+			void chat.stop();
 		}
 	}
 
@@ -367,12 +370,7 @@
 			</p>
 		{/if}
 		<div class="input-row">
-			<textarea
-				bind:value={input}
-				onkeydown={handleKeydown}
-				{placeholder}
-				rows={2}
-				disabled={chat.sending}></textarea>
+			<textarea bind:value={input} onkeydown={handleKeydown} {placeholder} rows={2}></textarea>
 			{#if comparisonModeActive && compareAvailable}
 				<button
 					class="ab-btn"
@@ -384,13 +382,25 @@
 					A/B
 				</button>
 			{/if}
-			<button
-				class="send-btn"
-				onclick={() => send()}
-				disabled={chat.sending || !input.trim() || chat.loadingSession}
-			>
-				{chat.sending ? '…' : 'Send'}
-			</button>
+			{#if chat.sending || chat.earlierReplyId}
+				<!-- The draft stays editable meanwhile; Enter waits until the reply ends. -->
+				<button
+					class="send-btn stop-btn"
+					onclick={() => chat.stop()}
+					disabled={!chat.canStop}
+					title="Stop the reply, keeping what it has said so far (Esc)"
+				>
+					{chat.stopping ? 'Stopping…' : 'Stop'}
+				</button>
+			{:else}
+				<button
+					class="send-btn"
+					onclick={() => send()}
+					disabled={!input.trim() || chat.loadingSession}
+				>
+					Send
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -523,6 +533,11 @@
 	}
 	.send-btn:not(:disabled):hover {
 		opacity: 0.85;
+	}
+	.stop-btn {
+		background: transparent;
+		color: var(--color-text);
+		border: 1px solid var(--color-border);
 	}
 	.compare-hint {
 		margin: 0;
