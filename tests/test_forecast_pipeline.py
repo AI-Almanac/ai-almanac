@@ -545,6 +545,91 @@ def test_gcs_store_sweep_lists_the_key_prefix_once_and_reads_dates_from_names(mo
     assert listings == [("data-bucket", "season-forecasts/aifs/gfs/v1/lead45d/")]
 
 
+def _assembled_tp(path: Path):
+    import xarray as xr
+
+    with xr.open_dataset(path) as ds:
+        return ds["tp"].load()
+
+
+def _store_season(store: Path, key: TrajectoryKey, dates) -> None:
+    from ai_almanac.server.services.forecast_pipeline import write_stored_trajectory
+
+    for offset, issue_date in enumerate(dates):
+        write_stored_trajectory(store, key, issue_date, _trajectory() + 100 * offset)
+
+
+def test_season_assembly_crops_each_issue_date_to_the_region_in_archive_units(tmp_path):
+    import numpy as np
+
+    from ai_almanac.server.services.forecast_pipeline import assemble_season_netcdf
+
+    _store_season(tmp_path / "store", FUXI_GFS, (MAY_4, MAY_7))
+    run = ModelRun("fuxi", FUXI, 2.0, Bounds(2.0, 3.0, 11.0, 12.0), (MAY_4, MAY_7))
+
+    tp = _assembled_tp(
+        assemble_season_netcdf(
+            tmp_path / "store", FUXI_GFS, run, tmp_path / "scratch", tmp_path / "2026.nc"
+        )
+    )
+
+    cropped = _trajectory().sel(lat=[2.0, 3.0], lon=[11.0, 12.0]).values
+    assert [str(t)[:10] for t in tp["time"].values] == ["2026-05-04", "2026-05-07"]
+    np.testing.assert_allclose(tp.sel(time="2026-05-04").values, 2 * cropped)
+    np.testing.assert_allclose(tp.sel(time="2026-05-07").values, 2 * (cropped + 100))
+
+
+def test_season_assembly_reports_progress_per_issue_date(tmp_path, capsys):
+    from ai_almanac.server.services.forecast_pipeline import assemble_season_netcdf
+
+    _store_season(tmp_path / "store", FUXI_GFS, FUXI_RUN.issue_dates)
+
+    assemble_season_netcdf(
+        tmp_path / "store", FUXI_GFS, FUXI_RUN, tmp_path / "scratch", tmp_path / "2026.nc"
+    )
+
+    out = capsys.readouterr().out
+    assert "[fuxi] 2026-05-04 assembled (1/2" in out
+    assert "[fuxi] 2026-05-07 assembled (2/2" in out
+
+
+def test_season_assembly_from_gcs_holds_a_bounded_number_of_downloads(tmp_path, monkeypatch):
+    import shutil
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    dates = tuple(MAY_4 + dt.timedelta(days=7 * week) for week in range(6))
+    local_store = tmp_path / "store"
+    _store_season(local_store, FUXI_GFS, dates)
+    held: list[int] = []
+
+    class _Blob:
+        def __init__(self, uri: str):
+            self.source = uri.replace("gs://data-bucket/season-forecasts", str(local_store))
+
+        def download_to_filename(self, filename: str) -> None:
+            shutil.copy(self.source, filename)
+            held.append(len(list(Path(filename).parent.glob("*.nc"))))
+
+    monkeypatch.setattr(forecast_pipeline, "_gcs_blob", _Blob)
+    monkeypatch.setattr(forecast_pipeline, "ASSEMBLY_DOWNLOADS", 2)
+    run = ModelRun("fuxi", FUXI, 1.0, None, dates)
+
+    tp = _assembled_tp(
+        forecast_pipeline.assemble_season_netcdf(
+            "gs://data-bucket/season-forecasts",
+            FUXI_GFS,
+            run,
+            tmp_path / "scratch",
+            tmp_path / "2026.nc",
+        )
+    )
+
+    assert tp.sizes["time"] == len(dates)
+    assert len(held) == len(dates) and max(held) <= 2
+    assert list((tmp_path / "scratch" / "downloads").iterdir()) == []
+
+
 def test_roll_out_reports_dates_whose_prefetch_went_unused(tmp_path, monkeypatch, capsys):
     import numpy as np
 
