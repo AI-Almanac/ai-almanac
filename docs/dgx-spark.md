@@ -53,7 +53,7 @@ cached in the data directory and survives image rebuilds.
 | Variable | Default | Purpose |
 |---|---|---|
 | `ALMANAC_DATA_DIR` | `~/.local/share/ai-almanac-spark` | Database, jobs, environments, and download caches |
-| `ALMANAC_DATASETS_DIR` | `./testdata` | Host directory mounted read-only at `/datasets` |
+| `ALMANAC_DATASETS_DIR` | `./datasets` if it exists, else `./testdata` | Host directory mounted read-only at `/datasets` |
 | `ALMANAC_PORT` | `8765` | Loopback port |
 
 The data directory is a bind mount, so outputs and the database are ordinary

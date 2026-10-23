@@ -11,6 +11,7 @@
 *.log
 dist
 testdata
+datasets
 web/build
 web/node_modules
 web/.svelte-kit

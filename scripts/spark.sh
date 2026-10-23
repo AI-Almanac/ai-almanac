@@ -8,7 +8,16 @@ cd "$(dirname "$0")/.."
 
 : "${ALMANAC_DATA_DIR:=${XDG_DATA_HOME:-$HOME/.local/share}/ai-almanac-spark}"
 : "${ALMANAC_PORT:=8765}"
-export ALMANAC_DATA_DIR ALMANAC_PORT
+# Your own data in ./datasets (git- and docker-ignored) when present, else the
+# bundled fixtures.
+if [ -z "${ALMANAC_DATASETS_DIR:-}" ]; then
+  if [ -d datasets ]; then
+    ALMANAC_DATASETS_DIR="$PWD/datasets"
+  else
+    ALMANAC_DATASETS_DIR="$PWD/testdata"
+  fi
+fi
+export ALMANAC_DATA_DIR ALMANAC_PORT ALMANAC_DATASETS_DIR
 
 compose="docker compose -f compose.spark.yaml"
 
@@ -29,7 +38,7 @@ Environment:
   ALMANAC_DATA_DIR      host directory for the database, jobs, environments, and
                         caches (default: ~/.local/share/ai-almanac-spark)
   ALMANAC_DATASETS_DIR  host directory mounted read-only at /datasets
-                        (default: ./testdata)
+                        (default: ./datasets if it exists, else ./testdata)
   ALMANAC_PORT          loopback port (default: 8765)
 EOF
   exit 2
