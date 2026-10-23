@@ -19,6 +19,15 @@ if [ -z "${ALMANAC_DATASETS_DIR:-}" ]; then
 fi
 export ALMANAC_DATA_DIR ALMANAC_PORT ALMANAC_DATASETS_DIR
 
+# Talk to this user's rootless daemon even when the CLI's current context is the
+# system one (which other services on the Spark may need it to be).
+if [ -z "${DOCKER_HOST:-}" ]; then
+  rootless_sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+  if [ -S "$rootless_sock" ]; then
+    export DOCKER_HOST="unix://$rootless_sock"
+  fi
+fi
+
 compose="docker compose -f compose.spark.yaml"
 
 usage() {
