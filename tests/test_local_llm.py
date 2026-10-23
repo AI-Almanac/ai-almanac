@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -321,7 +321,7 @@ def _tuning_pass(op: str, buckets: int = 16) -> str:
     )
 
 
-def test_tuning_progress_counts_passes_rather_than_one_resetting_bar(managed) -> None:
+def test_tuning_progress_shows_the_pass_bar_and_counts_passes(managed) -> None:
     local_llm.log_path().write_text(
         _launch_log(
             "(EngineCore pid=7) INFO [model_runner.py:428] Model loading took 17.82 GiB memory",
@@ -336,13 +336,18 @@ def test_tuning_progress_counts_passes_rather_than_one_resetting_bar(managed) ->
 
     progress = local_llm.startup_progress()
 
+    # The current pass's own bar, plus how many passes have run.
     assert (progress.stage, progress.detail, progress.done, progress.total) == (
         "tuning",
         "fp8_gemm",
-        3,
-        None,
+        11,
+        16,
     )
+    assert progress.passes_done == 3
+    assert progress.passes_expected is None, "no earlier start on record to compare with"
     assert progress.elapsed_seconds is not None and 89 <= progress.elapsed_seconds < 100
+    assert progress.overall == pytest.approx(4 / 6), "a rough count of stages passed"
+    assert progress.expected_seconds is None
 
 
 def test_graph_capture_progress_reads_its_bar(managed) -> None:
@@ -359,6 +364,87 @@ def test_graph_capture_progress_reads_its_bar(managed) -> None:
         4,
         7,
     )
+
+
+def _timed_launch_log(launched: datetime, *, passes: int = 4, finished: bool = True) -> str:
+    """This launch's stages, each on a vLLM line stamped with its time."""
+
+    def at(seconds: int, message: str) -> str:
+        stamp = (launched + timedelta(seconds=seconds)).strftime("%m-%d %H:%M:%S")
+        return f"(EngineCore pid=7) INFO {stamp} [x.py:1] {message}"
+
+    return (
+        _launch_log(
+            at(20, "Loading model from scratch..."),
+            at(45, "Model loading took 17.82 GiB memory"),
+            at(50, "Graph capturing finished in 7 secs"),
+            at(52, "Running FlashInfer autotune with 2048 tokens"),
+        )
+        + _tuning_pass("fp8_gemm") * passes
+        + (at(300, "Available routes are:") + "\n" if finished else "")
+    )
+
+
+def test_a_launch_records_its_timeline_when_it_first_answers(managed) -> None:
+    started = time.time() - 600
+    launched = datetime.fromtimestamp(started).replace(microsecond=0)
+    started = launched.timestamp()
+    record = {"pid": _FAKE_PID, **local_llm._launch_identity(), "ready": False}
+    local_llm.pid_path().write_text(json.dumps({**record, "started_at": started}))
+    local_llm.log_path().write_text(_timed_launch_log(launched))
+
+    local_llm._mark_ready()
+
+    profile = json.loads(local_llm._startup_profile_path().read_text())
+    assert profile["args"] == record["args"]
+    # Ready when the final stage began, not when it happened to be noticed.
+    assert profile["ready_after_seconds"] == pytest.approx(300)
+    assert profile["stage_offsets"] == {
+        "loading_weights": 20,
+        "compiling": 45,
+        "capturing": 50,
+        "tuning": 52,
+        "finishing": 300,
+    }
+    assert profile["tuning_passes"] == 4
+
+
+def test_overall_progress_follows_the_last_starts_timeline(managed) -> None:
+    identity = local_llm._launch_identity()
+    local_llm._startup_profile_path().write_text(
+        json.dumps(
+            {
+                "args": identity["args"],
+                "ready_after_seconds": 300,
+                "stage_offsets": {"loading_weights": 20, "compiling": 45, "tuning": 100},
+                "tuning_passes": 40,
+            }
+        )
+    )
+    launched = datetime.fromtimestamp(time.time() - 150).replace(microsecond=0)
+    record = {"pid": _FAKE_PID, **identity, "ready": False, "started_at": launched.timestamp()}
+    local_llm.pid_path().write_text(json.dumps(record))
+    # Ten passes into tuning, not yet finished.
+    local_llm.log_path().write_text(_timed_launch_log(launched, passes=10, finished=False))
+
+    progress = local_llm.startup_progress()
+
+    assert (progress.passes_done, progress.passes_expected) == (10, 40)
+    # Tuning spans 100-300 s of the last start; a quarter of its passes is 150 s.
+    assert progress.overall == pytest.approx(150 / 300)
+    assert progress.expected_seconds == 300
+
+
+def test_a_timeline_recorded_with_other_flags_is_not_used(managed) -> None:
+    local_llm._startup_profile_path().write_text(
+        json.dumps({"args": ["vllm", "serve", "other"], "ready_after_seconds": 60})
+    )
+    local_llm.log_path().write_text(_launch_log())
+
+    progress = local_llm.startup_progress()
+
+    assert progress.expected_seconds is None
+    assert progress.overall == 0
 
 
 async def _collect(stream) -> list[dict]:

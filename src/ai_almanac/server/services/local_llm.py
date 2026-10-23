@@ -30,6 +30,7 @@ import subprocess
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -177,6 +178,7 @@ def _mark_ready() -> None:
     record = _read_record()
     if record and record.get("ready") is False:
         pid_path().write_text(json.dumps({**record, "ready": True}))
+        _record_startup_profile(record)
 
 
 # A Python exception line in vLLM's log, after any "(EngineCore pid=N) ERROR …]" prefix.
@@ -237,10 +239,18 @@ class StartupProgress:
     elapsed_seconds: float | None = None
     # What the stage is working on, e.g. the kernel being tuned.
     detail: str | None = None
-    # How far through `detail` it is: `done` of `total` when vLLM reports a
-    # bounded count, or just `done` (passes so far) when no total is known.
+    # How far through `detail` it is, when vLLM draws a bar for it.
     done: int | None = None
     total: int | None = None
+    # Tuning only: passes run so far, and how many the last start with these
+    # flags ran (one pass per kernel shape; none is known up front otherwise).
+    passes_done: int | None = None
+    passes_expected: int | None = None
+    # 0-1 through the whole start. Measured against the last start's timeline
+    # when one is on record (`expected_seconds` is then its length), else a
+    # rough count of stages passed.
+    overall: float | None = None
+    expected_seconds: float | None = None
 
 
 def _current_launch_log() -> str:
@@ -259,32 +269,133 @@ def _current_launch_log() -> str:
     return text[start:] if start >= 0 else text
 
 
+def _startup_profile_path() -> Path:
+    return data_root() / "llm-startup.json"
+
+
+# Timestamps on vLLM lines ("10-23 19:01:48") and FlashInfer's ("2026-10-23 19:07:40,070").
+_LOG_TIME = re.compile(r"(?:(\d{4})-)?(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})")
+
+
+def _stage_offsets(text: str, launched: datetime) -> dict[str, float]:
+    """Seconds from launch to the first log line of each stage reached.
+
+    Log times and `launched` are both naive local times of this host.
+    """
+    offsets: dict[str, float] = {}
+    for name, markers in STARTUP_STAGES[1:]:
+        found = [index for marker in markers if (index := text.find(marker)) >= 0]
+        if not found:
+            continue
+        # The stage's own line carries its time; look back from where it starts.
+        stamps = list(_LOG_TIME.finditer(text, max(0, min(found) - 4096), min(found)))
+        if not stamps:
+            continue
+        year, month, day, hour, minute, second = stamps[-1].groups()
+        with suppress(ValueError):
+            stamp = datetime(
+                int(year or launched.year),
+                int(month),
+                int(day),
+                int(hour),
+                int(minute),
+                int(second),
+            )
+            offsets[name] = max(0.0, (stamp - launched).total_seconds())
+    return offsets
+
+
+def _record_startup_profile(record: dict) -> None:
+    """Keep this launch's timeline, the yardstick for the next start's progress."""
+    started_at = record.get("started_at")
+    if not isinstance(started_at, int | float):
+        return
+    text = _current_launch_log()
+    offsets = _stage_offsets(text, datetime.fromtimestamp(started_at))
+    # Readiness is first noticed whenever something next checks, which can be
+    # long after it happened; the final stage begins within a second of it.
+    ready_after = offsets.get("finishing", time.time() - started_at)
+    profile = {
+        "args": record.get("args"),
+        "ready_after_seconds": ready_after,
+        "stage_offsets": offsets,
+        "tuning_passes": len(_TUNING_PASS_START.findall(text)),
+    }
+    with suppress(OSError):
+        _startup_profile_path().write_text(json.dumps(profile))
+
+
+def _startup_profile(args: object) -> dict | None:
+    """The last recorded start with these exact flags, if any."""
+    try:
+        profile = json.loads(_startup_profile_path().read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(profile, dict) or profile.get("args") != args:
+        return None
+    ready_after = profile.get("ready_after_seconds")
+    return profile if isinstance(ready_after, int | float) and ready_after > 0 else None
+
+
+def _overall_progress(
+    progress: StartupProgress, offsets_now: dict[str, float], profile: dict | None
+) -> None:
+    """Fill in `overall`: the last start's timeline when there is one, else stages passed."""
+    names = [name for name, _ in STARTUP_STAGES]
+    index = names.index(progress.stage)
+    if profile is None or progress.elapsed_seconds is None:
+        progress.overall = index / len(names)
+        return
+    total = float(profile["ready_after_seconds"])
+    recorded = profile.get("stage_offsets") or {}
+    begin = 0.0 if progress.stage == "starting" else recorded.get(progress.stage)
+    later = [recorded[name] for name in names[index + 1 :] if name in recorded]
+    end = later[0] if later else total
+    if begin is None or end <= begin:
+        progress.overall = index / len(names)
+        return
+    if progress.stage == "tuning" and progress.passes_expected:
+        within = progress.passes_done / progress.passes_expected
+    else:
+        started = 0.0 if progress.stage == "starting" else offsets_now.get(progress.stage)
+        within = (progress.elapsed_seconds - started) / (end - begin) if started is not None else 0
+    within = min(max(within, 0.0), 1.0)
+    progress.overall = min((begin + within * (end - begin)) / total, 0.99)
+    progress.expected_seconds = total
+
+
 def startup_progress() -> StartupProgress:
-    """Which startup stage the managed server is in, read from its log."""
+    """Which startup stage the managed server is in, and how far through it, from its log."""
     text = _current_launch_log()
     stage = "starting"
     for name, markers in STARTUP_STAGES:
         if any(marker in text for marker in markers):
             stage = name
     progress = StartupProgress(stage=stage)
-    started_at = _read_record().get("started_at")
+    record = _read_record()
+    started_at = record.get("started_at")
+    offsets_now: dict[str, float] = {}
     if isinstance(started_at, int | float):
         progress.elapsed_seconds = max(0.0, time.time() - started_at)
-    if stage == "capturing":
+        offsets_now = _stage_offsets(text, datetime.fromtimestamp(started_at))
+    profile = _startup_profile(record.get("args"))
+    if stage in ("capturing", "tuning"):
         # The newest bar is the work in hand; tqdm redraws it with "\r".
-        bars = [bar for bar in _PROGRESS_BAR.finditer(text[-64 * 1024 :]) if bar.group("capture")]
+        wanted = "capture" if stage == "capturing" else "op"
+        bars = [bar for bar in _PROGRESS_BAR.finditer(text[-64 * 1024 :]) if bar.group(wanted)]
         if bars:
-            progress.detail = "CUDA graphs"
+            progress.detail = bars[-1].group("op") or "CUDA graphs"
             progress.done, progress.total = (
                 int(bars[-1].group("done")),
                 int(bars[-1].group("total")),
             )
-    elif stage == "tuning":
-        # One pass per kernel shape, each with its own bar, and no total known
-        # up front: a per-pass bar would keep resetting, so count passes instead.
-        passes = _TUNING_PASS_START.findall(text)
-        if passes:
-            progress.detail, progress.done = passes[-1], len(passes)
+    if stage == "tuning":
+        # One pass, and one bar, per kernel shape; the last start says how many.
+        progress.passes_done = len(_TUNING_PASS_START.findall(text))
+        expected = (profile or {}).get("tuning_passes")
+        if isinstance(expected, int) and expected > 0:
+            progress.passes_expected = max(expected, progress.passes_done)
+    _overall_progress(progress, offsets_now, profile)
     return progress
 
 

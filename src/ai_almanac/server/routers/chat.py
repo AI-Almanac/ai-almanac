@@ -307,6 +307,10 @@ class AssistantStartupOut(BaseModel):
     detail: str | None
     done: int | None
     total: int | None
+    passes_done: int | None
+    passes_expected: int | None
+    overall: float | None
+    expected_seconds: float | None
 
 
 class AssistantStatusOut(BaseModel):

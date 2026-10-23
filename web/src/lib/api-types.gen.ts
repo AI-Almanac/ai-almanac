@@ -2129,6 +2129,14 @@ export interface components {
             done: number | null;
             /** Total */
             total: number | null;
+            /** Passes Done */
+            passes_done: number | null;
+            /** Passes Expected */
+            passes_expected: number | null;
+            /** Overall */
+            overall: number | null;
+            /** Expected Seconds */
+            expected_seconds: number | null;
         };
         /** AssistantStatusOut */
         AssistantStatusOut: {
