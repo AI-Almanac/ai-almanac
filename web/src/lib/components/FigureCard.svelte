@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { fetchResultBlob } from '$lib/benchmarks.svelte';
+	import { windowLabel } from '$lib/metric-metadata';
 	import type { ParsedFigure } from '$lib/result-parser';
 
 	type Props = {
@@ -16,8 +17,6 @@
 		a.download = figure.label.replace(/\s+/g, '_') + '.png';
 		a.click();
 	}
-
-	const WINDOW_LABELS: Record<string, string> = { '1-15': 'Days 1–15', '16-30': 'Days 16–30' };
 </script>
 
 <div class="card">
@@ -25,7 +24,7 @@
 		<span class="card-label">{figure.label}</span>
 		<div class="badges">
 			{#if figure.window}
-				<span class="badge window">{WINDOW_LABELS[figure.window] ?? figure.window}</span>
+				<span class="badge window">{windowLabel(figure.window)}</span>
 			{/if}
 			{#if figure.model}
 				<span class="badge model">{figure.model.toUpperCase()}</span>

@@ -4503,6 +4503,11 @@ export interface components {
             date_filter_year?: number | null;
             /** Max Forecast Day */
             max_forecast_day?: number | null;
+            /**
+             * Verification Windows
+             * @description Lead-time windows ROMP scores separately, each with its own onset tolerance. Defaults to days 1-15 (±3 days) and 16-30 (±5 days).
+             */
+            verification_windows?: components["schemas"]["VerificationWindow"][] | null;
             /** Probabilistic */
             probabilistic?: boolean | null;
             /** Members */
@@ -5225,6 +5230,27 @@ export interface components {
             ruleset_id: string;
             /** Model */
             model?: string | null;
+        };
+        /**
+         * VerificationWindow
+         * @description A lead-time range ROMP scores separately, with the onset tolerance FAR uses in it.
+         */
+        VerificationWindow: {
+            /**
+             * Start
+             * @description First lead day in the window (1 = day after init).
+             */
+            start: number;
+            /**
+             * End
+             * @description Last lead day in the window, inclusive.
+             */
+            end: number;
+            /**
+             * Tolerance Days
+             * @description A predicted onset further than this many days from the observed onset counts as a false alarm in this window.
+             */
+            tolerance_days: number;
         };
         /**
          * VoteIn

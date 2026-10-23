@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from ai_almanac.server.services import guardrails, job_submission
 from ai_almanac.server.services.focus_area import parse_focus_area
 from ai_almanac.server.services.forecast_models import training_summary
+from ai_almanac.server.services.romp import parse_verification_windows
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
@@ -117,6 +118,7 @@ SHARED_ROMP_PARAM_KEYS = {
     "thresh_file",
     "ref_model",
     "ref_model_dir",
+    "verification_windows",
 }
 
 PER_MODEL_ROMP_PARAM_KEYS = {
@@ -325,9 +327,16 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
         errors.append(f"Models are not available for {spec.region_id}: {', '.join(bad_models)}")
     if spec.forecast_window_days is not None and spec.forecast_window_days <= 0:
         errors.append("forecast_window_days must be positive")
-    if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
+    try:
+        windows = parse_verification_windows(spec.advanced_params.get("verification_windows"))
+    except ValueError as exc:
+        errors.append(f"verification_windows: {exc}")
+        windows = ()
+    last_day = max((window.end for window in windows), default=0)
+    if spec.forecast_window_days is not None and spec.forecast_window_days < last_day:
         errors.append(
-            "forecast_window_days must be at least 30 because the default verification window extends to day 30"
+            f"forecast_window_days must be at least {last_day} because the verification "
+            f"windows extend to day {last_day}"
         )
     per_model_params = spec.advanced_params.get("per_model_params")
     if isinstance(per_model_params, dict):

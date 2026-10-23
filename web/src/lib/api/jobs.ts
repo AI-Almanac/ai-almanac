@@ -38,6 +38,8 @@ export type JobParams = {
 	start_year_clim?: number;
 	end_year_clim?: number;
 	max_forecast_day?: number;
+	// Lead-time windows scored separately; the server defaults to 1-15 (±3) and 16-30 (±5).
+	verification_windows?: { start: number; end: number; tolerance_days: number }[];
 	init_days?: string;
 	date_filter_year?: number | null;
 	parallel?: boolean;

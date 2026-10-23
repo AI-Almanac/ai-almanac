@@ -16,6 +16,7 @@ from ai_almanac.server.services.romp import (
     InitDays,
     Members,
     RompName,
+    VerificationWindows,
     Year,
 )
 
@@ -55,6 +56,14 @@ class BenchmarkAdvancedParams(BaseModel):
     thresh_file: DataPath | None = None
     ref_model: RompName | None = None
     ref_model_dir: DataPath | None = None
+    verification_windows: VerificationWindows | None = PydanticField(
+        default=None,
+        description=(
+            "Lead-time windows to score, each reported separately with its own onset "
+            "tolerance, e.g. [{start: 1, end: 15, tolerance_days: 3}, {start: 16, end: 30, "
+            "tolerance_days: 5}] (the default). Every run scores all of them."
+        ),
+    )
     focus_area: FocusArea | None = None
     per_model_params: dict[str, PerModelRompParams] | None = None
 
@@ -65,7 +74,14 @@ class BenchmarkConfigPatch(BaseModel):
     dataset_id: str | None = None
     model_ids: list[str] | None = None
     event_type: BenchmarkEventType | None = None
-    forecast_window_days: Annotated[int, PydanticField(ge=30)] | None = None
+    forecast_window_days: Annotated[int, PydanticField(ge=1)] | None = PydanticField(
+        default=None,
+        description=(
+            "Maximum forecast lead day ROMP reads (default 30). Not a scoring window: "
+            "every run scores each of advanced_params.verification_windows (default "
+            "days 1-15 and 16-30), so this must reach the last window's end day."
+        ),
+    )
     advanced_params: BenchmarkAdvancedParams | None = PydanticField(default=None)
 
 

@@ -1,8 +1,10 @@
 import type { JobResult } from './api';
+import { windowLabel } from './metric-metadata';
 
 export type FigureKind = 'spatial_metrics' | 'portrait' | 'climatology' | 'unknown';
 export type FigureMetric = 'far' | 'mr' | 'mae' | 'multi' | null;
-export type FigureWindow = '1-15' | '16-30' | null;
+/** A verification window label such as "1-15". */
+export type FigureWindow = string | null;
 
 export type ParsedFigure = {
 	raw: JobResult;
@@ -23,13 +25,8 @@ const METRIC_LABELS: Record<string, string> = {
 	multi: 'All Metrics'
 };
 
-const WINDOW_LABELS: Record<string, string> = {
-	'1-15': 'Days 1–15',
-	'16-30': 'Days 16–30'
-};
-
 // spatial_metrics_{model}_{window}.png  e.g. spatial_metrics_aifs_1-15.png
-const SPATIAL_RE = /^spatial_metrics_(.+?)_(1-15|16-30)\.png$/;
+const SPATIAL_RE = /^spatial_metrics_(.+?)_(\d+-\d+)\.png$/;
 
 // panel_portrait_mae_far_mr_{model}_{maxDay}day.png
 const PORTRAIT_RE = /^panel_portrait_mae_far_mr_(.+?)_(\d+)day\.png$/;
@@ -45,14 +42,14 @@ export function parseResult(r: JobResult): ParsedFigure {
 	m = name.match(SPATIAL_RE);
 	if (m) {
 		const model = m[1];
-		const window = m[2] as FigureWindow;
+		const window = m[2];
 		return {
 			raw: r,
 			kind: 'spatial_metrics',
 			metric: 'multi', // spatial metrics figures show FAR, MR, MAE together
 			model,
 			window,
-			label: `Spatial Metrics — ${WINDOW_LABELS[window ?? ''] ?? window}`
+			label: `Spatial Metrics — ${windowLabel(window)}`
 		};
 	}
 
@@ -93,4 +90,4 @@ export function parseResult(r: JobResult): ParsedFigure {
 	};
 }
 
-export { METRIC_LABELS, WINDOW_LABELS };
+export { METRIC_LABELS };

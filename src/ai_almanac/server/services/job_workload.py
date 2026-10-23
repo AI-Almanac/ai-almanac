@@ -257,17 +257,22 @@ def _run_stub(job_id: str, config: dict) -> None:
     lat, lon = stub_outputs.resolve_grid(config)
     # ROMP's two output paths are mutually exclusive: a probabilistic run emits
     # skill-score CSVs and no spatial NetCDF, a deterministic run the reverse.
-    probabilistic = bool((config.get("romp_params") or {}).get("probabilistic"))
+    romp_params = config.get("romp_params") or {}
+    probabilistic = bool(romp_params.get("probabilistic"))
 
     print("==> [STUB RUNNER] producing synthetic ROMP-shaped outputs", flush=True)
-    for window in stub_outputs.WINDOWS:
+    for window in stub_outputs.verification_windows(romp_params):
         time.sleep(0.4)
         if probabilistic:
-            for path in stub_outputs.write_skill_score_csvs(output_dir, model_name, window):
+            for path in stub_outputs.write_skill_score_csvs(
+                output_dir, model_name, window.label, window.bins
+            ):
                 print(f"    wrote {path.name}", flush=True)
         else:
-            path = output_dir / f"spatial_metrics_{model_name}_{window}.nc"
-            stub_outputs.write_metric_nc(path, lat, lon, model_name, window)
+            path = output_dir / f"spatial_metrics_{model_name}_{window.label}.nc"
+            stub_outputs.write_metric_nc(
+                path, lat, lon, model_name, window.label, window.tolerance_days
+            )
             print(f"    wrote {path.name}", flush=True)
     for figure_name in ("portrait", "panel_heatmap_skill"):
         path = figure_dir / f"{figure_name}_{model_name}.png"

@@ -16,18 +16,36 @@ other's mode (momp/app/spatial_far_mr_mae.py:33, momp/app/bin_skill_score.py:38)
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NamedTuple
 
-# The verification windows ROMP emits, matching the hardcoded
-# verification_window_list in services/romp.py so the window picker and the
-# skill-score lead axis see the same values the real runner produces.
-WINDOWS = ("1-15", "16-30")
+from ai_almanac.server.services.romp import verification_settings
 
-# The day bins ROMP scores within each verification window
-# (romp.py day_bins, filtered to the window by momp/lib/control.py).
-BINS_BY_WINDOW: dict[str, tuple[tuple[int, int], ...]] = {
-    "1-15": ((1, 5), (6, 10), (11, 15)),
-    "16-30": ((16, 20), (21, 25), (26, 30)),
-}
+
+class StubWindow(NamedTuple):
+    label: str
+    tolerance_days: int
+    bins: tuple[tuple[int, int], ...]
+
+
+def verification_windows(romp_params: dict) -> list[StubWindow]:
+    """The windows a real ROMP run of these settings would emit, with their day bins.
+
+    Built from the same settings render_romp_config writes, so the window picker
+    and the skill-score lead axis see the values the real runner produces. Each
+    window keeps the bins wholly inside it, as momp/lib/control.py does.
+    """
+    settings = verification_settings(romp_params.get("verification_windows"))
+    return [
+        StubWindow(
+            label=f"{start}-{end}",
+            tolerance_days=tolerance,
+            bins=tuple(b for b in settings["day_bins"] if start <= b[0] and b[1] <= end),
+        )
+        for (start, end), tolerance in zip(
+            settings["verification_window_list"], settings["tolerance_days_list"], strict=True
+        )
+    ]
+
 
 _OVERALL_HEADER = (
     "Fair_Brier_Score,Fair_Brier_Skill_Score,Fair_RPS,Fair_RPS_Skill_Score,AUC,AUC_ref"
@@ -79,6 +97,7 @@ def write_metric_nc(
     lon: list[float],
     model_name: str,
     window: str,
+    tolerance_days: int,
 ) -> None:
     import numpy as np
     import xarray as xr
@@ -101,6 +120,7 @@ def write_metric_nc(
         attrs={
             "model": model_name,
             "verification_window": window,
+            "tolerance_days": tolerance_days,
             "source": "ai-almanac stub runner — synthetic values, not real metrics",
         },
     )
@@ -111,6 +131,7 @@ def write_skill_score_csvs(
     output_dir: Path,
     model_name: str,
     window: str,
+    bins: tuple[tuple[int, int], ...],
 ) -> list[Path]:
     """Write the pair of skill-score CSVs a probabilistic ROMP run produces.
 
@@ -127,7 +148,6 @@ def write_skill_score_csvs(
 
     # Skill decays with lead time, so later bins score worse — otherwise the
     # curves are flat noise and tell you nothing about whether the chart works.
-    bins = BINS_BY_WINDOW.get(window, ((1, 5),))
     binned_rows = []
     for index, (start, end) in enumerate(bins):
         decay = index / max(len(bins), 1)

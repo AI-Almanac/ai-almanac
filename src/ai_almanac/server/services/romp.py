@@ -15,12 +15,14 @@ from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
+    BaseModel,
     BeforeValidator,
     Field,
     PlainSerializer,
     StringConstraints,
     TypeAdapter,
     WithJsonSchema,
+    model_validator,
 )
 
 _NAME_CHARS = r"A-Za-z0-9_.\-"
@@ -124,8 +126,59 @@ DataPath = Annotated[
 ModelDims = dict[Literal["init_time", "step", "member", "lat", "lon"], RompName]
 """ROMP's forecast dim names mapped to the names used in the model files."""
 
+LeadDay = Annotated[int, Field(ge=1, le=366)]
+
+# ROMP reads this many lead days when a job does not set max_forecast_day.
+DEFAULT_MAX_FORECAST_DAY = 30
+
+
+class VerificationWindow(BaseModel):
+    """A lead-time range ROMP scores separately, with the onset tolerance FAR uses in it."""
+
+    start: LeadDay = Field(description="First lead day in the window (1 = day after init).")
+    end: LeadDay = Field(description="Last lead day in the window, inclusive.")
+    tolerance_days: Annotated[int, Field(ge=0, le=30)] = Field(
+        description=(
+            "A predicted onset further than this many days from the observed onset "
+            "counts as a false alarm in this window."
+        )
+    )
+
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> VerificationWindow:
+        if self.end < self.start:
+            raise ValueError("end must not be before start")
+        return self
+
+
+def _sorted_distinct_windows(
+    windows: tuple[VerificationWindow, ...],
+) -> tuple[VerificationWindow, ...]:
+    # ROMP looks a window's tolerance up by its (start, end), so two windows
+    # with the same range would both get the first one's tolerance.
+    if len({(window.start, window.end) for window in windows}) != len(windows):
+        raise ValueError("verification windows must not repeat a lead-day range")
+    return tuple(sorted(windows, key=lambda window: (window.start, window.end)))
+
+
+VerificationWindows = Annotated[
+    tuple[VerificationWindow, ...],
+    Field(min_length=1, max_length=8),
+    AfterValidator(_sorted_distinct_windows),
+]
+"""The lead-time windows ROMP scores; each run yields one set of results per window."""
+
+DEFAULT_VERIFICATION_WINDOWS: tuple[VerificationWindow, ...] = (
+    VerificationWindow(start=1, end=15, tolerance_days=3),
+    VerificationWindow(start=16, end=30, tolerance_days=5),
+)
+
+# Width of the lead-day bins probabilistic skill scores are reported in.
+DAY_BIN_WIDTH = 5
+
 _INIT_DAYS = TypeAdapter(InitDays)
 _MEMBERS = TypeAdapter(Members)
+_VERIFICATION_WINDOWS = TypeAdapter(VerificationWindows)
 _MODEL_DIMS = TypeAdapter(ModelDims | None)
 _DATE = TypeAdapter(date)
 
@@ -153,6 +206,45 @@ def _year_list(value: object) -> tuple[int, ...] | None:
     if not isinstance(value, list | tuple) or not value:
         return None
     return tuple(int(year) for year in value)
+
+
+def parse_verification_windows(value: object) -> tuple[VerificationWindow, ...]:
+    """The windows a job asked for, or ROMP's 1-15 / 16-30 defaults when it set none."""
+    if value is None:
+        return DEFAULT_VERIFICATION_WINDOWS
+    return _VERIFICATION_WINDOWS.validate_python(value)
+
+
+def day_bins(windows: tuple[VerificationWindow, ...]) -> tuple[tuple[int, int], ...]:
+    """Lead-day bins covering day 1 through the last window's end, without overlap.
+
+    Probabilistic scoring treats the bins as the categories of one forecast
+    distribution, and scores each window over the bins wholly inside it
+    (momp/lib/control.py:filter_bins_in_window). Breaking at every window edge
+    gives each window an exact cover; between edges bins are DAY_BIN_WIDTH
+    days, the last one possibly shorter.
+    """
+    edges = sorted(
+        {0} | {window.start - 1 for window in windows} | {window.end for window in windows}
+    )
+    return tuple(
+        (start, min(start + DAY_BIN_WIDTH - 1, high))
+        for low, high in zip(edges, edges[1:], strict=False)
+        for start in range(low + 1, high + 1, DAY_BIN_WIDTH)
+    )
+
+
+def verification_settings(value: object) -> dict:
+    """ROMP's verification_window_list, tolerance_days_list, and day_bins for a job's windows.
+
+    ROMP pairs tolerance_days_list with verification_window_list by position.
+    """
+    windows = parse_verification_windows(value)
+    return {
+        "verification_window_list": tuple((window.start, window.end) for window in windows),
+        "tolerance_days_list": tuple(window.tolerance_days for window in windows),
+        "day_bins": day_bins(windows),
+    }
 
 
 def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
@@ -219,10 +311,8 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "years": _year_list(params.get("years")),
         "years_clim": _year_list(params.get("years_clim")),
         "date_filter_year": int(params.get("date_filter_year") or start_date[0]),
-        "verification_window_list": ((1, 15), (16, 30)),
-        "tolerance_days_list": (3, 5),
-        "max_forecast_day": int(params.get("max_forecast_day") or 30),
-        "day_bins": ((1, 5), (6, 10), (11, 15), (16, 20), (21, 25), (26, 30)),
+        **verification_settings(params.get("verification_windows")),
+        "max_forecast_day": int(params.get("max_forecast_day") or DEFAULT_MAX_FORECAST_DAY),
         "FAR": True,
         "MAE": True,
         "MR": True,

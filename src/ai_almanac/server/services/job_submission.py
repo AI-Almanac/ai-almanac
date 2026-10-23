@@ -50,6 +50,7 @@ from ai_almanac.server.services.forecast_pipeline import (
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import (
+    DEFAULT_MAX_FORECAST_DAY,
     DataPath,
     FilePattern,
     InitDays,
@@ -57,8 +58,10 @@ from ai_almanac.server.services.romp import (
     Longitude,
     Members,
     RompName,
+    VerificationWindows,
     Year,
     parse_model_dims,
+    parse_verification_windows,
     romp_safe_model_name,
 )
 from ai_almanac.server.services.runner_registry import get_job_runner
@@ -94,6 +97,13 @@ class RompParams(BaseModel):
     end_year_clim: Year | None = None
     date_filter_year: Year | None = None
     max_forecast_day: int | None = None
+    verification_windows: VerificationWindows | None = Field(
+        default=None,
+        description=(
+            "Lead-time windows ROMP scores separately, each with its own onset tolerance. "
+            "Defaults to days 1-15 (±3 days) and 16-30 (±5 days)."
+        ),
+    )
     probabilistic: bool | None = None
     members: Members | None = None
     parallel: bool | None = None
@@ -116,6 +126,18 @@ class ResolvedRompParams(RompParams):
 
     years: tuple[Year, ...] | None = None
     years_clim: tuple[Year, ...] | None = None
+
+    @model_validator(mode="after")
+    def _windows_within_forecast(self) -> ResolvedRompParams:
+        max_day = self.max_forecast_day or DEFAULT_MAX_FORECAST_DAY
+        last_day = max(
+            window.end for window in parse_verification_windows(self.verification_windows)
+        )
+        if last_day > max_day:
+            raise ValueError(
+                f"verification windows reach day {last_day}, past max_forecast_day {max_day}"
+            )
+        return self
 
 
 class JobCreate(BaseModel):

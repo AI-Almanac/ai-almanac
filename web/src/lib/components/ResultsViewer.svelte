@@ -75,11 +75,12 @@
 			.map((metrics) => metrics.job_id)
 	);
 
+	// Lead-day windows ("1-15", "16-30", …) in lead order, then "all", then anything else.
 	function windowSortValue(window: string): number {
-		if (window === '1-15') return 0;
-		if (window === '16-30') return 1;
-		if (window === 'all') return 2;
-		return 10;
+		const range = window.match(/^(\d+)-(\d+)$/);
+		if (range) return Number(range[1]) * 1000 + Number(range[2]);
+		if (window === 'all') return 1e6;
+		return 1e7;
 	}
 
 	const windowOptions = $derived(
