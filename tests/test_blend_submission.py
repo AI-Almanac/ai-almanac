@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -611,6 +611,170 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     assert all(run.issue_dates[-1] <= date(2026, 6, 15) for run in plan.runs)
 
 
+JUNE_15 = date(2026, 6, 15)
+
+
+async def _forecast_a_linked_blend(user_id: str, monkeypatch, today: date) -> tuple[str, str]:
+    """A completed forecast, planned on `today`, of a trained blend whose members
+    are linked to live models: (blend id, forecast id)."""
+    from ai_almanac.server.db import get_db
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: today)
+    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await _seed_source(
+        "model", "AIFS v2 India 0.25", "gs://data/models/aifs2", grid_step=0.25
+    )
+    graphcast_id = await _seed_source(
+        "model", "GraphCast India 0.25", "gs://data/models/graphcast", grid_step=0.25
+    )
+    await _link_forecast_model(aifs_id, "aifs2")
+    await _link_forecast_model(graphcast_id, "graphcast_operational")
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="india",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id, graphcast_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+    forecast = await job_submission.create_forecast_for_user(
+        job_submission.ForecastCreate(blend_id=blend.id), user_id
+    )
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(jobs).where(jobs.c.id == forecast.id).values(status="complete")
+        )
+    return blend.id, forecast.id
+
+
+async def _forecast_job_count() -> int:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        return (
+            await conn.execute(
+                sa.select(sa.func.count()).select_from(jobs).where(jobs.c.job_type == "forecast")
+            )
+        ).scalar_one()
+
+
+async def _nothing_happens(monkeypatch, blend_id: str, forecast_id: str) -> None:
+    pass
+
+
+async def _the_forecast_predates_forest_tracking(
+    monkeypatch, blend_id: str, forecast_id: str
+) -> None:
+    """Forecasts saved before the forest's landing was recorded have no such key."""
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        saved = (
+            await conn.execute(sa.select(jobs.c.config_json).where(jobs.c.id == forecast_id))
+        ).scalar_one()
+        config = json.loads(saved)
+        del config["blend_day_level_completed_at"]
+        await conn.execute(
+            sa.update(jobs).where(jobs.c.id == forecast_id).values(config_json=json.dumps(config))
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history", [_nothing_happens, _the_forecast_predates_forest_tracking])
+async def test_updating_a_forecast_with_nothing_new_returns_it_without_starting_a_run(
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch, history
+) -> None:
+    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    await history(monkeypatch, blend_id, forecast_id)
+
+    response = await client.post(f"/forecasts/{forecast_id}/refresh", headers=as_new_user)
+
+    assert response.status_code == 200
+    assert response.json()["up_to_date"] is True
+    assert response.json()["forecast"]["id"] == forecast_id
+    assert await _forecast_job_count() == 1
+
+
+async def _an_issue_date_elapses(monkeypatch, blend_id: str, forecast_id: str) -> None:
+    monkeypatch.setattr(job_submission, "utc_today", lambda: JUNE_15 + timedelta(days=7))
+
+
+async def _the_blends_day_level_forest_lands(monkeypatch, blend_id: str, forecast_id: str) -> None:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(jobs)
+            .where(jobs.c.id == blend_id)
+            .values(day_level_status="complete", day_level_completed_at="2026-06-15T12:00:00")
+        )
+
+
+async def _a_forest_lands_after_a_forecast_that_predates_forest_tracking(
+    monkeypatch, blend_id: str, forecast_id: str
+) -> None:
+    await _the_forecast_predates_forest_tracking(monkeypatch, blend_id, forecast_id)
+    await _the_blends_day_level_forest_lands(monkeypatch, blend_id, forecast_id)
+
+
+async def _the_forecast_failed(monkeypatch, blend_id: str, forecast_id: str) -> None:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == forecast_id).values(status="failed"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        _an_issue_date_elapses,
+        _the_blends_day_level_forest_lands,
+        _a_forest_lands_after_a_forecast_that_predates_forest_tracking,
+        _the_forecast_failed,
+    ],
+)
+async def test_updating_a_forecast_starts_a_run_once_something_it_scores_changed(
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch, change
+) -> None:
+    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    await change(monkeypatch, blend_id, forecast_id)
+
+    response = await client.post(f"/forecasts/{forecast_id}/refresh", headers=as_new_user)
+
+    assert response.status_code == 201
+    assert response.json()["up_to_date"] is False
+    assert response.json()["forecast"]["id"] != forecast_id
+    assert await _forecast_job_count() == 2
+
+
+@pytest.mark.asyncio
+async def test_updating_someone_elses_shared_forecast_with_nothing_new_returns_theirs(
+    client, user_id: str, _stub_runner, monkeypatch
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(jobs)
+            .where(jobs.c.id.in_([blend_id, forecast_id]))
+            .values(visibility="shared")
+        )
+    someone_else = {"X-Forwarded-User": f"pytest-{uuid.uuid4()}"}
+
+    response = await client.post(f"/forecasts/{forecast_id}/refresh", headers=someone_else)
+
+    assert response.status_code == 200
+    assert response.json()["up_to_date"] is True
+    assert response.json()["forecast"]["id"] == forecast_id
+    assert response.json()["forecast"]["is_owner"] is False
+    assert await _forecast_job_count() == 1
+
+
 @pytest.mark.asyncio
 async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
     client, user_id: str, _stub_runner, monkeypatch
@@ -751,3 +915,19 @@ async def test_cancel_mid_submit_survives_the_submit_and_keeps_the_handle(
     assert row["status"] == "canceling"
     # The reconciler needs the handle to cancel the call that was spawned.
     assert row["runner_handle"]["external_id"] == "fc-test"
+
+
+@pytest.mark.asyncio
+async def test_forcing_an_update_of_an_up_to_date_forecast_starts_a_run(
+    client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch
+) -> None:
+    _, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+
+    response = await client.post(
+        f"/forecasts/{forecast_id}/refresh", params={"force": "true"}, headers=as_new_user
+    )
+
+    assert response.status_code == 201
+    assert response.json()["up_to_date"] is False
+    assert response.json()["forecast"]["id"] != forecast_id
+    assert await _forecast_job_count() == 2
