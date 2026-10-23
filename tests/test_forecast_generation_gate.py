@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ai_almanac.server.services.forecast_models import live_forecast_compatibility
-from ai_almanac.server.services.job_submission import forecast_generation_gpus
-from ai_almanac.settings import member_forecast_model_id
+from ai_almanac.server.services.job_submission import ForecastParams, forecast_generation_gpus
 
 
 @pytest.mark.parametrize(
@@ -20,6 +19,17 @@ def test_only_a_missing_or_stale_trajectory_set_needs_a_gpu(
     readiness: dict[str, bool], gpus: int
 ) -> None:
     assert forecast_generation_gpus(readiness) == gpus
+
+
+def test_forecast_params_accept_a_known_init_source_in_any_case() -> None:
+    assert ForecastParams(init_source=" IFS ").init_source == "ifs"
+
+
+@pytest.mark.parametrize("init_source", ["era5", "../../other-model", ""])
+def test_forecast_params_refuse_an_unknown_init_source(init_source: str) -> None:
+    # It names a trajectory-store directory, so it must be a known source.
+    with pytest.raises(ValueError, match="Unknown init source"):
+        ForecastParams(init_source=init_source)
 
 
 class TestLiveForecastCompatibility:
@@ -48,17 +58,3 @@ class TestLiveForecastCompatibility:
     )
     def test_an_unlinked_or_unregistered_archive_is_unavailable(self, model_id, grid_step):
         assert live_forecast_compatibility(model_id, grid_step).status == "unavailable"
-
-
-@pytest.mark.parametrize(
-    ("config", "member", "expected"),
-    [
-        ({"forecast_models": {"aifs_v2_india_0_25": "aifs2"}}, "aifs_v2_india_0_25", "aifs2"),
-        # A job queued before members were linked runs the member's own name.
-        ({}, "fuxi", "fuxi"),
-    ],
-)
-def test_runners_execute_the_model_each_member_is_linked_to(
-    config: dict, member: str, expected: str
-) -> None:
-    assert member_forecast_model_id(config, member) == expected

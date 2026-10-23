@@ -35,8 +35,9 @@
 	} from './blend-skill-map';
 	import { DEFAULT_BLEND_MODEL, blendLabel } from './blend-summary';
 
-	type Props = { jobId: string };
-	let { jobId }: Props = $props();
+	// revision changes when the job's results grow, which reloads the map in place.
+	type Props = { jobId: string; revision?: string };
+	let { jobId, revision = '' }: Props = $props();
 
 	const SOURCE = 'blend-skill';
 	const FILL_LAYER = 'blend-skill-fill';
@@ -176,6 +177,7 @@
 	$effect(() => {
 		const id = jobId;
 		const blend = model;
+		void revision;
 		const sameJob = untrack(() => metrics?.job_id === id);
 		let cancelled = false;
 		loading = true;

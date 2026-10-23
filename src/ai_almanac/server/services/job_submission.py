@@ -13,23 +13,44 @@ import math
 import re
 import uuid
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import NamedTuple
+from typing import Annotated, NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, FiniteFloat, ValidationError, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    ValidationError,
+    model_validator,
+)
 
 from ai_almanac.server.db import get_db, lock_for_update
-from ai_almanac.server.services import boundaries, guardrails, trajectory_sets
+from ai_almanac.server.services import boundaries, day_level_blends, guardrails, trajectory_sets
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
-from ai_almanac.server.services.execution import ExecutionRequest, ResourceRequest
+from ai_almanac.server.services.execution import (
+    ExecutionRequest,
+    ResourceRequest,
+    RunnerHandle,
+)
 from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     linked_forecast_model_id,
     live_forecast_compatibility,
+    parse_init_source,
+)
+from ai_almanac.server.services.forecast_pipeline import (
+    ArchiveLayout,
+    ForecastModel,
+    PlanError,
+    SeasonPlan,
+    plan_season,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
@@ -50,6 +71,7 @@ from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
     blend_model_key,
+    forecast_model_by_id,
     get_packaged_forecast_models,
     settings,
 )
@@ -339,6 +361,41 @@ def onset_param_errors(
     return errors
 
 
+class DayLevelSettings(BaseModel):
+    """How the day-level blend is cross-validated and how its forest grows.
+
+    Every setting is optional and forwarded only when given, so an unset one
+    keeps the day-level run's default: one CV year out per fold, and
+    onset_forest.ForestParams' own forest settings. Holding several CV years
+    out per fold cuts the forests fitted (and run time) by that factor, at the
+    cost of training on fewer years per fold; the week-level blend still
+    leaves one year out at a time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    years_per_fold: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="CV holdout years held out together per day-level fold, in "
+        "contiguous blocks; 1 (the default) leaves one year out at a time.",
+    )
+    trees: int | None = Field(default=None, ge=10, le=500, description="Trees in the forest.")
+    max_depth: int | None = Field(
+        default=None, ge=1, le=64, description="Deepest a tree may grow; unset for no limit."
+    )
+    min_samples_leaf: int | None = Field(
+        default=None, ge=1, le=1000, description="Fewest training rows a leaf may hold."
+    )
+    max_samples: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Share of the training rows each tree's bootstrap sample draws.",
+    )
+
+
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
@@ -368,6 +425,8 @@ class BlendParams(BaseModel):
         "onset-before-reference probability is scored against.",
     )
     focus_area: FocusArea | None = None
+    # Omitted, the day-level blend trains with DayLevelSettings' defaults.
+    day_level: DayLevelSettings | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -419,6 +478,12 @@ class BlendOut(BaseModel):
     forecast_models: dict[str, str] = {}
     # Years kept out of every fit, so results can show their scores apart.
     true_holdout_years: list[int] = []
+    # The day-level blend, when it trains in its own run alongside this one:
+    # "running" (the blend can be complete while it still trains), then
+    # "complete", "failed", or "canceled". None when it trains with the blend
+    # or not at all.
+    day_level_status: str | None = None
+    day_level_error: str | None = None
 
 
 _blend_model_key = blend_model_key
@@ -787,6 +852,8 @@ def blend_row_to_out(
         true_holdout_years=_years_or_empty(
             (cfg.get("blend_params") or {}).get("true_holdout_years")
         ),
+        day_level_status=row.get("day_level_status"),
+        day_level_error=row.get("day_level_error"),
     )
 
 
@@ -804,6 +871,21 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
             ),
         )
     return source
+
+
+async def _record_submission(job_id: str, handle: RunnerHandle) -> None:
+    """Persist the runner handle once submit returns.
+
+    The local runner's supervisor advances status itself; a remote runner is
+    already executing once spawned, so its job moves to running — but only from
+    queued. A cancel that landed while submit was in flight must win, and the
+    handle must still be stored so the reconciler can cancel the remote call.
+    """
+    values: dict = {"runner_handle": handle.as_dict()}
+    if handle.runner != "local":
+        values["status"] = sa.case((jobs.c.status == "queued", "running"), else_=jobs.c.status)
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
 
 
 async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
@@ -908,6 +990,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "warnings": warnings,
     }
 
+    runner = get_job_runner()
     async with get_db() as conn:
         await lock_for_update(conn)
         await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
@@ -931,6 +1014,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
                 dataset_id=body.obs_dataset_id,
                 job_type="blend",
                 status="queued",
+                runner=runner.name,
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
@@ -957,7 +1041,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         )
 
     try:
-        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+        handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
         async with get_db() as conn:
             await conn.execute(
@@ -971,11 +1055,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
             )
         raise HTTPException(status_code=400, detail=f"Blend submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return blend_row_to_out(row, user_id, {source["id"]: source for source in model_sources})
 
 
@@ -989,10 +1069,58 @@ class ForecastParams(BaseModel):
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
     # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: str = "gfs"
+    init_source: Annotated[str, AfterValidator(parse_init_source)] = "gfs"
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
-    max_issue_dates: int | None = None
+    max_issue_dates: Annotated[int, Field(ge=1)] | None = None
+
+
+def utc_today() -> date:
+    """The date a forecast is planned against; the one clock read in planning."""
+    return datetime.now(UTC).date()
+
+
+def plan_live_season(
+    members: list[str],
+    sources_by_name: Mapping[str, dict | None],
+    registry: dict,
+    blend_config: dict,
+    params: ForecastParams,
+    *,
+    today: date,
+) -> SeasonPlan:
+    """The frozen season plan a forecast job executes (see SeasonPlan).
+
+    Each member runs the registry model its archive links to, laid out like that
+    archive — cadence, units, extent — so the live season has the shape the
+    blend was trained on. Issue dates start at the blend's monsoon cutoff.
+    """
+    try:
+        inputs = {
+            name: (
+                _member_forecast_model(name, sources_by_name.get(name) or {}, registry),
+                ArchiveLayout.parse((sources_by_name.get(name) or {}).get("metadata") or {}),
+            )
+            for name in members
+        }
+        return plan_season(
+            inputs,
+            season=today.year,
+            season_start_month_day=(blend_config.get("blend_params") or {}).get("cutoff_month_day")
+            or "05-01",
+            init_source=params.init_source,
+            today=today,
+            max_issue_dates=params.max_issue_dates,
+        )
+    except PlanError as exc:
+        raise HTTPException(status_code=409, detail=f"This forecast can't run: {exc}") from exc
+
+
+def _member_forecast_model(member: str, source: dict, registry: dict) -> ForecastModel:
+    entry = forecast_model_by_id(registry, linked_forecast_model_id(source))
+    if entry is None:
+        raise PlanError(f"{member} isn't linked to a live forecast model")
+    return ForecastModel.parse(entry)
 
 
 def forecast_generation_gpus(model_ready: dict[str, bool]) -> int:
@@ -1068,18 +1196,53 @@ async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
     return dict(row)
 
 
+class ForecastRefreshOut(BaseModel):
+    forecast: ForecastOut
+    # True when nothing the forecast scores has changed since it ran, so no new
+    # run was started and `forecast` is the one that was asked to update.
+    up_to_date: bool
+
+
+@dataclass(frozen=True)
+class ForecastJob:
+    """A forecast job built from a request, ready to submit."""
+
+    dataset_id: str
+    run_id: str | None
+    plan: SeasonPlan
+    config: dict
+
+
+# What a forecast's scores depend on: the seasons it rolls out, the blend it
+# scores them against, and whether that blend's day-level forest had landed
+# (live scoring applies the forest only once it exists).
+_SCORED_INPUTS = ("season_plan", "blend_config_snapshot", "blend_day_level_completed_at")
+
+
+def scores_same_inputs(config: dict, saved_config: dict) -> bool:
+    """Whether a forecast job config scores exactly what a saved one already
+    scored. Compared as JSON, the form a saved config is read back in."""
+
+    def scored(cfg: dict) -> dict:
+        return json.loads(json.dumps({key: cfg.get(key) for key in _SCORED_INPUTS}))
+
+    return scored(config) == scored(saved_config)
+
+
+def _day_level_completed_at(blend_row: dict) -> str | None:
+    if blend_row.get("day_level_status") != day_level_blends.COMPLETE:
+        return None
+    return blend_row.get("day_level_completed_at")
+
+
 async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
-    """Submit a live-forecast job: run the blend's models forward and score them.
+    """Submit a live-forecast job: run the blend's models forward and score them."""
+    return await submit_forecast_job(await build_forecast_job(body, user_id), user_id)
 
-    A run whose season is fully cached scores for free (GPU-free); any run that
-    needs a rollout — a cold model's full season or a stale set's gap-fill —
-    requests one GPU. See forecast_generation_gpus.
 
-    Works with either job runner: locally via the `forecast` pixi environment
-    (envs/forecast_entrypoint.py, requires a GPU host — see the
-    `self-host-local-gpu` deployment profile) or via the Modal app, exactly
-    like blend/benchmark submission already does.
-    """
+async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
+    """The forecast job a request asks for: its blend and members checked, its
+    season planned as of today, and its job config frozen."""
     blend_row = await _resolve_parent_blend(body.blend_id, user_id)
     blend_config = json.loads(blend_row.get("config_json") or "{}")
     # Where the blend's training run published its artifacts. The live-scoring
@@ -1141,58 +1304,67 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         )
     lead_hours = body.params.lead_hours or list(registry.get("default_lead_hours") or [])
 
-    # The season-long scoring loop (run_season_forecast) needs each model's
-    # archived issue-day cadence, unit conversion, and spatial extent so its
-    # output matches the shape/units the blend was trained against — these
-    # live on the original archived data source, not the live registry.
-    from ai_almanac.server.services.forecast_pipeline import (
-        season_covered_dates,
-        shared_issue_schedule,
+    plan = plan_live_season(
+        forecast_model_ids,
+        sources_by_name,
+        registry,
+        blend_config,
+        body.params,
+        today=utc_today(),
     )
 
-    season_model_params: dict[str, dict] = {}
-    for name in forecast_model_ids:
-        metadata = (sources_by_name.get(name) or {}).get("metadata") or {}
-        season_model_params[name] = {
-            "init_days": metadata.get("init_days") or "0,3",
-            # The archive's fixed calendar (MM-DD) issue-date schedule, when
-            # inferred at registration. Preferred over init_days weekdays so a
-            # live rollout reproduces the training dates (see season_issue_dates).
-            "init_month_days": metadata.get("init_month_days"),
-            "unit_cvt": metadata.get("unit_cvt", 1.0),
-            "spatial_bounds": metadata.get("spatial_bounds"),
-        }
-    season_model_params = shared_issue_schedule(season_model_params)
+    config = {
+        "job_type": "forecast",
+        "modal_app": settings.modal_forecast_app_name,
+        "modal_function": settings.modal_forecast_function_name,
+        "blend_id": body.blend_id,
+        # Frozen at submission time so a later edit to the blend doesn't
+        # retroactively change a forecast job already queued.
+        "blend_config_snapshot": blend_config,
+        "blend_day_level_completed_at": _day_level_completed_at(blend_row),
+        "forecast_model_ids": forecast_model_ids,
+        # What the runners execute and the coverage markers record. The fields
+        # beside it are the request as submitted, kept for display and re-runs.
+        "season_plan": plan.to_dict(),
+        "init_source": plan.init_source,
+        "max_issue_dates": body.params.max_issue_dates,
+        "region_id": blend_config.get("region_id"),
+        "init_time": body.params.init_time,
+        "lead_hours": lead_hours,
+        "variables": variables,
+        "gcs_cache_bucket": settings.gcs_data_bucket,
+    }
+    return ForecastJob(
+        dataset_id=blend_row["dataset_id"], run_id=body.run_id, plan=plan, config=config
+    )
 
-    # The season loop must start counting issue dates from the same monsoon
-    # cutoff the blend was trained against, not an unrelated hardcoded date.
-    season_start_month_day = (blend_config.get("blend_params") or {}).get(
-        "cutoff_month_day"
-    ) or "05-01"
 
+async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
+    """Queue a built forecast job and hand it to the job runner.
+
+    A run whose season is fully cached scores for free (GPU-free); any run that
+    needs a rollout — a cold model's full season or a stale set's gap-fill —
+    requests one GPU. See forecast_generation_gpus.
+
+    Works with either job runner: locally via the `forecast` pixi environment
+    (envs/forecast_entrypoint.py, requires a GPU host — see the
+    `self-host-local-gpu` deployment profile) or via the Modal app, exactly
+    like blend/benchmark submission already does.
+    """
+    forecast_model_ids: list[str] = job.config["forecast_model_ids"]
     # Gate against the shared trajectory store. The expensive season rollout is
     # deterministic and model-scoped, so it is generated once (admin-triggered
-    # when cold) and every later run scores against the cache for free.
-    init_source = body.params.init_source or "gfs"
-    season = str(datetime.now(UTC).year)
+    # when cold) and every later run scores against the cache for free. The
+    # coverage markers record the same plan, so a set they mark complete
+    # satisfies this gate on the next run.
+    init_source = job.plan.init_source
+    season = str(job.plan.season)
     season_store_prefix = (
         f"gs://{settings.gcs_data_bucket}/season-forecasts"
         if settings.gcs_data_bucket
         else "season-forecasts"
     )
-
-    # Same computation the completion markers use, so a set the rollout marks
-    # complete actually satisfies this gate on the next run (see
-    # season_covered_dates).
-    needed = season_covered_dates(
-        {
-            "season": season,
-            "season_start_month_day": season_start_month_day,
-            "season_model_params": season_model_params,
-            "forecast_model_ids": forecast_model_ids,
-            "max_issue_dates": body.params.max_issue_dates,
-        }
-    )
+    needed = job.plan.covered_dates()
     async with get_db() as conn:
         model_ready = {
             name: await trajectory_sets.set_is_ready(
@@ -1208,32 +1380,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
 
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    config = {
-        "job_type": "forecast",
-        "modal_app": settings.modal_forecast_app_name,
-        "modal_function": settings.modal_forecast_function_name,
-        "blend_id": body.blend_id,
-        # Frozen at submission time so a later edit to the blend doesn't
-        # retroactively change a forecast job already queued.
-        "blend_config_snapshot": blend_config,
-        "forecast_model_ids": forecast_model_ids,
-        # Member name → registry id the runners execute for it.
-        "forecast_models": {
-            name: linked_forecast_model_id(sources_by_name[name] or {})
-            for name in forecast_model_ids
-        },
-        "season_model_params": season_model_params,
-        "season_start_month_day": season_start_month_day,
-        "init_source": init_source,
-        "season": season,
-        "max_issue_dates": body.params.max_issue_dates,
-        "region_id": blend_config.get("region_id"),
-        "init_time": body.params.init_time,
-        "lead_hours": lead_hours,
-        "variables": variables,
-        "gcs_cache_bucket": settings.gcs_data_bucket,
-    }
-
+    runner = get_job_runner()
     async with get_db() as conn:
         await lock_for_update(conn)
         await conn.execute(sa.select(users.c.id).where(users.c.id == user_id).with_for_update())
@@ -1254,11 +1401,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             .values(
                 id=job_id,
                 user_id=user_id,
-                dataset_id=blend_row["dataset_id"],
+                dataset_id=job.dataset_id,
                 job_type="forecast",
                 status="queued",
-                config_json=json.dumps(config),
-                run_id=body.run_id,
+                runner=runner.name,
+                config_json=json.dumps(job.config),
+                run_id=job.run_id,
                 created_at=now,
                 runner_request={"job_id": job_id, "resources": {"gpus": gpus}},
             )
@@ -1283,7 +1431,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             user_id=user_id,
             resource_type="job",
             resource_id=job_id,
-            metadata={"blend_id": body.blend_id, "forecast_model_ids": forecast_model_ids},
+            metadata={"blend_id": job.config["blend_id"], "forecast_model_ids": forecast_model_ids},
         )
         await usage(
             conn,
@@ -1295,7 +1443,7 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         )
 
     try:
-        handle = await get_job_runner().submit(ExecutionRequest(job_id=job_id))
+        handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
         async with get_db() as conn:
             await conn.execute(
@@ -1309,16 +1457,15 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
             )
         raise HTTPException(status_code=400, detail=f"Forecast submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return forecast_row_to_out(row, user_id)
 
 
-async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastOut:
-    """Re-run an existing forecast with its ORIGINAL generation parameters.
+async def refresh_forecast_for_user(
+    forecast_id: str, user_id: str, *, force: bool = False
+) -> ForecastRefreshOut:
+    """Re-run an existing forecast with its ORIGINAL generation parameters,
+    unless it already scored everything a re-run would.
 
     The season rollout is cumulative and cache-backed, so an "update" should
     land on the same trajectory set as the first run — reusing every cached
@@ -1327,15 +1474,19 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     falling back to submission defaults would target a different set (e.g. the
     full season instead of the original's recent-N window) and miss the cache.
     Mirrors the benchmark rerun path: read the frozen config, rebuild the
-    request, delegate to create_forecast_for_user.
+    request, and rebuild the job from it.
+
+    A completed forecast whose rebuilt job scores the same inputs (no issue
+    date has elapsed and its blend is unchanged) is returned as up to date
+    without starting a run: a re-run would only reproduce it. `force` runs it
+    anyway, for what the comparison can't see — a scoring fix in a deploy, or a
+    rebuilt trajectory cache.
     """
     async with get_db() as conn:
         row = (
             (
                 await conn.execute(
-                    sa.select(
-                        jobs.c.user_id, jobs.c.config_json, jobs.c.visibility, jobs.c.run_id
-                    ).where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
+                    sa.select(jobs).where(jobs.c.id == forecast_id, jobs.c.job_type == "forecast")
                 )
             )
             .mappings()
@@ -1350,16 +1501,34 @@ async def refresh_forecast_for_user(forecast_id: str, user_id: str) -> ForecastO
     body = ForecastCreate(
         blend_id=cfg.get("blend_id") or "",
         forecast_model_ids=cfg.get("forecast_model_ids") or None,
-        params=ForecastParams(
-            init_time=cfg.get("init_time"),
-            init_source=cfg.get("init_source") or "gfs",
-            max_issue_dates=cfg.get("max_issue_dates"),
-            lead_hours=cfg.get("lead_hours"),
-            variables=cfg.get("variables"),
-        ),
+        params=_saved_forecast_params(cfg),
         run_id=row["run_id"],
     )
-    return await create_forecast_for_user(body, user_id)
+    job = await build_forecast_job(body, user_id)
+    if not force and row["status"] == "complete" and scores_same_inputs(job.config, cfg):
+        return ForecastRefreshOut(forecast=forecast_row_to_out(dict(row), user_id), up_to_date=True)
+    return ForecastRefreshOut(forecast=await submit_forecast_job(job, user_id), up_to_date=False)
+
+
+def _saved_forecast_params(cfg: dict) -> ForecastParams:
+    """The request a stored forecast was submitted with. Jobs saved before a
+    setting was restricted (e.g. an init source no longer offered) can't be
+    re-run as they were, so they are refused rather than silently changed."""
+    try:
+        return ForecastParams(
+            init_time=cfg.get("init_time"),
+            init_source=cfg.get("init_source") or "gfs",
+            # Older jobs saved 0 to mean "no trim", which None now means.
+            max_issue_dates=cfg.get("max_issue_dates") or None,
+            lead_hours=cfg.get("lead_hours"),
+            variables=cfg.get("variables"),
+        )
+    except ValidationError as exc:
+        fields = ", ".join(sorted({str(error["loc"][0]) for error in exc.errors()}))
+        raise HTTPException(
+            status_code=409,
+            detail=f"This forecast can't be updated: its saved {fields} is no longer supported.",
+        ) from exc
 
 
 class InvalidBenchmarkSettings(ValueError):
@@ -1556,6 +1725,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "romp_params": romp_params,
     }
 
+    runner = get_job_runner()
     async with get_db() as conn:
         # On SQLite this takes the write lock up front; on PostgreSQL the
         # FOR UPDATE below serializes concurrent submissions per user.
@@ -1585,6 +1755,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
                 user_id=user_id,
                 dataset_id=body.dataset_id,
                 status="queued",
+                runner=runner.name,
                 config_json=json.dumps(config),
                 run_id=body.run_id,
                 created_at=now,
@@ -1614,7 +1785,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     # Remote runners (Modal) have no local workspace; only the local runner does.
     workspace = storage.job_dir(job_id) if storage.is_local else None
     try:
-        handle = await get_job_runner().submit(
+        handle = await runner.submit(
             ExecutionRequest(
                 job_id=job_id,
                 workspace=workspace,
@@ -1635,11 +1806,5 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             )
         raise HTTPException(status_code=400, detail=f"Job submission failed: {exc}") from exc
 
-    values: dict = {"runner": handle.runner, "runner_handle": handle.as_dict()}
-    # The local runner's supervisor advances status itself; a remote runner is
-    # already executing once spawned, and the reconciler tracks it from here.
-    if handle.runner != "local":
-        values["status"] = "running"
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+    await _record_submission(job_id, handle)
     return row_to_job_out(row, user_id, catalog)

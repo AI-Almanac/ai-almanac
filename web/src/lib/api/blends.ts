@@ -18,7 +18,14 @@ export type Blend = {
 	is_owner?: boolean;
 	visibility?: 'private' | 'shared' | 'example';
 	run_id?: string | null;
+	// The day-level blend when it trains in its own run alongside this one, so
+	// a complete blend can still be 'running' here. Absent when it trains with
+	// the blend or not at all.
+	day_level_status?: DayLevelStatus | null;
+	day_level_error?: string | null;
 };
+
+export type DayLevelStatus = 'running' | 'complete' | 'failed' | 'canceled';
 
 export type BlendParams = {
 	training_years: string;
@@ -32,6 +39,17 @@ export type BlendParams = {
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
 	focus_area?: FocusAreaValue;
+	// The day-level blend's CV and forest settings; omitted ones keep its defaults.
+	day_level?: DayLevelSettings;
+};
+
+// The day-level blend's CV and forest settings (server DayLevelSettings).
+export type DayLevelSettings = {
+	years_per_fold?: number;
+	trees?: number;
+	max_depth?: number;
+	min_samples_leaf?: number;
+	max_samples?: number;
 };
 
 export type BlendCreate = {

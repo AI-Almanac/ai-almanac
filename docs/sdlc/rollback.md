@@ -6,9 +6,9 @@ AI triage in the workflow summary recommends, you decide.
 
 ## Roll back (one command, a few minutes)
 
-Every deploy ships the backend and the Modal apps (`app`, `blending_app`,
-`forecasts_app`) together, so a rollback has to move both. `scripts/rollback.sh`
-does that:
+A release is the backend and the Modal apps (`app`, `blending_app`,
+`forecasts_app`) at one commit, so a rollback has to move both.
+`scripts/rollback.sh` does that:
 
 ```bash
 scripts/rollback.sh --dry-run prod   # show the target and the commands first
@@ -42,10 +42,10 @@ moved: rerun with the same `<sha>` (the traffic switch is a no-op when that
 revision already serves) or deploy the apps by hand from a checkout of that
 commit.
 
-Note: the rollback pins traffic to one revision. The deploy workflows route
-traffic back to the latest revision after every deploy, so the next push to
-`main`/`develop` undoes the rollback — it does not stop the pipeline.
-Revert or fix the offending commit before pushing again.
+Note: the rollback pins traffic to one revision. A deploy run that finds
+traffic pinned ships everything and routes traffic back to the latest
+revision, so the next push to `main`/`develop` undoes the rollback — it does
+not stop the pipeline. Revert or fix the offending commit before pushing again.
 
 A failed deploy can leave Modal ahead of Cloud Run: CI deploys the Modal
 apps before migrations and the Cloud Run deploy, so if either of those
@@ -53,6 +53,18 @@ fails, the old revision keeps serving while Modal runs the new commit. Don't
 run a bare `rollback.sh` then (it would go one release further back).
 Resync Modal to the serving release instead:
 `scripts/rollback.sh <env> <serving-sha>`, which leaves traffic where it is.
+The next deploy run ships everything, because the failed run may have
+shipped only part of its commit.
+
+## Modal-only deploys
+
+A deploy run ships only what changed since the previous successful run
+(`scripts/deploy-plan.sh`): a commit that touches only the Modal apps
+redeploys them and builds no new revision, so Modal runs a newer commit than
+the serving revision's `commit-sha` label. Such a commit has no revision for
+`rollback.sh <env> <sha>` to find. To undo a bad Modal-only deploy, resync
+Modal to the serving release with `scripts/rollback.sh <env> <serving-sha>`;
+a bare `rollback.sh` would also take the backend one release back.
 
 ## The migration caveat
 
@@ -63,6 +75,13 @@ CLAUDE.md): additive first, destructive changes only in a later release
 once no deployed revision reads the old shape. If a migration itself is
 the failure, do not roll traffic back blindly — check whether the old code
 can read the current schema first.
+
+The same applies to seeded rows. Packaged regions are re-seeded on every
+`GET /regions`, so removing a region from `regions.yaml` and deleting its
+row in one release lets old revisions re-insert it mid-rollout (migration
+0015's delete was undone this way; 0028 redid it). Drop the region from `regions.yaml`
+first; delete its row in a later release, once no deployed revision
+packages it.
 
 ## Fix-forward (preferred when the fix is obvious)
 

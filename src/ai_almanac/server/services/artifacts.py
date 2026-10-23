@@ -5,6 +5,10 @@ job_artifacts table (the indexed system of record). Publication runs in the
 application process — never the runner — and is atomic per job: all records and
 the publication marker commit together, so a successful job publishes its full,
 indexed output set exactly once and a failed job never publishes partial output.
+
+A blend whose day-level blend trains in its own call (day_level_blends) adds its
+outputs after the job completes, so it is indexed a second time once that call
+finishes, under its own claim; files the first pass already indexed are kept.
 """
 
 from __future__ import annotations
@@ -25,12 +29,20 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-async def index_job_artifacts(job_id: str) -> int:
-    """Index a completed job's outputs into job_artifacts and mark it published.
+# The jobs columns that claim one indexing pass: the job's own outputs, then the
+# outputs its day-level blend adds after it completes.
+_CLAIMS = ("artifacts_published_at", "day_level_published_at")
+
+
+async def index_job_artifacts(job_id: str, claim: str = "artifacts_published_at") -> int:
+    """Index a job's outputs into job_artifacts and mark the `claim` pass done.
 
     Atomic: artifact rows and the publication marker commit in one transaction.
-    Returns the number of artifacts indexed (0 if another instance already did).
+    Rows for files an earlier pass indexed are left as they are. Returns the
+    number of artifacts listed (0 if another instance already claimed the pass).
     """
+    if claim not in _CLAIMS:
+        raise ValueError(f"Unknown artifact publication claim: {claim!r}")
     store = get_artifact_store()
     artifacts = await asyncio.to_thread(store.publish, job_id)
 
@@ -38,10 +50,7 @@ async def index_job_artifacts(job_id: str) -> int:
         # Every instance's reconciler loop publishes pending jobs; claiming the
         # job first means exactly one of them inserts its rows.
         claimed = await conn.execute(
-            text(
-                "UPDATE jobs SET artifacts_published_at = :now "
-                "WHERE id = :id AND artifacts_published_at IS NULL"
-            ),
+            text(f"UPDATE jobs SET {claim} = :now WHERE id = :id AND {claim} IS NULL"),
             {"now": _now(), "id": job_id},
         )
         if not claimed.rowcount:
@@ -53,7 +62,8 @@ async def index_job_artifacts(job_id: str) -> int:
                     "(id, job_id, kind, filename, media_type, size_bytes, "
                     "checksum, storage_key, created_at) VALUES "
                     "(:id, :job_id, :kind, :filename, :media_type, :size_bytes, "
-                    ":checksum, :storage_key, :created_at)"
+                    ":checksum, :storage_key, :created_at) "
+                    "ON CONFLICT (job_id, kind, filename) DO NOTHING"
                 ),
                 {
                     "id": artifact.id,
@@ -71,19 +81,34 @@ async def index_job_artifacts(job_id: str) -> int:
 
 
 async def publish_pending() -> None:
-    """Index artifacts for completed jobs that have not been published yet."""
+    """Index artifacts for completed jobs, and for finished day-level blends,
+    that have not been published yet."""
     async with get_db() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT id FROM jobs "
-                    "WHERE status = 'complete' AND artifacts_published_at IS NULL"
+        pending = [
+            (job_id, "artifacts_published_at")
+            for (job_id,) in (
+                await conn.execute(
+                    text(
+                        "SELECT id FROM jobs "
+                        "WHERE status = 'complete' AND artifacts_published_at IS NULL"
+                    )
                 )
-            )
-        ).fetchall()
-    for (job_id,) in rows:
+            ).fetchall()
+        ] + [
+            (job_id, "day_level_published_at")
+            for (job_id,) in (
+                await conn.execute(
+                    text(
+                        "SELECT id FROM jobs WHERE status = 'complete' "
+                        "AND artifacts_published_at IS NOT NULL "
+                        "AND day_level_status = 'complete' AND day_level_published_at IS NULL"
+                    )
+                )
+            ).fetchall()
+        ]
+    for job_id, claim in pending:
         try:
-            await index_job_artifacts(job_id)
+            await index_job_artifacts(job_id, claim)
         except Exception as exc:  # noqa: BLE001 — one bad job must not block others
             logger.warning("artifact indexing failed for job %s: %s", job_id, exc)
 

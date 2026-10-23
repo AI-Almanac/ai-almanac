@@ -298,6 +298,7 @@ def _patch_modal_runner(monkeypatch, runner) -> None:
         ("running", "complete", "complete"),
         ("running", "failed", "failed"),
         ("running", "running", "running"),
+        ("running", "unknown", "running"),
         ("canceling", "running", "canceled"),
     ],
 )
@@ -322,3 +323,26 @@ async def test_reconcile_follows_the_modal_job(
     assert runner.canceled is (status == "canceling")
     assert (row["completed_at"] is not None) is (final_status != "running")
     assert bool(row["error"]) is (final_status == "failed")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_escalates_a_job_whose_modal_status_stays_unreadable(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _make_modal_job(user_id, "running")
+    _patch_modal_runner(monkeypatch, _FakeModalRunner("unknown"))
+    monkeypatch.setattr(job_manager, "UNKNOWN_POLL_ESCALATION", 3)
+
+    with caplog.at_level(logging.WARNING, logger=job_manager.logger.name):
+        for _ in range(3):
+            await job_manager.reconcile_jobs()
+
+    levels = [record.levelno for record in caplog.records if job_id in record.getMessage()]
+    assert levels == [logging.WARNING, logging.WARNING, logging.ERROR]
+    assert (await _job_row(job_id))["status"] == "running"

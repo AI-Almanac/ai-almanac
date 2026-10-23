@@ -2,6 +2,8 @@
 
 A fake `modal` module stands in for the SDK so submit/inspect/cancel are tested
 without Modal or the network; `_job_config` is stubbed so no DB row is needed.
+Errors raised by the fake are the real SDK's, so classification is tested
+against the types Modal actually raises.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import sys
 import types
 from pathlib import Path
 
+import modal.exception as modal_exc
 import pytest
 
 from ai_almanac.server.services import modal_runner as mr
@@ -72,6 +75,8 @@ def _install_fake_modal(monkeypatch, *, get_behavior="complete", record=None):
             return inst
 
         def get(self, timeout=0):
+            if isinstance(get_behavior, BaseException):
+                raise get_behavior
             if get_behavior == "running":
                 raise TimeoutError
             if get_behavior == "failed":
@@ -84,7 +89,9 @@ def _install_fake_modal(monkeypatch, *, get_behavior="complete", record=None):
 
     modal.Function = FakeFunction
     modal.FunctionCall = FakeFunctionCall
+    modal.exception = modal_exc
     monkeypatch.setitem(sys.modules, "modal", modal)
+    monkeypatch.setitem(sys.modules, "modal.exception", modal_exc)
 
 
 def _runner() -> mr.ModalRunner:
@@ -213,6 +220,58 @@ async def test_inspect_maps_modal_states(monkeypatch: pytest.MonkeyPatch) -> Non
 
     _install_fake_modal(monkeypatch, get_behavior="failed")
     assert (await _runner().inspect(handle)).status == "failed"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        modal_exc.ConnectionError("Could not connect to the Modal server."),
+        modal_exc.ServiceError("UNAVAILABLE"),
+        modal_exc.InternalError("INTERNAL"),
+        modal_exc.ResourceExhaustedError("rate limited"),
+        modal_exc.AuthError("token expired"),
+        modal_exc.PermissionDeniedError("token rotated"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+@pytest.mark.asyncio
+async def test_inspect_leaves_the_job_active_when_modal_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    _install_fake_modal(monkeypatch, get_behavior=error)
+
+    snapshot = await _runner().inspect(RunnerHandle(runner="modal", external_id="fc-123"))
+
+    assert snapshot.status == "unknown"
+    assert type(error).__name__ in snapshot.detail
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("raised by the function"),
+        modal_exc.FunctionTimeoutError("exceeded its timeout"),
+        modal_exc.RemoteError("terminated"),
+        # A crash-looping (e.g. OOM-killed) container, as observed on staging.
+        modal_exc.InternalFailure("Server has lost track of input"),
+        modal_exc.OutputExpiredError(),
+        # Unknown or expired call ids: retrying would never succeed.
+        modal_exc.NotFoundError("call not found"),
+        # A function's own network error is re-raised as-is; it is the call's
+        # outcome, not a transient poll failure.
+        OSError("GCS connection reset"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+@pytest.mark.asyncio
+async def test_inspect_fails_the_job_when_the_call_itself_failed(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    _install_fake_modal(monkeypatch, get_behavior=error)
+
+    snapshot = await _runner().inspect(RunnerHandle(runner="modal", external_id="fc-123"))
+
+    assert snapshot.status == "failed"
 
 
 @pytest.mark.asyncio

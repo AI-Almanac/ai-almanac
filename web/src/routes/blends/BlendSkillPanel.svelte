@@ -28,7 +28,13 @@
 		type SkillRow
 	} from './blend-summary';
 
-	let { series, jobId }: { series: SkillRow[]; jobId: string } = $props();
+	// revision changes when the blend's results grow (a day-level blend that
+	// trained apart finishing), so the map reloads its per-point skill.
+	let {
+		series,
+		jobId,
+		revision = ''
+	}: { series: SkillRow[]; jobId: string; revision?: string } = $props();
 
 	// Diverging fill encoding exactly one quantity: skill relative to Traditional
 	// Climatology. Same hues as cellStyle in MetricPortrait.svelte, but a shallower
@@ -211,7 +217,7 @@
 		</div>
 	{/if}
 
-	<BlendSkillMap {jobId} />
+	<BlendSkillMap {jobId} {revision} />
 
 	<details class="glossary">
 		<summary>What do “raw”, “calibrated” and “climatology” mean?</summary>

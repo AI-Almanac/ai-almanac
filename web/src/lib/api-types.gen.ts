@@ -805,6 +805,8 @@ export interface paths {
         /**
          * Refresh Forecast
          * @description Re-run a forecast with its original spec so it reuses the cached season.
+         *     An up-to-date forecast starts no run and answers 200 with itself, unless
+         *     `force` asks for a run anyway.
          */
         post: operations["refresh_forecast_forecasts__forecast_id__refresh_post"];
         delete?: never;
@@ -2316,6 +2318,10 @@ export interface components {
              * @default []
              */
             true_holdout_years: number[];
+            /** Day Level Status */
+            day_level_status?: string | null;
+            /** Day Level Error */
+            day_level_error?: string | null;
         };
         /**
          * BlendParams
@@ -2355,6 +2361,7 @@ export interface components {
             ref_onset_month_day?: string | null;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+            day_level?: components["schemas"]["DayLevelSettings"] | null;
         };
         /**
          * BlendRunSpec
@@ -2857,6 +2864,44 @@ export interface components {
             grid_step_deg?: number | null;
         };
         /**
+         * DayLevelSettings
+         * @description How the day-level blend is cross-validated and how its forest grows.
+         *
+         *     Every setting is optional and forwarded only when given, so an unset one
+         *     keeps the day-level run's default: one CV year out per fold, and
+         *     onset_forest.ForestParams' own forest settings. Holding several CV years
+         *     out per fold cuts the forests fitted (and run time) by that factor, at the
+         *     cost of training on fewer years per fold; the week-level blend still
+         *     leaves one year out at a time.
+         */
+        DayLevelSettings: {
+            /**
+             * Years Per Fold
+             * @description CV holdout years held out together per day-level fold, in contiguous blocks; 1 (the default) leaves one year out at a time.
+             */
+            years_per_fold?: number | null;
+            /**
+             * Trees
+             * @description Trees in the forest.
+             */
+            trees?: number | null;
+            /**
+             * Max Depth
+             * @description Deepest a tree may grow; unset for no limit.
+             */
+            max_depth?: number | null;
+            /**
+             * Min Samples Leaf
+             * @description Fewest training rows a leaf may hold.
+             */
+            min_samples_leaf?: number | null;
+            /**
+             * Max Samples
+             * @description Share of the training rows each tree's bootstrap sample draws.
+             */
+            max_samples?: number | null;
+        };
+        /**
          * Feature
          * @description Feature Model
          */
@@ -3120,6 +3165,12 @@ export interface components {
             init_source: string;
             /** Max Issue Dates */
             max_issue_dates?: number | null;
+        };
+        /** ForecastRefreshOut */
+        ForecastRefreshOut: {
+            forecast: components["schemas"]["ForecastOut"];
+            /** Up To Date */
+            up_to_date: boolean;
         };
         /** FsEntry */
         FsEntry: {
@@ -6456,7 +6507,9 @@ export interface operations {
     };
     refresh_forecast_forecasts__forecast_id__refresh_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: never;
             path: {
                 forecast_id: string;
@@ -6471,7 +6524,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ForecastOut"];
+                    "application/json": components["schemas"]["ForecastRefreshOut"];
                 };
             };
             /** @description Validation Error */

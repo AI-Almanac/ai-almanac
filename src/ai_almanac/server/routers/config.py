@@ -67,7 +67,8 @@ async def capabilities(user: CurrentUser) -> dict[str, bool]:
         chat = await chat_available_for_user(user.id)
     else:
         chat = llm_is_configured()
-    return {"chat": chat}
+    # Whether new blends train the day-level blend, so the blend form offers its settings.
+    return {"chat": chat, "day_level_blend": settings.enable_day_level_blend}
 
 
 # Mounted at the root path (not under /config/) so the SPA's `<script

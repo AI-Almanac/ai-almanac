@@ -1,0 +1,35 @@
+# Which checks a change needs, by the files it touches. ci.yml and autofix.yml
+# read this through dorny/paths-filter (picomatch globs). Changing CI itself
+# runs everything, so a broken filter can't hide behind a skipped check.
+ci: &ci
+  - .github/path-filters.yml
+  - .github/workflows/ci.yml
+
+# Ruff and pytest. The tests also read the Modal apps, the scripts, and testdata.
+python:
+  - *ci
+  - "src/**"
+  - "tests/**"
+  - "modal/**"
+  - "scripts/**"
+  - "evals/**"
+  - "testdata/**"
+  - pyproject.toml
+  - pixi.lock
+
+# svelte-check, prettier, and vitest. pixi supplies node and the tasks.
+web:
+  - *ci
+  - "web/**"
+  - pyproject.toml
+  - pixi.lock
+
+# web/src/lib/api-types.gen.ts is generated from the FastAPI schema by
+# openapi-typescript, so it goes stale when either side changes.
+api:
+  - *ci
+  - "src/**"
+  - scripts/generate-api-types.sh
+  - web/src/lib/api-types.gen.ts
+  - web/package-lock.json
+  - pixi.lock

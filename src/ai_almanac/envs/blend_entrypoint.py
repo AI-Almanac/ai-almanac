@@ -13,19 +13,6 @@ import tarfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-# Blend params that shape the intermediates. Mirrors modal/blending_app.py
-# `_intermediate_prep_kwargs` (the Modal module is standalone and cannot import this
-# package). `mok_month_day` is the pre-rename spelling of `ref_onset_month_day`;
-# job configs written before the rename still carry it.
-INTERMEDIATE_PREP_KEYS = ("threshold_mm", "cutoff_month_day", "ref_onset_month_day", "focus_area")
-
-
-def intermediate_prep_kwargs(params: dict) -> dict:
-    kwargs = {k: params[k] for k in INTERMEDIATE_PREP_KEYS if params.get(k) is not None}
-    if "ref_onset_month_day" not in kwargs and params.get("mok_month_day") is not None:
-        kwargs["ref_onset_month_day"] = params["mok_month_day"]
-    return kwargs
-
 
 class _LocalFunction:
     def __init__(self, function):
@@ -109,6 +96,11 @@ def _forecast_files(config: dict, model_name: str) -> list[Path]:
     return files
 
 
+def _staged_dir(workflow: ModuleType, files: list[Path]) -> Path:
+    """The files copied into a fresh directory of their own, as the builder reads them."""
+    return workflow._extract_bundle(workflow._bundle_files(files))
+
+
 def _extract_tar(data: bytes, output_dir: Path) -> None:
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         root = output_dir.resolve()
@@ -131,22 +123,15 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     if not model_names:
         raise ValueError("Blend config has no models")
 
-    obs_bundle = workflow._bundle_files(_netcdf_files(config["obs_dir"]))
-    forecast_bundles = {
-        name: workflow._bundle_files(_forecast_files(config, name)) for name in model_names
-    }
-    prep_kwargs = intermediate_prep_kwargs(params)
-    if config.get("region_id"):
-        prep_kwargs["region_id"] = config["region_id"]
-
     print("==> Building blending intermediates", flush=True)
-    intermediates = workflow.build_lat_lon_intermediates_bundle.local(
-        obs_bundle,
-        forecast_bundles,
-        return_outputs=False,
+    intermediates = workflow.build_blend_intermediates(
+        _staged_dir(workflow, _netcdf_files(config["obs_dir"])),
+        {name: _staged_dir(workflow, _forecast_files(config, name)) for name in model_names},
+        params,
+        region_id=config.get("region_id"),
         cache_dir=config.get("cache_dir"),
+        resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
         model_layouts=config.get("model_layouts"),
-        **prep_kwargs,
     )
     # Read from disk, never held as bytes: on large grids the combined table
     # is the biggest object the run handles.
@@ -155,16 +140,18 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     train_kwargs = {"cores": os.cpu_count() or 1}
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
+    years = {
+        "training_years": workflow._parse_years(params.get("training_years") or "") or [],
+        "cv_holdout_years": workflow._parse_years(params.get("cv_holdout_years") or "") or [],
+        "true_holdout_years": workflow._parse_years(params.get("true_holdout_years") or ""),
+    }
     print("==> Training blend weights", flush=True)
     training = workflow.train_blending_model_bundle.local(
         None,
         combined_wide_path=str(combined_path),
         model_names=model_names,
-        training_years=workflow._parse_years(params.get("training_years") or "") or [],
-        cv_holdout_years=workflow._parse_years(params.get("cv_holdout_years") or "") or [],
-        true_holdout_years=workflow._parse_years(params.get("true_holdout_years") or ""),
         return_outputs=True,
-        train_forest=bool(config.get("train_day_level_blend")),
+        **years,
         **train_kwargs,
     )
     if not training["manifest"].get("ok"):
@@ -172,10 +159,36 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
         raise RuntimeError(f"Blend training pipeline failed:\n{tail}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.move(combined_path, output_dir / "combined_wide.pkl")
     if training.get("outputs_tar"):
         _extract_tar(training["outputs_tar"], output_dir)
+    published_combined = output_dir / "combined_wide.pkl"
+    shutil.move(combined_path, published_combined)
+    if config.get("train_day_level_blend"):
+        _train_day_level(workflow, published_combined, model_names, years, config, output_dir)
     print("==> Model blending complete", flush=True)
+
+
+def _train_day_level(workflow, combined_path, model_names, years, config, output_dir) -> None:
+    """The day-level blend into output_dir, after the weekly one. As on Modal,
+    where it trains in its own container, its failure leaves the weekly blend
+    standing: it is logged here, not raised."""
+    import traceback
+
+    print("==> Training the day-level blend", flush=True)
+    try:
+        day_level = workflow.train_day_level_bundle(
+            str(combined_path),
+            model_names,
+            cache_dir=config.get("cache_dir"),
+            settings=(config.get("blend_params") or {}).get("day_level"),
+            **years,
+        )
+    except Exception:
+        traceback.print_exc()
+        print("==> Day-level blend failed; the weekly blend is unaffected", flush=True)
+        return
+    for path in Path(day_level["output_dir"]).iterdir():
+        shutil.move(path, output_dir / path.name)
 
 
 def main() -> None:

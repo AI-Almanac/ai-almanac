@@ -17,6 +17,7 @@
 		fetchResultBlob,
 		type Blend,
 		type BlendCreate,
+		type DayLevelSettings,
 		type BlendRunSpec,
 		type ChatScope,
 		type DataSource,
@@ -41,9 +42,18 @@
 	} from './year-coverage';
 	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
+	import {
+		DAY_LEVEL_DEFAULTS,
+		dayLevelFits,
+		dayLevelParamsBody,
+		dayLevelParamsError,
+		dayLevelRunNote
+	} from './day-level-params';
+	import { parseYearSpec } from './year-coverage';
 	import { parsePooledSummary, type SkillRow } from './blend-summary';
 	import BlendSkillPanel from './BlendSkillPanel.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
+	import { awaitingArtifacts, blendInProgress, blendStateChanged, dayLevelNote } from './day-level';
 	import { installTour } from '$lib/tour.svelte';
 	import { takeSetupRequest } from '$lib/setup-request';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
@@ -60,6 +70,13 @@
 	let creating = $state(false);
 	let loaded = $state(false);
 	let chatAvailable = $state(false);
+	// Whether new blends train the day-level blend, so its settings are offered.
+	let dayLevelAvailable = $state(false);
+	let yearsPerFold = $state('');
+	let forestTrees = $state('');
+	let forestMaxDepth = $state('');
+	let forestMinSamplesLeaf = $state('');
+	let forestMaxSamples = $state('');
 	// A comparison needs a wider assistant column than the normal rail.
 	let chatComparing = $state(false);
 	let splitEl = $state<HTMLElement | null>(null);
@@ -106,6 +123,8 @@
 	});
 
 	let artifacts = $state<JobArtifact[]>([]);
+	// The blend `artifacts` belongs to; plain, so reading it tracks nothing.
+	let artifactsFor: string | null = null;
 	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
@@ -228,6 +247,23 @@
 	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
 	const onsetError = $derived(onsetParamsError(onsetInput));
 
+	const dayLevelInput = $derived({
+		yearsPerFold,
+		trees: forestTrees,
+		maxDepth: forestMaxDepth,
+		minSamplesLeaf: forestMinSamplesLeaf,
+		maxSamples: forestMaxSamples
+	});
+	const dayLevelError = $derived(dayLevelAvailable ? dayLevelParamsError(dayLevelInput) : null);
+	// What the chosen day-level cross-validation costs. Advisory only.
+	const dayLevelNoteText = $derived.by(() => {
+		const cvYears = parseYearSpec(cvHoldoutYears.trim());
+		if (!dayLevelAvailable || !cvYears?.length || dayLevelError) return null;
+		const folds = Number(yearsPerFold.trim() || DAY_LEVEL_DEFAULTS.years_per_fold);
+		const trueHoldouts = parseYearSpec(trueHoldoutYears.trim())?.length ?? 0;
+		return dayLevelRunNote(dayLevelFits(cvYears.length, trueHoldouts, folds), folds);
+	});
+
 	// Advisory only — never feeds formValid.
 	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
 
@@ -248,6 +284,7 @@
 			cvHoldoutYears.trim() !== '' &&
 			!yearError &&
 			!onsetError &&
+			!dayLevelError &&
 			!insufficientData
 	);
 
@@ -264,7 +301,10 @@
 		if (obs.status === 'fulfilled') obsSources = obs.value.filter((s) => s.status === 'ready');
 		if (models.status === 'fulfilled')
 			modelSources = models.value.filter((s) => s.status === 'ready');
-		if (caps.status === 'fulfilled') chatAvailable = caps.value.chat;
+		if (caps.status === 'fulfilled') {
+			chatAvailable = caps.value.chat;
+			dayLevelAvailable = caps.value.day_level_blend ?? false;
+		}
 		if (thresholds.status === 'fulfilled') minTrainingYears = thresholds.value.min_training_years;
 		loaded = true;
 	}
@@ -400,8 +440,12 @@
 	// makes the page jump). Bounded by the server's ~5s reconcile cadence, so a
 	// 3s poll is as live as the data gets. Returning the stop fn lets $effect
 	// tear the timer down on unmount.
+	// A complete blend keeps being polled while its day-level blend trains.
 	$effect(() =>
-		pollWhileActive(() => blends.some((b) => ACTIVE_STATUSES.includes(b.status)), syncBlendStatuses)
+		pollWhileActive(
+			() => blends.some((b) => blendInProgress(b, ACTIVE_STATUSES)),
+			syncBlendStatuses
+		)
 	);
 
 	async function syncBlendStatuses() {
@@ -414,7 +458,7 @@
 		const byId = new Map(fresh.map((b) => [b.id, b]));
 		blends = blends.map((b) => {
 			const updated = byId.get(b.id);
-			return updated && updated.status !== b.status ? updated : b;
+			return updated && blendStateChanged(b, updated) ? updated : b;
 		});
 	}
 
@@ -429,12 +473,19 @@
 	});
 
 	// Load a completed blend's artifacts. Publication is a background step that
-	// lags completion by a few seconds, so an empty result is retried until the
-	// artifacts land rather than cached as "none".
+	// lags completion by a few seconds, so a list still missing files is retried
+	// until they land rather than cached as final. A day-level blend finishing
+	// later reloads the list with its files.
 	$effect(() => {
 		const job = selected;
 		if (job?.status !== 'complete') return;
 		const id = job.id;
+		const state = { status: job.status, day_level_status: job.day_level_status };
+		// Another blend's files never show; this blend's stay up while they reload.
+		if (artifactsFor !== id) {
+			artifacts = [];
+			artifactsFor = id;
+		}
 		let cancelled = false;
 		let attempts = 0;
 		const load = async () => {
@@ -443,12 +494,11 @@
 				const found = await getJobArtifacts(id);
 				if (cancelled) return;
 				artifacts = found;
-				if (found.length === 0 && attempts++ < 6) setTimeout(load, 2000);
+				if (awaitingArtifacts(state, found) && attempts++ < 6) setTimeout(load, 2000);
 			} catch {
 				if (!cancelled) artifacts = [];
 			}
 		};
-		artifacts = [];
 		void load();
 		return () => {
 			cancelled = true;
@@ -495,6 +545,11 @@
 		modelIds = modelIds.includes(id) ? modelIds.filter((m) => m !== id) : [...modelIds, id];
 	}
 
+	function dayLevelBody(): { day_level?: DayLevelSettings } {
+		const settings = dayLevelAvailable ? dayLevelParamsBody(dayLevelInput) : undefined;
+		return settings ? { day_level: settings } : {};
+	}
+
 	async function submit() {
 		if (!formValid || submitting) return;
 		submitting = true;
@@ -510,7 +565,8 @@
 				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
 				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
 				...(focusArea ? { focus_area: focusArea } : {}),
-				...onsetParamsBody(onsetInput)
+				...onsetParamsBody(onsetInput),
+				...dayLevelBody()
 			}
 		};
 		try {
@@ -520,6 +576,7 @@
 			selectedId = blend.id;
 			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
 			forecastYears = trueHoldoutYears = formulaText = '';
+			yearsPerFold = forestTrees = forestMaxDepth = forestMinSamplesLeaf = forestMaxSamples = '';
 			focusArea = null;
 			modelIds = [];
 			yearsDirty = false;
@@ -853,6 +910,83 @@
 						{#if onsetError}
 							<p class="error">{onsetError}</p>
 						{/if}
+
+						{#if dayLevelAvailable}
+							<p class="muted advanced-group">
+								Day-level blend — leave blank to use the defaults (one year out per fold,
+								{DAY_LEVEL_DEFAULTS.trees} trees, no depth limit, {DAY_LEVEL_DEFAULTS.min_samples_leaf}
+								rows per leaf, every row per tree).
+							</p>
+							<div class="field-row">
+								<label class="field">
+									{@render fieldLabel(
+										'Years held out per fold',
+										'CV holdout years held out together in each day-level fold, in contiguous blocks. 1 leaves one year out at a time, as the week-level blend does; more years per fold means fewer forests to fit.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={yearsPerFold}
+										placeholder={String(DAY_LEVEL_DEFAULTS.years_per_fold)}
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Trees',
+										'Trees in each day-level forest. Fewer trees train faster.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestTrees}
+										placeholder={String(DAY_LEVEL_DEFAULTS.trees)}
+									/>
+								</label>
+							</div>
+							<div class="field-row">
+								<label class="field">
+									{@render fieldLabel(
+										'Deepest tree',
+										'Most levels a tree may grow. Leave blank for no limit; a limit trains faster.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestMaxDepth}
+										placeholder="no limit"
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Fewest rows per leaf',
+										'A tree stops splitting where a leaf would hold fewer rows than this.'
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={forestMinSamplesLeaf}
+										placeholder={String(DAY_LEVEL_DEFAULTS.min_samples_leaf)}
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Share of rows per tree',
+										'Share of the training rows each tree draws, from more than 0 up to 1. Smaller shares train faster.'
+									)}
+									<input
+										type="text"
+										inputmode="decimal"
+										bind:value={forestMaxSamples}
+										placeholder={String(DAY_LEVEL_DEFAULTS.max_samples)}
+									/>
+								</label>
+							</div>
+							{#if dayLevelError}
+								<p class="error">{dayLevelError}</p>
+							{:else if dayLevelNoteText}
+								<p class="caution">{dayLevelNoteText}</p>
+							{/if}
+						{/if}
 					</details>
 
 					{#if submitError}
@@ -943,10 +1077,31 @@
 					{/if}
 
 					{#if selected.status === 'complete'}
+						{@const dayLevel = dayLevelNote(selected)}
+						{#if dayLevel}
+							<div class="day-level-note {dayLevel.kind}" role="status">
+								{#if dayLevel.kind === 'training'}<div class="spinner"></div>{/if}
+								<div>
+									<strong>{dayLevel.title}</strong>
+									{#if dayLevel.kind === 'training'}
+										<p class="muted">{dayLevel.detail}</p>
+									{:else if dayLevel.detail}
+										<details>
+											<summary>Details</summary>
+											<pre class="error-block">{dayLevel.detail}</pre>
+										</details>
+									{/if}
+								</div>
+							</div>
+						{/if}
 						{#if skill.length > 0}
 							<div class="skill">
 								<h2>Forecast skill</h2>
-								<BlendSkillPanel series={skill} jobId={selected.id} />
+								<BlendSkillPanel
+									series={skill}
+									jobId={selected.id}
+									revision={selected.day_level_status ?? ''}
+								/>
 							</div>
 						{/if}
 
@@ -1345,6 +1500,34 @@
 
 	.running-state strong,
 	.running-state p {
+		margin: 0;
+	}
+
+	.day-level-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.75rem;
+		padding: 0.75rem 1rem;
+		margin-bottom: 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		background: var(--color-bg);
+	}
+
+	.day-level-note.failed {
+		border-color: var(--color-danger-border);
+	}
+
+	.day-level-note > div {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.day-level-note strong,
+	.day-level-note p {
 		margin: 0;
 	}
 

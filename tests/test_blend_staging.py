@@ -4,6 +4,7 @@ intermediates cache doesn't already hold."""
 from __future__ import annotations
 
 import importlib.util
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,69 @@ def test_cached_parts_only_compute_cache_misses_and_keep_file_order(tmp_path: Pa
     rerun = app._cached_parts(cache_dir, "obs", keys, paths, process, {"label": "fresh"}, 1)
     assert all(was_cached for _, was_cached in rerun)
     assert computed == ["2001.nc", "2003.nc"]
+
+
+class _CountingCacheBucket:
+    """An in-memory GCS bucket that records every request the cache makes."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.requests: list[str] = []
+
+    def list_blobs(self, bucket: str, prefix: str):
+        self.requests.append("list")
+        return [_NamedBlob(name) for name in self.objects if name.startswith(prefix)]
+
+    def bucket(self, bucket: str):
+        outer = self
+
+        class _Bucket:
+            def blob(self, name: str):
+                return _CountingBlob(outer, name)
+
+        return _Bucket()
+
+
+class _NamedBlob:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _CountingBlob:
+    def __init__(self, bucket: _CountingCacheBucket, name: str) -> None:
+        self._bucket, self.name = bucket, name
+
+    def exists(self) -> bool:
+        self._bucket.requests.append("exists")
+        return self.name in self._bucket.objects
+
+    def download_as_bytes(self) -> bytes:
+        self._bucket.requests.append("download")
+        return self._bucket.objects[self.name]
+
+    def upload_from_string(self, data: bytes) -> None:
+        self._bucket.requests.append("upload")
+        self._bucket.objects[self.name] = data
+
+
+def test_a_cached_season_costs_one_listing_not_a_lookup_per_file(tmp_path: Path) -> None:
+    app = _load_blending_app()
+    bucket = _CountingCacheBucket()
+    app._cache_gcs_client = bucket
+    cache_dir = "gs://data/blend-intermediates"
+    paths = [tmp_path / f"{year}.nc" for year in range(2000, 2010)]
+    keys = [{"file": path.name} for path in paths]
+
+    def process(path: Path, context: dict) -> str:
+        return f"part {path.stem}"
+
+    first = list(app._iter_cached_parts(cache_dir, "fc", keys, paths, process, {}, 3))
+    bucket.requests.clear()
+    rerun = list(app._iter_cached_parts(cache_dir, "fc", keys, paths, process, {}, 3))
+
+    assert [was_cached for _, was_cached in first] == [False] * len(paths)
+    assert rerun == [(f"part {path.stem}", True) for path in paths]
+    assert Counter(bucket.requests) == {"list": 1, "download": len(paths)}
 
 
 def test_parts_run_in_order_when_workers_cannot_import_the_module(tmp_path: Path) -> None:
@@ -341,3 +405,86 @@ def test_ensemble_sized_files_are_processed_fewer_at_a_time() -> None:
     assert 1 <= ensemble_at_once < at_once
     assert app._part_workers([10**13], workers=4, memory_budget_bytes=budget) == 1
     assert app._part_workers(ensemble, workers=4, memory_budget_bytes=None) == 4
+
+
+def test_a_large_weekly_table_trains_with_fewer_cv_workers() -> None:
+    app = _load_blending_app()
+    budget = 48 * 2**30
+
+    small = app._training_cores(500 * 2**20, cores=4, memory_budget_bytes=budget)
+    large = app._training_cores(4 * 2**30, cores=4, memory_budget_bytes=budget)
+
+    assert small == 4
+    assert 1 <= large < small
+    # A table too big for even one fold worker trains its folds serially.
+    assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=budget) == 1
+    assert app._training_cores(40 * 2**30, cores=4, memory_budget_bytes=None) == 4
+
+
+def _row_local_connect(spec: dict):
+    """A stand-in for make_cv_rds_from_daylevel: weekly columns from each row alone."""
+    import pandas as pd
+
+    raw = pd.read_pickle(spec["input_rds"])
+    weekly = pd.DataFrame(
+        {
+            "id": raw["id"].to_numpy(),
+            "year": raw["year"].to_numpy(),
+            "week1": raw[["day_1", "day_2"]].sum(axis=1).to_numpy(),
+            "outcome": raw["onset"].astype(str).where(raw["onset"].notna(), None).to_numpy(),
+        }
+    )
+    weekly.attrs["rain_horizons"] = {"aifs": spec["day_max"]}
+    pd.to_pickle(weekly, spec["output_rds"])
+    return weekly
+
+
+def test_connecting_in_row_chunks_matches_a_one_shot_connect(tmp_path: Path) -> None:
+    import pandas as pd
+
+    app = _load_blending_app()
+    combined = pd.DataFrame(
+        {
+            "id": [f"c{i % 7}" for i in range(50)],
+            "year": [2000 + i % 3 for i in range(50)],
+            "day_1": [float(i) for i in range(50)],
+            "day_2": [0.5 * i for i in range(50)],
+            "onset": [None if i % 4 else f"week{i % 3}" for i in range(50)],
+        }
+    )
+    one_shot_input = tmp_path / "combined.pkl"
+    combined.to_pickle(one_shot_input)
+    spec = {"day_max": 28}
+    one_shot = _row_local_connect(
+        {**spec, "input_rds": str(one_shot_input), "output_rds": str(tmp_path / "weekly.pkl")}
+    )
+    row_bytes = int(combined.memory_usage(deep=True).sum()) // len(combined)
+
+    chunk_paths = app._write_row_chunks(combined, tmp_path / "chunks", chunk_bytes=8 * row_bytes)
+    chunked = app._connect_in_chunks(_row_local_connect, spec, chunk_paths)
+
+    assert len(chunk_paths) == 7
+    pd.testing.assert_frame_equal(chunked, one_shot, check_exact=True)
+    assert chunked.attrs == one_shot.attrs
+    assert not list((tmp_path / "chunks").iterdir())  # chunk inputs and outputs are cleaned up
+
+
+_LINUX_STATUS = "Name:\tpython\nVmHWM:\t 31457280 kB\nVmRSS:\t 12582912 kB\nThreads:\t4\n"
+_GVISOR_STATUS = "Name:\tpython\nVmRSS:\t 12582912 kB\nThreads:\t4\n"
+
+
+@pytest.mark.parametrize(
+    ("status", "max_rss_kib", "note"),
+    [
+        (_LINUX_STATUS, 0, " (rss 12.0 GiB, peak 30.0 GiB)"),
+        (_GVISOR_STATUS, 20 * 2**20, " (rss 12.0 GiB, peak 20.0 GiB)"),
+        (_GVISOR_STATUS, 0, " (rss 12.0 GiB)"),
+        ("Name:\tpython\n", 0, ""),
+    ],
+)
+def test_memory_notes_report_only_the_figures_the_kernel_gives(
+    status: str, max_rss_kib: int, note: str
+) -> None:
+    app = _load_blending_app()
+
+    assert app._format_memory_note(status, max_rss_kib) == note
