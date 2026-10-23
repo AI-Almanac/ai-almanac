@@ -327,8 +327,18 @@
 								<h3>Models Run</h3>
 								<div class="model-run-list">
 									{#each group.jobs as job}
+										{@const earlier = group.earlierAttempts[job.id] ?? []}
 										<div class="model-run-item">
-											<strong>{job.model_display_name || modelDisplayName(job.model_name)}</strong>
+											<strong>
+												{job.model_display_name || modelDisplayName(job.model_name)}
+												{#if earlier.length}
+													<span
+														class="retry-tag"
+														title={`Retried after ${earlier.length === 1 ? 'an earlier attempt' : `${earlier.length} earlier attempts`} (${earlier.map((attempt) => attempt.status).join(', ')})`}
+														>retry</span
+													>
+												{/if}
+											</strong>
 											<span
 												class:complete={job.status === 'complete'}
 												class:failed={job.status === 'failed'}
@@ -749,6 +759,17 @@
 		padding: 0.5rem 0.6rem;
 		border-radius: 0.45rem;
 		background: var(--color-bg);
+	}
+
+	.retry-tag {
+		margin-left: 0.4rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		background: var(--color-surface-raised);
+		color: var(--color-text-muted);
+		font-size: 0.7rem;
+		font-weight: 500;
+		cursor: help;
 	}
 
 	.model-run-item strong {

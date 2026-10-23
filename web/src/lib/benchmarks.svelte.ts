@@ -111,7 +111,10 @@ export type RunGroup = {
 	region: string;
 	startDate: string;
 	endDate: string;
+	// The latest attempt of each job in the run (see latestAttempts).
 	jobs: Job[];
+	// Earlier attempts each listed job replaced, keyed by the listed job's id.
+	earlierAttempts: Record<string, Job[]>;
 	mostRecentAt: string; // for sort order
 	isOwner: boolean; // true if the current user owns all jobs in this group
 };
@@ -132,6 +135,47 @@ function mergeJobs(incoming: Job[], existing: Job[]): Job[] {
 	return [...incoming, ...existing.filter((job) => !incomingIds.has(job.id))];
 }
 
+/** JSON with object keys sorted, so equal settings compare equal whatever their order. */
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+	if (value && typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.filter(([, item]) => item !== undefined)
+			.sort(([a], [b]) => a.localeCompare(b));
+		return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
+	}
+	return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * Collapse a run's retries: a rerun is a new job for the same model with the
+ * same settings, so only its latest attempt is listed. A rerun with changed
+ * settings (one year at a time, say) is a different job and stays listed.
+ */
+export function latestAttempts(jobs: Job[]): {
+	jobs: Job[];
+	earlierAttempts: Record<string, Job[]>;
+} {
+	const attempts = new globalThis.Map<string, Job[]>();
+	for (const job of jobs) {
+		const key = `${job.model_source_id ?? job.model_name}||${stableJson(job.params ?? {})}`;
+		if (!attempts.has(key)) attempts.set(key, []);
+		attempts.get(key)!.push(job);
+	}
+	const latest: Job[] = [];
+	const earlierAttempts: Record<string, Job[]> = {};
+	// Each job keeps the place of its first attempt, so a retry doesn't reorder the list.
+	for (const group of attempts.values()) {
+		const ordered = [...group].sort((a, b) =>
+			(a.created_at ?? '').localeCompare(b.created_at ?? '')
+		);
+		const newest = ordered[ordered.length - 1];
+		latest.push(newest);
+		if (ordered.length > 1) earlierAttempts[newest.id] = ordered.slice(0, -1);
+	}
+	return { jobs: latest, earlierAttempts };
+}
+
 function buildRunGroups(jobs: Job[]): RunGroup[] {
 	const map = new globalThis.Map<string, Job[]>();
 	for (const job of jobs) {
@@ -146,7 +190,8 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
 		map.get(key)!.push(job);
 	}
 	return [...map.entries()]
-		.map(([key, groupJobs]) => {
+		.map(([key, allJobs]) => {
+			const { jobs: groupJobs, earlierAttempts } = latestAttempts(allJobs);
 			const mostRecentAt =
 				groupJobs
 					.map((j) => j.created_at ?? '')
@@ -160,6 +205,7 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
 				startDate: first.params?.start_date ?? '',
 				endDate: first.params?.end_date ?? '',
 				jobs: groupJobs,
+				earlierAttempts,
 				mostRecentAt,
 				isOwner: groupJobs.every((j) => j.is_owner !== false)
 			} satisfies RunGroup;
