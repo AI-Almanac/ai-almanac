@@ -74,12 +74,27 @@ def serve(
             help="Allow the data dir to be on a network filesystem (SQLite corruption risk).",
         ),
     ] = False,
+    container: Annotated[
+        bool,
+        typer.Option(
+            "--container",
+            envvar="AI_ALMANAC_CONTAINER",
+            help=(
+                "Running inside a container whose port is published only on the host's "
+                "loopback: allow binding all interfaces and always require an access token."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Boot the ai-almanac web server (FastAPI + bundled UI)."""
     from ai_almanac.settings import reload_settings, settings
 
     reload_settings()
-    if settings.deployment_mode != "shared" and bind not in ("127.0.0.1", "localhost", "::1"):
+    if (
+        settings.deployment_mode != "shared"
+        and not container
+        and bind not in ("127.0.0.1", "localhost", "::1")
+    ):
         typer.secho(
             f"refusing to bind to {bind!r}.\n"
             "ai-almanac currently supports local, single-user operation only.",
@@ -119,6 +134,14 @@ def serve(
         if ensure_local_secrets():
             reload_settings()
             typer.echo(f"generated secrets at {secrets_env_path()}")
+
+    # A published container port is reachable by every local user of the host,
+    # so container mode never serves without a token; it persists across restarts.
+    if container and settings.deployment_mode == "personal":
+        from ai_almanac.secrets_bootstrap import ensure_access_token
+
+        if ensure_access_token():
+            reload_settings()
 
     # 3. Token handling
     import secrets as _secrets_mod

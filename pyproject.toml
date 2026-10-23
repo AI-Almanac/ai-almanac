@@ -46,6 +46,7 @@ dependencies = [
     "certifi",
     # Floor for a transitive dep: anyio < 4.14.2 is vulnerable.
     "anyio>=4.14.2",
+    "aiohttp>=3.13,<4",
 ]
 
 [project.optional-dependencies]
@@ -135,10 +136,16 @@ dev = { features = ["devtools", "dev"], solve-group = "default" }
 # What the production image ships: runtime dependencies only, solved with the
 # others so it runs exactly the versions the tests run against.
 prod = { features = ["prod"], solve-group = "default" }
+# The same image for an all-local host (DGX Spark): the wheel without the
+# `cloud` extra, since nothing there dispatches to Modal, GCS, or Globus.
+local = { features = ["local"], solve-group = "default" }
 
 [tool.pixi.feature.prod.pypi-dependencies]
 # A wheel install, so the bundled SPA lands in the package's static dir.
 ai-almanac = { path = ".", editable = false, extras = ["cloud"] }
+
+[tool.pixi.feature.local.pypi-dependencies]
+ai-almanac = { path = ".", editable = false }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }

@@ -137,7 +137,9 @@ def probe_gpu() -> dict | None:
             return None
         parts = lines[0].split(",", 1)
         name = parts[0].strip()
-        memory_mib = int(parts[1].strip()) if len(parts) > 1 else None
+        # Unified-memory GPUs (DGX Spark's GB10) report memory.total as "[N/A]".
+        memory = parts[1].strip() if len(parts) > 1 else ""
+        memory_mib = int(memory) if memory.isdigit() else None
         return {"name": name, "memory_mib": memory_mib, "count": len(lines)}
     except Exception:  # noqa: BLE001
         return None

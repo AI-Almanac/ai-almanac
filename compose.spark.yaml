@@ -1,0 +1,72 @@
+# Single-container personal install for an NVIDIA DGX Spark under rootless Docker.
+#
+#   scripts/spark.sh up
+#
+# One container is the whole application: the web UI/API, the SQLite database,
+# the job supervisor, and every pixi workload environment (benchmark, blending,
+# forecast, local LLM), which it installs into /data on first use and runs as
+# subprocesses. No Docker socket is mounted; nothing launches sibling containers.
+#
+# Rootless Docker maps container root to the invoking host user, so the process
+# runs as root here and files it writes to bind mounts are owned by that user.
+# The GPU is injected through CDI (/var/run/cdi/nvidia.yaml), which rootless
+# Docker supports without the nvidia runtime's cgroup configuration.
+name: ai-almanac-spark
+
+services:
+  almanac:
+    build:
+      context: .
+      # All local: the image's pixi env without the cloud (Modal/GCS/Globus) extra.
+      args:
+        PIXI_ENV: local
+    image: ai-almanac:spark
+    user: "0:0"
+    # The detached job supervisor double-forks; an init reaps the orphans.
+    init: true
+    command:
+      - ai-almanac
+      - serve
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "${ALMANAC_PORT:-8765}"
+      - --no-open
+      - --container
+    environment:
+      AI_ALMANAC_DATA_DIR: /data
+      ALMANAC_PORT: "${ALMANAC_PORT:-8765}"
+      DATASET_MOUNT_ROOTS: /datasets
+      # Keep every download in the data dir so it survives image rebuilds.
+      PIXI_CACHE_DIR: /data/cache/pixi
+      HF_HOME: /data/cache/huggingface
+      EARTH2STUDIO_CACHE: /data/cache/earth2studio
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # Loopback only: other machines cannot reach it, and the access token that
+    # container mode requires keeps other local users of the Spark out.
+    ports:
+      - "127.0.0.1:${ALMANAC_PORT:-8765}:${ALMANAC_PORT:-8765}"
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      - ${ALMANAC_DATA_DIR:?set ALMANAC_DATA_DIR (scripts/spark.sh does)}:/data
+      - ${ALMANAC_DATASETS_DIR:-./testdata}:/datasets:ro
+    # PyTorch and vLLM workers exchange tensors through /dev/shm.
+    shm_size: 16g
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    # Let a running job's supervisor record its state before the stop.
+    stop_grace_period: 60s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; urllib.request.urlopen(f\"http://localhost:{os.environ.get('ALMANAC_PORT', '8765')}/health\")",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12

@@ -148,6 +148,23 @@ def test_state_gpu_monkeypatched(
     assert resp.json()["gpu"]["name"] == "TestGPU"
 
 
+@pytest.mark.parametrize(
+    ("stdout", "memory_mib"),
+    [("NVIDIA A100-SXM4-80GB, 81920\n", 81920), ("NVIDIA GB10, [N/A]\n", None)],
+    ids=["discrete", "unified-memory"],
+)
+def test_probe_gpu_detects_gpus_with_and_without_reported_memory(
+    monkeypatch: pytest.MonkeyPatch, stdout: str, memory_mib: int | None
+) -> None:
+    monkeypatch.setattr(
+        setup_svc.subprocess,
+        "run",
+        lambda *args, **kwargs: MagicMock(returncode=0, stdout=stdout),
+    )
+    gpu = setup_svc.probe_gpu()
+    assert gpu == {"name": stdout.split(",")[0], "memory_mib": memory_mib, "count": 1}
+
+
 # ---------------------------------------------------------------------------
 # POST /api/setup/storage
 # ---------------------------------------------------------------------------

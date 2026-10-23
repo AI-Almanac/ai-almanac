@@ -61,7 +61,7 @@ def _default_progress(event: EnvProgressEvent) -> None:
     elif event.kind == "line":
         print(event.line or "", end="" if (event.line or "").endswith("\n") else "\n", flush=True)
     elif event.kind == "phase_finished":
-        print(f"==> {event.phase} ready at {event.detail}")
+        print(f"==> {event.phase} ready" + (f" at {event.detail}" if event.detail else ""))
     elif event.kind == "phase_skipped":
         print(f"==> {event.phase} skipped: {event.detail}")
     elif event.kind == "phase_failed":
@@ -145,6 +145,10 @@ def _install(
             # pypi build phase of the same `pixi install` run.
             prefix = env_dir / ".pixi" / "envs" / env
             build_env = {
+                # pixi solves every platform at once, and each solve waits on
+                # the other's build of the same earth2studio git checkout. On
+                # a slow link that build outlasts uv's 300 s cache-lock wait.
+                "UV_LOCK_TIMEOUT": "3600",
                 **os.environ,
                 "CUDA_HOME": str(prefix),
                 "PATH": f"{prefix / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",

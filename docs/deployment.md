@@ -46,6 +46,12 @@ ai-almanac serve              # http://127.0.0.1:8765, opens a browser
 `serve` binds to `127.0.0.1` only (by design — see shared mode). Useful flags:
 `--port`, `--no-open`, `--reload`.
 
+### Run in a container on a DGX Spark
+
+`scripts/spark.sh up` runs the app, its database, and every pixi workload
+environment in a single rootless-Docker container with GPU access, needing
+nothing but Docker on the host. See [dgx-spark.md](./dgx-spark.md).
+
 Database migrations run automatically on startup; there is no manual migration
 step.
 

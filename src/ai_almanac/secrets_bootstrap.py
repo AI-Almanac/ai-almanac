@@ -37,6 +37,9 @@ _MANAGED_SECRETS: dict[str, object] = {
 _ENV_NAME_MAP: dict[str, str] = {
     "CREDENTIAL_ENCRYPTION_KEY": "credential_encryption_key",
     "CHAT_FIGURE_SIGNING_SECRET": "chat_figure_signing_secret",
+    # Not auto-generated; persisted by ensure_access_token() when serve runs in
+    # a container, so the token survives restarts.
+    "SERVE_ACCESS_TOKEN": "serve_access_token",
 }
 
 # Default value for each managed field — skip generation when the effective
@@ -132,6 +135,27 @@ def _ensure_local_secrets_locked() -> bool:
 
     _write_secrets_file(to_write)
     return True
+
+
+def ensure_access_token() -> bool:
+    """Generate and persist a serve access token unless one is already set.
+
+    Same precedence as ensure_local_secrets: an env var, a value already in
+    secrets.env, or a non-empty effective setting all win. Returns True if a
+    token was written so the caller can reload settings.
+    """
+    from ai_almanac.settings import settings
+
+    with file_lock(data_root() / "secrets.env.lock", message="waiting for secrets.env lock…"):
+        existing = load_secrets_file()
+        if (
+            "SERVE_ACCESS_TOKEN" in os.environ
+            or "serve_access_token" in existing
+            or settings.serve_access_token
+        ):
+            return False
+        _write_secrets_file({**existing, "serve_access_token": secrets.token_urlsafe(24)})
+        return True
 
 
 def _write_secrets_file(values: dict[str, str]) -> None:

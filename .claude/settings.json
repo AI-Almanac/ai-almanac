@@ -1,5 +1,23 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(journalctl -b *)",
+      "Bash(journalctl -k *)",
+      "Bash(journalctl --list-boots *)",
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(nvidia-smi)",
+      "Bash(nvidia-smi -L *)",
+      "Bash(nvidia-smi --query-gpu=*)",
+      "Bash(docker info)",
+      "Bash(docker info *)",
+      "Bash(pixi run check)",
+      "Bash(pixi run test)",
+      "Bash(docker context ls)",
+      "Bash(docker context ls *)",
+      "Bash(getent group *)",
+      "Bash(dpkg --print-architecture)"
+    ],
     "deny": [
       "Read(.env)",
       "Read(web/.env)",
