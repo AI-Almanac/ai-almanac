@@ -25,10 +25,32 @@ libc = { family = "glibc", version = "2.34" }
 # CUDA 13 driver, like the forecast env.
 cuda = "13"
 
-# Python only from conda: vLLM pins an exact torch (from PyPI), so torch and
-# the CUDA runtime libraries come from the PyPI solve, not conda-forge.
+# Python and build tools from conda: vLLM pins an exact torch (from PyPI), so
+# torch and the CUDA runtime libraries come from the PyPI solve, not conda-forge.
 [dependencies]
 python = "3.12.*"
+# vLLM compiles kernels on first start, which needs compilers a bare host (or
+# the container image) may lack: Triton builds a C helper with `cc`, and
+# FlashInfer, which the attention layers use, is disabled outright without
+# `nvcc`. Pinned to the CUDA 13.0 that vLLM's torch wheel is built against.
+c-compiler = "*"
+cxx-compiler = "*"
+cuda-version = "13.0.*"
+cuda-nvcc = "*"
+cuda-cudart-dev = "*"
+cuda-cccl = "*"
+# Headers FlashInfer's bundled CUTLASS includes when it builds its GEMM kernels.
+libcurand-dev = "*"
+libcublas-dev = "*"
+
+# FlashInfer links its kernels with a bare `-lcuda`. The driver itself comes
+# from the host at run time; at link time the toolkit's stub stands in for it,
+# and LIBRARY_PATH is where the linker looks for it.
+[target.linux-aarch64.activation.env]
+LIBRARY_PATH = "$CONDA_PREFIX/targets/sbsa-linux/lib/stubs:$CONDA_PREFIX/lib"
+
+[target.linux-64.activation.env]
+LIBRARY_PATH = "$CONDA_PREFIX/targets/x86_64-linux/lib/stubs:$CONDA_PREFIX/lib"
 
 [pypi-dependencies]
 vllm = "==0.30.0"
