@@ -1080,9 +1080,13 @@
 						{@const dayLevel = dayLevelNote(selected)}
 						{#if dayLevel}
 							<div class="day-level-note {dayLevel.kind}" role="status">
-								{#if dayLevel.kind === 'training'}<div class="spinner"></div>{/if}
-								<div>
-									<strong>{dayLevel.title}</strong>
+								<div class="day-level-text">
+									<strong>
+										{#if dayLevel.kind === 'training'}
+											<span class="training-dot" aria-hidden="true"></span>
+										{/if}
+										{dayLevel.title}
+									</strong>
 									{#if dayLevel.kind === 'training'}
 										<p class="muted">{dayLevel.detail}</p>
 									{:else if dayLevel.detail}
@@ -1518,7 +1522,7 @@
 		border-color: var(--color-danger-border);
 	}
 
-	.day-level-note > div {
+	.day-level-text {
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
@@ -1529,6 +1533,33 @@
 	.day-level-note strong,
 	.day-level-note p {
 		margin: 0;
+	}
+
+	.day-level-note strong {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	@keyframes breathe {
+		50% {
+			opacity: 0.35;
+		}
+	}
+
+	.training-dot {
+		width: 0.45rem;
+		height: 0.45rem;
+		border-radius: 999rem;
+		background: var(--color-status-running);
+		flex-shrink: 0;
+		animation: breathe 2.4s ease-in-out infinite;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.training-dot {
+			animation: none;
+		}
 	}
 
 	@keyframes spin {
