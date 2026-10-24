@@ -111,14 +111,14 @@ def _extract_tar(data: bytes, output_dir: Path) -> None:
         archive.extractall(output_dir, filter="data")
 
 
-def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
+def build_combined_table(config: dict, workflow: ModuleType) -> Path:
+    """The blend's intermediates built from config; returns the combined table's path."""
     source_marker = workflow.BLENDING_ROOT / "python" / "prepare_data" / "nc_utils.py"
     if not source_marker.is_file():
         raise RuntimeError(
             "The blending source checkout is incomplete. Run `ai-almanac env prepare` "
             f"and verify that {source_marker} exists."
         )
-    params = config.get("blend_params") or {}
     model_names = config.get("model_names") or []
     if not model_names:
         raise ValueError("Blend config has no models")
@@ -127,7 +127,7 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     intermediates = workflow.build_blend_intermediates(
         _staged_dir(workflow, _netcdf_files(config["obs_dir"])),
         {name: _staged_dir(workflow, _forecast_files(config, name)) for name in model_names},
-        params,
+        config.get("blend_params") or {},
         region_id=config.get("region_id"),
         cache_dir=config.get("cache_dir"),
         resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
@@ -135,7 +135,13 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     )
     # Read from disk, never held as bytes: on large grids the combined table
     # is the biggest object the run handles.
-    combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
+    return Path(intermediates["output_dir"]) / "combined_wide.pkl"
+
+
+def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
+    combined_path = build_combined_table(config, workflow)
+    params = config.get("blend_params") or {}
+    model_names = config["model_names"]
 
     train_kwargs = {"cores": os.cpu_count() or 1}
     if params.get("formula_text"):
