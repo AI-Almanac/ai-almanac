@@ -162,6 +162,13 @@ def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
     assert intermediate_prep_kwargs({"training_years": "2020"}) == {}
 
 
+def test_intermediate_prep_kwargs_lets_a_short_local_record_lower_min_onset_years() -> None:
+    # The checked-in three-year fixtures only reach the combined table this way.
+    assert _load_workflow()._intermediate_prep_kwargs({"min_onset_years": 1}) == {
+        "min_onset_years": 1
+    }
+
+
 def test_blend_intermediates_run_with_the_given_resources_and_blend_params(
     monkeypatch,
 ) -> None:
