@@ -20,6 +20,15 @@
 # minutes profiling 736 shape/batch pairs, found no usable tactic for any, and
 # saved 0 configs, so every call used the default kernel anyway. Skipping the
 # search changes no kernel choice and saves those minutes on every cold start.
+#
+# `speculative_config`, when present, is passed to vLLM as `--speculative-config`
+# (unless `llm_serve_args` replaces the flags): a small draft model proposes a
+# block of tokens and the target verifies them in one pass, so replies come
+# faster with the target's output unchanged. Setup downloads `model` alongside
+# the target, `weights_gb` counts both, and local_llm.py reloads the draft's
+# weights on every wake, which vLLM's own reload leaves out. The
+# `llm_speculative_decoding` setting turns it off; `llm_draft_model` swaps in
+# another draft (see docs/local-llm-design.md).
 
 models:
   - id: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
@@ -53,18 +62,30 @@ models:
     source: https://stevescargall.com/blog/2026/04/vllm-recipe-redhatai/qwen3.6-35b-a3b-nvfp4-on-dgx-spark/
 
   - id: nvidia/Qwen3.8-27B-NVFP4
-    label: Qwen3.8 27B (NVFP4)
+    label: Qwen3.8 27B (NVFP4) + DFlash 2
     description: >-
-      NVIDIA's recommended single-Spark vLLM recipe. Dense, so replies are
-      noticeably slower than the mixture-of-experts models.
-    weights_gb: 21.9
-    verified: false
+      NVIDIA's recommended single-Spark vLLM recipe, with a DFlash 2 draft model
+      proposing tokens for it to check. Dense, so it would reply slower than the
+      mixture-of-experts models; the draft makes up much of that.
+    # 21.9 GB of target, 3.8 GB of BF16 draft.
+    weights_gb: 25.7
+    # Verified 2026-10-23 with the draft: tool call, sleep/wake with the draft
+    # reload, 2.0-3.7x the target alone (docs/local-llm-design.md).
+    verified: true
     gpu_memory_utilization: 0.45
     serve_args: >-
       --max-model-len 65536 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser qwen3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
       --kernel-config.enable_flashinfer_autotune false
+    # A block-diffusion drafter (vLLM's dflash method; DFlash 2 needs the V2
+    # model runner, which vLLM picks for it). Seven draft tokens per step is
+    # the block size it was trained for. Lossless: greedy output matches the
+    # target exactly. https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2
+    speculative_config:
+      method: dflash
+      model: z-lab/Qwen3.8-27B-DFlash2
+      num_speculative_tokens: 7
     source: https://build.nvidia.com/spark/vllm
 
   - id: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4

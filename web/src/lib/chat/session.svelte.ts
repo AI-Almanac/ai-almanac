@@ -71,6 +71,9 @@ function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string 
 	if (event.error_type === 'context_overflow') {
 		return "This conversation has grown too long for the assistant's memory. Start a new chat to continue.";
 	}
+	if (event.error_type === 'repetition') {
+		return 'The assistant got stuck repeating itself, so its reply was stopped. Try asking again, or rephrase.';
+	}
 	// The locally run model is paused for a forecast or still loading; the
 	// server's message says which.
 	if (event.error_type === 'assistant_unavailable') return event.message;

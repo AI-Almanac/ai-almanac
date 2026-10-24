@@ -808,6 +808,10 @@ async def delete_session(session_id: str, user: CurrentUser):
         )
         if not rows:
             raise HTTPException(status_code=404, detail="Session not found")
+        # A reply still streaming would otherwise run to its end on the model,
+        # holding its GPU slot and KV cache. Stopping it closes the request, so
+        # the model drops it now; its save then updates no row.
+        request_stop(session_id)
         storage_keys = [row["storage_key"] for row in rows if row.get("storage_key")]
         for storage_key in storage_keys:
             await delete_chat_figure_artifact(storage_key)

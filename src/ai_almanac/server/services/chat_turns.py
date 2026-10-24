@@ -38,6 +38,7 @@ from ai_almanac.server.services.chat_tools import (
     SubmitBlendApproval,
 )
 from ai_almanac.server.services.llm import (
+    ModelRepeated,
     deserialize_model_messages,
     serialize_model_messages,
     stream_response,
@@ -173,6 +174,9 @@ def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     # Before the tool check: the overflow is often caused by a tool's result.
     if "maximum context length" in message or "context_length_exceeded" in message:
         return "context_overflow"
+    # Before the tool check too: a loop is often cut off inside a tool call.
+    if isinstance(exc, ModelRepeated):
+        return "repetition"
     if (
         "tool" in message
         or "tool" in name

@@ -158,6 +158,79 @@ Spark:
 4. Chat again, and note the wake time.
 5. Flip the flag, and record the timings here.
 
+## Speculative decoding
+A catalog entry's `speculative_config` pairs the model with a small draft model
+that proposes a block of tokens; the target checks the block in one pass and
+keeps the longest correct prefix. Replies come faster and the output is the
+target's own, greedy or sampled. Qwen3.8 27B ships with the DFlash 2
+block-diffusion draft (`z-lab/Qwen3.8-27B-DFlash2`, 3.8 GB BF16), which vLLM
+0.30's `dflash` method runs on its V2 model runner.
+
+Settings (the AI assistant page shows the last two only while the first is on):
+- `llm_speculative_decoding` (default on): off serves the model alone.
+- `llm_draft_model`: another draft, as a Hugging Face id or a local path; blank
+  takes the catalog's. It also lets a model without a catalog draft speculate.
+  vLLM tells the method from the draft's name or architecture, except a DFlash
+  draft at a path, which local_llm.py reads from its config.json.
+- `llm_draft_tokens`: tokens per step; 0 takes the catalog's, else the draft's
+  config (DFlash: block size less one), else 3.
+
+A non-blank `llm_serve_args` replaces all of this along with the other flags.
+Changing any of them restarts the server on the next chat turn, like switching
+models.
+
+**Waking a draft.** Level-2 sleep discards the draft's weights along with the
+target's (one "weights" memory pool), but vLLM's `reload_weights` re-reads only
+the target, and its wake restores only the draft's buffers. The draft would
+then propose from garbage: replies stay correct, since the target checks every
+token, but nearly none are accepted, so the speedup vanishes with no error.
+`envs/vllm_ext/almanac_vllm_worker.py` is mixed into vLLM's workers
+(`--worker-extension-cls`) whenever the flags speculate, and `wake()` calls its
+`reload_draft_weights` after `reload_weights`. That file alone goes on the
+server's PYTHONPATH: the LLM env doesn't install ai-almanac.
+
+**Kernel builds.** A model's first start compiles FlashInfer kernels with
+ninja, one job per core unless `MAX_JOBS` is set. Qwen3.8's NVFP4 GEMMs are 17
+CUTLASS units at up to ~6.5 GB of compiler each, built with the weights already
+in memory; on the 20-core Spark the kernel OOM-killed the start. local_llm.py
+sets `MAX_JOBS` (unless already set) to what fits in free memory less the
+model's share, at 8 GB a job: 7 on an otherwise idle Spark.
+
+Measured on the Spark (2026-10-23, vLLM 0.30.0, one request, greedy, three
+prompts of 220-520 tokens):
+
+| | tok/s | tokens per target pass |
+|---|---:|---:|
+| Qwen3.8 27B NVFP4 alone | 11.9 | 1 |
+| with DFlash 2 | 23.9-44.0 | 2.7-4.9 |
+| with DFlash 2, after a wake without the draft reload | 9.1 | 1.0 |
+
+On live assistant chats acceptance ran 2.7-3.3. Model plus draft take 23.7 GiB,
+leaving a 24.1 GiB KV cache at the 0.45 share. A level-2 wake with the draft
+reload takes 12.7 s and restores the draft's weights exactly (equal checksums
+before and after); replies after it match a fresh start's token for token.
+Greedy replies with and without the draft are not token-identical: verifying a
+block runs different kernels than decoding one token, and near-ties can tip.
+
+## Loops
+A local model occasionally falls into repeating one passage until it runs out
+of context. Inside a tool call nothing streams meanwhile (vLLM holds a call
+back until it closes), so the turn sat silent until the 60 s read timeout
+failed it as a generic error: Qwen3.8 did this twice in one afternoon. Requests
+to the managed server carry vLLM's `repetition_detection` (stop when the tail
+is one 32-512 token span four times over; shorter cycles count as their
+multiples), which ends a loop within seconds. Prose, tables, and code don't
+trip it; a request for verbatim repetition does.
+
+vLLM then reports `finish_reason: repetition`, except after a tool call has
+streamed, when it reports `tool_calls` whatever stopped it; its `stop_reason:
+repetition_detected` says so either way. pydantic-ai keeps neither, so the
+local model uses a chat model subclass that keeps `stop_reason`, and the
+`StopOnRepetition` capability ends the turn on either. Without it a cut-off
+answer passed as complete, and a cut-off tool call (arguments empty, since the
+looping one never closed) was retried until the model looped out of retries.
+The chat says the assistant got stuck repeating itself.
+
 ## Deliberately skipped
 - Letting a small LLM run alongside a forecast when memory fits. We can add a memory-budget check later if someone wants that.
 - Parking for blend/ROMP jobs. They are CPU-bound and much smaller.

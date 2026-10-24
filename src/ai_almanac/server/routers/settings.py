@@ -112,6 +112,24 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Extra `vllm serve` flags (tool-call parser, context length); blank uses "
                 "the flags tested for the chosen model",
             ),
+            (
+                "llm_speculative_decoding",
+                "Local model speculative decoding",
+                "Serve the chosen model with a draft model that proposes tokens for it to "
+                "check: faster replies, same answers, a few GB more memory. Off runs the "
+                "model alone",
+            ),
+            (
+                "llm_draft_model",
+                "Draft model",
+                "Hugging Face id or local path of the draft model; blank uses the one "
+                "tested for the chosen model, if it has one",
+            ),
+            (
+                "llm_draft_tokens",
+                "Draft tokens per step",
+                "How many tokens the draft proposes at a time; 0 = the draft's own setting",
+            ),
             ("llm_timeout_seconds", "Request timeout (seconds)", "Per-request timeout"),
             (
                 "llm_history_max_messages",
@@ -241,6 +259,13 @@ MULTILINE_FIELDS: frozenset[str] = frozenset()
 _LIVE_DEFAULTS: dict[str, Any] = {}
 
 
+# Field name -> the bool field that must be on for the UI to show it.
+_SHOWN_WHEN: dict[str, str] = {
+    "llm_draft_model": "llm_speculative_decoding",
+    "llm_draft_tokens": "llm_speculative_decoding",
+}
+
+
 class FieldSchema(BaseModel):
     name: str
     label: str
@@ -255,6 +280,8 @@ class FieldSchema(BaseModel):
     choices: list[str] | None = None
     # Common values for a free-text field; the UI offers them while typing.
     suggestions: list[str] | None = None
+    # A bool field that must be on for this one to be shown.
+    shown_when: str | None = None
 
 
 class SettingsSchema(BaseModel):
@@ -292,6 +319,10 @@ def _suggestions(field_name: str) -> list[str] | None:
     if field_name == "llm_model":
         # The models the managed local server has serve flags for.
         return [m["id"] for m in get_local_llm_models()]
+    if field_name == "llm_draft_model":
+        # The drafts the catalog pairs with its models.
+        drafts = [(m.get("speculative_config") or {}).get("model") for m in get_local_llm_models()]
+        return [draft for draft in drafts if draft]
     return None
 
 
@@ -344,6 +375,7 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     multiline=field_name in MULTILINE_FIELDS,
                     choices=_choices(info.annotation),
                     suggestions=None if shared else _suggestions(field_name),
+                    shown_when=_SHOWN_WHEN.get(field_name),
                 )
             )
         if rendered:

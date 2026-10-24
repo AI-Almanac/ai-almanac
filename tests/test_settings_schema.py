@@ -141,3 +141,16 @@ def test_secret_overlay_value_is_sealed_at_rest(
     assert _unseal_secret(sealed) == "sk-super-secret"
     # Plaintext/legacy values pass through unchanged.
     assert _unseal_secret("plain") == "plain"
+
+
+def test_draft_model_fields_show_only_while_speculative_decoding_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    fields = _fields(get_schema(_admin=None))
+
+    assert fields["llm_speculative_decoding"]["type"] == "bool"
+    for name in ("llm_draft_model", "llm_draft_tokens"):
+        assert fields[name]["shown_when"] == "llm_speculative_decoding"
+    assert fields["llm_speculative_decoding"]["shown_when"] is None
+    assert "z-lab/Qwen3.8-27B-DFlash2" in fields["llm_draft_model"]["suggestions"]

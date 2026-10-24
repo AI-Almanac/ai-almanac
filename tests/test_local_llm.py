@@ -7,10 +7,12 @@ liveness and termination are stubbed so no subprocess is ever launched.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -31,6 +33,7 @@ class FakeVllm:
         self.sleep_status = sleep_status
         self.sleeping = False
         self.calls: list[str] = []
+        self.rpcs: list[str] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -59,7 +62,9 @@ class FakeVllm:
                 self.sleeping = False
             return httpx.Response(200)
         if path == "/collective_rpc":
-            assert json.loads(request.content) == {"method": "reload_weights"}
+            method = json.loads(request.content)["method"]
+            assert method in ("reload_weights", "reload_draft_weights")
+            self.rpcs.append(method)
             return httpx.Response(200, json={"results": [None]})
         return httpx.Response(404)
 
@@ -200,6 +205,33 @@ def test_ensure_awake_wakes_sleeping_model(managed, clean_jobs) -> None:
         "POST /wake_up?tags=kv_cache",
     ]
     assert not fake.sleeping
+
+
+def test_a_wake_refills_the_draft_model_after_the_target(managed, monkeypatch, clean_jobs) -> None:
+    # Level 2 drops the draft's weights too, and vLLM's reload_weights only
+    # re-reads the target's; without the second reload the draft guesses from
+    # garbage and speculative decoding quietly stops paying off.
+    use, _ = managed
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID, **local_llm._launch_identity()}))
+    fake = use(FakeVllm())
+    fake.sleeping = True
+
+    local_llm.ensure_awake()
+
+    assert fake.rpcs == ["reload_weights", "reload_draft_weights"]
+    assert fake.paths()[-1] == "POST /wake_up?tags=kv_cache"
+
+
+def test_a_wake_without_a_draft_model_reloads_only_the_target(managed, clean_jobs) -> None:
+    use, _ = managed
+    fake = use(FakeVllm())
+    fake.sleeping = True
+
+    local_llm.ensure_awake()
+
+    assert fake.rpcs == ["reload_weights"]
 
 
 def test_ensure_awake_restarts_a_stopped_server(managed, monkeypatch, clean_jobs) -> None:
@@ -565,6 +597,209 @@ def test_serve_settings_override_the_catalog(monkeypatch) -> None:
     assert "--reasoning-parser" not in args
 
 
+def test_a_catalog_draft_model_is_speculated_with_and_reloadable(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    args = local_llm.serve_args()
+
+    config = json.loads(args[args.index("--speculative-config") + 1])
+    assert config == {
+        "method": "dflash",
+        "model": "z-lab/Qwen3.8-27B-DFlash2",
+        "num_speculative_tokens": 7,
+    }
+    assert args[args.index("--worker-extension-cls") + 1] == "almanac_vllm_worker.DraftReload"
+    # Still one shell-quoted string the context-length lookup can parse.
+    assert local_llm.model_serve_args().count("--max-model-len 65536") == 1
+
+
+def test_turning_speculative_decoding_off_serves_the_model_alone(monkeypatch) -> None:
+    from ai_almanac.settings import local_llm_weight_repos
+
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    on = local_llm.serve_args()
+    monkeypatch.setattr(settings, "llm_speculative_decoding", False)
+    off = local_llm.serve_args()
+
+    assert "--speculative-config" not in off
+    assert "--worker-extension-cls" not in off
+    # Everything else is the model's tested flags, unchanged.
+    assert off == on[: on.index("--speculative-config")]
+    # Nor is the draft fetched, or needed for the model to count as downloaded.
+    assert local_llm_weight_repos("nvidia/Qwen3.8-27B-NVFP4") == ["nvidia/Qwen3.8-27B-NVFP4"]
+
+
+def test_toggling_speculative_decoding_restarts_the_server(
+    managed, monkeypatch, clean_jobs
+) -> None:
+    use, terminated = managed
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    local_llm.pid_path().write_text(json.dumps({"pid": _FAKE_PID, **local_llm._launch_identity()}))
+    use(FakeVllm())
+    started: list[dict] = []
+    monkeypatch.setattr(local_llm, "_start_locked", lambda identity=None: started.append(identity))
+    monkeypatch.setattr(settings, "llm_speculative_decoding", False)
+
+    with pytest.raises(local_llm.AssistantLoading):
+        local_llm.ensure_awake()
+    assert terminated == [_FAKE_PID]
+    assert "--speculative-config" not in started[0]["args"]
+
+
+def _speculative(args: list[str]) -> dict:
+    return json.loads(args[args.index("--speculative-config") + 1])
+
+
+def test_a_chosen_draft_model_replaces_the_catalogs(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+
+    # Named alone, vLLM tells the method from the draft; the length has a default.
+    monkeypatch.setattr(settings, "llm_draft_model", "someone/qwen3.8-eagle3")
+    assert _speculative(local_llm.serve_args()) == {
+        "model": "someone/qwen3.8-eagle3",
+        "num_speculative_tokens": 3,
+    }
+
+    # A DFlash draft on disk says what it is and how far it drafts.
+    draft = tmp_path / "my-draft"
+    draft.mkdir()
+    (draft / "config.json").write_text(
+        json.dumps({"architectures": ["DFlash2DraftModel"], "dflash_config": {"block_size": 16}})
+    )
+    monkeypatch.setattr(settings, "llm_draft_model", str(draft))
+    assert _speculative(local_llm.serve_args()) == {
+        "model": str(draft),
+        "method": "dflash",
+        "num_speculative_tokens": 15,
+    }
+
+    # The catalog's own draft keeps its tested settings; a length setting wins.
+    monkeypatch.setattr(settings, "llm_draft_model", "z-lab/Qwen3.8-27B-DFlash2")
+    assert _speculative(local_llm.serve_args())["method"] == "dflash"
+    monkeypatch.setattr(settings, "llm_draft_tokens", 4)
+    assert _speculative(local_llm.serve_args())["num_speculative_tokens"] == 4
+
+
+def test_a_model_outside_the_catalog_can_speculate_too(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "someone/custom-model")
+    assert "--speculative-config" not in local_llm.serve_args()
+
+    monkeypatch.setattr(settings, "llm_draft_model", "someone/custom-model-eagle3")
+    args = local_llm.serve_args()
+    assert _speculative(args)["model"] == "someone/custom-model-eagle3"
+    assert "--safetensors-load-strategy" in args
+    assert args[args.index("--worker-extension-cls") + 1] == "almanac_vllm_worker.DraftReload"
+
+
+def test_a_chosen_draft_is_fetched_for_the_configured_model_only(monkeypatch, tmp_path) -> None:
+    from ai_almanac.settings import local_llm_weight_repos
+
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    monkeypatch.setattr(settings, "llm_draft_model", "someone/qwen3.8-eagle3")
+    assert local_llm_weight_repos("nvidia/Qwen3.8-27B-NVFP4") == [
+        "nvidia/Qwen3.8-27B-NVFP4",
+        "someone/qwen3.8-eagle3",
+    ]
+    # Other catalog models (listed in setup with a "downloaded" flag) keep their own.
+    assert local_llm_weight_repos(DEFAULT_LOCAL_LLM_MODEL) == [DEFAULT_LOCAL_LLM_MODEL]
+    # A draft on disk has nothing to download.
+    monkeypatch.setattr(settings, "llm_draft_model", str(tmp_path))
+    assert local_llm_weight_repos("nvidia/Qwen3.8-27B-NVFP4") == ["nvidia/Qwen3.8-27B-NVFP4"]
+
+
+def test_speculating_in_llm_serve_args_also_gets_the_draft_reload(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    monkeypatch.setattr(settings, "llm_serve_args", "--max-model-len 4096")
+    assert "--speculative-config" not in local_llm.serve_args()
+    assert "--worker-extension-cls" not in local_llm.serve_args()
+
+    monkeypatch.setattr(
+        settings,
+        "llm_serve_args",
+        """--speculative-config='{"method":"mtp","num_speculative_tokens":2}'""",
+    )
+    args = local_llm.serve_args()
+    assert args[args.index("--worker-extension-cls") + 1] == "almanac_vllm_worker.DraftReload"
+
+
+def test_models_without_a_draft_launch_as_before(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", DEFAULT_LOCAL_LLM_MODEL)
+    args = local_llm.serve_args()
+    assert "--speculative-config" not in args
+    assert "--worker-extension-cls" not in args
+
+
+def test_the_draft_reload_extension_is_importable_by_the_server(launchable, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_serve_args", "")
+    monkeypatch.setattr(settings, "llm_model", "nvidia/Qwen3.8-27B-NVFP4")
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    envs: list[dict] = []
+
+    class FakeProc:
+        pid = _FAKE_PID + 1
+
+    def fake_run(args, env=None, log_path=None):
+        envs.append(env)
+        return FakeProc()
+
+    monkeypatch.setattr("ai_almanac.envs.manager.run_llm_server", fake_run)
+    local_llm.pid_path().unlink(missing_ok=True)
+
+    local_llm.start()
+
+    first, rest = envs[0]["PYTHONPATH"].split(os.pathsep)
+    assert (Path(first) / "almanac_vllm_worker.py").is_file()
+    assert rest == "/elsewhere"
+
+
+def _host(monkeypatch, *, cores: int, total_gib: float, available_gib: float | None) -> None:
+    pages = {"SC_PAGE_SIZE": 4096, "SC_PHYS_PAGES": int(total_gib * 2**30 / 4096)}
+    monkeypatch.setattr(local_llm.os, "cpu_count", lambda: cores)
+    monkeypatch.setattr(local_llm.os, "sysconf", lambda name: pages[name])
+    monkeypatch.setattr(local_llm, "_mem_available_gb", lambda: available_gib)
+
+
+def test_kernel_builds_run_only_as_many_at_once_as_fit_beside_the_model(monkeypatch) -> None:
+    # The Spark: 20 cores, 128 GiB, 0.45 of it claimed by the default model.
+    # Unbounded, ninja ran 17 ~6.5 GB compiles at once and the start was OOM-killed.
+    monkeypatch.setattr(settings, "llm_gpu_memory_utilization", 0.45)
+    _host(monkeypatch, cores=20, total_gib=128, available_gib=113)
+    assert local_llm._kernel_build_jobs() == 6
+
+    _host(monkeypatch, cores=20, total_gib=128, available_gib=40)
+    assert local_llm._kernel_build_jobs() == 1
+
+    _host(monkeypatch, cores=4, total_gib=512, available_gib=500)
+    assert local_llm._kernel_build_jobs() == 4
+
+    _host(monkeypatch, cores=20, total_gib=128, available_gib=None)
+    assert local_llm._kernel_build_jobs() == 20
+
+
+def test_a_max_jobs_already_set_is_left_alone(launchable, monkeypatch) -> None:
+    monkeypatch.setenv("MAX_JOBS", "3")
+    envs: list[dict] = []
+
+    class FakeProc:
+        pid = _FAKE_PID + 1
+
+    monkeypatch.setattr(
+        "ai_almanac.envs.manager.run_llm_server",
+        lambda args, env=None, log_path=None: envs.append(env) or FakeProc(),
+    )
+    local_llm.pid_path().unlink(missing_ok=True)
+
+    local_llm.start()
+
+    assert envs[0]["MAX_JOBS"] == "3"
+
+
 def test_custom_model_gets_only_the_startup_tuning(monkeypatch) -> None:
     monkeypatch.setattr(settings, "llm_serve_args", "")
     monkeypatch.setattr(settings, "llm_model", "someone/custom-model")
@@ -599,6 +834,40 @@ def test_llm_model_cached_needs_every_shard(monkeypatch, tmp_path) -> None:
     assert not llm_model_cached("org/m")
     (snapshot / "model-2.safetensors").write_bytes(b"")
     assert llm_model_cached("org/m")
+
+
+def test_a_model_with_a_draft_is_cached_only_with_its_draft(monkeypatch, tmp_path) -> None:
+    from ai_almanac.envs.manager import llm_model_cached
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    for repo in ("nvidia--Qwen3.8-27B-NVFP4", "z-lab--Qwen3.8-27B-DFlash2"):
+        (tmp_path / f"models--{repo}" / "snapshots" / "abc").mkdir(parents=True)
+    (tmp_path / "models--nvidia--Qwen3.8-27B-NVFP4/snapshots/abc/model.safetensors").write_bytes(
+        b""
+    )
+    assert not llm_model_cached("nvidia/Qwen3.8-27B-NVFP4")
+
+    (tmp_path / "models--z-lab--Qwen3.8-27B-DFlash2/snapshots/abc/model.safetensors").write_bytes(
+        b""
+    )
+    assert llm_model_cached("nvidia/Qwen3.8-27B-NVFP4")
+
+
+def test_downloading_a_model_fetches_its_draft_too(monkeypatch) -> None:
+    from ai_almanac.envs import manager
+
+    fetched: list[str] = []
+    monkeypatch.setattr(manager, "_ensure_pixi", lambda progress=None: "pixi")
+    monkeypatch.setattr(manager, "_run_streaming", lambda cmd, **_: fetched.append(cmd[-1]))
+
+    manager.download_llm_model("nvidia/Qwen3.8-27B-NVFP4")
+    manager.download_llm_model(DEFAULT_LOCAL_LLM_MODEL)
+
+    assert fetched == [
+        "nvidia/Qwen3.8-27B-NVFP4",
+        "z-lab/Qwen3.8-27B-DFlash2",
+        DEFAULT_LOCAL_LLM_MODEL,
+    ]
 
 
 def test_managed_engine_derives_base_url(monkeypatch) -> None:
@@ -723,6 +992,9 @@ def test_suspend_sleeps_rather_than_stopping(managed) -> None:
     local_llm.suspend()
 
     assert fake.sleeping
+    # Shutdown has a fixed grace period; a reply still generating is dropped
+    # rather than waited on, so the server is never SIGKILLed mid-kernel.
+    assert "POST /sleep?level=2&mode=abort" in fake.calls
     assert terminated == []
     assert local_llm.pid_path().exists()
 

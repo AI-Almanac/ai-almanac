@@ -313,28 +313,31 @@ def llm_env_ready() -> bool:
 
 
 def download_llm_model(model_id: str, progress: ProgressCallback | None = None) -> None:
-    """Fetch a model's weights into the Hugging Face cache ahead of serving.
+    """Fetch a model's weights, and its draft model's, into the Hugging Face cache.
 
     Idempotent: `hf download` skips files already in the cache.
     """
+    from ai_almanac.settings import local_llm_weight_repos
+
     progress = progress or _default_progress
     pixi = _ensure_pixi(progress)
     env_dir = llm_env_dir()
-    _run_streaming(
-        [
-            pixi,
-            "run",
-            "--manifest-path",
-            str(env_dir / "pixi.toml"),
-            "--",
-            "hf",
-            "download",
-            model_id,
-        ],
-        phase="llm-model",
-        progress=progress,
-        cwd=env_dir,
-    )
+    for repo in local_llm_weight_repos(model_id):
+        _run_streaming(
+            [
+                pixi,
+                "run",
+                "--manifest-path",
+                str(env_dir / "pixi.toml"),
+                "--",
+                "hf",
+                "download",
+                repo,
+            ],
+            phase="llm-model",
+            progress=progress,
+            cwd=env_dir,
+        )
 
 
 def _hf_hub_cache() -> Path:
@@ -348,11 +351,37 @@ def _hf_hub_cache() -> Path:
 
 
 def llm_model_cached(model_id: str) -> bool:
-    """True when every weight shard of the model is in the Hugging Face cache.
+    """True when every weight shard of the model, and of its draft model, is cached.
 
     Reads only the local cache. A snapshot with the config but missing shards
     (an interrupted download) does not count.
     """
+    from ai_almanac.settings import local_llm_weight_repos
+
+    return all(_hf_repo_cached(repo) for repo in local_llm_weight_repos(model_id))
+
+
+def local_model_config(model: str) -> dict | None:
+    """A model's config.json from a local directory or the Hugging Face cache, if on disk."""
+    import json
+
+    path = Path(model).expanduser()
+    if path.is_dir():
+        candidates = [path / "config.json"]
+    else:
+        snapshots = _hf_hub_cache() / f"models--{model.replace('/', '--')}" / "snapshots"
+        candidates = sorted(snapshots.glob("*/config.json")) if snapshots.is_dir() else []
+    for candidate in candidates:
+        try:
+            config = json.loads(candidate.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(config, dict):
+            return config
+    return None
+
+
+def _hf_repo_cached(model_id: str) -> bool:
     import json
 
     snapshots = _hf_hub_cache() / f"models--{model_id.replace('/', '--')}" / "snapshots"

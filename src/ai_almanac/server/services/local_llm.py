@@ -38,7 +38,7 @@ import httpx
 
 from ai_almanac.locking import file_lock, try_file_lock
 from ai_almanac.paths import data_root
-from ai_almanac.settings import Settings, local_llm_model, settings
+from ai_almanac.settings import Settings, local_llm_draft_model, local_llm_model, settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,21 @@ _CUSTOM_MODEL_SERVE_ARGS = (
 # the Spark with eager safetensors loading, ~2 min with vLLM's mmap default.
 # Generous so a slower disk or a larger model doesn't fail the wake.
 _WAKE_TIMEOUT_SECONDS = 900.0
+# Mixed into vLLM's workers whenever the server drafts with a speculative model,
+# so a level-2 wake can refill the draft's weights too (see the class). The
+# module lives in its own directory because the LLM env doesn't install
+# ai-almanac: that directory alone goes on the server's PYTHONPATH.
+_WORKER_EXTENSION_DIR = Path(__file__).parents[2] / "envs" / "vllm_ext"
+_DRAFT_RELOAD_EXTENSION = "almanac_vllm_worker.DraftReload"
+_SPECULATIVE_FLAGS = ("--speculative-config", "--speculative_config", "-sc")
+# A model's first start compiles FlashInfer kernels for this GPU with ninja, one
+# job per core unless MAX_JOBS says otherwise, and with the weights already
+# loaded. Each CUTLASS unit's compiler peaks around 6.5 GB: on the 20-core Spark
+# Qwen3.8's 17 FP4 GEMM units ran at once and the kernel OOM-killed the start.
+_JIT_JOB_GB = 8.0
+# Draft tokens per step when neither a setting, the catalog, nor the draft's own
+# config says: what vLLM's EAGLE/MTP examples use.
+_DEFAULT_DRAFT_TOKENS = 3
 _STOP_GRACE_SECONDS = 30.0
 _DRAIN_TIMEOUT_SECONDS = 120.0
 
@@ -455,12 +470,56 @@ def gpu_memory_utilization() -> float:
     return settings.llm_gpu_memory_utilization
 
 
+def speculative_config() -> dict | None:
+    """vLLM's `--speculative-config` for the configured model, or None to serve it alone.
+
+    The catalog's own draft keeps its tested settings. Any other draft is named
+    alone and vLLM tells its method from the name or architecture, except a
+    DFlash draft at a local path, whose name may not say so; its tokens per step
+    come from its config when that is on disk.
+    """
+    from ai_almanac.envs.manager import local_model_config
+
+    draft = local_llm_draft_model(settings.llm_model)
+    if draft is None:
+        return None
+    entry = local_llm_model(settings.llm_model) or {}
+    catalog = entry.get("speculative_config") or {}
+    if catalog.get("model") == draft:
+        config = dict(catalog)
+    else:
+        config = {"model": draft}
+        draft_config = local_model_config(draft) or {}
+        architectures = draft_config.get("architectures") or []
+        block = (draft_config.get("dflash_config") or {}).get("block_size")
+        if any("DFlash" in arch for arch in architectures):
+            config["method"] = "dflash"
+        if isinstance(block, int) and block > 1:
+            config["num_speculative_tokens"] = block - 1
+        elif isinstance(draft_config.get("n_predict"), int):
+            config["num_speculative_tokens"] = draft_config["n_predict"]
+        else:
+            config["num_speculative_tokens"] = _DEFAULT_DRAFT_TOKENS
+    if settings.llm_draft_tokens > 0:
+        config["num_speculative_tokens"] = settings.llm_draft_tokens
+    return config
+
+
 def model_serve_args() -> str:
-    """Model-specific `vllm serve` flags: llm_serve_args, else the catalog's."""
+    """Model-specific `vllm serve` flags: llm_serve_args, else the catalog's.
+
+    The catalog's flags (or, for another model, just the startup tuning) get
+    `--speculative-config` too when speculative_config() names a draft;
+    llm_serve_args replaces that as well.
+    """
     if settings.llm_serve_args.strip():
         return settings.llm_serve_args
     entry = local_llm_model(settings.llm_model)
-    return entry["serve_args"] if entry is not None else _CUSTOM_MODEL_SERVE_ARGS
+    args = entry["serve_args"] if entry is not None else _CUSTOM_MODEL_SERVE_ARGS
+    if (speculative := speculative_config()) is not None:
+        config = json.dumps(speculative, separators=(",", ":"))
+        args = f"{args} --speculative-config {shlex.quote(config)}"
+    return args
 
 
 def serve_args() -> list[str]:
@@ -472,6 +531,9 @@ def serve_args() -> list[str]:
                 f"llm_serve_args must not set {name}: the local model server binds "
                 "to loopback on llm_port"
             )
+    names = {flag.split("=", 1)[0] for flag in extra}
+    if names & set(_SPECULATIVE_FLAGS) and "--worker-extension-cls" not in names:
+        extra += ["--worker-extension-cls", _DRAFT_RELOAD_EXTENSION]
     return [
         "vllm",
         "serve",
@@ -485,6 +547,37 @@ def serve_args() -> list[str]:
         str(gpu_memory_utilization()),
         *extra,
     ]
+
+
+def _mem_available_gb() -> float | None:
+    try:
+        with open("/proc/meminfo") as meminfo:
+            for line in meminfo:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 2**20
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _kernel_build_jobs() -> int:
+    """Parallel kernel compiles that fit beside the model, at _JIT_JOB_GB each.
+
+    Counts against what is free now less the share vLLM will claim, which is
+    more than the weights it holds while compiling, so the estimate errs low.
+    """
+    cores = os.cpu_count() or 1
+    available = _mem_available_gb()
+    if available is None:
+        return cores
+    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    spare = available - gpu_memory_utilization() * total
+    return max(1, min(cores, int(spare // _JIT_JOB_GB)))
+
+
+def _reloads_draft(args: object) -> bool:
+    """Whether a server launched with these args carries the draft-reload extension."""
+    return isinstance(args, list) and _DRAFT_RELOAD_EXTENSION in args
 
 
 def start() -> None:
@@ -533,6 +626,11 @@ def suspend() -> None:
     Sleeping is fast and a later wake (~25 s) beats a cold start (~45 s). A
     server that is still loading is stopped instead — it cannot be slept, and
     left alone it would come up awake with no idle timer to put it back down.
+
+    A reply still generating is aborted, not waited on: a container stop gives
+    shutdown a fixed grace period, and once that runs out the model server is
+    SIGKILLed mid-kernel. On the Spark that once left a kernel spinning on the
+    GPU with no process to own it, which only a reboot cleared.
     """
     with _lock():
         if _live_pid() is None:
@@ -541,7 +639,7 @@ def suspend() -> None:
             if not _healthy():
                 raise RuntimeError("server is still loading")
             if not is_sleeping():
-                sleep()
+                sleep(abort=True)
             return
         except Exception as exc:  # noqa: BLE001 — memory safety wins; fall back to kill
             logger.info("stopping local model server instead of sleeping it (%s)", exc)
@@ -554,6 +652,11 @@ def _start_locked(identity: dict | None = None) -> None:
 
     identity = identity or _launch_identity()
     env = {**os.environ, "VLLM_SERVER_DEV_MODE": "1"}
+    env.setdefault("MAX_JOBS", str(_kernel_build_jobs()))
+    if _reloads_draft(identity["args"]):
+        env["PYTHONPATH"] = os.pathsep.join(
+            path for path in (str(_WORKER_EXTENSION_DIR), env.get("PYTHONPATH")) if path
+        )
     # Progress is read from the log after this line, so earlier launches'
     # stages don't count toward this one.
     with log_path().open("a") as log:
@@ -628,11 +731,17 @@ def drain(timeout: float = _DRAIN_TIMEOUT_SECONDS) -> bool:
         time.sleep(0.5)
 
 
-def sleep() -> None:
-    # mode=wait: anything that slipped in after drain() still finishes rather
-    # than being aborted mid-reply.
+def sleep(*, abort: bool = False) -> None:
+    """Sleep at level 2, letting replies in flight finish first unless told to abort.
+
+    Waiting is right in normal use: anything that slipped in after drain() still
+    finishes rather than being cut off mid-reply. On shutdown there is no time
+    for that.
+    """
     with _client(timeout=_DRAIN_TIMEOUT_SECONDS) as client:
-        client.post("/sleep", params={"level": 2, "mode": "wait"}).raise_for_status()
+        client.post(
+            "/sleep", params={"level": 2, "mode": "abort" if abort else "wait"}
+        ).raise_for_status()
 
 
 def wake() -> None:
@@ -640,11 +749,17 @@ def wake() -> None:
 
     Level 2 discarded the weights, so they are re-read from the checkpoint
     between the two wake stages; waking the KV cache last keeps peak memory at
-    weights-only while the reload runs.
+    weights-only while the reload runs. vLLM's reload covers only the target,
+    so a draft model for speculative decoding is re-read after it.
     """
+    reload_draft = _reloads_draft(_read_record().get("args"))
     with _client(timeout=_WAKE_TIMEOUT_SECONDS) as client:
         client.post("/wake_up", params={"tags": "weights"}).raise_for_status()
         client.post("/collective_rpc", json={"method": "reload_weights"}).raise_for_status()
+        if reload_draft:
+            client.post(
+                "/collective_rpc", json={"method": "reload_draft_weights"}
+            ).raise_for_status()
         client.post("/wake_up", params={"tags": "kv_cache"}).raise_for_status()
 
 

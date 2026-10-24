@@ -17,6 +17,11 @@ import typer
 from ai_almanac import __version__
 from ai_almanac.paths import data_root, ensure_layout, env_root, secrets_env_path
 
+# How long `serve` lets open responses finish on shutdown before cancelling
+# them, leaving the rest of a container's stop grace period for the lifespan
+# hook to put the local model to sleep.
+SHUTDOWN_GRACE_SECONDS = 10
+
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
@@ -290,6 +295,12 @@ def serve(
         port=port,
         reload=reload,
         log_level="info",
+        # Unbounded, shutdown waits for every open response, and a streaming
+        # chat reply can outlast a container's stop grace period (60 s in
+        # compose.spark.yaml): the lifespan hook that puts the local model to
+        # sleep never ran, and the model server was SIGKILLed mid-reply.
+        # Streams still open after this are cancelled, closing their requests.
+        timeout_graceful_shutdown=SHUTDOWN_GRACE_SECONDS,
     )
 
 

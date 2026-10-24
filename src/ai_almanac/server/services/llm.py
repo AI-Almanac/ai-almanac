@@ -34,7 +34,7 @@ from pydantic_ai import (
     ModelMessagesTypeAdapter,
     RunContext,
 )
-from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.capabilities import AbstractCapability, ProcessHistory
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -49,7 +49,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import (
+    OpenAIChatModel,
+    OpenAIChatModelSettings,
+    OpenAIStreamedResponse,
+)
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -178,7 +182,74 @@ def _build_model() -> OpenAIChatModel | str:
 
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    return _openai_compatible_model(settings.llm_model, settings.llm_base_url, settings.llm_api_key)
+    return _openai_compatible_model(
+        settings.llm_model,
+        settings.llm_base_url,
+        settings.llm_api_key,
+        local=local_llm.is_managed(),
+    )
+
+
+# A local model can fall into a loop, writing one passage over and over until
+# it runs out of context. Inside a tool call nothing streams meanwhile (vLLM
+# holds a call back until it closes), so the turn sat silent until the read
+# timeout failed it: Qwen3.8 did this twice in an afternoon on the Spark. vLLM
+# ends a reply whose tail is one 32-512 token span four times over, which a
+# loop reaches in seconds; shorter cycles count too, as their multiples. Only
+# output that is exactly periodic for 128+ tokens trips it, which prose,
+# tables, and code don't, though a request for verbatim repetition would.
+_LOCAL_REPETITION_DETECTION = {"min_pattern_size": 32, "max_pattern_size": 512, "min_count": 4}
+_LOCAL_MODEL_SETTINGS = OpenAIChatModelSettings(
+    extra_body={"repetition_detection": _LOCAL_REPETITION_DETECTION}
+)
+
+
+class _VllmStreamedResponse(OpenAIStreamedResponse):
+    """Keeps vLLM's `stop_reason`, which still says why a reply ended when
+    `finish_reason` can't: once a tool call has streamed, vLLM reports
+    `tool_calls` whatever stopped it, repetition and length included."""
+
+    def _map_provider_details(self, chunk):
+        details = super()._map_provider_details(chunk)
+        stop_reason = getattr(chunk.choices[0], "stop_reason", None) if chunk.choices else None
+        if isinstance(stop_reason, str):
+            details = {**(details or {}), "stop_reason": stop_reason}
+        return details
+
+
+class _LocalVllmModel(OpenAIChatModel):
+    """The managed local server: vLLM's dialect of chat completions."""
+
+    @property
+    def _streamed_response_cls(self) -> type[OpenAIStreamedResponse]:
+        return _VllmStreamedResponse
+
+
+class ModelRepeated(RuntimeError):
+    """The model fell into repeating itself and the server stopped its reply."""
+
+
+def _stopped_for_repetition(details: dict | None) -> bool:
+    details = details or {}
+    return (
+        details.get("finish_reason") == "repetition"
+        or details.get("stop_reason") == "repetition_detected"
+    )
+
+
+class StopOnRepetition(AbstractCapability):
+    """End the turn when the server stops a reply for repeating itself.
+
+    pydantic-ai doesn't know vLLM's `repetition` finish reason: it would pass a
+    cut-off answer on as complete, and retry a cut-off tool call (whose looping
+    argument never closed, so it arrives empty) until the model looped out of
+    retries, failing as a generic tool error.
+    """
+
+    async def after_model_request(self, ctx, *, request_context, response):
+        if _stopped_for_repetition(response.provider_details):
+            raise ModelRepeated("the model repeated itself and its reply was stopped")
+        return response
 
 
 # OpenRouter only returns reasoning when asked. Claude Sonnet 5.5 writes its
@@ -193,8 +264,15 @@ def _is_openrouter(base_url: str) -> bool:
     return host == "openrouter.ai" or host.endswith(".openrouter.ai")
 
 
-def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None):
-    """Build a chat-completions model, using OpenRouter's dialect when the URL is OpenRouter's.
+def _openai_compatible_model(
+    model_name: str,
+    base_url: str,
+    api_key: str | None,
+    *,
+    local: bool = False,
+):
+    """Build a chat-completions model, using OpenRouter's dialect when the URL is
+    OpenRouter's, and vLLM's (with loop detection) for the managed local server.
 
     The OpenRouter model streams reasoning and replays its `reasoning_details`
     on later turns, which the generic client drops.
@@ -207,6 +285,12 @@ def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None
             model_name,
             provider=OpenRouterProvider(openai_client=client),
             settings=_OPENROUTER_DEFAULT_SETTINGS,
+        )
+    if local:
+        return _LocalVllmModel(
+            model_name,
+            provider=OpenAIProvider(openai_client=client),
+            settings=_LOCAL_MODEL_SETTINGS,
         )
     return OpenAIChatModel(model_name, provider=OpenAIProvider(openai_client=client))
 
@@ -758,7 +842,7 @@ def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None):
         deps_type=ChatDeps,
         toolsets=toolsets,
         model_settings=ruleset.model_settings or None,
-        capabilities=[ProcessHistory(trim_chat_history)],
+        capabilities=[ProcessHistory(trim_chat_history), StopOnRepetition()],
     )
 
 

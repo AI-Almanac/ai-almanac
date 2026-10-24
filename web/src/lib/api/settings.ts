@@ -15,6 +15,8 @@ export interface SettingsField {
 	choices: string[] | null;
 	/** Common values for a free-text field; the input offers them while typing. */
 	suggestions?: string[] | null;
+	/** A bool field that must be on (in the form, saved or not) for this one to show. */
+	shown_when?: string | null;
 }
 
 export interface SettingsGroup {

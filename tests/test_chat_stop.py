@@ -146,3 +146,30 @@ async def test_only_the_sessions_owner_can_stop_it(
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_chat_stops_its_reply_on_the_model(
+    client: httpx.AsyncClient, as_new_user: dict[str, str], stalled_reply
+) -> None:
+    # Left alone, the reply would keep generating for a chat nobody can see,
+    # holding the model's attention and its KV cache until it finished.
+    reached_wait, closed = stalled_reply
+    session_id = (await _create_session(client, as_new_user))["id"]
+    sending = asyncio.create_task(
+        client.post(
+            f"/chat/sessions/{session_id}/message",
+            headers=as_new_user,
+            json={"content": "Rerun the failed models."},
+        )
+    )
+    await asyncio.wait_for(reached_wait.wait(), timeout=5)
+
+    deleted = await client.delete(f"/chat/sessions/{session_id}", headers=as_new_user)
+    await asyncio.wait_for(sending, timeout=5)
+
+    assert deleted.status_code == 204
+    assert closed.is_set(), "the stream to the model was closed, not left running"
+    # Saving the stopped turn did not bring the chat back.
+    gone = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
+    assert gone.status_code == 404

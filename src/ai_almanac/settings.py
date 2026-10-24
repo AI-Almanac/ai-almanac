@@ -214,6 +214,17 @@ class Settings(BaseSettings):
     # a value replaces them wholesale. --host/--port are rejected: the
     # server's dev endpoints are unauthenticated and must stay on loopback.
     llm_serve_args: str = ""
+    # Serve the managed model with a draft model (speculative decoding: faster
+    # replies, same output, a few GB more memory). Off serves the model alone.
+    # A non-blank llm_serve_args decides this itself.
+    llm_speculative_decoding: bool = True
+    # The draft model, as a Hugging Face id or a local path. Blank uses the one
+    # local_llm_models.yaml lists for llm_model, if any; a value also lets a
+    # model without one speculate.
+    llm_draft_model: str = ""
+    # Tokens the draft proposes per step. 0 takes the catalog's value for its
+    # own draft, else the draft's config (DFlash: its block size less one).
+    llm_draft_tokens: int = 0
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
@@ -412,6 +423,9 @@ LOCAL_ONLY_FIELDS: frozenset[str] = frozenset(
         "llm_gpu_memory_utilization",
         "llm_idle_sleep_minutes",
         "llm_serve_args",
+        "llm_speculative_decoding",
+        "llm_draft_model",
+        "llm_draft_tokens",
     }
 )
 
@@ -715,6 +729,30 @@ def get_local_llm_models() -> list[dict]:
 def local_llm_model(model_id: str) -> dict | None:
     """Catalog entry for a Hugging Face model id, or None for a custom model."""
     return next((m for m in get_local_llm_models() if m["id"] == model_id), None)
+
+
+def local_llm_draft_model(model_id: str) -> str | None:
+    """The draft model a managed model speculates with, or None to serve it alone.
+
+    llm_draft_model overrides the catalog's draft, for the configured model only.
+    """
+    if not settings.llm_speculative_decoding:
+        return None
+    if model_id == settings.llm_model and settings.llm_draft_model.strip():
+        return settings.llm_draft_model.strip()
+    entry = local_llm_model(model_id) or {}
+    return (entry.get("speculative_config") or {}).get("model")
+
+
+def is_local_model_path(model: str) -> bool:
+    """A model given as a directory on this machine rather than a Hugging Face id."""
+    return model.startswith(("/", "~", ".")) or Path(model).expanduser().is_dir()
+
+
+def local_llm_weight_repos(model_id: str) -> list[str]:
+    """Hugging Face repos a model needs locally: itself, then any draft model it speculates with."""
+    draft = local_llm_draft_model(model_id)
+    return [model_id, draft] if draft and not is_local_model_path(draft) else [model_id]
 
 
 def blend_model_key(name: str) -> str:

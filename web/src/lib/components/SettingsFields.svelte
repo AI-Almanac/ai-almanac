@@ -10,6 +10,10 @@
 	const { settings, group }: Props = $props();
 
 	const restartEdited = $derived(settings.restartFieldsEdited(group));
+	// Follows the form as edited, so turning a toggle on reveals its fields at once.
+	const shownFields = $derived(
+		group.fields.filter((field) => !field.shown_when || Boolean(settings.value(field.shown_when)))
+	);
 	const saving = $derived(settings.savingGroup === group.name);
 </script>
 
@@ -37,7 +41,7 @@
 	{/if}
 
 	<div class="fields">
-		{#each group.fields as field (field.name)}
+		{#each shownFields as field (field.name)}
 			<div class="field">
 				<label for={`f-${field.name}`}>
 					<span class="fieldname">{field.label}</span>

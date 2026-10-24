@@ -82,3 +82,28 @@ def test_access_token_from_env_is_not_persisted(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("SERVE_ACCESS_TOKEN", "from-env")
     assert not sb.ensure_access_token()
     assert not secrets_env_path().exists()
+
+
+def test_shutdown_stops_waiting_on_open_replies_in_time_to_sleep_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Uvicorn otherwise waits on every open response before the lifespan hook
+    # that sleeps the local model runs. A streaming chat reply outlasted the
+    # container's stop grace period, and the model server was SIGKILLed
+    # mid-kernel, leaving the GPU busy with no process until a reboot.
+    import re
+
+    import yaml
+
+    seen: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda target, **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(app, ["serve", "--no-open"])
+
+    assert result.exit_code == 0, result.output
+    grace = seen["timeout_graceful_shutdown"]
+    compose = yaml.safe_load((Path(__file__).parents[1] / "compose.spark.yaml").read_text())
+    stop_after = compose["services"]["almanac"]["stop_grace_period"]
+    seconds = int(re.fullmatch(r"(\d+)s", stop_after).group(1))
+    # Room left after the wait for the sleep itself (a few seconds).
+    assert 0 < grace <= seconds - 30

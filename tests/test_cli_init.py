@@ -300,13 +300,16 @@ def test_interactive_local_model_picks_from_the_catalog(
 
 def test_llm_use_switches_model_without_downloading(tmp_path: Path) -> None:
     with patch("ai_almanac.envs.manager.download_llm_model") as mock_download:
-        result = runner.invoke(app, ["llm", "use", "nvidia/Qwen3.8-27B-NVFP4", "--no-download"])
+        result = runner.invoke(
+            app, ["llm", "use", "RedHatAI/Qwen3.6-35B-A3B-NVFP4", "--no-download"]
+        )
     assert result.exit_code == 0, result.output
     mock_download.assert_not_called()
+    # An unverified catalog model says so.
     assert "not been tested" in result.output
     reload_settings()
     assert settings.llm_engine == "managed"
-    assert settings.llm_model == "nvidia/Qwen3.8-27B-NVFP4"
+    assert settings.llm_model == "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
 
 
 def test_llm_models_lists_the_catalog(tmp_path: Path) -> None:
