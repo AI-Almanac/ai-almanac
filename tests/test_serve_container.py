@@ -107,3 +107,19 @@ def test_shutdown_stops_waiting_on_open_replies_in_time_to_sleep_the_model(
     seconds = int(re.fullmatch(r"(\d+)s", stop_after).group(1))
     # Room left after the wait for the sleep itself (a few seconds).
     assert 0 < grace <= seconds - 30
+
+
+def test_container_mode_tells_the_app_to_stop_its_model_on_shutdown(
+    served: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The app's shutdown hook reads this: in a container the local model is
+    # stopped cleanly, not left asleep for the container's end to SIGKILL.
+    import os
+
+    monkeypatch.delenv("AI_ALMANAC_CONTAINER", raising=False)
+
+    result = runner.invoke(app, ["serve", "--bind", "0.0.0.0", "--no-open", "--container"])
+
+    assert result.exit_code == 0, result.output
+    assert os.environ.get("AI_ALMANAC_CONTAINER") == "1"
+    monkeypatch.delenv("AI_ALMANAC_CONTAINER")

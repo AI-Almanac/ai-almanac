@@ -5,7 +5,7 @@
 # much of the Spark's unified memory vLLM must claim. These apply whenever
 # `llm_serve_args` is left blank; a non-blank value replaces `serve_args`
 # wholesale. Flags common to every model (loopback host/port, sleep mode, memory
-# share) are added by server/services/local_llm.py.
+# share, shutdown grace) are added by server/services/local_llm.py.
 #
 # `verified: true` means someone served the model with the vLLM pinned in
 # envs/llm.pixi.toml on a DGX Spark and confirmed sleep/wake and a parsed tool
@@ -73,15 +73,22 @@ models:
     # reload, 2.0-3.7x the target alone (docs/local-llm-design.md).
     verified: true
     gpu_memory_utilization: 0.45
+    # InstantTensor reads the checkpoint with pipelined direct I/O: loading
+    # took 10.1 s instead of 17.1 s, and a wake (which re-reads the weights,
+    # the draft's included) 8.5 s instead of 14.0 s, replies unchanged
+    # (2026-10-24). Untested on the other entries.
     serve_args: >-
       --max-model-len 65536 --enable-auto-tool-choice
       --tool-call-parser qwen3_coder --reasoning-parser qwen3
       --max-cudagraph-capture-size 32 --safetensors-load-strategy eager
       --kernel-config.enable_flashinfer_autotune false
+      --load-format instanttensor
     # A block-diffusion drafter (vLLM's dflash method; DFlash 2 needs the V2
     # model runner, which vLLM picks for it). Seven draft tokens per step is
-    # the block size it was trained for. Lossless: greedy output matches the
-    # target exactly. https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2
+    # the block size it was trained for. The target checks every token, so
+    # replies are the target's own, though not token-identical to it alone:
+    # verifying a block runs other kernels, and near-ties can tip.
+    # https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2
     speculative_config:
       method: dflash
       model: z-lab/Qwen3.8-27B-DFlash2

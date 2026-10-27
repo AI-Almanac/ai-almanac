@@ -212,6 +212,10 @@ def serve(
             err=True,
         )
         raise typer.Exit(code=2)
+    if container:
+        # Read by the app's shutdown hook, which then stops the local model
+        # rather than leaving it asleep for the container's end to kill.
+        os.environ["AI_ALMANAC_CONTAINER"] = "1"
 
     ensure_layout()
 

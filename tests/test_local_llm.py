@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import time
 import uuid
@@ -22,6 +23,7 @@ from ai_almanac.server.services import local_llm
 from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, reload_settings, settings
 
 _FAKE_PID = 424242
+_REAL_TERMINATE = local_llm._terminate
 
 
 class FakeVllm:
@@ -61,6 +63,10 @@ class FakeVllm:
             if request.url.params.get("tags") == "kv_cache":
                 self.sleeping = False
             return httpx.Response(200)
+        if path == "/abort_requests":
+            assert json.loads(request.content) == {}, "an empty body aborts everything"
+            self.running = [0.0]
+            return httpx.Response(200, json={})
         if path == "/collective_rpc":
             method = json.loads(request.content)["method"]
             assert method in ("reload_weights", "reload_draft_weights")
@@ -565,6 +571,10 @@ def test_serve_args_bind_loopback_and_reject_host_overrides(monkeypatch) -> None
     args = local_llm.serve_args()
     assert args[args.index("--host") + 1] == "127.0.0.1"
     assert "--enable-sleep-mode" in args
+    # A stop lets the engine finish its step instead of killing it mid-kernel,
+    # and within the grace _terminate gives before it kills the group anyway.
+    timeout = int(args[args.index("--shutdown-timeout") + 1])
+    assert 0 < timeout < local_llm._STOP_GRACE_SECONDS
 
     monkeypatch.setattr(settings, "llm_serve_args", "--host=0.0.0.0")
     with pytest.raises(ValueError, match="--host"):
@@ -609,6 +619,8 @@ def test_a_catalog_draft_model_is_speculated_with_and_reloadable(monkeypatch) ->
         "num_speculative_tokens": 7,
     }
     assert args[args.index("--worker-extension-cls") + 1] == "almanac_vllm_worker.DraftReload"
+    # Measured faster loads and wakes for this entry; the draft reloads through it too.
+    assert args[args.index("--load-format") + 1] == "instanttensor"
     # Still one shell-quoted string the context-length lookup can parse.
     assert local_llm.model_serve_args().count("--max-model-len 65536") == 1
 
@@ -997,6 +1009,80 @@ def test_suspend_sleeps_rather_than_stopping(managed) -> None:
     assert "POST /sleep?level=2&mode=abort" in fake.calls
     assert terminated == []
     assert local_llm.pid_path().exists()
+
+
+def test_suspend_in_a_container_stops_the_server_instead_of_sleeping_it(
+    managed, monkeypatch
+) -> None:
+    # The container's end SIGKILLs whatever is left in it, a sleeping server too.
+    use, terminated = managed
+    fake = use(FakeVllm())
+    monkeypatch.setenv("AI_ALMANAC_CONTAINER", "1")
+
+    local_llm.suspend()
+
+    assert terminated == [_FAKE_PID]
+    assert not fake.sleeping
+    assert not local_llm.pid_path().exists()
+
+
+@pytest.fixture
+def signals(managed, monkeypatch):
+    """The real _terminate, with process signals recorded instead of sent."""
+    sent: list[signal.Signals] = []
+    alive = {"value": True}
+
+    def record(pid: int, sig: signal.Signals) -> None:
+        sent.append(sig)
+        alive["value"] = False  # the server exits on SIGTERM
+
+    monkeypatch.setattr(local_llm, "_terminate", _REAL_TERMINATE)
+    monkeypatch.setattr(local_llm, "_signal_group", record)
+    monkeypatch.setattr(local_llm, "_is_our_server", lambda pid: alive["value"])
+    return managed[0], sent
+
+
+def test_a_stop_aborts_running_replies_before_signalling_the_server(signals) -> None:
+    # Signalled mid-reply, vLLM keeps generating until --shutdown-timeout and
+    # then kills its engine: a DFlash engine killed so on the Spark left the GPU
+    # spinning with no process, until a reboot. Idle, the engine exits itself.
+    use, sent = signals
+    fake = use(FakeVllm(running=[1.0]))
+
+    local_llm.stop()
+
+    abort = fake.calls.index("POST /abort_requests")
+    assert fake.calls[abort + 1 :].count("GET /metrics") >= 1, "waited until idle"
+    assert sent == [signal.SIGTERM]
+
+
+def test_a_stop_goes_ahead_when_the_server_cannot_be_reached(signals, monkeypatch) -> None:
+    _, sent = signals
+
+    def unreachable(timeout=5.0):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(local_llm, "_client", unreachable)
+
+    local_llm.stop()
+
+    assert sent == [signal.SIGTERM]
+
+
+def test_a_server_that_wont_go_idle_is_stopped_anyway(signals, monkeypatch) -> None:
+    use, sent = signals
+    fake = use(FakeVllm(running=[1.0]))
+    # An abort the server doesn't act on: requests stay running.
+    handler = fake.handler
+    fake.handler = lambda request: (
+        httpx.Response(200, json={}) if request.url.path == "/abort_requests" else handler(request)
+    )
+    use(fake)
+    monkeypatch.setattr(local_llm, "_QUIESCE_TIMEOUT_SECONDS", 0.0)
+
+    local_llm.stop()
+
+    assert sent == [signal.SIGTERM]
 
 
 def test_suspend_stops_a_server_that_is_still_loading(managed) -> None:

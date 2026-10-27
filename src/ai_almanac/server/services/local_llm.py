@@ -78,6 +78,18 @@ _JIT_JOB_GB = 8.0
 # config says: what vLLM's EAGLE/MTP examples use.
 _DEFAULT_DRAFT_TOKENS = 3
 _STOP_GRACE_SECONDS = 30.0
+# How long vLLM waits for its engine process to exit on SIGTERM before killing
+# it (`--shutdown-timeout`). Its default, 0, kills the engine at once even when
+# idle; with a timeout an idle engine exits on its own. A busy one drains (keeps
+# generating) until the timeout and is then killed all the same, so this only
+# helps once in-flight requests are gone. A DFlash server killed mid-reply on
+# the Spark left a kernel spinning on the GPU with no process to own it, which
+# only a reboot cleared (2026-10-24, reproduced). Under _STOP_GRACE_SECONDS,
+# after which _terminate kills the group anyway.
+_VLLM_SHUTDOWN_TIMEOUT_SECONDS = 10
+# How long a stop waits, after aborting the server's requests, for it to go
+# idle before signalling it (see _quiesce).
+_QUIESCE_TIMEOUT_SECONDS = 10.0
 _DRAIN_TIMEOUT_SECONDS = 120.0
 
 # Last chat turn in this process (the `serve` process owns chat and the idle
@@ -434,8 +446,37 @@ def _signal_group(pid: int, sig: signal.Signals) -> None:
         logger.warning("cannot signal local model process group %s", pid)
 
 
+def _quiesce(timeout: float | None = None) -> bool:
+    """Abort every request the server is running and wait for it to go idle.
+
+    vLLM kills its engine process when it hasn't exited within
+    --shutdown-timeout, and a busy engine doesn't: it drains, still generating.
+    A DFlash engine killed mid-reply on the Spark left a kernel spinning on the
+    GPU with no process to own it, which only a reboot cleared. With nothing
+    running the engine exits by itself, so every stop goes through here first.
+
+    Best effort, and False if the server didn't go idle: one still loading, or
+    already gone, has nothing to abort, and the stop goes ahead regardless.
+    """
+    try:
+        with _client(timeout=5.0) as client:
+            # vLLM's dev endpoint: an empty body aborts everything in flight.
+            client.post("/abort_requests", json={}).raise_for_status()
+        deadline = time.monotonic() + (_QUIESCE_TIMEOUT_SECONDS if timeout is None else timeout)
+        while _requests_in_flight() > 0:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+        return True
+    except httpx.HTTPError as exc:
+        logger.info("could not abort the local model's requests before stopping it (%s)", exc)
+        return False
+
+
 def _terminate(pid: int, grace: float = _STOP_GRACE_SECONDS) -> None:
-    """SIGTERM the server's process group, escalating to SIGKILL."""
+    """Stop the server: abort its requests, then SIGTERM its process group,
+    escalating to SIGKILL."""
+    _quiesce()
     _signal_group(pid, signal.SIGTERM)
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
@@ -545,6 +586,8 @@ def serve_args() -> list[str]:
         "--enable-sleep-mode",
         "--gpu-memory-utilization",
         str(gpu_memory_utilization()),
+        "--shutdown-timeout",
+        str(_VLLM_SHUTDOWN_TIMEOUT_SECONDS),
         *extra,
     ]
 
@@ -631,9 +674,17 @@ def suspend() -> None:
     shutdown a fixed grace period, and once that runs out the model server is
     SIGKILLed mid-kernel. On the Spark that once left a kernel spinning on the
     GPU with no process to own it, which only a reboot cleared.
+
+    In a container the server is stopped instead, cleanly (_terminate): when
+    the container ends, every process left in it is SIGKILLed, a sleeping
+    server included, and no later `serve` could adopt it anyway.
     """
     with _lock():
         if _live_pid() is None:
+            return
+        if _in_container():
+            logger.info("stopping local model server: its container is stopping")
+            _kill_recorded()
             return
         try:
             if not _healthy():
@@ -644,6 +695,11 @@ def suspend() -> None:
         except Exception as exc:  # noqa: BLE001 — memory safety wins; fall back to kill
             logger.info("stopping local model server instead of sleeping it (%s)", exc)
         _kill_recorded()
+
+
+def _in_container() -> bool:
+    """Whether `serve` runs in a container (`--container`, which sets this)."""
+    return os.environ.get("AI_ALMANAC_CONTAINER", "").strip().lower() in ("1", "true", "yes")
 
 
 def _start_locked(identity: dict | None = None) -> None:
