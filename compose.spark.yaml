@@ -46,6 +46,10 @@ services:
       XDG_CACHE_HOME: /data/cache
       FLASHINFER_WORKSPACE_BASE: /data/cache/flashinfer-workspace
       TRITON_CACHE_DIR: /data/cache/triton
+      # The driver's own cache of kernels JIT-compiled for the GB10 (~200 MB
+      # for Qwen3.8); left in the container, it costs ~30 s per recreate.
+      CUDA_CACHE_PATH: /data/cache/nvidia-compute
+      CUDA_CACHE_MAXSIZE: "4294967296"
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     # Loopback only: other machines cannot reach it, and the access token that
     # container mode requires keeps other local users of the Spark out.
