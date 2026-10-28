@@ -60,6 +60,16 @@ def sources_discover(
             help="Register every ready source found that has a region and isn't registered yet.",
         ),
     ] = False,
+    names: Annotated[
+        Path | None,
+        typer.Option(
+            "--names",
+            help=(
+                "YAML file giving sources' names (and live forecast model links) by "
+                "path relative to the scanned directory, e.g. deploy/spark-datasets.yaml."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Find NetCDF data sources under a directory and show how each would register.
 
@@ -84,18 +94,69 @@ def sources_discover(
     if missing:
         typer.secho(f"not a directory: {', '.join(missing)}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
+    overrides = _load_source_names(names) if names else {}
     _apply_migrations()
-    asyncio.run(_discover_sources(roots, register))
+    asyncio.run(_discover_sources(roots, register, overrides))
 
 
-async def _discover_sources(roots: list[Path], register: bool) -> None:
+_SOURCE_NAME_KEYS = frozenset({"name", "forecast_model_id"})
+
+
+def _load_source_names(path: Path) -> dict[str, dict]:
+    """Read a `sources:` map of relative path -> {name, forecast_model_id}."""
+    import yaml
+
+    try:
+        sources = (yaml.safe_load(path.read_text()) or {}).get("sources") or {}
+    except (OSError, yaml.YAMLError, AttributeError) as exc:
+        typer.secho(f"cannot read {path}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    for rel, entry in sources.items():
+        valid = (
+            isinstance(entry, dict)
+            and not set(entry) - _SOURCE_NAME_KEYS
+            and str(entry.get("name") or "").strip()
+        )
+        if not valid:
+            typer.secho(
+                f"{path}: {rel!r} needs a name, and only {sorted(_SOURCE_NAME_KEYS)}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    return {str(Path(rel)): entry for rel, entry in sources.items()}
+
+
+def _apply_source_names(discovery, overrides: dict[str, dict]) -> list[str]:
+    """Rename discovered sources the overrides list; return the listed paths not found."""
+    found = set()
+    for source in discovery.sources:
+        path = Path(source.path)
+        root = next((Path(r) for r in discovery.roots if path.is_relative_to(r)), None)
+        rel = str(path.relative_to(root)) if root else None
+        entry = overrides.get(rel) if rel else None
+        if entry is None:
+            continue
+        found.add(rel)
+        source.name = str(entry["name"]).strip()
+        if source.kind == "model" and entry.get("forecast_model_id"):
+            source.metadata = {**source.metadata, "forecast_model_id": entry["forecast_model_id"]}
+    return sorted(set(overrides) - found)
+
+
+async def _discover_sources(
+    roots: list[Path], register: bool, overrides: dict[str, dict] | None = None
+) -> None:
     from ai_almanac.server import db
     from ai_almanac.server.services import data_sources, region_catalog, source_discovery
 
     try:
         await region_catalog.seed_packaged_regions()
         discovery = await source_discovery.discover_sources(roots)
+        missing = _apply_source_names(discovery, overrides or {})
         typer.echo(f"scanned {', '.join(discovery.roots)}")
+        for rel in missing:
+            typer.secho(f"  named but not found: {rel}", fg=typer.colors.YELLOW)
         if discovery.truncated:
             typer.secho(
                 f"stopped after {source_discovery.MAX_DIRECTORIES} directories; "
@@ -582,6 +643,12 @@ def init(
     skip_llm_test: Annotated[
         bool, typer.Option("--skip-llm-test", help="Save LLM config without testing.")
     ] = False,
+    if_needed: Annotated[
+        bool,
+        typer.Option(
+            "--if-needed", help="Do nothing if setup is already complete (for scripted installs)."
+        ),
+    ] = False,
 ) -> None:
     """Interactive first-run configuration (headless-friendly with --yes)."""
     import asyncio
@@ -610,6 +677,9 @@ def init(
     reload_settings()
 
     if not setup_required():
+        if if_needed:
+            typer.echo("setup already complete")
+            return
         if yes:
             typer.echo("setup already complete — re-running with --yes.")
         else:

@@ -316,3 +316,35 @@ def test_llm_models_lists_the_catalog(tmp_path: Path) -> None:
     result = runner.invoke(app, ["llm", "models"])
     assert result.exit_code == 0, result.output
     assert DEFAULT_LOCAL_LLM_MODEL in result.output
+
+
+def test_if_needed_leaves_a_completed_setup_alone(tmp_path: Path) -> None:
+    first = runner.invoke(
+        app, ["init", "--yes", "--no-prepare-envs", "--local-llm", "--llm-model", "my/model"]
+    )
+    assert first.exit_code == 0, first.output
+
+    again = runner.invoke(
+        app, ["init", "--yes", "--if-needed", "--local-llm", "--llm-model", "other/model"]
+    )
+
+    assert again.exit_code == 0, again.output
+    assert "setup already complete" in again.output
+    reload_settings()
+    assert settings.llm_model == "my/model"
+
+
+def test_if_needed_sets_up_a_fresh_install(tmp_path: Path) -> None:
+    # Fresh, whatever this checkout's environment says about setup.
+    with patch("ai_almanac.server.services.setup.setup_required", return_value=True):
+        result = runner.invoke(
+            app,
+            ["init", "--yes", "--if-needed", "--no-prepare-envs", "--local-llm"]
+            + ["--llm-model", DEFAULT_LOCAL_LLM_MODEL, "--dataset-mount-roots", "/datasets"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "setup already complete" not in result.output
+    reload_settings()
+    assert settings.llm_engine == "managed"
+    assert settings.llm_model == DEFAULT_LOCAL_LLM_MODEL

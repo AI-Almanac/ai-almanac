@@ -38,23 +38,32 @@ supports without the NVIDIA runtime's `no-cgroups` setting.
 ## Use
 
 ```bash
-scripts/spark.sh up        # build, start, print the URL to open
-scripts/spark.sh prepare   # install the workload environments (or use the setup wizard)
+scripts/spark.sh up        # build, start (setting up on first run), print the URL to open
+scripts/spark.sh prepare   # reinstall the workload environments
 scripts/spark.sh url       # print the URL again
 scripts/spark.sh logs
 scripts/spark.sh status    # container state and the GPU it sees
 scripts/spark.sh down      # stop; data is kept
 ```
 
-Open the printed `?token=` URL. On first start the setup wizard URL is printed
-too. Installing the forecast environment downloads tens of gigabytes; it is
-cached in the data directory and survives image rebuilds.
+Open the printed `?token=` URL.
+
+The first `up` on a new data directory sets the install up without the wizard:
+the assistant runs `ALMANAC_LLM_MODEL` on this machine, `/datasets` is the
+dataset root, and the workload environments (forecast ones included, since
+there is a GPU) and the model's weights are installed. That downloads tens of
+gigabytes and takes a while; it is cached in the data directory, survives
+image rebuilds, and resumes if interrupted. A data directory that is already
+set up is left as it is, so changes made in Settings stick.
+
+Every `up` then registers the datasets it hasn't seen yet (see below).
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ALMANAC_DATA_DIR` | `~/.local/share/ai-almanac-spark` | Database, jobs, environments, and download caches |
-| `ALMANAC_DATASETS_DIR` | `./datasets` if it exists, else `./testdata` | Host directory mounted read-only at `/datasets` |
+| `ALMANAC_DATASETS_DIR` | `./datasets` | Host directory mounted read-only at `/datasets` |
 | `ALMANAC_PORT` | `8765` | Loopback port |
+| `ALMANAC_LLM_MODEL` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` | The assistant model a fresh install runs |
 
 The data directory is a bind mount, so outputs and the database are ordinary
 files owned by you. Use a local disk: SQLite refuses a network filesystem.
@@ -64,8 +73,25 @@ be shared with a native install.
 ## Registering datasets
 
 Put each dataset in its own directory of yearly NetCDF files under the datasets
-directory, e.g. `india/obs/` and `india/models/graphcast/`, then register them
-all at once:
+directory, e.g. `india/obs/` and `india/models/graphcast/`. `scripts/spark.sh up`
+registers each new one it finds, under the name `deploy/spark-datasets.yaml`
+gives its path (and with the live forecast model the file links it to), or a
+name inferred from the path when the file doesn't list it. To ship a dataset
+to every machine under a chosen name, add it there:
+
+```yaml
+sources:
+  india/models/graphcast:
+    name: GraphCast
+    forecast_model_id: graphcast_operational
+```
+
+`up` creates an empty datasets directory if there isn't one, so data can be
+copied in later; the next `up` registers it. Copy into the directory rather
+than replacing it: a container keeps seeing the directory it started with, so
+after a replacement `up` recreates the container (a plain restart wouldn't).
+
+To preview or register without restarting:
 
 ```bash
 scripts/spark.sh discover              # list what it finds and how each would register

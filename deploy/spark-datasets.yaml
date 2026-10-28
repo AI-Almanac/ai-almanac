@@ -1,0 +1,32 @@
+# What `scripts/spark.sh up` registers the datasets under ./datasets as, by
+# path relative to it. Discovery infers everything else (kind, variable, file
+# pattern, years, region); this keeps the names, and the live forecast model
+# links discovery can't infer from a folder name, the same on every machine.
+# A directory not listed here registers under its inferred name.
+sources:
+  ethiopia/models/AIFS_ENS_v2:
+    name: AIFS-ENSv2
+    forecast_model_id: aifs2ens
+  ethiopia/models/AIFS_v2:
+    name: AIFSv2
+    forecast_model_id: aifs2
+  ethiopia/models/aurora1p5:
+    name: Aurora 1.5
+  ethiopia/models/graphcast:
+    name: GraphCast
+    forecast_model_id: graphcast_operational
+  ethiopia/obs:
+    name: "Chirps (IMERG)"
+  india/models/AIFS_ENS_v2:
+    name: AIFS-ENSv2
+    forecast_model_id: aifs2ens
+  india/models/AIFS_v2:
+    name: AIFSv2
+    forecast_model_id: aifs2
+  india/models/aurora1p5:
+    name: Aurora 1.5
+  india/models/graphcast:
+    name: GraphCast
+    forecast_model_id: graphcast_operational
+  india/obs:
+    name: IMD

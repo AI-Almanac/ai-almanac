@@ -249,3 +249,67 @@ def test_the_cli_registers_ready_sources_once(tmp_path: Path) -> None:
     assert second.exit_code == 0, second.output
     assert "already registered as 'Ethiopia obs'" in second.output
     assert "registered 0 source(s)" in second.output
+
+
+def test_the_cli_registers_sources_under_the_names_file(tmp_path: Path) -> None:
+    import asyncio
+
+    from ai_almanac.cli import app
+    from ai_almanac.server.services import data_sources
+
+    data = tmp_path / "datasets"
+    _copy_years(_TESTDATA / "obs", data / "ethiopia" / "obs", "data_{}.nc")
+    _copy_years(_TESTDATA / "fuxi", data / "ethiopia" / "models" / "fuxi")
+    names = tmp_path / "names.yaml"
+    names.write_text(
+        "sources:\n"
+        "  ethiopia/obs:\n"
+        "    name: Chirps (IMERG)\n"
+        "  ethiopia/models/fuxi:\n"
+        "    name: FuXi\n"
+        "    forecast_model_id: fuxi_live\n"
+        "  india/obs:\n"
+        "    name: IMD\n"
+    )
+
+    result = runner.invoke(
+        app, ["sources", "discover", str(data), "--register", "--names", str(names)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "named but not found: india/obs" in result.output
+    rows = {row["name"]: row for row in asyncio.run(data_sources.list_sources())}
+    assert set(rows) == {"Chirps (IMERG)", "FuXi"}
+    assert rows["FuXi"]["metadata"]["forecast_model_id"] == "fuxi_live"
+    assert rows["Chirps (IMERG)"]["region"] == "ethiopia"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "sources:\n  ethiopia/obs:\n    region: india\n",
+        "sources:\n  ethiopia/obs:\n    name: ''\n",
+        "sources:\n  ethiopia/obs: IMD\n",
+    ],
+)
+def test_a_names_file_entry_needs_a_name_and_nothing_else(tmp_path: Path, body: str) -> None:
+    from ai_almanac.cli import app
+
+    names = tmp_path / "names.yaml"
+    names.write_text(body)
+
+    result = runner.invoke(app, ["sources", "discover", str(tmp_path), "--names", str(names)])
+
+    assert result.exit_code == 1
+    assert "needs a name" in result.output
+
+
+def test_the_spark_names_file_names_every_dataset_once() -> None:
+    import yaml
+
+    from ai_almanac.cli import _load_source_names
+
+    path = Path(__file__).parents[1] / "deploy" / "spark-datasets.yaml"
+    names = _load_source_names(path)
+    assert names
+    assert yaml.safe_load(path.read_text())["sources"].keys() == names.keys()

@@ -59,7 +59,9 @@ services:
       - nvidia.com/gpu=all
     volumes:
       - ${ALMANAC_DATA_DIR:?set ALMANAC_DATA_DIR (scripts/spark.sh does)}:/data
-      - ${ALMANAC_DATASETS_DIR:-./testdata}:/datasets:ro
+      - ${ALMANAC_DATASETS_DIR:-./datasets}:/datasets:ro
+      # The names `scripts/spark.sh` registers those datasets under.
+      - ./deploy/spark-datasets.yaml:/etc/ai-almanac/spark-datasets.yaml:ro
     # PyTorch and vLLM workers exchange tensors through /dev/shm.
     shm_size: 16g
     ulimits:

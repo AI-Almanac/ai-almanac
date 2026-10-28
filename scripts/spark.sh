@@ -8,16 +8,14 @@ cd "$(dirname "$0")/.."
 
 : "${ALMANAC_DATA_DIR:=${XDG_DATA_HOME:-$HOME/.local/share}/ai-almanac-spark}"
 : "${ALMANAC_PORT:=8765}"
-# Your own data in ./datasets (git- and docker-ignored) when present, else the
-# bundled fixtures.
-if [ -z "${ALMANAC_DATASETS_DIR:-}" ]; then
-  if [ -d datasets ]; then
-    ALMANAC_DATASETS_DIR="$PWD/datasets"
-  else
-    ALMANAC_DATASETS_DIR="$PWD/testdata"
-  fi
-fi
+# The datasets live in ./datasets (git- and docker-ignored), registered under
+# the names in deploy/spark-datasets.yaml.
+: "${ALMANAC_DATASETS_DIR:=$PWD/datasets}"
+# What a fresh install's assistant runs; change it later in Settings.
+: "${ALMANAC_LLM_MODEL:=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4}"
 export ALMANAC_DATA_DIR ALMANAC_PORT ALMANAC_DATASETS_DIR
+# Where compose.spark.yaml mounts deploy/spark-datasets.yaml.
+dataset_names=/etc/ai-almanac/spark-datasets.yaml
 
 # Talk to this user's rootless daemon even when the CLI's current context is the
 # system one (which other services on the Spark may need it to be).
@@ -34,7 +32,9 @@ usage() {
   cat >&2 <<'EOF'
 usage: scripts/spark.sh <command>
 
-  up        build the image, start the container, print the URL to open
+  up        build the image, start the container, print the URL to open; on a
+            fresh data directory, also set up (local assistant model, workload
+            environments, model weights), then register any new datasets
   prepare   install the workload environments inside the container
   init ...  headless first-run setup (ai-almanac init --yes ...), then restart
   discover [--register]
@@ -49,8 +49,10 @@ Environment:
   ALMANAC_DATA_DIR      host directory for the database, jobs, environments, and
                         caches (default: ~/.local/share/ai-almanac-spark)
   ALMANAC_DATASETS_DIR  host directory mounted read-only at /datasets
-                        (default: ./datasets if it exists, else ./testdata)
+                        (default: ./datasets)
   ALMANAC_PORT          loopback port (default: 8765)
+  ALMANAC_LLM_MODEL     the local assistant model a fresh install runs
+                        (default: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4)
 EOF
   exit 2
 }
@@ -73,13 +75,32 @@ preflight() {
 }
 
 print_urls() {
+  # Only the latest start's lines: an earlier one's setup link has expired.
   lines=$($compose logs --no-log-prefix almanac 2>/dev/null \
-    | grep -E 'access token required|first-run setup' | tail -n 2)
+    | awk '/ serving at / { found = "" } /access token required|first-run setup/ { found = found $0 "\n" }
+           END { printf "%s", found }')
   if [ -z "$lines" ]; then
     printf 'no URL in the logs yet; try again in a moment or run: scripts/spark.sh logs\n' >&2
     return 1
   fi
   printf '%s\n' "$lines"
+}
+
+# Whether this data directory still needs its first-run setup.
+needs_setup() {
+  $compose exec -T almanac python -c '
+from ai_almanac.settings import reload_settings
+reload_settings()
+from ai_almanac.server.services.setup import setup_required
+raise SystemExit(0 if setup_required() else 1)'
+}
+
+# A bind mount holds on to the directory it was given, so after the datasets
+# directory is deleted and recreated (rather than copied into) the container
+# still sees the old, empty one until it is recreated.
+datasets_mount_is_stale() {
+  inside=$($compose exec -T almanac stat -c %i /datasets 2>/dev/null) || return 1
+  [ "$(stat -c %i "$ALMANAC_DATASETS_DIR")" != "$inside" ]
 }
 
 [ "$#" -ge 1 ] || usage
@@ -93,15 +114,32 @@ esac
 case "$cmd" in
   up)
     preflight
-    mkdir -p "$ALMANAC_DATA_DIR"
+    mkdir -p "$ALMANAC_DATA_DIR" "$ALMANAC_DATASETS_DIR"
     $compose up --build --detach --wait
+    if datasets_mount_is_stale; then
+      printf '\n%s was replaced since the container started; recreating it to see the new one\n' \
+        "$ALMANAC_DATASETS_DIR"
+      $compose up --detach --wait --force-recreate
+    fi
+    if needs_setup; then
+      printf '\nFirst start: setting up with %s (the downloads take a while)\n' "$ALMANAC_LLM_MODEL"
+      $compose exec -T almanac ai-almanac init --yes --if-needed --local-llm \
+        --llm-model "$ALMANAC_LLM_MODEL" --dataset-mount-roots /datasets
+      setup_ran=1
+    fi
+    # Sources are read per request, so registered ones appear without a restart.
+    printf '\nRegistering new datasets in %s\n' "$ALMANAC_DATASETS_DIR"
+    $compose exec -T almanac ai-almanac sources discover --register --names "$dataset_names"
+    if [ -n "${setup_ran:-}" ]; then
+      # The server reads settings at startup.
+      $compose restart almanac
+      $compose up --detach --wait
+    fi
     printf '\nAI Almanac is running (data: %s)\n' "$ALMANAC_DATA_DIR"
     print_urls
-    printf '\nInstall the workload environments with the setup wizard or: scripts/spark.sh prepare\n'
     ;;
   prepare) $compose exec almanac ai-almanac env prepare ;;
-  # Sources are read per request, so registered ones appear without a restart.
-  discover) $compose exec almanac ai-almanac sources discover "$@" ;;
+  discover) $compose exec almanac ai-almanac sources discover --names "$dataset_names" "$@" ;;
   init)
     # The server reads settings at startup, so restart it to pick up the result.
     $compose exec almanac ai-almanac init --yes --dataset-mount-roots /datasets "$@"
