@@ -146,7 +146,14 @@ def _ref_onset_for(ref_onset_month_day: str | None) -> dict | None:
 # Blend params that shape the intermediates. `mok_month_day` is the pre-rename
 # spelling of `ref_onset_month_day`; job configs written before the rename still
 # carry it, so both are read (the new name wins when both are present).
-_INTERMEDIATE_PREP_KEYS = ("threshold_mm", "cutoff_month_day", "ref_onset_month_day", "focus_area")
+_INTERMEDIATE_PREP_KEYS = (
+    "threshold_mm",
+    "cutoff_month_day",
+    "ref_onset_month_day",
+    "focus_area",
+    # The obs source's variable, set by the server (job_submission) from its metadata.
+    "obs_value_col",
+)
 
 
 def _intermediate_prep_kwargs(params: dict) -> dict:
@@ -1648,6 +1655,16 @@ def _process_obs_part(path: Path, context: dict) -> dict:
         var_name=context["obs_value_col"],
         dim_rename_map=obs_spec["dimensions"]["rename"],
     )
+    if df is None:
+        # onset_blending returns None, rather than raising, for a variable the file lacks.
+        import netCDF4
+
+        with netCDF4.Dataset(path) as ds:
+            found = ", ".join(ds.variables)
+        raise ValueError(
+            f"{path.name} has no {context['obs_value_col']!r} variable (it has: {found}); "
+            "check the observation source's variable name"
+        )
     df = _add_lat_lon_id(df, precision=context["id_precision"])
     df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
     return process_ground_truth_rainfall_id(

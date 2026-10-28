@@ -1038,6 +1038,10 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     blend_params = await _with_unit_outlines(
         body.params.model_dump(exclude_none=True), (await load_catalog()).region(region_id or "")
     )
+    # The workflow reads observations by variable name and would otherwise
+    # assume IMD's "RAINFALL"; Chirps, for one, calls it total_precipitation_24hr.
+    if obs_var := ((obs_source or {}).get("metadata") or {}).get("obs_var"):
+        blend_params["obs_value_col"] = obs_var
     config = {
         "job_type": "blend",
         "modal_app": settings.modal_blending_app_name,

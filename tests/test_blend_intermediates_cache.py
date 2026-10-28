@@ -138,3 +138,43 @@ def test_a_change_to_the_fixed_onset_rule_misses_the_cache(
     assert was_cached() is False
     monkeypatch.setattr(workflow, "ONSET_RULE", {**workflow.ONSET_RULE, "changed": True})
     assert was_cached() is False
+
+
+def test_the_obs_variable_reaches_the_intermediates_builder(workflow) -> None:
+    kwargs = workflow._intermediate_prep_kwargs(
+        {"obs_value_col": "total_precipitation_24hr", "training_years": "2008:2022"}
+    )
+    assert kwargs == {"obs_value_col": "total_precipitation_24hr"}
+
+
+def test_an_obs_file_without_the_variable_fails_naming_it(workflow, tmp_path: Path) -> None:
+    import sys
+
+    import netCDF4
+    import numpy as np
+
+    # onset_blending's reader returns None for a variable the file lacks.
+    package = tmp_path / "onset-blending" / "python" / "prepare_data"
+    package.mkdir(parents=True)
+    for init in (package.parent / "__init__.py", package / "__init__.py"):
+        init.touch()
+    (package / "nc_utils.py").write_text(
+        "def nc_read_groundtruth_long(**_kwargs):\n    return None\n"
+        "filter_by_dissemination_cells = process_ground_truth_rainfall_id = None\n"
+    )
+    path = tmp_path / "2008.nc"
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.createDimension("time", 2)
+        ds.createVariable("total_precipitation_24hr", "f4", ("time",))[:] = np.zeros(2)
+    context = {
+        "obs_spec": {"dimensions": {"rename": {}}},
+        "obs_value_col": "RAINFALL",
+        "id_precision": 2,
+    }
+
+    try:
+        with pytest.raises(ValueError, match=r"no 'RAINFALL' variable.*total_precipitation_24hr"):
+            workflow._process_obs_part(path, context)
+    finally:
+        for name in [m for m in sys.modules if m == "python" or m.startswith("python.")]:
+            del sys.modules[name]
