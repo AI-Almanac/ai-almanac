@@ -154,3 +154,22 @@ def test_draft_model_fields_show_only_while_speculative_decoding_is_on(
         assert fields[name]["shown_when"] == "llm_speculative_decoding"
     assert fields["llm_speculative_decoding"]["shown_when"] is None
     assert "z-lab/Qwen3.8-27B-DFlash2" in fields["llm_draft_model"]["suggestions"]
+
+
+def test_model_field_offers_the_local_catalog_while_the_server_is_managed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    model = _fields(get_schema(_admin=None))["llm_model"]
+
+    assert model["presets_when"] == {"field": "llm_engine", "equals": "managed"}
+    labels = {p["value"]: p["label"] for p in model["presets"]}
+    assert labels["nvidia/Qwen3.8-27B-NVFP4"] == "Qwen3.8 27B (NVFP4) + DFlash 2 · 25.7 GB"
+    assert labels["RedHatAI/Qwen3.6-35B-A3B-NVFP4"].endswith("· untested")
+
+
+def test_shared_mode_offers_no_local_model_presets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    model = _fields(get_schema(_admin=None)).get("llm_model")
+
+    assert model is None or model["presets"] is None

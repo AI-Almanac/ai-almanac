@@ -25,17 +25,30 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml pixi.lock README.md ./
-COPY src ./src
-COPY modal ./modal
-COPY --from=frontend /build/web/build ./web/build
 # prod (Cloud Run) carries the `cloud` extra; local (DGX Spark, see
 # compose.spark.yaml) is the same wheel without it.
 ARG PIXI_ENV=prod
+# Dependencies first, against a stub of the package, so this layer depends on
+# the manifest and lockfile alone and a code change doesn't reinstall them.
+# The cache mount keeps downloads (and the source-built wheel) for when it does
+# rerun.
+COPY pyproject.toml pixi.lock README.md LICENSE ./
+RUN mkdir -p src/ai_almanac web/build modal \
+    && touch src/ai_almanac/__init__.py modal/blending_app.py
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    pixi install --locked -e ${PIXI_ENV}
+# Then the real package over the stub, without touching its dependencies. uv
+# rather than a second `pixi install`, which doesn't rebuild a path dependency
+# whose source alone changed (pixi 0.82), so would keep the stub.
+COPY src ./src
+COPY modal ./modal
+COPY --from=frontend /build/web/build ./web/build
+RUN --mount=type=cache,target=/root/.cache,sharing=locked \
+    pixi exec --spec uv -- uv pip install --python .pixi/envs/${PIXI_ENV}/bin/python \
+        --no-deps --reinstall-package ai-almanac .
 # The final stage replays the env's activation scripts as static ENV, so any
 # command works without a shell wrapper (Cloud Run `command` replaces
 # ENTRYPOINT). Fail the build if a dependency adds a script the ENV misses.
-RUN pixi install --locked -e ${PIXI_ENV}
 RUN ls .pixi/envs/${PIXI_ENV}/etc/conda/activate.d/*.sh | xargs -n1 basename | sort | tr '\n' ' ' \
         | grep -qx 'gdal-activate.sh libxml2-split_activate.sh proj4-activate.sh ' \
     || { echo "Conda activation scripts changed; update the ENV block in the final stage." >&2; exit 1; }

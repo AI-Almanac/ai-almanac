@@ -266,6 +266,16 @@ _SHOWN_WHEN: dict[str, str] = {
 }
 
 
+class FieldOption(BaseModel):
+    value: str
+    label: str
+
+
+class FieldCondition(BaseModel):
+    field: str
+    equals: str
+
+
 class FieldSchema(BaseModel):
     name: str
     label: str
@@ -282,6 +292,10 @@ class FieldSchema(BaseModel):
     suggestions: list[str] | None = None
     # A bool field that must be on for this one to be shown.
     shown_when: str | None = None
+    # Labelled values the UI offers in a select, beside a custom-value input,
+    # while `presets_when` holds (always, when it is unset).
+    presets: list[FieldOption] | None = None
+    presets_when: FieldCondition | None = None
 
 
 class SettingsSchema(BaseModel):
@@ -315,10 +329,23 @@ def _choices(annotation) -> list[str] | None:
     return None
 
 
-def _suggestions(field_name: str) -> list[str] | None:
+def _preset_label(model: dict) -> str:
+    label = f"{model['label']} · {model['weights_gb']:g} GB"
+    return label if model.get("verified") else f"{label} · untested"
+
+
+def _presets(field_name: str) -> tuple[list[FieldOption], FieldCondition] | None:
     if field_name == "llm_model":
-        # The models the managed local server has serve flags for.
-        return [m["id"] for m in get_local_llm_models()]
+        # The models the managed local server has serve flags for; other
+        # engines serve whatever they serve, so only the custom input applies.
+        options = [
+            FieldOption(value=m["id"], label=_preset_label(m)) for m in get_local_llm_models()
+        ]
+        return options, FieldCondition(field="llm_engine", equals="managed")
+    return None
+
+
+def _suggestions(field_name: str) -> list[str] | None:
     if field_name == "llm_draft_model":
         # The drafts the catalog pairs with its models.
         drafts = [(m.get("speculative_config") or {}).get("model") for m in get_local_llm_models()]
@@ -362,6 +389,7 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
             if shared and field_name in LOCAL_ONLY_FIELDS:
                 continue
             info = model_fields[field_name]
+            presets = None if shared else _presets(field_name)
             rendered.append(
                 FieldSchema(
                     name=field_name,
@@ -376,6 +404,8 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     choices=_choices(info.annotation),
                     suggestions=None if shared else _suggestions(field_name),
                     shown_when=_SHOWN_WHEN.get(field_name),
+                    presets=presets[0] if presets else None,
+                    presets_when=presets[1] if presets else None,
                 )
             )
         if rendered:

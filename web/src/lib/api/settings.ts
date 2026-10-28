@@ -17,6 +17,10 @@ export interface SettingsField {
 	suggestions?: string[] | null;
 	/** A bool field that must be on (in the form, saved or not) for this one to show. */
 	shown_when?: string | null;
+	/** Labelled values offered in a select, beside a custom-value input. */
+	presets?: { value: string; label: string }[] | null;
+	/** Offer the presets only while this field (as edited) has this value. */
+	presets_when?: { field: string; equals: string } | null;
 }
 
 export interface SettingsGroup {

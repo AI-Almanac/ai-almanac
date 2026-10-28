@@ -1,5 +1,6 @@
 <script lang="ts">
-	import type { SettingsGroup } from '$lib/api';
+	import { SvelteSet } from 'svelte/reactivity';
+	import type { SettingsField, SettingsGroup } from '$lib/api';
 	import { inputType, type ConfigSettingsState } from '$lib/settings/config.svelte';
 
 	interface Props {
@@ -15,6 +16,33 @@
 		group.fields.filter((field) => !field.shown_when || Boolean(settings.value(field.shown_when)))
 	);
 	const saving = $derived(settings.savingGroup === group.name);
+
+	const CUSTOM = '__custom__';
+	// Fields whose preset select the user switched to "Custom…": the value may
+	// still equal a preset while they edit it, so it can't be derived.
+	const customizing = new SvelteSet<string>();
+
+	function presetsFor(field: SettingsField) {
+		const when = field.presets_when;
+		if (!field.presets?.length) return null;
+		if (when && String(settings.value(when.field) ?? '') !== when.equals) return null;
+		return field.presets;
+	}
+
+	function presetChoice(field: SettingsField, presets: { value: string }[]): string {
+		const current = String(settings.value(field.name) ?? '');
+		if (customizing.has(field.name) || !presets.some((p) => p.value === current)) return CUSTOM;
+		return current;
+	}
+
+	function choosePreset(field: SettingsField, choice: string) {
+		if (choice === CUSTOM) {
+			customizing.add(field.name);
+			return;
+		}
+		customizing.delete(field.name);
+		settings.setValue(field, choice);
+	}
 </script>
 
 <div class="group">
@@ -84,25 +112,44 @@
 								oninput={(e) => settings.setValue(field, e.currentTarget.value)}></textarea>
 						</details>
 					{:else}
-						<input
-							id={`f-${field.name}`}
-							type={inputType(field)}
-							list={field.suggestions?.length ? `s-${field.name}` : undefined}
-							value={String(settings.value(field.name) ?? '')}
-							disabled={!field.editable}
-							oninput={(e) => settings.setValue(field, e.currentTarget.value)}
-							placeholder={field.sensitive
-								? settings.configured[field.name]
-									? 'Enter a new key to replace'
-									: 'Not set — enter a key'
-								: String(field.default ?? '')}
-						/>
-						{#if field.suggestions?.length}
-							<datalist id={`s-${field.name}`}>
-								{#each field.suggestions as suggestion (suggestion)}
-									<option value={suggestion}></option>
+						{@const presets = presetsFor(field)}
+						{@const choice = presets ? presetChoice(field, presets) : CUSTOM}
+						{#if presets}
+							<select
+								id={`f-${field.name}`}
+								aria-label={field.label}
+								value={choice}
+								disabled={!field.editable}
+								onchange={(e) => choosePreset(field, e.currentTarget.value)}
+							>
+								{#each presets as preset (preset.value)}
+									<option value={preset.value}>{preset.label}</option>
 								{/each}
-							</datalist>
+								<option value={CUSTOM}>Custom…</option>
+							</select>
+						{/if}
+						{#if choice === CUSTOM}
+							<input
+								id={presets ? `f-${field.name}-custom` : `f-${field.name}`}
+								aria-label={presets ? `${field.label} (custom)` : undefined}
+								type={inputType(field)}
+								list={field.suggestions?.length ? `s-${field.name}` : undefined}
+								value={String(settings.value(field.name) ?? '')}
+								disabled={!field.editable}
+								oninput={(e) => settings.setValue(field, e.currentTarget.value)}
+								placeholder={field.sensitive
+									? settings.configured[field.name]
+										? 'Enter a new key to replace'
+										: 'Not set — enter a key'
+									: String(field.default ?? '')}
+							/>
+							{#if field.suggestions?.length}
+								<datalist id={`s-${field.name}`}>
+									{#each field.suggestions as suggestion (suggestion)}
+										<option value={suggestion}></option>
+									{/each}
+								</datalist>
+							{/if}
 						{/if}
 						{#if field.sensitive && field.editable && settings.configured[field.name]}
 							<button
