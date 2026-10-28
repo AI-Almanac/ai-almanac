@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import importlib.util
 import io
 import json
@@ -10,6 +11,7 @@ import os
 import shutil
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -56,23 +58,65 @@ def _workflow_path() -> Path:
     raise FileNotFoundError("The bundled blending workflow could not be found")
 
 
-def _load_workflow() -> ModuleType:
+WORKFLOW_MODULE = "ai_almanac_blending_workflow"
+
+# Stands on sys.path under the workflow's module name, so the workers its
+# process pools spawn can re-import it by name, as they do on Modal.
+_WORKFLOW_LOADER = '''"""The blending workflow under this module's name; see blend_entrypoint._load_workflow."""
+import importlib.util as _util
+import sys as _sys
+
+_spec = _util.spec_from_file_location("_ai_almanac_blend_entrypoint", {entrypoint!r})
+_entry = _util.module_from_spec(_spec)
+_spec.loader.exec_module(_entry)
+_entry._exec_workflow(_sys.modules[__name__])
+'''
+_loader_dir: Path | None = None
+
+
+def _exec_workflow(module: ModuleType) -> None:
+    """Run the workflow's source in `module`, with the local stand-in for modal."""
+    path = _workflow_path()
     previous_modal = sys.modules.get("modal")
     sys.modules["modal"] = _local_modal_module()
     try:
-        spec = importlib.util.spec_from_file_location(
-            "ai_almanac_blending_workflow", _workflow_path()
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError("Unable to load the blending workflow")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        module.__file__ = str(path)
+        exec(compile(path.read_text(), str(path), "exec"), module.__dict__)
     finally:
         if previous_modal is None:
             sys.modules.pop("modal", None)
         else:
             sys.modules["modal"] = previous_modal
+
+
+def _workflow_loader_dir() -> Path:
+    """A directory holding just the workflow's loader, on sys.path (which spawned
+    workers inherit); created once per process."""
+    global _loader_dir
+    if _loader_dir is None:
+        _loader_dir = Path(tempfile.mkdtemp(prefix="blend-workflow-"))
+        loader = _WORKFLOW_LOADER.format(entrypoint=str(Path(__file__).resolve()))
+        (_loader_dir / f"{WORKFLOW_MODULE}.py").write_text(loader)
+        atexit.register(shutil.rmtree, _loader_dir, ignore_errors=True)
+        sys.path.append(str(_loader_dir))
+    return _loader_dir
+
+
+def _load_workflow() -> ModuleType:
+    """A fresh copy of the workflow module, importable by name.
+
+    Its process pools spawn workers that re-import the module by name: the
+    loader on sys.path lets them, where a module loaded only from a path would
+    leave them unable to (and the pools to run serially).
+    """
+    loader = _workflow_loader_dir() / f"{WORKFLOW_MODULE}.py"
+    spec = importlib.util.spec_from_file_location(WORKFLOW_MODULE, loader)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load the blending workflow")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[WORKFLOW_MODULE] = module
+    _exec_workflow(module)
+    return module
 
 
 def _netcdf_files(directory: str) -> list[Path]:
@@ -96,9 +140,17 @@ def _forecast_files(config: dict, model_name: str) -> list[Path]:
     return files
 
 
-def _staged_dir(workflow: ModuleType, files: list[Path]) -> Path:
-    """The files copied into a fresh directory of their own, as the builder reads them."""
-    return workflow._extract_bundle(workflow._bundle_files(files))
+def _staged_dir(files: list[Path]) -> Path:
+    """The files linked into a fresh directory of their own, as the builder reads them.
+
+    Links, not copies: the builder only reads its inputs and writes elsewhere,
+    and copying (as a gzipped tar held in memory) cost minutes and tens of GB
+    on large archives.
+    """
+    stage = Path(tempfile.mkdtemp(prefix="blend-input-"))
+    for path in files:
+        (stage / path.name).symlink_to(path.resolve())
+    return stage
 
 
 def _extract_tar(data: bytes, output_dir: Path) -> None:
@@ -125,8 +177,8 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
 
     print("==> Building blending intermediates", flush=True)
     intermediates = workflow.build_blend_intermediates(
-        _staged_dir(workflow, _netcdf_files(config["obs_dir"])),
-        {name: _staged_dir(workflow, _forecast_files(config, name)) for name in model_names},
+        _staged_dir(_netcdf_files(config["obs_dir"])),
+        {name: _staged_dir(_forecast_files(config, name)) for name in model_names},
         params,
         region_id=config.get("region_id"),
         cache_dir=config.get("cache_dir"),
@@ -137,7 +189,12 @@ def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
     # is the biggest object the run handles.
     combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
 
-    train_kwargs = {"cores": os.cpu_count() or 1}
+    # The same memory share the intermediates had: each CV fold worker holds
+    # its own copies of the weekly table.
+    train_kwargs = {
+        "cores": os.cpu_count() or 1,
+        "memory_budget_bytes": workflow.LOCAL_INTERMEDIATE_RESOURCES.file_memory_budget_bytes,
+    }
     if params.get("formula_text"):
         train_kwargs["formula_text"] = params["formula_text"]
     years = {

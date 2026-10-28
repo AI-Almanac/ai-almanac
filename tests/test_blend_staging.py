@@ -488,3 +488,106 @@ def test_memory_notes_report_only_the_figures_the_kernel_gives(
     app = _load_blending_app()
 
     assert app._format_memory_note(status, max_rss_kib) == note
+
+
+def test_lat_lon_ids_match_formatting_every_row() -> None:
+    import numpy as np
+    import pandas as pd
+
+    app = _load_blending_app()
+    lat = np.array([6.5, 6.75, 0.0, -0.0, np.nan, 1.005], dtype=np.float32)
+    lon = np.array([70.0, 70.25, -0.0, 0.0, 2.0, np.nan])
+    df = pd.DataFrame({"lat": np.tile(lat, 50), "lon": np.tile(lon, 50), "x": 1.0})
+    df.index = df.index * 3  # not a default index
+
+    for precision in (2, 3):
+        expected = df.assign(
+            id=[
+                f"{float(a):.{precision}f}_{float(b):.{precision}f}"
+                for a, b in zip(df["lat"], df["lon"], strict=True)
+            ]
+        )
+        pd.testing.assert_frame_equal(app._add_lat_lon_id(df, precision), expected)
+    # -0.0 and 0.0 format differently, so they stay distinct.
+    assert set(app._add_lat_lon_id(df, 2)["id"].head(4)) == {
+        "6.50_70.00",
+        "6.75_70.25",
+        "0.00_-0.00",
+        "-0.00_0.00",
+    }
+
+
+def test_scaled_rainfall_stays_one_block_with_unchanged_values() -> None:
+    import numpy as np
+    import pandas as pd
+
+    app = _load_blending_app()
+    rain = pd.DataFrame(
+        np.random.default_rng(0).random((20, 45), dtype=np.float32),
+        columns=[f"rain_day_{day}" for day in range(1, 46)],
+    )
+    df = pd.concat([pd.DataFrame({"id": ["a"] * 20, "time": 1.0}), rain], axis=1).assign(year=2000)
+    per_column = df.assign(**{col: df[col] * 1000.0 for col in rain.columns})
+
+    scaled = app._in_millimetres(df, 1000.0)
+
+    pd.testing.assert_frame_equal(scaled, per_column, check_exact=True)
+    assert scaled._mgr.nblocks < 10  # per-column assignment left one block per day
+    assert app._in_millimetres(df, 1.0) is df
+
+
+def test_a_grid_already_on_lat_lon_is_linked_not_rewritten(tmp_path: Path) -> None:
+    import numpy as np
+    import xarray as xr
+
+    app = _load_blending_app()
+    on_lat_lon = tmp_path / "lat_lon.nc"
+    xr.Dataset(
+        {"tp": (("lat", "lon"), np.ones((2, 2)))}, coords={"lat": [1.0, 2.0], "lon": [3.0, 4.0]}
+    ).to_netcdf(on_lat_lon)
+    named_out = tmp_path / "latitude.nc"
+    xr.Dataset(
+        {"tp": (("latitude", "longitude"), np.ones((2, 2)))},
+        coords={"latitude": [1.0, 2.0], "longitude": [3.0, 4.0]},
+    ).to_netcdf(named_out)
+
+    linked = app._normalize_grid_dims(on_lat_lon, tmp_path / "a.nc")
+    renamed = app._normalize_grid_dims(named_out, tmp_path / "b.nc")
+
+    assert linked.is_symlink() and linked.resolve() == on_lat_lon.resolve()
+    assert not renamed.is_symlink()
+    with xr.open_dataset(renamed) as ds:
+        assert set(ds.dims) == {"lat", "lon"}
+
+
+def test_the_local_runner_loads_a_fresh_workflow_its_workers_can_import() -> None:
+    import importlib.util
+    import sys
+
+    from ai_almanac.envs.blend_entrypoint import WORKFLOW_MODULE, _load_workflow
+
+    first, second = _load_workflow(), _load_workflow()
+
+    assert first is not second
+    assert first.__name__ == WORKFLOW_MODULE
+    # Spawned workers re-import by name: from sys.path, not just sys.modules.
+    loader_dir = Path(importlib.util.find_spec(WORKFLOW_MODULE).origin).parent
+    assert str(loader_dir) in sys.path
+    assert [path.name for path in loader_dir.iterdir()] == [f"{WORKFLOW_MODULE}.py"]
+    assert Path(first.__file__).name == "blending_app.py"
+
+
+def test_combine_workers_fit_the_largest_partition_in_the_budget(tmp_path: Path) -> None:
+    app = _load_blending_app()
+
+    def task(name: str, size: int) -> dict:
+        path = tmp_path / name
+        path.write_bytes(b"x" * size)
+        return {"clim_path": path, "clim_unc_path": path, "model_part_paths": {"m": [path]}}
+
+    tasks = [task("small", 100), task("large", 1000)]
+    per_partition = 3 * 1000 * app.COMBINE_BYTES_PER_INPUT_BYTE
+
+    assert app._combine_workers(tasks, 8, None) == 2  # no budget: one per partition
+    assert app._combine_workers(tasks, 8, per_partition * 3) == 3
+    assert app._combine_workers(tasks, 8, per_partition // 2) == 1

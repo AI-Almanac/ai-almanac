@@ -119,13 +119,47 @@ class IntermediateResources(NamedTuple):
 
 # Training and live scoring both build intermediates in containers sized by RUN_BLEND_*.
 MODAL_INTERMEDIATE_RESOURCES = IntermediateResources(RUN_BLEND_CPU, RUN_BLEND_WORKER_BUDGET_BYTES)
-# The local runners load this module under a synthetic name, which worker
-# processes cannot re-import (see _map_parts), so they build serially.
-LOCAL_INTERMEDIATE_RESOURCES = IntermediateResources(1, None)
+
+
+def _local_intermediate_resources() -> IntermediateResources:
+    """Every core, sharing half of the memory available as the run starts.
+
+    The local runners load this module under a name its spawned workers can
+    re-import (blend_entrypoint._load_workflow). The memory share is what
+    keeps an ensemble archive's files from running all at once (_part_workers):
+    on a Spark the local model may be holding much of the rest.
+    """
+    available = None
+    try:
+        with open("/proc/meminfo") as meminfo:
+            for line in meminfo:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+    except OSError:
+        pass
+    if available is None:
+        try:
+            available = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        except (ValueError, OSError):
+            available = None
+    workers = os.cpu_count() or 1
+    if available is None:
+        return IntermediateResources(1, None)
+    return IntermediateResources(workers, available // 2)
+
+
+LOCAL_INTERMEDIATE_RESOURCES = _local_intermediate_resources()
 # Peak memory per forecast value while one file is processed: the reader
 # expands every value into a wide frame before onset processing. Measured at
-# 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files.
+# 16.5-17.2 on India 0.25° AIFS v2, GraphCast, and AIFS ENS files. Where
+# onset_blending reads only the cells that reach the combine, it applies to
+# those cells' values (_forecast_part_bytes): 17.2 again with every India
+# cell kept, 2.8 per file value with the 27% that are.
 PART_BYTES_PER_VALUE = 18
+# A forecast part's cost beyond its values (per-row columns, the reader's
+# working tiles); measured up to 0.41 GB on a deterministic India file.
+PART_FIXED_BYTES = 512 * 2**20
 # Forecast archives are one object per year; downloads are I/O-bound.
 STAGE_DOWNLOAD_WORKERS = 8
 # NetCDF and pickles barely shrink past level 1, and level 9 is several times slower.
@@ -748,6 +782,40 @@ def _forecast_value_count(path: Path, var_name: str) -> int:
         return math.prod(ds.variables[var_name].shape) if var_name in ds.variables else 0
 
 
+def _kept_point_fraction(path: Path, context: dict) -> float:
+    """The share of the file's grid that _read_kept_forecast_points builds rows
+    for: the blendable cells (the area of interest only narrows it further).
+    1.0 where onset_blending reads every row."""
+    from python.prepare_data import nc_utils
+
+    blendable = context.get("blendable_ids")
+    if blendable is None or not hasattr(nc_utils, "read_forecast_points"):
+        return 1.0
+    spec = context["forecast_spec"]
+    points = nc_utils.forecast_points(
+        str(path), context["forecast_value_col"], spec["dimensions"]["rename"], day_dim="day"
+    )
+    if points is None or points.empty:
+        return 1.0
+    points = _add_lat_lon_id(points, precision=context["id_precision"])
+    return float(points["id"].isin(blendable).mean())
+
+
+def _forecast_part_bytes(path: Path, context: dict) -> int:
+    """Peak memory to process one forecast file."""
+    values = _forecast_value_count(path, context["forecast_value_col"])
+    kept = _kept_point_fraction(path, context)
+    return int(values * kept * PART_BYTES_PER_VALUE) + PART_FIXED_BYTES
+
+
+def _workers_for_bytes(part_bytes: list[int], workers: int, memory_budget_bytes: int | None) -> int:
+    """How many parts to process at once so their combined peak fits the budget,
+    sized by the largest."""
+    if memory_budget_bytes is None or not part_bytes:
+        return workers
+    return max(1, min(int(workers), memory_budget_bytes // max(max(part_bytes), 1)))
+
+
 def _part_workers(value_counts: list[int], workers: int, memory_budget_bytes: int | None) -> int:
     """How many files to process at once so their combined peak fits the budget.
 
@@ -1038,8 +1106,11 @@ def _normalize_grid_dims(src: Path, dst: Path) -> Path:
                 rename[name] = "lat"
             elif lower in {"longitude", "lon"} and name != "lon":
                 rename[name] = "lon"
-        normalized = ds.rename(rename) if rename else ds
-        normalized.to_netcdf(dst)
+        if not rename:
+            # Already lat/lon: link rather than decode and rewrite the whole file.
+            dst.symlink_to(src.resolve())
+            return dst
+        ds.rename(rename).to_netcdf(dst)
     return dst
 
 
@@ -1051,13 +1122,53 @@ def _has_adm3_dimension(path: Path) -> bool:
     return bool(names & {"adm3", "adm3_name"})
 
 
-def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None) -> Path:
-    """Write ADM3-aggregated copies of input_dir's NetCDFs to a new directory."""
+def _largest_value_count(path: Path) -> int:
+    """Values in the file's largest gridded variable, read from the NetCDF header only."""
+    import math
+
+    import netCDF4
+
+    with netCDF4.Dataset(path) as ds:
+        return max(
+            (math.prod(var.shape) for var in ds.variables.values() if len(var.dimensions) >= 2),
+            default=0,
+        )
+
+
+def _remap_file_to_adm3(src: Path, context: dict) -> Path:
+    """One file's ADM3 remap into context["out_dir"]; a _map_parts task."""
     import sys
 
     sys.path.insert(0, str(BLENDING_ROOT))
     from utils.remap_nc import batch_aggregate_to_adm3_matrix
 
+    remap_dir = Path(context["remap_dir"])
+    target = Path(context["out_dir"]) / src.name
+    normalized = _normalize_grid_dims(src, remap_dir / src.name)
+    batch_aggregate_to_adm3_matrix(
+        str(remap_dir),
+        str(context["mapping_path"]),
+        input_file=str(normalized),
+    )
+    remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
+    if not remapped.is_file():
+        raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
+    shutil.move(str(remapped), target)
+    return target
+
+
+def _remap_dir_to_adm3(
+    input_dir: Path,
+    label: str,
+    cache_dir: str | None = None,
+    workers: int = 1,
+    memory_budget_bytes: int | None = None,
+) -> Path:
+    """Write ADM3-aggregated copies of input_dir's NetCDFs to a new directory.
+
+    Files are remapped across up to `workers` processes, as many at once as
+    the memory budget allows (_part_workers).
+    """
     mapping_path, _ = _adm3_support_paths()
     remap_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-input-"))
     out_dir = Path(tempfile.mkdtemp(prefix=f"{label}-adm3-output-"))
@@ -1073,6 +1184,8 @@ def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None
         stored = _cached_digests(cache_dir, "adm3_nc")
         file_hashes = dict(zip(to_remap, _file_sha256s(to_remap), strict=True))
 
+    pending: list[Path] = []
+    uploads: dict[Path, object] = {}
     for src in sources:
         target = out_dir / src.name
 
@@ -1092,22 +1205,23 @@ def _remap_dir_to_adm3(input_dir: Path, label: str, cache_dir: str | None = None
 
         if file_hash in stored:
             cache_blob.download_to_filename(str(target))
+            output_paths.append(target)
         else:
-            normalized = _normalize_grid_dims(src, remap_dir / src.name)
-            batch_aggregate_to_adm3_matrix(
-                str(remap_dir),
-                str(mapping_path),
-                input_file=str(normalized),
-            )
-            remapped = normalized.with_name(f"{normalized.stem}_adm3{normalized.suffix}")
-            if not remapped.is_file():
-                raise FileNotFoundError(f"ADM3 remap did not produce {remapped}")
-            shutil.move(str(remapped), target)
+            pending.append(src)
             if cache_blob is not None:
-                cache_blob.upload_from_string(
-                    target.read_bytes(), content_type="application/octet-stream"
-                )
+                uploads[src] = cache_blob
 
+    remap_workers = _part_workers(
+        [_largest_value_count(src) for src in pending], workers, memory_budget_bytes
+    )
+    context = {"remap_dir": remap_dir, "out_dir": out_dir, "mapping_path": mapping_path}
+    for src, target in zip(
+        pending, _map_parts(_remap_file_to_adm3, pending, context, remap_workers), strict=True
+    ):
+        if src in uploads:
+            uploads[src].upload_from_string(
+                target.read_bytes(), content_type="application/octet-stream"
+            )
         output_paths.append(target)
 
     if not output_paths:
@@ -1236,16 +1350,43 @@ def _with_area_centroids(path: Path) -> bytes:
 
 
 def _add_lat_lon_id(df, precision: int):
+    """`df` with an `id` of "<lat>_<lon>" at `precision` decimals.
+
+    Each distinct (lat, lon) pair is formatted once: a grid has thousands of
+    cells, while its rows run to tens of millions (cells x days, or x issue
+    dates x members), and one Python string per row cost GBs.
+    """
+    import numpy as np
+    import pandas as pd
+
     if "id" in df.columns:
         return df
     if "lat" not in df.columns or "lon" not in df.columns:
         raise ValueError("Cannot create id: expected lat and lon columns")
-    df = df.copy()
-    df["id"] = [
-        f"{float(lat):.{precision}f}_{float(lon):.{precision}f}"
-        for lat, lon in zip(df["lat"], df["lon"], strict=True)
-    ]
-    return df
+    if not (pd.api.types.is_numeric_dtype(df["lat"]) and pd.api.types.is_numeric_dtype(df["lon"])):
+        ids = [
+            f"{float(lat):.{precision}f}_{float(lon):.{precision}f}"
+            for lat, lon in zip(df["lat"], df["lon"], strict=True)
+        ]
+        return df.assign(id=ids)
+    # By exact bit pattern, so -0.0 and 0.0 (which format differently) stay apart.
+    lat = df["lat"].to_numpy(dtype=np.float64)
+    lon = df["lon"].to_numpy(dtype=np.float64)
+    lat_codes, lat_bits = pd.factorize(lat.view(np.int64))
+    lon_codes, lon_bits = pd.factorize(lon.view(np.int64))
+    pair_codes, pairs = pd.factorize(lat_codes * len(lon_bits) + lon_codes)
+    lats = lat_bits.view(np.float64)
+    lons = lon_bits.view(np.float64)
+    labels = np.array(
+        [
+            f"{float(lats[pair // len(lons)]):.{precision}f}_"
+            f"{float(lons[pair % len(lons)]):.{precision}f}"
+            for pair in pairs
+        ],
+        dtype=object,
+    )
+    # A list of strings becomes the default string dtype; so does this.
+    return df.assign(id=pd.Series(labels[pair_codes], index=df.index).astype(str))
 
 
 def _parse_years(value: str) -> list[int] | None:
@@ -1685,10 +1826,22 @@ def _process_obs_wide(path: Path, context: dict):
 
 def _in_millimetres(df, unit_cvt: float):
     """Scale the lead-day rainfall columns by the source's unit conversion (e.g. m -> mm)."""
+    import pandas as pd
+
     if unit_cvt == 1.0:
         return df
     rain_cols = [col for col in df.columns if col.startswith("rain_day_")]
-    return df.assign(**{col: df[col] * unit_cvt for col in rain_cols})
+    columns = list(df.columns)
+    first = columns.index(rain_cols[0]) if rain_cols else 0
+    if not rain_cols or columns[first : first + len(rain_cols)] != rain_cols:
+        return df.assign(**{col: df[col] * unit_cvt for col in rain_cols})
+    # The reader writes the lead days side by side; scaled as one block they
+    # stay one block (per-column assignment leaves one block per day, which
+    # slows every later operation on the frame).
+    scaled = pd.DataFrame(
+        df[rain_cols].to_numpy() * unit_cvt, columns=rain_cols, index=df.index, copy=False
+    )
+    return pd.concat([df.iloc[:, :first], scaled, df.iloc[:, first + len(rain_cols) :]], axis=1)
 
 
 def _forecast_spec_for(base_spec: dict, forecast_dims: dict | None) -> dict:
@@ -1804,6 +1957,43 @@ def _write_year_slices(table, out_dir: Path, name: str, partitions: list[list[in
         table[table["year"].isin(years)].to_pickle(path)
         paths.append(path)
     return paths
+
+
+# Peak memory of one partition's combine relative to the bytes of its input
+# pickles (climatology slices and forecast parts): the joins hold several
+# widened copies. Measured at up to 2.5x (Ethiopia) and 2.9x (India, AIFS v2 +
+# AIFS ENS v2); rounded up.
+COMBINE_BYTES_PER_INPUT_BYTE = 4
+
+
+def _combine_workers(tasks: list[dict], workers: int, memory_budget_bytes: int | None) -> int:
+    """How many partitions to combine at once so their combined peak fits the budget."""
+    if memory_budget_bytes is None or not tasks:
+        return min(int(workers), max(len(tasks), 1))
+
+    def input_bytes(task):
+        paths = [task["clim_path"], task["clim_unc_path"]]
+        paths += [path for model_paths in task["model_part_paths"].values() for path in model_paths]
+        return sum(Path(path).stat().st_size for path in paths)
+
+    per_partition = max(input_bytes(task) for task in tasks) * COMBINE_BYTES_PER_INPUT_BYTE
+    return max(1, min(int(workers), memory_budget_bytes // max(per_partition, 1)))
+
+
+def _combine_partition_to_file(task: dict, context: dict) -> Path:
+    """_combine_partition for one partition, pickled to task["out_path"]; a _map_parts task."""
+    part = _combine_partition(
+        task["years"],
+        task["clim_path"],
+        task["clim_unc_path"],
+        task["model_part_paths"],
+        context["family_confs"],
+        context["truth"],
+        context["join_how"],
+        context["trim_forecasts_after_true_onset"],
+    )
+    part.to_pickle(task["out_path"])
+    return task["out_path"]
 
 
 def _combine_partition(
@@ -1980,6 +2170,55 @@ def _has_spread(df) -> bool:
     return False
 
 
+def _read_kept_forecast_points(path: Path, context: dict):
+    """The forecast's rows for just the cells that reach the combine, and whether
+    it has member spread in the area of interest: (frame, has_spread), what
+    reading every row and then filtering gives, without building rows for the
+    rest of the grid (most of a country's box is often sea or a neighbour).
+
+    None when onset_blending can't read point-wise (an older checkout, or a
+    layout it doesn't handle) or when two cells in the area share an id, which
+    the spread check groups by; the caller then reads every row.
+    """
+    import numpy as np
+    from python.prepare_data import nc_utils
+
+    if not hasattr(nc_utils, "read_forecast_points"):
+        return None
+    forecast_spec = context["forecast_spec"]
+    var_name = context["forecast_value_col"]
+    rename = forecast_spec["dimensions"]["rename"]
+    points = nc_utils.forecast_points(str(path), var_name, rename, day_dim="day")
+    if points is None:
+        return None
+    points = _add_lat_lon_id(points, precision=context["id_precision"])
+    # The area of interest point by point, as _apply_focus_area decides it row by row.
+    marked = points.assign(_point=np.arange(len(points)))
+    inside = _apply_focus_area(
+        marked, context["domain_filter"], nc_utils.filter_by_dissemination_cells
+    )
+    in_area = np.zeros(len(points), dtype=bool)
+    in_area[inside["_point"].to_numpy()] = True
+    if points["id"][in_area].duplicated().any():
+        return None
+    keep = in_area.copy()
+    blendable = context.get("blendable_ids")
+    if blendable is not None:
+        keep &= points["id"].isin(blendable).to_numpy()
+    df, has_spread = nc_utils.read_forecast_points(
+        str(path),
+        var_name,
+        rename,
+        forecast_spec,
+        keep,
+        spread_over=in_area,
+        scale=context.get("unit_cvt", 1.0),
+        day_dim="day",
+        prefix="rain",
+    )
+    return _add_lat_lon_id(df, precision=context["id_precision"]), has_spread
+
+
 def _process_forecast_part(path: Path, context: dict) -> dict:
     """Onset processing of one forecast file: its wide frame and ensemble member counts."""
     import sys
@@ -1992,21 +2231,25 @@ def _process_forecast_part(path: Path, context: dict) -> dict:
     )
 
     forecast_spec = context["forecast_spec"]
-    df = nc_read_forecast_wide(
-        nc_path=str(path),
-        var_name=context["forecast_value_col"],
-        dim_rename_map=forecast_spec["dimensions"]["rename"],
-        spec=forecast_spec,
-        day_dim="day",
-        prefix="rain",
-    )
-    df = _in_millimetres(df, context.get("unit_cvt", 1.0))
-    df = _add_lat_lon_id(df, precision=context["id_precision"])
-    df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
-    # Before the trim: whether a model gets rain_sd columns depends on spread
-    # anywhere in the focus area, not just in the cells that reach the combine.
-    has_spread = _has_spread(df)
-    df = _only_cells(df, context.get("blendable_ids"))
+    kept = _read_kept_forecast_points(path, context)
+    if kept is not None:
+        df, has_spread = kept
+    else:
+        df = nc_read_forecast_wide(
+            nc_path=str(path),
+            var_name=context["forecast_value_col"],
+            dim_rename_map=forecast_spec["dimensions"]["rename"],
+            spec=forecast_spec,
+            day_dim="day",
+            prefix="rain",
+        )
+        df = _in_millimetres(df, context.get("unit_cvt", 1.0))
+        df = _add_lat_lon_id(df, precision=context["id_precision"])
+        df = _apply_focus_area(df, context["domain_filter"], filter_by_dissemination_cells)
+        # Before the trim: whether a model gets rain_sd columns depends on spread
+        # anywhere in the focus area, not just in the cells that reach the combine.
+        has_spread = _has_spread(df)
+        df = _only_cells(df, context.get("blendable_ids"))
     member_counts = df.groupby(["id", "time"]).size().tolist() if "number" in df.columns else []
     processed = process_rainfall_forecast_id(
         df,
@@ -2130,9 +2373,14 @@ def build_intermediates_from_dirs(
             f"==> Remapping {region_id or 'configured'} blend inputs to ADM3 domain",
             flush=True,
         )
-        obs_dir = _remap_dir_to_adm3(obs_dir, "obs", cache_dir=cache_dir)
+        remap = {
+            "cache_dir": cache_dir,
+            "workers": file_workers,
+            "memory_budget_bytes": file_memory_budget_bytes,
+        }
+        obs_dir = _remap_dir_to_adm3(obs_dir, "obs", **remap)
         forecast_dirs = {
-            model_name: _remap_dir_to_adm3(input_dir, f"forecast-{model_name}", cache_dir=cache_dir)
+            model_name: _remap_dir_to_adm3(input_dir, f"forecast-{model_name}", **remap)
             for model_name, input_dir in forecast_dirs.items()
         }
 
@@ -2322,8 +2570,8 @@ def build_intermediates_from_dirs(
         part_dir.mkdir(parents=True, exist_ok=True)
         summary = _ForecastSummary()
         model_parts: list[tuple[Path, list[int]]] = []
-        model_workers = _part_workers(
-            [_forecast_value_count(path, forecast_value_col) for path in forecast_paths_in],
+        model_workers = _workers_for_bytes(
+            [_forecast_part_bytes(path, model_context) for path in forecast_paths_in],
             file_workers,
             file_memory_budget_bytes,
         )
@@ -2532,7 +2780,7 @@ def build_intermediates_from_dirs(
 
         combined_dir = parts_root / "combined"
         combined_dir.mkdir()
-        combined_part_paths = []
+        tasks = []
         for index, years in enumerate(partitions):
             model_part_paths = {
                 model_name: [path for path, part_years in parts if set(part_years) & set(years)]
@@ -2541,20 +2789,27 @@ def build_intermediates_from_dirs(
             # The inner join keeps no row for a year some model lacks.
             if join_how == "inner" and not all(model_part_paths.values()):
                 continue
-            part = _combine_partition(
-                years,
-                clim_paths[index],
-                clim_unc_paths[index],
-                model_part_paths,
-                family_confs,
-                truth,
-                join_how,
-                trim_forecasts_after_true_onset,
+            tasks.append(
+                {
+                    "years": years,
+                    "clim_path": clim_paths[index],
+                    "clim_unc_path": clim_unc_paths[index],
+                    "model_part_paths": model_part_paths,
+                    "out_path": combined_dir / f"{index}.pkl",
+                }
             )
-            part_path = combined_dir / f"{index}.pkl"
-            part.to_pickle(part_path)
-            combined_part_paths.append(part_path)
-            del part
+        # Partitions are independent, so they combine across processes, as many
+        # at once as the memory budget allows for the largest one's inputs.
+        combine_workers = _combine_workers(tasks, file_workers, file_memory_budget_bytes)
+        combine_context = {
+            "family_confs": family_confs,
+            "truth": truth,
+            "join_how": join_how,
+            "trim_forecasts_after_true_onset": trim_forecasts_after_true_onset,
+        }
+        combined_part_paths = _map_parts(
+            _combine_partition_to_file, tasks, combine_context, combine_workers
+        )
         lap(f"Combined {len(combined_part_paths)} partition(s)")
         combined = _assemble_combined(combined_part_paths, restore_clim_order=join_how == "inner")
         lap("Assembled the combined table")
@@ -3276,31 +3531,54 @@ def train_blending_model_bundle(
     )
 
     with _blend_spec_file(blend_spec) as spec_id:
-        completed = _run_blend_evaluation(spec_id, work_dir, results_dir, cores)
         # Fit the production model on all training years (no holdout) so the
         # coef bundle (FINAL_COEF_FILENAME) ships with the training outputs —
         # live forecasts apply it directly instead of retraining (see
         # apply_blend_coefs_bundle / score_live_forecast).
-        final_fit = None
-        if completed.returncode == 0:
-            final_fit = subprocess.run(
-                [
-                    sys.executable,
-                    "predict/3_fit_final_model.py",
-                    "--spec_id",
-                    spec_id,
-                    "--model",
-                    "blended_model",
-                    "--dissem_file",
-                    str(work_dir / "dissemination_cells.csv"),
-                    "--out_dir",
-                    str(results_dir),
-                ],
+        # It reads only the training input, never the evaluation's results, so
+        # it runs alongside the evaluation rather than after it. Its files join
+        # the results only once the evaluation has succeeded, which leaves a
+        # failed run's outputs as they were.
+        final_dir = Path(tempfile.mkdtemp(prefix="blend-final-fit-"))
+        final_cmd = [
+            sys.executable,
+            "predict/3_fit_final_model.py",
+            "--spec_id",
+            spec_id,
+            "--model",
+            "blended_model",
+            "--dissem_file",
+            str(work_dir / "dissemination_cells.csv"),
+            "--out_dir",
+            str(final_dir),
+        ]
+        # Files, not pipes: a full pipe would stall the fit until the evaluation ends.
+        with (
+            tempfile.TemporaryFile(mode="w+") as final_stdout,
+            tempfile.TemporaryFile(mode="w+") as final_stderr,
+        ):
+            final_proc = subprocess.Popen(
+                final_cmd,
                 cwd=str(BLENDING_ROOT),
-                capture_output=True,
+                stdout=final_stdout,
+                stderr=final_stderr,
                 text=True,
-                check=False,
             )
+            try:
+                completed = _run_blend_evaluation(spec_id, work_dir, results_dir, cores)
+            finally:
+                final_returncode = final_proc.wait()
+            final_stdout.seek(0)
+            final_stderr.seek(0)
+            final_fit = subprocess.CompletedProcess(
+                final_cmd, final_returncode, final_stdout.read(), final_stderr.read()
+            )
+        if completed.returncode == 0:
+            for path in final_dir.iterdir():
+                shutil.move(str(path), results_dir / path.name)
+        else:
+            final_fit = None
+        shutil.rmtree(final_dir, ignore_errors=True)
 
     result_files = sorted(path.name for path in results_dir.iterdir() if path.is_file())
     summary_csv = results_dir / f"summary_models_pooled{output_tag}.csv"

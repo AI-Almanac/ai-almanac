@@ -91,8 +91,6 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     workflow = SimpleNamespace(
         BLENDING_ROOT=blending_root,
         LOCAL_INTERMEDIATE_RESOURCES=_load_workflow().LOCAL_INTERMEDIATE_RESOURCES,
-        _bundle_files=lambda files: [path.name for path in files],
-        _extract_bundle=lambda bundle: bundle,
         _read_tar_member_bytes=lambda data, name: combined,
         _parse_years=lambda value: [int(year) for year in value.split(",") if year],
         build_blend_intermediates=prepare,
@@ -121,7 +119,13 @@ def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
     run(config, output_dir, workflow)
 
     prep_args, prep_kwargs = prepare.calls[0]
-    assert prep_args == (["2023.nc"], {"aifs": ["2023.nc"]}, config["blend_params"])
+    staged_obs, staged_models, params = prep_args
+    # Inputs are linked into directories of their own, not copied.
+    assert [path.name for path in staged_obs.iterdir()] == ["2023.nc"]
+    assert (staged_obs / "2023.nc").resolve() == (obs_dir / "2023.nc").resolve()
+    assert list(staged_models) == ["aifs"]
+    assert (staged_models["aifs"] / "2023.nc").resolve() == forecast_path.resolve()
+    assert params == config["blend_params"]
     assert prep_kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
     assert prep_kwargs["model_layouts"] == layouts
     assert prep_kwargs["region_id"] == "ethiopia"
