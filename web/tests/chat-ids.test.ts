@@ -105,6 +105,33 @@ describe('hideIds', () => {
 		expect(hideIds(text, names)).toBe(text);
 	});
 
+	it('recognises IDs written with typographic dashes', () => {
+		const nb = ENS.replaceAll('-', '\u2011');
+		expect(hideIds(`Running \`${nb}\` now`, names)).toBe('Running AIFS‑ENSv2 now');
+	});
+
+	it('expands a shortened ID only when it starts exactly one known ID', () => {
+		expect(hideIds('AIFSv2 (9aa0…) and Aurora 1.5 (`4629ef23‑…`)', names)).toBe(
+			'AIFSv2 and Aurora 1.5'
+		);
+		expect(hideIds(`Chirps is \`${CHIRPS.slice(0, 8)}\`.`, names)).toBe('Chirps is Chirps.');
+		// Hex that starts no known ID is ordinary text.
+		expect(hideIds('Commit deadbeef… and run 20250601', names)).toBe(
+			'Commit deadbeef… and run 20250601'
+		);
+	});
+
+	it('drops a shortened ID the tools returned without a name', () => {
+		const job = '29d8ec12-1f9e-4978-96e8-70ceb915a8d1';
+		const withJob = namesById([turn([{ jobs: [{ id: job, status: 'completed' }] }])]);
+		expect(hideIds('The run (`29d8ec12`) finished.', withJob)).toBe('The run finished.');
+	});
+
+	it('leaves typographic dashes outside IDs alone', () => {
+		const text = 'Seasons 1998‑2015 and 2016‑2018, AIFS‑ENSv2.';
+		expect(hideIds(text, names)).toBe(text);
+	});
+
 	it('holds back an ID until it has finished streaming', () => {
 		expect(hideIds('Running AIFSv2 (9aa0415a-802c', names)).toBe('Running AIFSv2 (');
 		expect(hideIds(`Running ${AIFS}`, names)).toBe('Running AIFSv2');

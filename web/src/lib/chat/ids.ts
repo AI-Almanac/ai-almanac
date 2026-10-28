@@ -10,6 +10,19 @@ import type { ChatMessage } from '$lib/api';
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const QUOTED_UUID = `\`?(${UUID})\`?`;
 
+// Models often write an ID with typographic dashes (U+2011 in particular) or
+// shorten it ("9aa0…", "2d999d09‑…", a bare "29d8ec12").
+const DASH = '[\\-\u2010-\u2014\u2212]';
+const ANY_DASH_UUID = new RegExp(
+	`[0-9a-f]{8}${DASH}[0-9a-f]{4}${DASH}[0-9a-f]{4}${DASH}[0-9a-f]{4}${DASH}[0-9a-f]{12}`,
+	'gi'
+);
+const SHORTENED_ID = new RegExp(
+	`\\b[0-9a-f]{4,}(?:${DASH}[0-9a-f]*)*(?:…|\\.{3})|\\b[0-9a-f]{8}\\b(?!${DASH}[0-9a-f])`,
+	'gi'
+);
+const WHOLE_UUID = new RegExp(`^${UUID}$`, 'i');
+
 const NAME_KEYS = ['name', 'display_name', 'model_name', 'label'];
 
 function nameOf(record: Record<string, unknown>): string | null {
@@ -20,8 +33,15 @@ function nameOf(record: Record<string, unknown>): string | null {
 	return null;
 }
 
+/** Record an ID the tools returned without a name: shortened, it is still recognised (and dropped). */
+function remember(id: string, names: Map<string, string>): void {
+	const key = id.toLowerCase();
+	if (!names.has(key)) names.set(key, '');
+}
+
 function collect(value: unknown, names: Map<string, string>): void {
 	if (typeof value === 'string') {
+		if (WHOLE_UUID.test(value.trim())) remember(value.trim(), names);
 		// Tools that return JSON text arrive unparsed when the result was not an object.
 		if (/^\s*[[{]/.test(value)) {
 			try {
@@ -150,8 +170,24 @@ function hideInTable(rows: string[], names: Map<string, string>): string[] {
 	];
 }
 
+/** Write every form of a known ID the way the tools returned it. */
+function canonicalIds(text: string, names: Map<string, string>): string {
+	const out = text.replace(ANY_DASH_UUID, (match) => match.replace(new RegExp(DASH, 'g'), '-'));
+	return out.replace(SHORTENED_ID, (match) => {
+		const prefix = match
+			.replace(/…|\.{3}$/, '')
+			.replace(new RegExp(DASH, 'g'), '-')
+			.replace(/-+$/, '')
+			.toLowerCase();
+		// Only a prefix of exactly one ID the tools returned: anything else is just text.
+		const ids = [...names.keys()].filter((id) => id.startsWith(prefix));
+		return ids.length === 1 ? ids[0] : match;
+	});
+}
+
 /** The assistant's markdown with IDs shown as names, or dropped where no name is known. */
 export function hideIds(text: string, names: Map<string, string>): string {
+	text = canonicalIds(text, names);
 	if (!/[0-9a-f]{8}-/i.test(text)) return text;
 	// An ID still streaming in shows once it is whole, not hex by hex.
 	const settled = text.replace(/`?\b[0-9a-f]{8}-[0-9a-f-]{0,27}$/i, (match) =>
