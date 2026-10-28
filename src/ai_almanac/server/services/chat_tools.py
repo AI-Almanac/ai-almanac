@@ -6,7 +6,7 @@ import json
 from datetime import date
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic import Field as PydanticField
 
 from ai_almanac.server.services.focus_area import FocusArea
@@ -20,7 +20,7 @@ from ai_almanac.server.services.romp import (
     Year,
 )
 
-from . import benchmark_domain, blend_domain
+from . import benchmark_domain, blend_domain, job_submission
 from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
@@ -122,6 +122,13 @@ class BlendConfigPatch(BaseModel):
         description="MM-DD reference (climatological) onset date the onset-before-"
         "reference probability is scored against. Optional; workflow default is 06-01.",
     )
+
+    @field_validator(
+        "training_years", "cv_holdout_years", "forecast_years", "true_holdout_years", mode="before"
+    )
+    @classmethod
+    def _colon_ranges(cls, value: object) -> object:
+        return job_submission.normalize_year_spec(value)
 
 
 class SubmitBlendApproval(BaseModel):

@@ -25,6 +25,7 @@ from pydantic import (
     Field,
     FiniteFloat,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -412,6 +413,27 @@ class DayLevelSettings(BaseModel):
     )
 
 
+# People and models write a range with a dash: "2000-2019", "2000–2019", or
+# the non-breaking "2000‑2019" models favour. The workflows parse colons.
+_DASHED_YEAR_RANGE = re.compile(
+    r"^\s*(\d{4})\s*(?:[-\u2010-\u2015\u2212]|\.\.|to)\s*(\d{4})\s*$", re.I
+)
+YEAR_SPEC_FIELDS = (
+    "forecast_years",
+    "obs_years",
+    "training_years",
+    "cv_holdout_years",
+    "true_holdout_years",
+)
+
+
+def normalize_year_spec(value: object) -> object:
+    """'2000-2019, 2021' -> '2000:2019, 2021'; anything else is left to the parser."""
+    if not isinstance(value, str):
+        return value
+    return ",".join(_DASHED_YEAR_RANGE.sub(r"\1:\2", part) for part in value.split(","))
+
+
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
@@ -443,6 +465,11 @@ class BlendParams(BaseModel):
     focus_area: FocusArea | None = None
     # Omitted, the day-level blend trains with DayLevelSettings' defaults.
     day_level: DayLevelSettings | None = None
+
+    @field_validator(*YEAR_SPEC_FIELDS, mode="before")
+    @classmethod
+    def _colon_ranges(cls, value: object) -> object:
+        return normalize_year_spec(value)
 
     @model_validator(mode="before")
     @classmethod

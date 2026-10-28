@@ -18,6 +18,16 @@ describe('parseYearSpec', () => {
 	it('expands ranges and lists', () => {
 		expect(parseYearSpec('2008:2010,2012')).toEqual([2008, 2009, 2010, 2012]);
 	});
+	it('reads a range written with any dash, "..", or "to"', () => {
+		for (const spec of [
+			'2008-2010',
+			'2008\u20112010',
+			'2008 \u2013 2010',
+			'2008..2010',
+			'2008 to 2010'
+		])
+			expect(parseYearSpec(spec)).toEqual([2008, 2009, 2010]);
+	});
 	it('returns [] for empty and null for malformed', () => {
 		expect(parseYearSpec('')).toEqual([]);
 		expect(parseYearSpec('20x8')).toBeNull();

@@ -48,6 +48,43 @@ def test_year_errors_flags_malformed_spec() -> None:
     assert errors and "training_years" in errors[0]
 
 
+def test_year_errors_quote_the_value_they_reject() -> None:
+    spec = BlendRunSpec(training_years="2000-2019 (20 years)", cv_holdout_years="2013")
+    assert blend_domain._year_errors(spec, None) == [
+        'training_years is "2000-2019 (20 years)"; it must look like "2005:2010" or "2011,2012".'
+    ]
+
+
+@pytest.mark.parametrize(
+    ("written", "stored"),
+    [
+        ("2000-2019", "2000:2019"),
+        ("2000\u20112019", "2000:2019"),  # the non-breaking hyphen models favour
+        ("2000 \u2013 2019, 2021", "2000:2019, 2021"),
+        ("1998 to 2012,2016..2018", "1998:2012,2016:2018"),
+        ("2000:2019", "2000:2019"),
+        ("2011,2012", "2011,2012"),
+    ],
+)
+def test_dashed_year_ranges_are_stored_as_colon_ranges(written: str, stored: str) -> None:
+    from ai_almanac.server.services.chat_tools import BlendConfigPatch
+    from ai_almanac.server.services.job_submission import BlendParams
+
+    assert BlendConfigPatch(training_years=written).training_years == stored
+    params = BlendParams(training_years=written, cv_holdout_years=written)
+    assert (params.training_years, params.cv_holdout_years) == (stored, stored)
+
+
+def test_finalize_repairs_dashed_years_saved_before_normalizing() -> None:
+    saved = BlendRunSpec(name="x", training_years="2000\u20112015", true_holdout_years="2016-2019")
+    spec = blend_domain._finalize_blend_config(saved)
+    assert (spec.training_years, spec.true_holdout_years) == ("2000:2015", "2016:2019")
+    assert (
+        blend_domain._year_errors(spec.model_copy(update={"cv_holdout_years": "2000:2015"}), None)
+        == []
+    )
+
+
 def test_finalize_reports_missing_fields() -> None:
     spec = blend_domain._finalize_blend_config(BlendRunSpec(name="x"))
     assert spec.status == "collecting"

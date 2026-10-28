@@ -21,7 +21,8 @@ export function parseYearSpec(value: string): number[] | null {
 	for (const part of value.split(',')) {
 		const token = part.trim();
 		if (!token) continue;
-		const range = token.match(/^(\d{4}):(\d{4})$/);
+		// "2000-2019" (any dash, or "..", or "to") as well as "2000:2019", like the server.
+		const range = token.match(/^(\d{4})\s*(?::|[-\u2010-\u2015\u2212]|\.\.|to)\s*(\d{4})$/i);
 		const single = token.match(/^(\d{4})$/);
 		if (range) {
 			for (let y = +range[1]; y <= +range[2]; y++) years.add(y);

@@ -151,7 +151,7 @@ def _year_errors(spec: BlendRunSpec, coverage: dict | None) -> list[str]:
     for field, text in specs.items():
         years = _parse_year_spec(text)
         if years is None:
-            return [f'{field} must look like "2005:2010" or "2011,2012".']
+            return [f'{field} is "{text}"; it must look like "2005:2010" or "2011,2012".']
         parsed[field] = years
 
     explicit = parsed["forecast_years"]
@@ -192,8 +192,13 @@ def _finalize_blend_config(spec: BlendRunSpec) -> BlendRunSpec:
         f"Reserve {MIN_ONSET_YEARS} observation years before the first forecast "
         "year for the onset climatology baseline.",
     ]
+    # Also repairs a config saved before dashed ranges were normalized on input.
+    years = {
+        field: job_submission.normalize_year_spec(getattr(spec, field))
+        for field in ("training_years", "cv_holdout_years", "forecast_years", "true_holdout_years")
+    }
     return spec.model_copy(
-        update={"missing_fields": missing, "status": status, "assumptions": assumptions}
+        update={"missing_fields": missing, "status": status, "assumptions": assumptions, **years}
     )
 
 
