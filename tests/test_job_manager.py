@@ -143,6 +143,66 @@ async def test_reconcile_finalizes_jobs_whose_supervisor_is_dead(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_at_startup_says_the_app_stopped_the_job(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervisor gone at startup went while the app was down, so the job
+    says so rather than reading as a crash nobody can explain."""
+    from ai_almanac.server.services import job_manager
+
+    job_id = await _insert_job(user_id, "running", worker_pid=999_999_999)
+    monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
+
+    await job_manager.reconcile_jobs(at_startup=True)
+
+    row = await _job_row(job_id)
+    assert row["status"] == "failed"
+    assert row["error"] == "The job stopped when the app stopped or restarted."
+
+
+@pytest.mark.parametrize("max_chars", [12_000, 60_000])
+@pytest.mark.asyncio
+async def test_the_assistant_sees_the_last_lines_of_a_long_job_log(
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    max_chars: int,
+) -> None:
+    """The log tool returns the end of the log and the assistant's view keeps
+    the start of a long result, so a tail over that cap lost the last lines,
+    and asking for more of the log showed less of its end."""
+    from ai_almanac.server.services import llm, storage
+    from ai_almanac.server.services.benchmark_domain import _exec_get_job_logs
+    from ai_almanac.server.services.benchmark_state import BenchmarkScope
+
+    log = (
+        "".join(f"Processing target year {year} ----- done\n" for year in range(3000)) + "Killed\n"
+    )
+
+    class Logs:
+        def read_log(self, _job_id: str) -> str:
+            return log
+
+    monkeypatch.setattr(storage, "get_storage", lambda: Logs())
+    job_id = await _insert_job(user_id, "failed")
+
+    result = json.loads(
+        await _exec_get_job_logs(
+            {"job_id": job_id, "max_chars": max_chars},
+            user_id,
+            BenchmarkScope(kind="general", key="general"),
+        )
+    )
+    seen = llm._compact_tool_content(result)["logs"]
+
+    assert result["truncated"] is True
+    assert seen == result["logs"]
+    assert seen.endswith(
+        "Processing target year 2999 - - - - - done\nKilled\n\n----- end job log -----"
+    )
+
+
+@pytest.mark.asyncio
 async def test_reconcile_leaves_healthy_jobs_alone(
     user_id: str,
     monkeypatch: pytest.MonkeyPatch,

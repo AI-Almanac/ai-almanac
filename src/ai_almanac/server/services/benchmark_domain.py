@@ -903,6 +903,7 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
 
 async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) -> str:
     from ai_almanac.server.db import get_db
+    from ai_almanac.settings import settings
 
     from ..services.storage import get_storage
 
@@ -926,14 +927,20 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
 
     storage = get_storage()
     logs = await asyncio.to_thread(storage.read_log, job_id)
-    truncated = len(logs) > max_chars
-    if truncated:
-        logs = logs[-max_chars:]
+    # The assistant sees a tool result's strings only up to its cap, cut from
+    # the end; a tail longer than that would lose the last lines, where a
+    # failure shows, while a larger max_chars showed less of them.
+    cap = settings.llm_tool_result_max_chars
+    tail = logs[-min(max_chars, cap) :]
+    fenced = _as_untrusted_data(tail, "job log")
+    while len(fenced) > cap and tail:
+        tail = tail[len(fenced) - cap :]
+        fenced = _as_untrusted_data(tail, "job log")
     return json.dumps(
         {
             "job_id": job_id,
-            "logs": _as_untrusted_data(logs, "job log"),
-            "truncated": truncated,
+            "logs": fenced,
+            "truncated": len(tail) < len(logs),
         }
     )
 

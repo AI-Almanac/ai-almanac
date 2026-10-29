@@ -184,8 +184,12 @@ async def _finish_modal_job(job_id: str, status: str, error: str | None) -> None
     await day_level_blends.hand_off(job_id, status)
 
 
-async def reconcile_jobs() -> None:
-    """Recover queued jobs and finalize supervisors that disappeared."""
+async def reconcile_jobs(*, at_startup: bool = False) -> None:
+    """Recover queued jobs and finalize supervisors that disappeared.
+
+    At startup a missing supervisor went while the app was down: with the
+    container, the restart itself stopped it.
+    """
     async with get_db() as conn:
         rows = (
             (
@@ -230,7 +234,12 @@ async def reconcile_jobs() -> None:
             continue
         _terminate_process_group(row.get("process_group_id"), row.get("workload_pid"))
         final_status = "canceled" if row["status"] == "canceling" else "failed"
-        error = None if final_status == "canceled" else "Job supervisor exited unexpectedly."
+        if final_status == "canceled":
+            error = None
+        elif at_startup:
+            error = "The job stopped when the app stopped or restarted."
+        else:
+            error = "Job supervisor exited unexpectedly."
         async with get_db() as conn:
             await conn.execute(
                 sa.update(jobs)

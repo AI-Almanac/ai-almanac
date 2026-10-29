@@ -677,7 +677,7 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
 
     @toolset.tool
     async def get_job_logs(ctx: RunContext[ChatDeps], job_id: str, max_chars: int = 12000) -> dict:
-        """Fetch logs for a running or failed job so failures can be diagnosed without user copy/paste."""
+        """Fetch the end of a running or failed job's log so failures can be diagnosed without user copy/paste. Returns the last max_chars characters, up to the default: a larger max_chars shows no more."""
         return await chat_tools.get_job_logs(job_id, max_chars, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
