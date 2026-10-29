@@ -2,7 +2,7 @@
 
 On a DGX Spark they take an AIFS-ENS v2 member-step from 2.44 s to 1.68 s
 exactly, and to about 1.22 s with the compiled blocks; an AIFS-single v2 step
-from 1.74 s to AIFS2_TODO.
+from 1.71 s to 1.21 s with Triton graph attention, and to 0.95 s compiled.
 
 Both models are memory-bound here, and spend much of a step in anemoi-models
 code paths that move more memory than they need to. The exact speed-ups are
@@ -78,7 +78,7 @@ LOG = logging.getLogger(__name__)
 
 # earth2studio model class -> the anemoi-models versions its speed-ups were
 # checked on (envs/aifs_speedups_check.py).
-VERIFIED: dict[str, set[str]] = {"AIFS2ENS": {"0.11.2"}}
+VERIFIED: dict[str, set[str]] = {"AIFS2ENS": {"0.11.2"}, "AIFS2": {"0.9.4"}}
 
 # GPU memory the rollout's working set needs beside resident projected edges.
 EDGE_CACHE_RESERVE_BYTES = 14 * 1024**3
