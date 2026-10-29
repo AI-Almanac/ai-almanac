@@ -21,7 +21,7 @@ class _FakeTraining:
     """onset_blending's train(), recording the recipe and what was saved."""
 
     def __init__(self, files: dict[str, bytes]):
-        self.files, self.recipes, self.saved = files, [], []
+        self.files, self.recipes, self.saved, self.resources = files, [], [], []
 
     def modules(self) -> dict:
         fake = self
@@ -42,9 +42,13 @@ class _FakeTraining:
                 for name, data in fake.files.items():
                     (Path(directory) / name).write_bytes(data)
 
+        def train(config, *, resources):
+            fake.resources.append(resources)
+            return Result()
+
         training = SimpleNamespace(
-            Resources=SimpleNamespace(default=lambda: "resources"),
-            train=lambda config, *, resources: Result(),
+            Resources=SimpleNamespace(default=lambda *, cache_dir=None: {"cache_dir": cache_dir}),
+            train=train,
         )
         return {
             "onset_blending": SimpleNamespace(BlendConfig=BlendConfig),
@@ -80,9 +84,13 @@ def test_a_local_blend_trains_with_onset_blending_from_its_recipe(
         "model_files": {"aifs": [str(tmp_path / "aifs" / "2023.nc")]},
         "blend_params": {"training_years": "2020,2021", "cv_holdout_years": "2022"},
         "train_day_level_blend": day_level,
+        "cache_dir": str(tmp_path / "cache"),
     }
 
     blend_entrypoint.run(config, output_dir)
+
+    # Computed onset thresholds are kept in the app's cache.
+    assert fake.resources == [{"cache_dir": str(tmp_path / "cache")}]
 
     [recipe] = fake.recipes
     assert recipe["evaluation"]["years"] == {"training": [2020, 2021], "cv_holdout": [2022]}

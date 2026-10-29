@@ -174,7 +174,10 @@ def run(config: dict, output_dir: Path) -> None:
     recipe_dir = Path(output_dir).parent / "blend-recipe"
     recipe = blend_recipe.blend_config(config, work_dir=recipe_dir, blending_root=blending_root())
     print("==> Training the blend", flush=True)
-    result = train(BlendConfig.from_dict(recipe), resources=Resources.default())
+    # The app's cache keeps what outlives a run: thresholds computed from the
+    # observations (Moron-Robertson's), reused while their inputs are unchanged.
+    resources = Resources.default(cache_dir=config.get("cache_dir"))
+    result = train(BlendConfig.from_dict(recipe), resources=resources)
     timings = ", ".join(
         f"{stage} {seconds:.0f}s" for stage, seconds in result.inputs.timings.items()
     )
