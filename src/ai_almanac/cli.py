@@ -437,11 +437,11 @@ def env_check_speedups(
     steps: Annotated[int, typer.Option(help="Rollout steps compared.")] = 8,
     date: Annotated[str, typer.Option(help="Initial condition (UTC).")] = "2026-05-13T00:00",
 ) -> None:
-    """Check the AIFS inference speed-ups in the model's forecast env.
+    """Check a model's inference speed-ups in its forecast env.
 
     The exact ones bit for bit, the others against the forecast's chance
     spread. Run after the forecast environment is upgraded: a pass names the
-    anemoi-models version to add to aifs_speedups.VERIFIED. Uses the GPU.
+    version to add to the speed-up module's VERIFIED. Uses the GPU.
     """
     from pathlib import Path
 
@@ -465,7 +465,7 @@ def env_check_speedups(
     env = os.environ.copy()
     # Kept, so a second check downloads no initial conditions.
     env["EARTH2STUDIO_DATA_CACHE"] = str(cache_dir() / "aifs-speedups-check")
-    script = Path(envs.__file__).with_name("aifs_speedups_check.py")
+    script = Path(envs.__file__).with_name("speedups_check.py")
     command = ["python", str(script), "--model", model, "--steps", str(steps), "--date", date]
     try:
         process = run_forecast(command, env=env, environment=entry.get("env") or "base")

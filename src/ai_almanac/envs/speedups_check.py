@@ -1,7 +1,8 @@
-"""Check server/services/forecast_model_opt/aifs_speedups.py on this environment.
+"""Check a forecast model's speed-ups (server/services/forecast_model_opt) on
+this environment.
 
-Run after an earth2studio or anemoi-models upgrade (``ai-almanac env
-check-speedups`` runs it in the model's forecast environment). The model's
+Run after an earth2studio, anemoi-models or weathernext upgrade (``ai-almanac
+env check-speedups`` runs it in the model's forecast environment). The model's
 speed-ups are added one at a time, each rollout's every step hashed:
 
 * the first must make repeat runs reproducible, so the rest can be matched;
@@ -10,10 +11,10 @@ speed-ups are added one at a time, each rollout's every step hashed:
   against how far the forecast already moves by chance -- to another member
   for an ensemble model, between two runs of the stock model otherwise.
 
-A pass prints the anemoi-models version to add to ``aifs_speedups.VERIFIED``
-for the model; a failure names the speed-up. Needs a GPU, and initial
-conditions for --date (cached in EARTH2STUDIO_DATA_CACHE, so a second check
-downloads nothing).
+A pass prints the version to add to the speed-up module's ``VERIFIED`` for
+the model; a failure names the speed-up. Needs a GPU, and initial conditions
+for --date (cached in EARTH2STUDIO_DATA_CACHE, so a second check downloads
+nothing).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import argparse
 import hashlib
 import importlib.util
 import inspect
+import logging
 import sys
 import time
 from collections import OrderedDict
@@ -44,14 +46,20 @@ def _load_pipeline():
     return module
 
 
-def rollout(model, x0, c0, steps: int, *, first_t2m: list | None = None) -> tuple[list[str], float]:
+def rollout(
+    model, x0, c0, steps: int, *, members: bool, first_t2m: list | None = None
+) -> tuple[list[str], float]:
     """Each step's output hashed, and the mean time of the steps after warm-up;
-    ``first_t2m`` collects the first step's 2 m temperature."""
+    ``first_t2m`` collects the first step's 2 m temperature. An ensemble model
+    rolls out one member; others roll out as earth2studio's deterministic
+    workflow does, without a leading dimension."""
     import numpy as np
     import torch
 
-    x = x0.unsqueeze(0)
-    coords = OrderedDict([("ensemble", np.arange(1))] + list(c0.items()))
+    x, coords = x0, c0
+    if members:
+        x = x0.unsqueeze(0)
+        coords = OrderedDict([("ensemble", np.arange(1))] + list(c0.items()))
     hashes, times = [], []
     torch.cuda.synchronize()
     t = time.perf_counter()
@@ -62,9 +70,8 @@ def rollout(model, x0, c0, steps: int, *, first_t2m: list | None = None) -> tupl
                 times.append(time.perf_counter() - t)
             hashes.append(hashlib.sha256(y.contiguous().cpu().numpy().tobytes()).hexdigest())
             if step == 1 and first_t2m is not None:
-                first_t2m.append(
-                    y[0, ..., list(c["variable"]).index("t2m"), :, :].float().cpu().numpy()
-                )
+                t2m = y.select(list(c).index("variable"), list(c["variable"]).index("t2m"))
+                first_t2m.append(t2m.float().cpu().numpy())
             if step >= steps:
                 break
             # The hash is not the model's time: the clock restarts after it.
@@ -80,49 +87,71 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1234, help="ensemble models only")
     parser.add_argument("--package", help="local checkpoint folder (default: the model's own)")
     args = parser.parse_args()
+    # The speed-up modules log where they step aside, and why.
+    logging.basicConfig(level=logging.INFO, format="    %(name)s: %(message)s")
 
     import numpy as np
     import torch
     from earth2studio.data import fetch_data
     from earth2studio.models import px
     from earth2studio.models.auto import Package
+    from earth2studio.utils.coords import map_coords
 
     pipeline = _load_pipeline()
-    speedups = pipeline._aifs_speedups()
-    model_speedups = speedups.SPEEDUPS.get(args.model)
-    if not model_speedups:
-        print(f"FAIL: aifs_speedups has no speed-ups for {args.model}")
+    speedups = next(
+        (
+            module
+            for module in map(pipeline._speedups, pipeline.SPEEDUP_MODULES)
+            if args.model in module.SPEEDUPS
+        ),
+        None,
+    )
+    if speedups is None:
+        print(f"FAIL: forecast_model_opt has no speed-ups for {args.model}")
         return 1
-    anemoi_version = version("anemoi-models")
+    package_version = version(speedups.PACKAGE)
     print(
-        f"==> {args.model} on anemoi-models {anemoi_version}, {args.steps} steps from {args.date}"
+        f"==> {args.model} on {speedups.PACKAGE} {package_version}, "
+        f"{args.steps} steps from {args.date}"
     )
 
     torch.set_default_device("cuda")
     cls = getattr(px, args.model)
     pipeline._model_ifs_through_mirrors(cls)
-    package = Package(args.package) if args.package else cls.load_default_package()
+    package = (
+        Package(args.package)
+        if args.package
+        else pipeline._anonymous_gcs(cls.load_default_package())
+    )
     members = "seed" in inspect.signature(cls.load_model).parameters
     model = cls.load_model(package, seed=args.seed) if members else cls.load_model(package)
     model = model.to("cuda")
     model.eval()
+    # As earth2studio's workflows fetch it: onto the model's own grid.
     ic = model.input_coords()
+    interpolates = hasattr(model, "interp_method")
     x0, c0 = fetch_data(
         pipeline.resolve_data_source("ifs"),
         time=np.array([np.datetime64(args.date)]),
         variable=ic["variable"],
         lead_time=ic["lead_time"],
         device="cuda",
+        interp_to=ic if interpolates else None,
+        interp_method=model.interp_method if interpolates else "nearest",
     )
+    x0, c0 = map_coords(x0, c0, ic)
+
+    def run(steps: int, first_t2m: list | None = None) -> tuple[list[str], float]:
+        return rollout(model, x0, c0, steps, members=members, first_t2m=first_t2m)
 
     def mean_move(a, b) -> float:
         return float(np.abs(a - b).mean())
 
     stock = []
-    _, stock_time = rollout(model, x0, c0, args.steps, first_t2m=stock)
+    _, stock_time = run(args.steps, stock)
     print(f"    stock: {stock_time:.3f}s per step")
     if not members:
-        rollout(model, x0, c0, 1, first_t2m=stock)
+        run(1, stock)
         chance, spread = "two stock runs", mean_move(stock[0], stock[1])
 
     def within_chance(name: str, moved: float, step_time: float) -> bool:
@@ -136,20 +165,20 @@ def main() -> int:
             return False
         return True
 
-    (first, *rest) = model_speedups
+    (first, *rest) = speedups.SPEEDUPS[args.model]
     if not first.patch(model):
         print(f"FAIL: {first.name} does not apply to this model")
         return 1
     first_t2m = []
-    reference, step_time = rollout(model, x0, c0, args.steps, first_t2m=first_t2m)
-    repeat, _ = rollout(model, x0, c0, args.steps)
+    reference, step_time = run(args.steps, first_t2m)
+    repeat, _ = run(args.steps)
     if repeat != reference:
         print(f"FAIL: two runs with {first.name} differ, so nothing can be checked bit for bit")
         return 1
     if members:
         member = []
         model.seed = args.seed + 1
-        rollout(model, x0, c0, 1, first_t2m=member)
+        run(1, member)
         model.seed = args.seed
         chance, spread = "two members", mean_move(member[0], first_t2m[0])
     if first.exact:
@@ -164,7 +193,7 @@ def main() -> int:
             print(f"    {speedup.name}: does not apply to this model, skipped")
             continue
         t2m = []
-        hashes, step_time = rollout(model, x0, c0, args.steps, first_t2m=t2m)
+        hashes, step_time = run(args.steps, t2m)
         if speedup.exact:
             if hashes != reference:
                 step = next(
@@ -181,11 +210,12 @@ def main() -> int:
 
     print(f"    {stock_time / step_time:.2f}x the stock model's speed")
     verified = speedups.VERIFIED.get(args.model, set())
-    if anemoi_version in verified:
-        print(f"PASS: already verified for {args.model} on anemoi-models {anemoi_version}")
+    module = Path(speedups.__file__).stem
+    if package_version in verified:
+        print(f"PASS: already verified for {args.model} on {speedups.PACKAGE} {package_version}")
     else:
         print(
-            f"PASS: add {anemoi_version!r} to aifs_speedups.VERIFIED[{args.model!r}] "
+            f"PASS: add {package_version!r} to {module}.VERIFIED[{args.model!r}] "
             "to apply the speed-ups in forecasts"
         )
     return 0

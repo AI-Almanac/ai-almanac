@@ -447,7 +447,7 @@ def test_cli_check_speedups_runs_in_the_models_forecast_env(
     assert "PASS" in result.output
     [call] = calls
     assert call["environment"] == "aifs2ens"
-    assert call["cmd"][1].endswith("aifs_speedups_check.py")
+    assert call["cmd"][1].endswith("speedups_check.py")
     assert call["env"]["EARTH2STUDIO_DATA_CACHE"].endswith("aifs-speedups-check")
 
     unknown = CliRunner().invoke(app, ["env", "check-speedups", "--model", "Pangu6"])

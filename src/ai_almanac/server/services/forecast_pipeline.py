@@ -219,9 +219,10 @@ def load_model(model_class: str):
     _model_ifs_through_mirrors(cls)
     package = _anonymous_gcs(cls.load_default_package())
     model = cls.load_model(package)
-    applied = _aifs_speedups().apply(model)
-    if applied:
-        print(f"==> {model_class} speed-ups: {', '.join(applied)}", flush=True)
+    for name in SPEEDUP_MODULES:
+        applied = _speedups(name).apply(model)
+        if applied:
+            print(f"==> {model_class} speed-ups: {', '.join(applied)}", flush=True)
     return model
 
 
@@ -237,16 +238,20 @@ def _anonymous_gcs(package):
     )
 
 
-def _aifs_speedups():
-    """forecast_model_opt/aifs_speedups.py, loaded from beside this file: in
-    the package and in the Modal image alike, which bundles them together."""
+# forecast_model_opt/'s speed-up modules: each applies to its own models.
+SPEEDUP_MODULES = ("aifs_speedups", "graphcast_speedups")
+
+
+def _speedups(name: str):
+    """forecast_model_opt/<name>.py, loaded from beside this file: in the
+    package and in the Modal image alike, which bundles them together."""
     import importlib.util
     import sys
 
-    if (loaded := sys.modules.get("aifs_speedups")) is not None:
+    if (loaded := sys.modules.get(name)) is not None:
         return loaded
     spec = importlib.util.spec_from_file_location(
-        "aifs_speedups", Path(__file__).parent / "forecast_model_opt" / "aifs_speedups.py"
+        name, Path(__file__).parent / "forecast_model_opt" / f"{name}.py"
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

@@ -7,7 +7,7 @@ from 1.71 s to 1.21 s with Triton graph attention, and to 0.95 s compiled.
 Both models are memory-bound here, and spend much of a step in anemoi-models
 code paths that move more memory than they need to. The exact speed-ups are
 inference-only rewrites of them; the same kernels run on the same values, so
-the forecast is unchanged bit for bit (``envs/aifs_speedups_check.py`` checks
+the forecast is unchanged bit for bit (``envs/speedups_check.py`` checks
 it, against a run made reproducible by the model's first speed-up):
 
 * Deterministic noise projection (AIFS-ENS). The noise injector maps its
@@ -76,8 +76,9 @@ from typing import NamedTuple
 
 LOG = logging.getLogger(__name__)
 
-# earth2studio model class -> the anemoi-models versions its speed-ups were
-# checked on (envs/aifs_speedups_check.py).
+# The package whose version VERIFIED holds; earth2studio model class -> the
+# versions its speed-ups were checked on (envs/speedups_check.py).
+PACKAGE = "anemoi-models"
 VERIFIED: dict[str, set[str]] = {"AIFS2ENS": {"0.11.2"}, "AIFS2": {"0.9.4"}}
 
 # GPU memory the rollout's working set needs beside resident projected edges.
@@ -103,13 +104,13 @@ def apply(model, *, exact_only: bool | None = None) -> list[str]:
     if not verified:
         return []
     try:
-        anemoi_version = version("anemoi-models")
+        anemoi_version = version(PACKAGE)
     except PackageNotFoundError:
         return []
     if anemoi_version not in verified:
         LOG.warning(
             "AIFS speed-ups not applied to %s: anemoi-models %s is not verified for it "
-            "(verified: %s); run envs/aifs_speedups_check.py",
+            "(verified: %s); run envs/speedups_check.py",
             model_class,
             anemoi_version,
             ", ".join(sorted(verified)),

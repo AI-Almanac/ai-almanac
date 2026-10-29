@@ -61,6 +61,9 @@ AIFS_SPEEDUPS_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_model_o
 ANEMOI_TRITON_GT_PY = (
     _REPO_ROOT / "src/ai_almanac/server/services/forecast_model_opt/anemoi_triton_gt.py"
 )
+GRAPHCAST_SPEEDUPS_PY = (
+    _REPO_ROOT / "src/ai_almanac/server/services/forecast_model_opt/graphcast_speedups.py"
+)
 
 app = modal.App(APP_NAME)
 
@@ -125,6 +128,7 @@ def _inference_image(extras: list[str]) -> modal.Image:
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
         .add_local_file(AIFS_SPEEDUPS_PY, "/almanac/forecast_model_opt/aifs_speedups.py")
         .add_local_file(ANEMOI_TRITON_GT_PY, "/almanac/forecast_model_opt/anemoi_triton_gt.py")
+        .add_local_file(GRAPHCAST_SPEEDUPS_PY, "/almanac/forecast_model_opt/graphcast_speedups.py")
     )
 
 

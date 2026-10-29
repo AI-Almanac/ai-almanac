@@ -1,6 +1,6 @@
 """The AIFS speed-ups apply only where they were checked, and never stop a
 forecast: the patches themselves need a GPU and are checked by
-envs/aifs_speedups_check.py in the forecast environment."""
+envs/speedups_check.py in the forecast environment."""
 
 from __future__ import annotations
 
@@ -96,10 +96,11 @@ def test_the_pipeline_loads_the_speed_ups_from_beside_it() -> None:
     from ai_almanac.server.services import forecast_pipeline
 
     sys.modules.pop("aifs_speedups", None)
-    loaded = forecast_pipeline._aifs_speedups()
+    loaded = forecast_pipeline._speedups("aifs_speedups")
 
     assert loaded.VERIFIED == aifs_speedups.VERIFIED
-    assert forecast_pipeline._aifs_speedups() is loaded
+    assert forecast_pipeline._speedups("aifs_speedups") is loaded
+    assert "aifs_speedups" in forecast_pipeline.SPEEDUP_MODULES
 
 
 @pytest.mark.parametrize(("setting", "inexact"), [(None, True), ("0", True), ("1", False)])
