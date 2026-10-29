@@ -634,9 +634,13 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
         Returns pooled per-model scores (Ranked Probability Skill Score, Brier Skill
         Score, Area Under ROC Curve, and Brier skill per lead time), a per-grid-point
         summary of where the blend beats Traditional Climatology, and the weight/output
-        artifacts. All skill is against Traditional Climatology (`unc_clim_raw`): zero
-        matches it, above zero beats it. Conditional Climatology (`clim_raw`) appears as
-        a scored member, not as the reference. Prefer the Ranked Probability Skill Score
+        artifacts. Each row carries the `label` the user sees: name models by it. All
+        skill is against Traditional Climatology (`unc_clim_raw`): zero matches it,
+        above zero beats it. Conditional Climatology (`clim_raw`) appears as a scored
+        member, not as the reference. A blend can have two rows marked `is_blend`: the
+        Week-level blend (`blended_model`) and, where the deployment trains it, the
+        Day-level blend (`blended_forest`); compare them like any two members, on the
+        same scores. Prefer the Ranked Probability Skill Score
         as the headline — it is the metric that accounts for how far off a forecast was,
         not merely whether it was wrong, which is what the five ordered onset windows
         call for.

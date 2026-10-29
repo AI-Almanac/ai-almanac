@@ -67,6 +67,26 @@ def test_parse_pooled_summary_orders_blend_first() -> None:
         ("blended_forest", True),
         ("aifs_raw", False),
     ]
+    # The assistant names each row as the UI does.
+    assert [r["label"] for r in rows] == ["Week-level blend", "Day-level blend", "AIFS (raw)"]
+
+
+@pytest.mark.parametrize(
+    ("model", "label"),
+    [
+        ("blended_model", "Week-level blend"),
+        ("blended_forest", "Day-level blend"),
+        ("clim_raw", "Conditional Climatology"),
+        ("unc_clim_raw", "Traditional Climatology"),
+        ("aifs_fixed_cutoff_raw", "AIFS (raw)"),
+        ("aifs_calibrated_fixed_cutoff", "AIFS (calibrated)"),
+        ("aifs_ensv2_calibrated_fixed_cutoff", "AIFS ENSV2 (calibrated)"),
+        ("gencast_clim_mok_date_raw", "GENCAST (raw)"),
+    ],
+)
+def test_models_are_labelled_as_the_ui_labels_them(model: str, label: str) -> None:
+    # The same cases as modelLabel in web/src/routes/blends/blend-summary.ts.
+    assert blend_domain.model_label(model) == label
 
 
 def test_parse_pooled_summary_handles_empty() -> None:

@@ -41,6 +41,19 @@ def test_blend_results_docstring_names_the_baseline_and_the_sample_size_caution(
     assert "ten years" in doc
 
 
+def test_blend_results_docstring_names_both_blends_and_the_row_labels() -> None:
+    doc = _blend_results_docstring()
+    assert "Week-level blend (`blended_model`)" in doc
+    assert "Day-level blend (`blended_forest`)" in doc
+    assert "`label`" in doc
+
+
+def test_the_builtin_names_both_blends_as_the_user_sees_them() -> None:
+    text = instructions(ChatScope(kind="blend_setup", key="setup", job_ids=[]))
+    assert "**Week-level blend** (model id `blended_model`)" in text
+    assert "**Day-level blend** (model id `blended_forest`)" in text
+
+
 # --- prompt injection through scope values -------------------------------
 
 

@@ -160,7 +160,8 @@ export const OVERALL_METRICS: OverallMetric[] = [
 	}
 ];
 
-// Turn a raw model id into a reader-friendly label.
+// Turn a raw model id into a reader-friendly label. Mirrored server-side by
+// blend_domain.model_label, which labels the chat tool's skill rows.
 //   blended_model                 -> "Week-level blend"
 //   blended_forest                -> "Day-level blend"
 //   clim_raw                      -> "Conditional Climatology"

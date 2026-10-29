@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 
 import sqlalchemy as sa
@@ -39,6 +40,33 @@ _BRIER_LEAD_COLUMNS = [
 # uncalibrated: it comes from ``prob_clim_mr_unc``, the climatology that does not
 # condition on onset having held off until the issue date.
 _BASELINE_MODEL = "unc_clim_raw"
+_CONDITIONAL_CLIMATOLOGY_MODEL = "clim_raw"
+
+# What the user sees each blend called; mirrors BLEND_LABELS in
+# web/src/routes/blends/blend-summary.ts.
+_BLEND_LABELS = {"blended_model": "Week-level blend", "blended_forest": "Day-level blend"}
+
+
+def model_label(model: str) -> str:
+    """A model id as the UI names it; mirrors ``modelLabel`` in
+    web/src/routes/blends/blend-summary.ts.
+
+    blended_model -> "Week-level blend", blended_forest -> "Day-level blend",
+    clim_raw -> "Conditional Climatology", unc_clim_raw -> "Traditional
+    Climatology", aifs_fixed_cutoff_raw -> "AIFS (raw)",
+    aifs_calibrated_fixed_cutoff -> "AIFS (calibrated)".
+    """
+    if model in _BLEND_LABELS:
+        return _BLEND_LABELS[model]
+    if model == _CONDITIONAL_CLIMATOLOGY_MODEL:
+        return "Conditional Climatology"
+    if model == _BASELINE_MODEL:
+        return "Traditional Climatology"
+    name = re.sub(r"_calibrated", "", model)
+    name = re.sub(r"_(fixed_cutoff|clim_mok_date)", "", name)
+    name = re.sub(r"_raw$", "", name).replace("_", " ").strip().upper()
+    return f"{name} ({'calibrated' if 'calibrated' in model else 'raw'})"
+
 
 # Climatology needs this many observation years before the first forecast year.
 # Owned by ``job_submission`` so submission and this chat path enforce one rule.
@@ -521,7 +549,8 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
     """Parse the blend's pooled per-model summary CSV into skill rows.
 
     Mirrors ``parsePooledSummary`` in web/.../blend-summary.ts: one row per model
-    with its pooled scores and its per-lead AUC and Brier series.
+    with its pooled scores and its per-lead AUC and Brier series, and the
+    label the user sees it under.
 
     The Ranked Probability Skill Score matters most here — the outcome is five
     ordinal bins (weeks 1-4, later), so a metric that credits being close beats
@@ -556,6 +585,7 @@ def _parse_pooled_summary(csv_text: str) -> list[dict]:
         rows.append(
             {
                 "model": model,
+                "label": model_label(model),
                 "is_blend": model in BLEND_MODELS,
                 "is_baseline": model == _BASELINE_MODEL,
                 "auc": cell(cells, "auc"),
