@@ -108,7 +108,13 @@ class BlendConfigPatch(BaseModel):
     model_ids: list[str] | None = None
     training_years: str | None = None
     cv_holdout_years: str | None = None
-    forecast_years: str | None = None
+    forecast_years: str | None = PydanticField(
+        default=None,
+        description="Advanced; leave unset. The years to stage forecast data for, which "
+        "defaults to every training, cross-validation and true holdout year. Not the "
+        "years the blend forecasts: hold those out in true_holdout_years. Set to null "
+        "to clear it.",
+    )
     true_holdout_years: str | None = None
     formula_text: str | None = None
     focus_area: FocusArea | None = None

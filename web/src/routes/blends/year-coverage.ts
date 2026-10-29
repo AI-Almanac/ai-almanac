@@ -175,7 +175,7 @@ export function yearSpecError(
 		for (const [label, years] of splits) {
 			const missing = years.filter((y) => !staged.has(y));
 			if (missing.length)
-				return `${label} years ${span(missing)} have no forecast data — forecast years cover ${span(explicit)}.`;
+				return `${label} years ${span(missing)} have no forecast data — forecast years cover ${span(explicit)}. Leave Forecast years empty to stage every split year, or include these in it.`;
 		}
 	}
 	if (cov === null) return null;

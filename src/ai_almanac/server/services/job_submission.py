@@ -740,7 +740,8 @@ def blend_split_errors(
         if missing:
             errors.append(
                 f"{label} years {_year_span(missing)} have no forecast data — "
-                f"forecast years cover {_year_span(sorted(staged))}."
+                f"forecast years cover {_year_span(sorted(staged))}. Clear forecast years "
+                "to stage every split year, or include these in it."
             )
     return errors
 
