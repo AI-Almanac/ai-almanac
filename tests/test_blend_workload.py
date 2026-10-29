@@ -93,7 +93,9 @@ def test_a_local_blend_trains_with_onset_blending_from_its_recipe(
     # Per-point summaries get unit centroids; the pooled summary is left alone.
     assert centroided == ["summary_models_fixed_cutoff_2022.csv"]
     assert (output_dir / "summary_models_fixed_cutoff_2022.csv").read_bytes() == b"with centroids"
-    assert ("day-level blend is not trained" in capsys.readouterr().out) is day_level
+    # The day-level blend is onset_blending's random forest, trained with the rest.
+    assert ("random_forest" in recipe["evaluation"]) is day_level
+    assert "Model blending complete" in capsys.readouterr().out
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
@@ -312,8 +314,9 @@ def test_local_forecast_writes_daily_scores_only_when_the_blend_has_a_day_level_
     assert daily.exists() is has_day_level_model
 
 
+@pytest.mark.parametrize("day_level", [False, True])
 def test_a_blend_onset_blending_trained_forecasts_with_its_trained_blend(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, day_level: bool
 ) -> None:
     import pandas as pd
 
@@ -335,7 +338,10 @@ def test_a_blend_onset_blending_trained_forecasts_with_its_trained_blend(
             weekly = pd.DataFrame(
                 {"id": ["10.00_40.00"], "time": ["2026-06-01"], "cv_week1": [0.5]}
             )
-            return SimpleNamespace(weekly=weekly)
+            daily = None
+            if day_level:
+                daily = weekly.assign(p_day_1=0.25, p_later=0.75)
+            return SimpleNamespace(weekly=weekly, daily=daily)
 
     monkeypatch.setitem(sys.modules, "onset_blending", SimpleNamespace(TrainedBlend=TrainedBlend))
     workflow = _load_workflow()
@@ -354,3 +360,11 @@ def test_a_blend_onset_blending_trained_forecasts_with_its_trained_blend(
     assert applied == [{"aifs": live}]
     weekly = (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_text()
     assert weekly.splitlines() == ["id,time,cv_week1", "10.00_40.00,2026-06-01,0.5"]
+    # The day-level blend's probabilities by lead day, when the blend has one.
+    daily = output_dir / workflow.DAILY_FORECAST_FILENAME
+    assert daily.exists() is day_level
+    if day_level:
+        assert daily.read_text().splitlines() == [
+            "id,time,cv_week1,p_day_1,p_later",
+            "10.00_40.00,2026-06-01,0.5,0.25,0.75",
+        ]

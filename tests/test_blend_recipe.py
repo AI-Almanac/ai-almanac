@@ -183,11 +183,38 @@ def test_a_job_without_models_or_their_files_is_refused(tmp_path: Path) -> None:
         blend_recipe.blend_config(_job(model_files={"aifs_ensv2": []}), work_dir=tmp_path)
 
 
+def test_a_day_level_blend_is_the_random_forest_with_the_jobs_settings(tmp_path: Path) -> None:
+    params = {
+        **_job()["blend_params"],
+        "day_level": {"years_per_fold": 2, "trees": 50, "max_depth": None, "min_samples_leaf": 5},
+    }
+
+    plain = blend_recipe.blend_config(_job(), work_dir=tmp_path)
+    defaults = blend_recipe.blend_config(_job(train_day_level_blend=True), work_dir=tmp_path)
+    tuned = blend_recipe.blend_config(
+        _job(train_day_level_blend=True, blend_params=params), work_dir=tmp_path
+    )
+
+    assert "random_forest" not in plain["evaluation"]
+    assert defaults["evaluation"]["random_forest"] == {}
+    # Unset settings keep the forest's defaults.
+    assert tuned["evaluation"]["random_forest"] == {
+        "years_per_fold": 2,
+        "trees": 50,
+        "min_samples_leaf": 5,
+    }
+
+
 def test_the_recipe_is_a_valid_blend_config(tmp_path: Path) -> None:
     onset_blending = pytest.importorskip("onset_blending")
 
     config = onset_blending.BlendConfig.from_dict(
         blend_recipe.blend_config(_job(), work_dir=tmp_path)
     )
+    with_forest = onset_blending.BlendConfig.from_dict(
+        blend_recipe.blend_config(_job(train_day_level_blend=True), work_dir=tmp_path)
+    )
 
     assert config.model_names == ("aifs_ensv2", "aifsv2")
+    assert config.evaluation.random_forest is None
+    assert with_forest.evaluation.random_forest.name == "blended_forest"

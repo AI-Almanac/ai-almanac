@@ -41,6 +41,11 @@ ADM3_WEIGHTS = Path("Monsoon_Data") / "grid_to_district_mapping.csv"
 # Registered dimension roles (data_sources._forecast_dims) as BlendConfig names.
 _ROLE_NAMES = {"init_time": "time", "step": "day", "member": "number", "lat": "lat", "lon": "lon"}
 
+# A job's day-level settings (server DayLevelSettings) as onset_blending's
+# random forest settings; an unset one keeps the forest's default, which is
+# onset_forest's (the workflow's day-level blend).
+_FOREST_SETTINGS = ("years_per_fold", "trees", "max_depth", "min_samples_leaf", "max_samples")
+
 # Stored formula texts name the climatology features as the workflow's
 # connector did; onset_blending calls them prob_clim.
 _OLD_CLIMATOLOGY_FEATURE = "prob_clim_mr"
@@ -114,6 +119,12 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
     }
     if params.get("true_holdout_years"):
         years["true_holdout"] = _years(params["true_holdout_years"])
+    evaluation = {
+        "years": years,
+        "formulas": {"blended_model": formula(params.get("formula_text"), model_names)},
+    }
+    if job.get("train_day_level_blend"):
+        evaluation["random_forest"] = random_forest(params.get("day_level"))
     return {
         "name": job.get("blend_name") or "blend",
         "domain": domain,
@@ -134,11 +145,15 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
             "cv_by_year": False,
             "min_onset_years": int(params.get("min_onset_years") or DEFAULT_MIN_ONSET_YEARS),
         },
-        "evaluation": {
-            "years": years,
-            "formulas": {"blended_model": formula(params.get("formula_text"), model_names)},
-        },
+        "evaluation": evaluation,
     }
+
+
+def random_forest(settings: dict | None) -> dict:
+    """The day-level blend: onset_blending's random forest, scored and saved
+    as the workflow's (blended_forest), with the job's day-level settings."""
+    settings = settings or {}
+    return {key: settings[key] for key in _FOREST_SETTINGS if settings.get(key) is not None}
 
 
 def _years(value) -> list[int]:

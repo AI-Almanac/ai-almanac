@@ -2,9 +2,10 @@
 
 Training goes through onset_blending (`run`): the job config becomes a
 BlendConfig (envs/blend_recipe.py), and every stage stays in memory as
-arrays, with no wide intermediate tables. The Modal workflow
-(modal/blending_app.py) is still loaded, with a local stand-in for modal, for
-what has not moved: the day-level blend, unit centroids, and scoring blends
+arrays, with no wide intermediate tables; the day-level blend
+(train_day_level_blend) is its random forest, trained and scored with the
+rest. The Modal workflow (modal/blending_app.py) is still loaded, with a local
+stand-in for modal, for what has not moved: unit centroids, and scoring blends
 trained before onset_blending.
 """
 
@@ -162,8 +163,9 @@ def blending_root() -> Path:
 
 def run(config: dict, output_dir: Path) -> None:
     """Train a blend with onset_blending: its evaluation files (the summaries
-    the app reads), the trained blend live forecasts apply (TRAINED_BLEND) and
-    its recipe (config.yml), into output_dir."""
+    the app reads, the day-level blend's rows among them), the trained blend
+    live forecasts apply (TRAINED_BLEND) and its recipe (config.yml), into
+    output_dir."""
     from onset_blending import BlendConfig
     from onset_blending.training import Resources, train
 
@@ -179,10 +181,6 @@ def run(config: dict, output_dir: Path) -> None:
     print(f"==> Trained: {timings}", flush=True)
     result.save(output_dir, intermediates=())
     _attach_unit_centroids(output_dir)
-    if config.get("train_day_level_blend"):
-        # The day-level blend still trains from the workflow's wide day-level
-        # table; it moves to onset_blending's arrays next.
-        print("==> The day-level blend is not trained on this path yet; skipped", flush=True)
     print("==> Model blending complete", flush=True)
 
 

@@ -75,16 +75,21 @@ def _local_trained_blend(blend_output_uri: str) -> Path | None:
 def _forecast_with_trained_blend(
     path: Path, live_forecast_paths: dict[str, Path], region_id: str | None, output_dir: Path
 ) -> None:
-    """The blend's probabilities for every live issue date. The files must
-    cover what the blend was trained on (members, lead days, domain, units,
-    daily aggregation); anything more is trimmed, anything less refuses."""
+    """The blend's probabilities for every live issue date, and its day-level
+    blend's by lead day when it has one. The files must cover what the blend
+    was trained on (members, lead days, domain, units, daily aggregation);
+    anything more is trimmed, anything less refuses."""
     from onset_blending import TrainedBlend
 
     blend = TrainedBlend.load(path)
     forecast = blend.forecast(dict(live_forecast_paths))
     workflow = _load_workflow()
+    daily = forecast.daily
     scores = workflow._with_live_centroids(
-        workflow.LiveScores(weekly_csv=forecast.weekly.to_csv(index=False).encode("utf-8")),
+        workflow.LiveScores(
+            weekly_csv=forecast.weekly.to_csv(index=False).encode("utf-8"),
+            daily_csv=None if daily is None else daily.to_csv(index=False).encode("utf-8"),
+        ),
         region_id,
     )
     output_dir.mkdir(parents=True, exist_ok=True)

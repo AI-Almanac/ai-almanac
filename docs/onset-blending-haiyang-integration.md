@@ -249,6 +249,14 @@ on. Each observation source records what its dates mark
 (`obs_date_marks`: CHIRPS `start`, IMD `end`), so blends align them with the
 forecasts' lead days.
 
-The checkout pin above stays for what has not moved: the Modal workflow, the
-day-level blend, the ADM3 district weights, and scoring blends trained before
-this change.
+The day-level blend (`train_day_level_blend`) is the package's random forest
+(`evaluation.random_forest`, onset-forest's numerics on arrays), trained and
+scored with the weekly blend: its rows (`blended_forest`) are in the same
+summaries, and a live forecast writes its daily probabilities
+(`daily_onset_probabilities.csv`). The job's day-level settings (years per
+fold, trees, depth, leaf size, bootstrap share) carry over.
+
+The checkout pin above stays for what has not moved: the Modal workflow
+(whose day-level blend still uses `onset-forest`), the ADM3 district weights,
+and scoring blends trained before this change, which is also why the local
+blend env keeps `onset-forest`.
