@@ -116,27 +116,50 @@ def resolve_data_source(init_source: str):
         raise ValueError(
             f"Unknown forecast init source {init_source!r}; known: {sorted(INIT_SOURCES)}"
         )
-    import earth2studio.data as e2s_data
-
-    cls = getattr(e2s_data, entry["earth2studio_class"])
     # Initial conditions are kept on disk only where earth2studio's data cache
     # has a folder of its own (EARTH2STUDIO_DATA_CACHE): otherwise it shares
     # the model weights' cache root, which on Modal is a Volume re-uploaded on
     # every commit. The local runner gives a season's rollouts one, so models
     # and retries that read the same fields share a download, and clears it
     # once the season is stored (job_workload._run_forecast).
-    keep = bool(os.environ.get("EARTH2STUDIO_DATA_CACHE"))
+    return _source(entry, cache=bool(os.environ.get("EARTH2STUDIO_DATA_CACHE")))
+
+
+def _source(entry: dict, *, cache: bool, verbose: bool = True):
+    """An INIT_SOURCES entry's earth2studio source, read through its mirrors."""
+    import earth2studio.data as e2s_data
+
+    cls = getattr(e2s_data, entry["earth2studio_class"])
     mirrors = entry.get("mirrors")
     if not mirrors:
-        return cls(cache=keep)
+        return cls(cache=cache, verbose=verbose)
     sources = []
     for mirror in mirrors:
-        source = cls(source=mirror, cache=keep)
+        source = cls(source=mirror, cache=cache, verbose=verbose)
         source.client.maximum_retries = MIRROR_RETRIES
         source.client.retry_after = MIRROR_RETRY_SECONDS
         source.client = CompleteDownloads(source.client)
         sources.append((mirror, source))
     return FallbackSource(entry["display_name"], sources)
+
+
+def _model_ifs_through_mirrors(model_cls) -> None:
+    """The AIFS models fetch their invariant fields (land-sea mask, orography,
+    ...) from IFS themselves on their first load, through earth2studio's
+    defaults: the AWS mirror alone, retried 500 times two minutes apart. Point
+    that fetch at the mirrors and retry limits the rollouts use."""
+    import sys
+
+    import earth2studio.data as e2s_data
+
+    module = sys.modules.get(model_cls.__module__)
+    if getattr(module, "IFS", None) is not e2s_data.IFS:
+        return
+
+    def ifs(*, cache: bool = True, verbose: bool = True):
+        return _source(INIT_SOURCES["ifs"], cache=cache, verbose=verbose)
+
+    module.IFS = ifs
 
 
 class CompleteDownloads:
@@ -193,8 +216,30 @@ def load_model(model_class: str):
 
     torch.set_default_device("cuda")
     cls = getattr(px, model_class)
+    _model_ifs_through_mirrors(cls)
     package = cls.load_default_package()
-    return cls.load_model(package)
+    model = cls.load_model(package)
+    applied = _aifs_speedups().apply(model)
+    if applied:
+        print(f"==> {model_class} speed-ups: {', '.join(applied)}", flush=True)
+    return model
+
+
+def _aifs_speedups():
+    """forecast_model_opt/aifs_speedups.py, loaded from beside this file: in
+    the package and in the Modal image alike, which bundles them together."""
+    import importlib.util
+    import sys
+
+    if (loaded := sys.modules.get("aifs_speedups")) is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location(
+        "aifs_speedups", Path(__file__).parent / "forecast_model_opt" / "aifs_speedups.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class PlanError(ValueError):

@@ -170,6 +170,10 @@ def _run_forecast(job_id: str, config: dict) -> None:
     # on unified-memory hosts the chat model wakes into what is left over.
     # Matches the Modal inference images (modal/forecasts_app.py).
     process_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    # Compiled kernels (aifs_speedups' compiled blocks, Triton's own) kept
+    # between jobs, so only the first compiles them.
+    process_env.setdefault("TORCHINDUCTOR_CACHE_DIR", str(cache_dir() / "torchinductor"))
+    process_env.setdefault("TRITON_CACHE_DIR", str(cache_dir() / "triton"))
 
     print(f"==> Forecast config: {config_path}", flush=True)
 

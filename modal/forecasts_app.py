@@ -55,6 +55,12 @@ GCP_SECRET_NAME = "gcp-service-account"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 FORECAST_MODELS_YAML = _REPO_ROOT / "src/ai_almanac/server/config/forecast_models.yaml"
 FORECAST_PIPELINE_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_pipeline.py"
+# Loaded by forecast_pipeline from forecast_model_opt/ beside it (load_model
+# applies them).
+AIFS_SPEEDUPS_PY = _REPO_ROOT / "src/ai_almanac/server/services/forecast_model_opt/aifs_speedups.py"
+ANEMOI_TRITON_GT_PY = (
+    _REPO_ROOT / "src/ai_almanac/server/services/forecast_model_opt/anemoi_triton_gt.py"
+)
 
 app = modal.App(APP_NAME)
 
@@ -109,6 +115,8 @@ def _inference_image(extras: list[str]) -> modal.Image:
         )
         .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
+        .add_local_file(AIFS_SPEEDUPS_PY, "/almanac/forecast_model_opt/aifs_speedups.py")
+        .add_local_file(ANEMOI_TRITON_GT_PY, "/almanac/forecast_model_opt/anemoi_triton_gt.py")
     )
 
 

@@ -418,3 +418,37 @@ def test_cli_env_prepare_if_stale_updates_only_what_changed(
     else:
         assert calls == []
         assert "up to date" in result.output
+
+
+def test_cli_check_speedups_runs_in_the_models_forecast_env(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from ai_almanac.cli import app
+
+    calls: list[dict] = []
+
+    class _Done:
+        stdout = iter(["PASS\n"])
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_run(cmd, env=None, environment="base"):
+        calls.append({"cmd": cmd, "env": env, "environment": environment})
+        return _Done()
+
+    monkeypatch.setattr("ai_almanac.envs.manager.run_forecast", fake_run)
+
+    result = CliRunner().invoke(app, ["env", "check-speedups", "--steps", "4"])
+
+    assert result.exit_code == 0, result.output
+    assert "PASS" in result.output
+    [call] = calls
+    assert call["environment"] == "aifs2ens"
+    assert call["cmd"][1].endswith("aifs_speedups_check.py")
+    assert call["env"]["EARTH2STUDIO_DATA_CACHE"].endswith("aifs-speedups-check")
+
+    unknown = CliRunner().invoke(app, ["env", "check-speedups", "--model", "Pangu6"])
+    assert unknown.exit_code == 1

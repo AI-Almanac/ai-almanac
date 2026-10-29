@@ -431,6 +431,53 @@ def env_prepare(
         typer.echo(f"local model {settings.llm_model} ready")
 
 
+@env_app.command("check-speedups")
+def env_check_speedups(
+    model: Annotated[str, typer.Option(help="earth2studio model class to check.")] = "AIFS2ENS",
+    steps: Annotated[int, typer.Option(help="Rollout steps compared.")] = 8,
+    date: Annotated[str, typer.Option(help="Initial condition (UTC).")] = "2026-05-13T00:00",
+) -> None:
+    """Check the AIFS inference speed-ups in the model's forecast env.
+
+    The exact ones bit for bit, the others against the forecast's chance
+    spread. Run after the forecast environment is upgraded: a pass names the
+    anemoi-models version to add to aifs_speedups.VERIFIED. Uses the GPU.
+    """
+    from pathlib import Path
+
+    import ai_almanac.envs as envs
+    from ai_almanac.envs.manager import run_forecast
+    from ai_almanac.paths import cache_dir
+    from ai_almanac.settings import get_packaged_forecast_models, reload_settings
+
+    reload_settings()
+    entry = next(
+        (
+            m
+            for m in get_packaged_forecast_models().get("models") or []
+            if m.get("earth2studio_class") == model
+        ),
+        None,
+    )
+    if entry is None:
+        typer.secho(f"No registered forecast model runs {model}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    env = os.environ.copy()
+    # Kept, so a second check downloads no initial conditions.
+    env["EARTH2STUDIO_DATA_CACHE"] = str(cache_dir() / "aifs-speedups-check")
+    script = Path(envs.__file__).with_name("aifs_speedups_check.py")
+    command = ["python", str(script), "--model", model, "--steps", str(steps), "--date", date]
+    try:
+        process = run_forecast(command, env=env, environment=entry.get("env") or "base")
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    assert process.stdout is not None
+    for line in process.stdout:
+        typer.echo(line, nl=False)
+    raise typer.Exit(code=process.wait())
+
+
 @env_app.command("info")
 def env_info() -> None:
     """Show installed package versions in the benchmark environment."""

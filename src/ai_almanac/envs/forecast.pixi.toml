@@ -97,6 +97,13 @@ earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "1a6e
 onnxruntime-gpu = { url = "https://files.pythonhosted.org/packages/fa/96/1be0b9711a614861fbf5c0c85c4da3aa2321f9da0b4734a717eb606f70ab/onnxruntime_gpu-1.29.0-cp312-cp312-manylinux_2_34_aarch64.whl" }
 
 # aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
+# Its own mappers run on PyG, but the speed-ups give it Triton graph attention
+# and compiled blocks (forecast_model_opt/aifs_speedups.py): the same C
+# compiler and CUDA headers as aifs2ens below, for the same reasons.
+[feature.aifs2.dependencies]
+gcc = "*"
+cuda-cudart-dev = "13.*"
+
 [feature.aifs2.pypi-dependencies]
 earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "1a6e3669db0b04c1b42253cf0e631ed1ee8817ea", extras = ["aifs2", "data"] }
 # Season reassembly (forecast_pipeline) runs on dask; base has it from the

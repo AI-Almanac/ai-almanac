@@ -319,7 +319,7 @@ def test_ifs_reads_azure_then_aws_then_ecmwf_without_lingering_on_any(monkeypatc
     from ai_almanac.server.services import forecast_pipeline
 
     class _IFS:
-        def __init__(self, source, cache):
+        def __init__(self, source, cache, verbose=True):
             self.source = source
             self.client = SimpleNamespace(maximum_retries=500, retry_after=120)
 
@@ -346,7 +346,7 @@ def test_initial_conditions_are_kept_only_where_the_data_cache_has_its_own_folde
     built = []
 
     class _Source:
-        def __init__(self, cache, source=None):
+        def __init__(self, cache, source=None, verbose=True):
             built.append(cache)
             self.client = SimpleNamespace(maximum_retries=500, retry_after=120)
 
@@ -383,6 +383,31 @@ def test_an_ifs_download_lands_under_its_name_only_once_complete(tmp_path):
 
     CompleteDownloads(_Client(fails=False)).retrieve({"target": str(target), "param": "2t"})
     assert target.read_bytes() == b"GRIB"
+
+
+def test_an_aifs_models_own_invariant_fetch_reads_the_mirrors(monkeypatch):
+    import sys
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    class _IFS:
+        def __init__(self, source="aws", cache=True, verbose=True):
+            self.source, self.cache = source, cache
+            self.client = SimpleNamespace(maximum_retries=500, retry_after=120)
+
+    package = SimpleNamespace(data=SimpleNamespace(IFS=_IFS))
+    monkeypatch.setitem(sys.modules, "earth2studio", package)
+    monkeypatch.setitem(sys.modules, "earth2studio.data", package.data)
+    model_module = SimpleNamespace(IFS=_IFS)
+    monkeypatch.setitem(sys.modules, "fake_aifs_model", model_module)
+    model_cls = type("AIFS2", (), {"__module__": "fake_aifs_model"})
+
+    forecast_pipeline._model_ifs_through_mirrors(model_cls)
+    # What the AIFS models run on their first load.
+    source = model_module.IFS(cache=True, verbose=False)
+
+    assert [name for name, _ in source._sources] == ["azure", "aws", "ecmwf"]
+    assert all(m.cache and m.client.maximum_retries == 3 for _, m in source._sources)
 
 
 def test_aurora_1p5_steps_hourly_and_writes_only_its_hourly_precipitation():

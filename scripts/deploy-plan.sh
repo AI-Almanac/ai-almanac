@@ -41,6 +41,7 @@ ships_to_modal() {
 	modal/* | pixi.lock) return 0 ;;
 	src/ai_almanac/server/config/forecast_models.yaml) return 0 ;;
 	src/ai_almanac/server/services/forecast_pipeline.py) return 0 ;;
+	src/ai_almanac/server/services/forecast_model_opt/*) return 0 ;;
 	src/ai_almanac/server/services/e2s.py) return 0 ;;
 	src/ai_almanac/server/services/focus_area.py) return 0 ;;
 	src/ai_almanac/server/services/romp.py) return 0 ;;
