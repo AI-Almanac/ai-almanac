@@ -903,7 +903,7 @@
 							to use its defaults. Changing them redefines what counts as onset for both the observations
 							and every model.
 						</p>
-						<div class="field-row" data-tour="blend-onset">
+						<div class="onset-grid" data-tour="blend-onset">
 							<label class="field">
 								{@render fieldLabel(
 									'Onset definition',
@@ -916,6 +916,18 @@
 									>
 									{#each Object.entries(ONSET_DEFINITIONS) as [id, definition] (id)}
 										<option value={id}>{definition.label}</option>
+									{/each}
+								</select>
+							</label>
+							<label class="field">
+								{@render fieldLabel(
+									'Wet window',
+									`Days the onset rainfall is counted over, from a rain day. Default ${onsetRule.window_days} days.`
+								)}
+								<select bind:value={onsetWindowDays}>
+									<option value="">Default ({onsetRule.window_days} days)</option>
+									{#each ONSET_WINDOW_DAYS as days (days)}
+										<option value={String(days)}>{days} days</option>
 									{/each}
 								</select>
 							</label>
@@ -958,36 +970,26 @@
 								/>
 							</label>
 						</div>
-						<div class="field-row">
+						<div class="onset-switches">
 							{#if seasonMask}
-								<label class="field">
+								<label class="checkbox">
+									<input type="checkbox" bind:checked={seasonMaskOn} />
 									{@render fieldLabel(
 										seasonMask,
 										"On by default: train and score only the woredas where June–September brings at least about half the year's rain. Off: every woreda."
 									)}
-									<input type="checkbox" bind:checked={seasonMaskOn} />
 								</label>
 							{/if}
-							<label class="field">
-								{@render fieldLabel(
-									'Wet window',
-									`Days the onset rainfall is counted over, from a rain day. Default ${onsetRule.window_days} days.`
-								)}
-								<select bind:value={onsetWindowDays}>
-									<option value="">Default ({onsetRule.window_days} days)</option>
-									{#each ONSET_WINDOW_DAYS as days (days)}
-										<option value={String(days)}>{days} days</option>
-									{/each}
-								</select>
-							</label>
-							<label class="field">
+							<label class="checkbox">
+								<input type="checkbox" bind:checked={dryCheck} />
 								{@render fieldLabel(
 									'Dry-spell check',
 									`Off by default. On: an onset is not counted if followed by ${onsetRule.dry_spell.summary}.`
 								)}
-								<input type="checkbox" bind:checked={dryCheck} />
 							</label>
-							{#if dryCheck}
+						</div>
+						{#if dryCheck}
+							<div class="onset-grid">
 								<label class="field">
 									{@render fieldLabel(
 										'Dry spell (days)',
@@ -1012,8 +1014,8 @@
 										placeholder={String(onsetRule.dry_spell.window_days)}
 									/>
 								</label>
-							{/if}
-						</div>
+							</div>
+						{/if}
 						{#if onsetError}
 							<p class="error">{onsetError}</p>
 						{/if}
@@ -1491,6 +1493,19 @@
 	.field-row .field {
 		flex: 1;
 		min-width: 12rem;
+	}
+
+	/* The onset fields in even columns, so the rows line up. */
+	.onset-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+		gap: 1rem;
+	}
+
+	.onset-switches {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.5rem;
 	}
 
 	.advanced summary {
