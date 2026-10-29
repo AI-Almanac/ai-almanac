@@ -42,11 +42,36 @@
 	let creating = $state(false);
 	let loaded = $state(false);
 
-	// A forecast's logical identity: same blend + models + init source is "the
-	// same forecast," just re-run. An "update" reuses this spec, so weekly
-	// refreshes share a key.
+	// A forecast's logical identity: same blend + models + each model's init
+	// source and member count is "the same forecast," just re-run. An "update"
+	// reuses this spec, so weekly refreshes share a key.
 	function specKey(f: Forecast): string {
-		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${f.init_source ?? 'gfs'}`;
+		const pairs = (values: Record<string, string | number> | undefined) =>
+			Object.entries(values ?? {})
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([name, value]) => `${name}=${value}`)
+				.join(',');
+		const sources = pairs(f.init_sources) || (f.init_source ?? 'gfs');
+		return `${f.blend_id}::${[...f.forecast_model_ids].sort().join(',')}::${sources}::${pairs(f.ensemble_members)}`;
+	}
+
+	function sourceName(id: string): string {
+		return initSources.find((s) => s.id === id)?.display_name ?? id;
+	}
+
+	// "aifs_ensv2 (IFS (ECMWF), 8 members), graphcast (GFS (NOAA))".
+	function modelSummary(f: Forecast): string {
+		return f.forecast_model_ids
+			.map((name) => {
+				const source = f.init_sources?.[name];
+				const members = f.ensemble_members?.[name];
+				const details = [
+					...(source ? [sourceName(source)] : []),
+					...(members ? [`${members} members`] : [])
+				];
+				return details.length ? `${name} (${details.join(', ')})` : name;
+			})
+			.join(', ');
 	}
 
 	const newestRun = (runs: Forecast[]): Forecast =>
@@ -114,7 +139,12 @@
 	let blendId = $state('');
 	let forecastModelIds = $state<string[]>([]);
 	let initTime = $state('');
-	let initSource = $state('gfs');
+	// '' until the models are known; then the default common source.
+	let initSource = $state('');
+	// Advanced, per blend member: an init source other than initSource, and an
+	// ensemble's member count (unset = the model's own).
+	let modelInitSources = $state<Record<string, string>>({});
+	let memberCounts = $state<Record<string, number | undefined>>({});
 	// bind:value on <input type="number"> yields a number (or undefined when
 	// empty/invalid), not a string — unlike initTime's plain text input.
 	let maxIssueDates = $state<number | undefined>(undefined);
@@ -153,8 +183,63 @@
 		}
 	});
 
+	type ModelEntry = (typeof availableModels)[number];
+
+	const chosenModels = $derived(availableModels.filter((m) => forecastModelIds.includes(m.name)));
+
+	// Only sources every chosen model can start from are offered for all of
+	// them; Advanced sets one per model from that model's own list.
+	const commonSources = $derived(
+		initSources.filter((s) =>
+			(chosenModels.length ? chosenModels : availableModels).every((m) =>
+				m.model.init_sources.includes(s.id)
+			)
+		)
+	);
+
+	$effect(() => {
+		if (commonSources.some((s) => s.id === initSource)) return;
+		initSource = commonSources.find((s) => s.id === 'gfs')?.id ?? commonSources[0]?.id ?? '';
+	});
+
+	function sourcesFor(model: ForecastModel): InitSource[] {
+		return initSources.filter((s) => model.init_sources.includes(s.id));
+	}
+
+	function sourceFor(entry: ModelEntry): string {
+		const sources = entry.model.init_sources;
+		const chosen = modelInitSources[entry.name];
+		if (chosen && sources.includes(chosen)) return chosen;
+		if (sources.includes(initSource)) return initSource;
+		return sources.includes('gfs') ? 'gfs' : sources[0];
+	}
+
+	function setSource(entry: ModelEntry, source: string) {
+		modelInitSources = { ...modelInitSources, [entry.name]: source };
+	}
+
+	// A member count set below the model's own, or null.
+	function fewerMembers(entry: ModelEntry): number | null {
+		const count = memberCounts[entry.name];
+		const all = entry.model.ensemble_members;
+		return all != null && count != null && !Number.isNaN(count) && count < all ? count : null;
+	}
+
+	const memberCountsValid = $derived(
+		chosenModels.every((entry) => {
+			const count = memberCounts[entry.name];
+			const all = entry.model.ensemble_members;
+			if (all == null || count == null || Number.isNaN(count)) return true;
+			return Number.isInteger(count) && count >= 1 && count <= all;
+		})
+	);
+
 	const formValid = $derived(
-		blendId !== '' && forecastModelIds.length > 0 && unlinkedModels.length === 0
+		blendId !== '' &&
+			forecastModelIds.length > 0 &&
+			unlinkedModels.length === 0 &&
+			chosenModels.every((entry) => sourceFor(entry)) &&
+			memberCountsValid
 	);
 
 	async function load() {
@@ -299,7 +384,9 @@
 		blendId = '';
 		forecastModelIds = [];
 		initTime = '';
-		initSource = 'gfs';
+		initSource = '';
+		modelInitSources = {};
+		memberCounts = {};
 		maxIssueDates = undefined;
 	}
 
@@ -323,9 +410,26 @@
 		submitting = true;
 		submitError = null;
 		try {
+			// Only what differs from the common source and the models' own counts.
+			const sources = Object.fromEntries(
+				chosenModels
+					.map((entry) => [entry.name, sourceFor(entry)])
+					.filter(([, source]) => source !== initSource)
+			);
+			const members = Object.fromEntries(
+				chosenModels.flatMap((entry) => {
+					const count = memberCounts[entry.name];
+					const all = entry.model.ensemble_members;
+					return all != null && count != null && !Number.isNaN(count) && count !== all
+						? [[entry.name, count]]
+						: [];
+				})
+			);
 			const params: ForecastCreate['params'] = {
 				...(initTime.trim() ? { init_time: initTime.trim() } : {}),
-				...(initSource.trim() ? { init_source: initSource.trim() } : {}),
+				...(initSource ? { init_source: initSource } : {}),
+				...(Object.keys(sources).length ? { init_sources: sources } : {}),
+				...(Object.keys(members).length ? { ensemble_members: members } : {}),
 				...(maxIssueDates != null && !Number.isNaN(maxIssueDates)
 					? { max_issue_dates: maxIssueDates }
 					: {})
@@ -475,15 +579,27 @@
 					{/if}
 				</label>
 
-				<label class="field" data-tour="forecast-init">
-					<span>Initialization data source</span>
-					<select bind:value={initSource}>
-						{#each initSources as source (source.id)}
-							<option value={source.id}>{source.display_name}</option>
-						{/each}
-					</select>
-					<p class="muted">The conditions each live rollout is initialized from.</p>
-				</label>
+				{#if commonSources.length > 0}
+					<label class="field" data-tour="forecast-init">
+						<span>Initialization data source</span>
+						<select bind:value={initSource}>
+							{#each commonSources as source (source.id)}
+								<option value={source.id}>{source.display_name}</option>
+							{/each}
+						</select>
+						<p class="muted">
+							The conditions each live rollout is initialized from. Only sources every chosen model
+							can start from are listed; set one per model under Advanced.
+						</p>
+					</label>
+				{:else}
+					<div class="field" data-tour="forecast-init">
+						<span>Initialization data source</span>
+						<p class="muted">
+							The chosen models share no initialization source. Choose one for each under Advanced.
+						</p>
+					</div>
+				{/if}
 
 				{#if selectedBlend}
 					<fieldset class="field" data-tour="forecast-models">
@@ -513,6 +629,52 @@
 
 					<details class="advanced">
 						<summary>Advanced</summary>
+						{#if chosenModels.length > 0}
+							<fieldset class="field">
+								<legend>Each model</legend>
+								{#each chosenModels as entry (entry.name)}
+									<div class="model-settings">
+										<span class="model-name" title={entry.name}>{entry.model.display_name}</span>
+										<label class="field">
+											<span>Initialization data source</span>
+											<select
+												value={sourceFor(entry)}
+												onchange={(event) => setSource(entry, event.currentTarget.value)}
+											>
+												{#each sourcesFor(entry.model) as source (source.id)}
+													<option value={source.id}>{source.display_name}</option>
+												{/each}
+											</select>
+										</label>
+										{#if entry.model.ensemble_members != null}
+											<label class="field">
+												<span>Ensemble members</span>
+												<input
+													type="number"
+													min="1"
+													max={entry.model.ensemble_members}
+													step="1"
+													bind:value={memberCounts[entry.name]}
+													placeholder={`${entry.model.ensemble_members} (all)`}
+												/>
+											</label>
+										{/if}
+									</div>
+									{#if fewerMembers(entry) != null}
+										<p class="muted">
+											{fewerMembers(entry)} of {entry.model.ensemble_members} members rolls out faster,
+											but the blend's onset probabilities become shares of fewer members than it was trained
+											on: coarser and noisier.
+										</p>
+									{/if}
+								{/each}
+								{#if !memberCountsValid}
+									<p class="error">
+										Ensemble members must be a whole number up to each model's own.
+									</p>
+								{/if}
+							</fieldset>
+						{/if}
 						<label class="field">
 							<span>Init time (UTC)</span>
 							<input type="text" bind:value={initTime} placeholder="defaults to latest available" />
@@ -556,7 +718,7 @@
 						</h1>
 						<p class="detail-meta">
 							{#if selected.forecast_model_ids.length}
-								<span>{selected.forecast_model_ids.join(', ')}</span>
+								<span>{modelSummary(selected)}</span>
 								<span class="dot" aria-hidden="true">·</span>
 							{/if}
 							<span>Submitted {formatDate(selected.created_at)}</span>
@@ -772,6 +934,26 @@
 		gap: 0.5rem;
 		font-size: 0.9rem;
 		color: var(--color-text);
+	}
+
+	.model-settings {
+		display: grid;
+		grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.2fr) minmax(8rem, 0.8fr);
+		align-items: end;
+		gap: 0.6rem;
+	}
+
+	.model-name {
+		align-self: center;
+		font-size: 0.9rem;
+		color: var(--color-text);
+		overflow-wrap: anywhere;
+	}
+
+	@media (max-width: 40rem) {
+		.model-settings {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	.advanced summary {

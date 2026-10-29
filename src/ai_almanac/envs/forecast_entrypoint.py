@@ -73,16 +73,25 @@ def _local_trained_blend(blend_output_uri: str) -> Path | None:
 
 
 def _forecast_with_trained_blend(
-    path: Path, live_forecast_paths: dict[str, Path], region_id: str | None, output_dir: Path
+    path: Path,
+    live_forecast_paths: dict[str, Path],
+    region_id: str | None,
+    output_dir: Path,
+    *,
+    fewer_members: bool = False,
 ) -> None:
     """The blend's probabilities for every live issue date, and its day-level
     blend's by lead day when it has one. The files must cover what the blend
     was trained on (members, lead days, domain, units, daily aggregation);
-    anything more is trimmed, anything less refuses."""
+    anything more is trimmed, anything less refuses — except, with
+    fewer_members, an ensemble's members (the job set its member counts)."""
     from onset_blending import TrainedBlend
 
     blend = TrainedBlend.load(path)
-    forecast = blend.forecast(dict(live_forecast_paths))
+    # Only asked for when needed: onset_blending pins from before the option
+    # existed still score every other forecast.
+    options = {"fewer_members": True} if fewer_members else {}
+    forecast = blend.forecast(dict(live_forecast_paths), **options)
     workflow = _load_workflow()
     daily = forecast.daily
     scores = workflow._with_live_centroids(
@@ -109,7 +118,11 @@ def _score_live(
     if trained is not None:
         print(f"==> Forecasting live season {live_year} with the trained blend", flush=True)
         _forecast_with_trained_blend(
-            trained, live_forecast_paths, blend_config.get("region_id"), output_dir
+            trained,
+            live_forecast_paths,
+            blend_config.get("region_id"),
+            output_dir,
+            fewer_members=bool(config.get("ensemble_members")),
         )
         return
     workflow = _load_workflow()

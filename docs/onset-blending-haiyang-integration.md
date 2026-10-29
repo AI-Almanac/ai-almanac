@@ -281,5 +281,7 @@ fold, trees, depth, leaf size, bootstrap share) carry over.
 
 The checkout pin above stays for what has not moved: the Modal workflow
 (whose day-level blend still uses `onset-forest`), the ADM3 district weights,
-and scoring blends trained before this change, which is also why the local
-blend env keeps `onset-forest`.
+and scoring blends trained before this change. The local blend env no longer
+installs `onset-forest`: every local blend is scored by onset_blending from its
+saved trained blend, forest included. A local day-level blend trained before
+trained blends were saved would need it to be scored live.

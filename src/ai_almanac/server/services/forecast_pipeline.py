@@ -73,16 +73,32 @@ CANONICAL_LEAD_DAY = 45
 # (soil, precip, ...) over a season-to-date:
 #   - GFS: NOAA operational analysis (2021->present). The default — proven in
 #     production for the registered models.
-#   - IFS: ECMWF HRES operational analysis (2024-03->present).
+#   - IFS: ECMWF HRES operational analysis (2024-03->present), from ECMWF's
+#     open data. The same files are mirrored on Azure, AWS and ECMWF's own
+#     server; `mirrors` is the order they are tried in (see FallbackSource).
+#
+# Not every model can start from every source: a registry entry's
+# `init_sources` lists the ones that carry all of its inputs (see
+# ForecastModel.init_sources).
 #
 # ERA5 is intentionally absent: NCAR_ERA5 (free, live) has no precip in its
 # lexicon so it can't init precip models, and ARCO (free, complete) is frozen
 # at 2025-12-31. The only free+live+complete ERA5 is CDS, which needs an API
 # key — wire that (and its auth) before offering ERA5 here.
-INIT_SOURCES: dict[str, dict[str, str]] = {
+INIT_SOURCES: dict[str, dict[str, Any]] = {
     "gfs": {"display_name": "GFS (NOAA)", "earth2studio_class": "GFS"},
-    "ifs": {"display_name": "IFS (ECMWF)", "earth2studio_class": "IFS"},
+    "ifs": {
+        "display_name": "IFS (ECMWF)",
+        "earth2studio_class": "IFS",
+        "mirrors": ("azure", "aws", "ecmwf"),
+    },
 }
+
+# How hard ecmwf-opendata tries one mirror before FallbackSource moves on. Its
+# own default (500 retries, 120 s apart) would sit on an unavailable mirror for
+# most of a day.
+MIRROR_RETRIES = 3
+MIRROR_RETRY_SECONDS = 10
 
 
 def resolve_data_source(init_source: str):
@@ -90,7 +106,8 @@ def resolve_data_source(init_source: str):
 
     The init source is part of a trajectory's identity (D6): the same model and
     date initialized from GFS versus ERA5 are different assets, so serving one
-    for the other silently corrupts results. Register new earth2studio sources
+    for the other silently corrupts results. Mirrors of one source hold the
+    same data, so they share its identity. Register new earth2studio sources
     here by adding to INIT_SOURCES.
     """
     name = init_source.lower()
@@ -101,10 +118,48 @@ def resolve_data_source(init_source: str):
         )
     import earth2studio.data as e2s_data
 
+    cls = getattr(e2s_data, entry["earth2studio_class"])
     # No disk cache: every init date is fetched once (the trajectory store is
     # the cache), and on Modal the default cache root is the weights Volume, so
     # cached init data would be uploaded on every commit.
-    return getattr(e2s_data, entry["earth2studio_class"])(cache=False)
+    mirrors = entry.get("mirrors")
+    if not mirrors:
+        return cls(cache=False)
+    sources = []
+    for mirror in mirrors:
+        source = cls(source=mirror, cache=False)
+        source.client.maximum_retries = MIRROR_RETRIES
+        source.client.retry_after = MIRROR_RETRY_SECONDS
+        sources.append((mirror, source))
+    return FallbackSource(entry["display_name"], sources)
+
+
+class FallbackSource:
+    """An earth2studio data source that asks each mirror in turn, moving to
+    the next when one fails, and raises only when every mirror has.
+
+    Data that doesn't exist (a field a date's files lack) fails on every
+    mirror alike, so the error raised names each mirror's failure."""
+
+    def __init__(self, name: str, sources: list[tuple[str, Any]]):
+        if not sources:
+            raise ValueError("FallbackSource needs at least one source")
+        self._name = name
+        self._sources = sources
+
+    def __call__(self, time, variable):
+        failures = []
+        for mirror, source in self._sources:
+            try:
+                return source(time, variable)
+            except Exception as exc:  # noqa: BLE001 - any failure moves to the next mirror
+                failures.append(f"{mirror}: {exc}")
+                if len(failures) < len(self._sources):
+                    print(
+                        f"    {self._name} {mirror} mirror failed ({exc}); trying the next",
+                        flush=True,
+                    )
+        raise RuntimeError(f"{self._name}: every mirror failed — " + "; ".join(failures))
 
 
 def load_model(model_class: str):
@@ -158,15 +213,25 @@ def _setting_or_default(model_entry: dict, key: str, default):
 
 
 def run_rollout(
-    model, data, init_times: list[str], nsteps: int, io_backend, ensemble_spec: EnsembleSpec | None
+    model,
+    data,
+    init_times: list[str],
+    nsteps: int,
+    io_backend,
+    ensemble_spec: EnsembleSpec | None,
+    output_coords=None,
 ):
-    """Roll one model forward, writing to io_backend. Deterministic models use
-    the single-trajectory workflow; ensemble models use earth2studio's ensemble
-    workflow with a Zero perturbation (spread is the model's internal noise)."""
+    """Roll one model forward, writing to io_backend (only output_coords' slice
+    of the output when given). Deterministic models use the single-trajectory
+    workflow; ensemble models use earth2studio's ensemble workflow with a Zero
+    perturbation (spread is the model's internal noise)."""
+    from collections import OrderedDict
+
+    output_coords = output_coords or OrderedDict()
     if ensemble_spec is None:
         from earth2studio.run import deterministic
 
-        deterministic(init_times, nsteps, model, data, io_backend)
+        deterministic(init_times, nsteps, model, data, io_backend, output_coords=output_coords)
         return
     from earth2studio.perturbation import Zero
     from earth2studio.run import ensemble
@@ -180,12 +245,29 @@ def run_rollout(
         io_backend,
         Zero(),
         batch_size=ensemble_spec.batch_size,
+        output_coords=output_coords,
     )
 
 
+# Hours per model step, where it isn't 6. Aurora 1.5 steps hourly: its
+# precipitation is an hourly accumulation, and the archives sum 24 of them a
+# day (its 6-hourly variant reports only each 6 h's last hour).
+_STEP_HOURS = {"GenCastMini": 12, "Aurora1p5": 1}
+
+
 def lead_steps(lead_hours: list[int], model_class: str) -> tuple[int, int]:
-    step_hours = 12 if model_class == "GenCastMini" else 6
+    step_hours = _STEP_HOURS.get(model_class, 6)
     return max(lead_hours) // step_hours, step_hours
+
+
+def precip_output(model) -> str | None:
+    """The model output daily totals are summed from, or None when its outputs
+    can't be listed (the rollout then writes every output, as it once did)."""
+    try:
+        outputs = {str(v) for v in model.output_coords(model.input_coords())["variable"]}
+    except Exception:  # noqa: BLE001 - a model without listable outputs still rolls out
+        return None
+    return next((name for name in variable_candidates("tp") if name in outputs), None)
 
 
 # ---------------------------------------------------------------------------
@@ -335,11 +417,20 @@ class ForecastModel:
     earth2studio_class: str
     env: str
     ensemble: EnsembleSpec | None
+    # The init sources that carry every input the model reads, in the
+    # registry's order; every source when the entry doesn't say.
+    init_sources: tuple[str, ...] = tuple(INIT_SOURCES)
 
     def __post_init__(self) -> None:
         # The registry id is a trajectory-store path segment.
         if not _is_plain_identifier(self.registry_id):
             raise PlanError(f"Forecast model id {self.registry_id!r} isn't a plain identifier")
+        unknown = [source for source in self.init_sources if source not in INIT_SOURCES]
+        if unknown or not self.init_sources:
+            raise PlanError(
+                f"forecast model {self.registry_id!r} lists init sources {list(self.init_sources)}; "
+                f"choose from {sorted(INIT_SOURCES)}"
+            )
 
     @classmethod
     def parse(cls, entry: dict) -> ForecastModel:
@@ -350,6 +441,7 @@ class ForecastModel:
                 earth2studio_class=str(entry["earth2studio_class"]),
                 env=str(entry.get("env") or "base"),
                 ensemble=ensemble_config(entry),
+                init_sources=tuple(str(s) for s in entry.get("init_sources") or INIT_SOURCES),
             )
         except PlanError:
             raise
@@ -360,11 +452,18 @@ class ForecastModel:
                 f"forecast model {entry.get('id')!r} has unusable settings: {exc}"
             ) from exc
 
+    @property
+    def default_init_source(self) -> str:
+        """GFS where the model can start from it (the long-standing default),
+        else the first source it can."""
+        return "gfs" if "gfs" in self.init_sources else self.init_sources[0]
+
     def to_dict(self) -> dict:
         out = {
             "id": self.registry_id,
             "earth2studio_class": self.earth2studio_class,
             "env": self.env,
+            "init_sources": list(self.init_sources),
         }
         if self.ensemble is not None:
             out |= {
@@ -417,6 +516,10 @@ class ModelRun:
     unit_cvt: float
     spatial_bounds: Bounds | None
     issue_dates: tuple[dt.date, ...]
+    init_source: str
+    # An ensemble rolled out with other than the registry's member count, or
+    # None for the registry's own (and for deterministic models).
+    members: int | None = None
 
     def __post_init__(self) -> None:
         # Member names become file and temp-dir names in the runners.
@@ -427,25 +530,65 @@ class ModelRun:
                 f"No issue dates for {self.member} this season yet. The blend scores "
                 "every member together, so each needs at least one."
             )
+        if self.init_source not in self.model.init_sources:
+            raise PlanError(
+                f"{self.member} runs {self.model.registry_id}, which can't start from "
+                f"{_init_source_name(self.init_source)}: it needs one of "
+                + ", ".join(_init_source_name(s) for s in self.model.init_sources)
+                + "."
+            )
+        if self.members is not None:
+            if self.model.ensemble is None:
+                raise PlanError(
+                    f"{self.member} runs {self.model.registry_id}, which isn't an ensemble, "
+                    "so it has no member count to set"
+                )
+            if not 1 <= self.members <= self.model.ensemble.members:
+                raise PlanError(
+                    f"{self.member} can run 1 to {self.model.ensemble.members} members, "
+                    f"not {self.members}"
+                )
+
+    @property
+    def ensemble(self) -> EnsembleSpec | None:
+        """How the member's model is rolled out, with its member count."""
+        spec = self.model.ensemble
+        if spec is None or self.members is None:
+            return spec
+        return EnsembleSpec(members=self.members, batch_size=min(spec.batch_size, self.members))
 
     @classmethod
-    def parse(cls, raw: dict) -> ModelRun:
+    def parse(cls, raw: dict, default_init_source: str | None = None) -> ModelRun:
+        """From to_dict's output. Plans saved before init sources were set per
+        member name theirs once for the plan: default_init_source."""
+        members = raw.get("members")
         return cls(
             member=str(raw["member"]),
             model=ForecastModel.parse(raw["model"]),
             unit_cvt=_parse_unit_cvt(raw["unit_cvt"]),
             spatial_bounds=Bounds.parse(raw.get("spatial_bounds")),
             issue_dates=tuple(dt.date.fromisoformat(d) for d in raw["issue_dates"]),
+            init_source=str(raw.get("init_source") or default_init_source),
+            members=None if members is None else int(members),
         )
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "member": self.member,
             "model": self.model.to_dict(),
             "unit_cvt": self.unit_cvt,
             "spatial_bounds": self.spatial_bounds.to_dict() if self.spatial_bounds else None,
             "issue_dates": [d.isoformat() for d in self.issue_dates],
+            "init_source": self.init_source,
         }
+        if self.members is not None:
+            out["members"] = self.members
+        return out
+
+
+def _init_source_name(source: str) -> str:
+    entry = INIT_SOURCES.get(source)
+    return entry["display_name"] if entry else repr(source)
 
 
 @dataclass(frozen=True)
@@ -453,13 +596,10 @@ class SeasonPlan:
     """Every member's season rollout for one forecast job, frozen at submission."""
 
     season: int
-    init_source: str
     lead_day: int
     runs: tuple[ModelRun, ...]
 
     def __post_init__(self) -> None:
-        if self.init_source not in INIT_SOURCES:
-            raise PlanError(f"Unknown init source {self.init_source!r}")
         if not self.runs:
             raise PlanError("A season plan needs at least one model run")
         members = [run.member for run in self.runs]
@@ -476,11 +616,13 @@ class SeasonPlan:
                 "existed. Submit the forecast again."
             )
         try:
+            default_init_source = raw.get("init_source")
+            if default_init_source is not None and default_init_source not in INIT_SOURCES:
+                raise PlanError(f"Unknown init source {default_init_source!r}")
             return cls(
                 season=int(raw["season"]),
-                init_source=str(raw["init_source"]),
                 lead_day=int(raw["lead_day"]),
-                runs=tuple(ModelRun.parse(run) for run in raw["runs"]),
+                runs=tuple(ModelRun.parse(run, default_init_source) for run in raw["runs"]),
             )
         except PlanError:
             raise
@@ -490,7 +632,6 @@ class SeasonPlan:
     def to_dict(self) -> dict:
         return {
             "season": self.season,
-            "init_source": self.init_source,
             "lead_day": self.lead_day,
             "runs": [run.to_dict() for run in self.runs],
         }
@@ -503,7 +644,9 @@ class SeasonPlan:
 
     def key(self, run: ModelRun) -> TrajectoryKey:
         bounds = run.spatial_bounds if run.model.ensemble is not None else None
-        return TrajectoryKey(run.model.registry_id, self.init_source, self.lead_day, bounds)
+        return TrajectoryKey(
+            run.model.registry_id, run.init_source, self.lead_day, bounds, run.members
+        )
 
     def dates_by_key(self) -> dict[TrajectoryKey, tuple[dt.date, ...]]:
         """Every issue date each store key needs. Members whose archives link to
@@ -519,8 +662,14 @@ class SeasonPlan:
 
     def covered_dates(self) -> dict[str, list[str]]:
         """Issue dates each member's rollout covers: what the readiness gate
-        checks and what the coverage markers record."""
-        return {run.member: [d.isoformat() for d in run.issue_dates] for run in self.runs}
+        checks and what the coverage markers record. Only members rolled out
+        with the registry's member count: a trajectory set tracks those, so a
+        run with other members is never served from, or recorded in, one."""
+        return {
+            run.member: [d.isoformat() for d in run.issue_dates]
+            for run in self.runs
+            if run.members is None
+        }
 
 
 def plan_season(
@@ -528,8 +677,10 @@ def plan_season(
     *,
     season: int,
     season_start_month_day: str,
-    init_source: str,
     today: dt.date,
+    init_source: str | None = None,
+    init_sources: Mapping[str, str] | None = None,
+    ensemble_members: Mapping[str, int] | None = None,
     max_issue_dates: int | None = None,
     lead_day: int = CANONICAL_LEAD_DAY,
 ) -> SeasonPlan:
@@ -542,9 +693,23 @@ def plan_season(
     climatology grid is daily, so any date within the season scores. When no
     archive has a schedule, each member keeps its weekday fallback.
 
+    A member starts from its `init_sources` entry, else `init_source`, else its
+    model's default (ForecastModel.default_init_source); a source the model
+    can't start from is refused. `ensemble_members` sets an ensemble member's
+    member count, up to its registry's; the registry's own count is recorded as
+    no override, so such runs share the stored trajectories.
+
     `max_issue_dates` keeps only the most recent N dates — a smoke-test knob, as
     is a `lead_day` shorter than the canonical horizon.
     """
+    init_sources = init_sources or {}
+    ensemble_members = ensemble_members or {}
+    for what, overrides in (("init sources", init_sources), ("member counts", ensemble_members)):
+        unknown = sorted(set(overrides) - set(members))
+        if unknown:
+            raise PlanError(f"{what} given for models not in this forecast: {', '.join(unknown)}")
+    if init_source is not None and init_source not in INIT_SOURCES:
+        raise PlanError(f"Unknown init source {init_source!r}")
     if max_issue_dates is not None and max_issue_dates < 1:
         raise PlanError(f"max_issue_dates must be at least 1, got {max_issue_dates}")
     season_start = _parse_season_start(season_start_month_day, season)
@@ -562,8 +727,21 @@ def plan_season(
         )
         if max_issue_dates is not None:
             dates = dates[-max_issue_dates:]
-        runs.append(ModelRun(member, model, layout.unit_cvt, layout.spatial_bounds, tuple(dates)))
-    return SeasonPlan(season, init_source, lead_day, tuple(runs))
+        count = ensemble_members.get(member)
+        if count is not None and model.ensemble is not None and count == model.ensemble.members:
+            count = None
+        runs.append(
+            ModelRun(
+                member,
+                model,
+                layout.unit_cvt,
+                layout.spatial_bounds,
+                tuple(dates),
+                init_sources.get(member) or init_source or model.default_init_source,
+                count,
+            )
+        )
+    return SeasonPlan(season, lead_day, tuple(runs))
 
 
 def _daily_precip_trajectory(
@@ -581,14 +759,19 @@ def _daily_precip_trajectory(
     `bounds` when given. Ensemble members are kept.
     """
     import shutil
+    from collections import OrderedDict
 
     import dask
+    import numpy as np
     import xarray as xr
     from earth2studio.io import ZarrBackend
 
     nsteps = (max_lead_day * 24) // step_hours
     zarr_path = scratch_root / f"{issue_date.isoformat()}.zarr"
     io_backend = ZarrBackend(str(zarr_path))
+    # Only precipitation is kept, so only it is written: every output at every
+    # step would be hundreds of GB for an ensemble or an hourly model.
+    precip = precip_output(model)
     t0 = time.perf_counter()
     run_rollout(
         model,
@@ -597,6 +780,7 @@ def _daily_precip_trajectory(
         nsteps,
         io_backend,
         ensemble_spec,
+        OrderedDict(variable=np.array([precip])) if precip else None,
     )
     print(f"    rollout done in {time.perf_counter() - t0:.1f}s", flush=True)
     t0 = time.perf_counter()
@@ -741,10 +925,16 @@ class TrajectoryKey:
     # members at the native global grid would be ~5 GB a date); deterministic
     # ones stay global, so one entry serves every region.
     bounds: Bounds | None = None
+    # An ensemble's member count when it isn't the registry's (ModelRun.members):
+    # stored under its own `n{N}` prefix, so no run is served another count's
+    # trajectories. The registry's count keeps the prefix it always had.
+    members: int | None = None
 
     def __post_init__(self) -> None:
         if self.lead_day < 1:
             raise ValueError(f"lead_day must be at least 1, got {self.lead_day}")
+        if self.members is not None and self.members < 1:
+            raise ValueError(f"members must be at least 1, got {self.members}")
 
     def prefix(self, store: Path | str) -> str:
         domain = (
@@ -753,9 +943,10 @@ class TrajectoryKey:
             if self.bounds is not None
             else ""
         )
+        count = f"/n{self.members}" if self.members is not None else ""
         return (
             f"{str(store).rstrip('/')}/{self.model_id}/{self.init_source}"
-            f"/v{TRAJECTORY_CACHE_VERSION}/lead{self.lead_day}d{domain}"
+            f"/v{TRAJECTORY_CACHE_VERSION}/lead{self.lead_day}d{domain}{count}"
         )
 
     def uri(self, store: Path | str, issue_date: dt.date) -> str:
@@ -955,7 +1146,7 @@ def roll_out_issue_dates(
                     key.lead_day,
                     step_hours,
                     scratch_root,
-                    run.model.ensemble,
+                    run.ensemble,
                     key.bounds,
                 )
                 write_stored_trajectory(store, key, issue_date, trajectory)
@@ -1190,9 +1381,9 @@ def variable_candidates(variable: str) -> tuple[str, ...]:
         "q850": ("q850",),
         "z500": ("z500",),
         # AIFS/FuXi/GraphCastSmall name their precip output "tp06" (6h
-        # accumulation); GenCastMini's 12h-step output is "tp12". None of the
-        # registered models expose a plain "tp".
-        "tp": ("tp06", "tp12", "tp"),
+        # accumulation); GenCastMini's 12h-step output is "tp12", Aurora 1.5's
+        # hourly one "tp1h". None of the registered models expose a plain "tp".
+        "tp": ("tp06", "tp12", "tp1h", "tp"),
     }
     return known.get(variable, (variable,))
 

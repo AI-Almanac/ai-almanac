@@ -141,6 +141,200 @@ def test_plan_keys_trajectories_by_the_registry_model_not_the_member():
     assert plan.key(plan.run("aifs_v2_india_0_25")) == TrajectoryKey("aifs2", "gfs")
 
 
+IFS_ONLY_ENS = ForecastModel.parse(
+    {
+        "id": "aifs2ens",
+        "earth2studio_class": "AIFS2ENS",
+        "ensemble": True,
+        "nensemble": 26,
+        "nensemble_batch": 4,
+        "init_sources": ["ifs"],
+    }
+)
+
+
+def test_each_member_starts_from_its_own_init_source():
+    plan = _plan(
+        {
+            "aifs_ensv2": (IFS_ONLY_ENS, ArchiveLayout.parse({})),
+            "fuxi": (FUXI, ArchiveLayout.parse({})),
+        },
+        init_source=None,
+        init_sources={"fuxi": "ifs"},
+    )
+
+    assert plan.run("fuxi").init_source == "ifs"
+    # No source asked for: the model's default, which for an IFS-only model is IFS.
+    assert plan.run("aifs_ensv2").init_source == "ifs"
+    assert plan.key(plan.run("fuxi")) == TrajectoryKey("fuxi", "ifs")
+
+
+def test_a_plan_without_a_source_starts_each_model_from_its_default():
+    plan = _plan({"fuxi": (FUXI, ArchiveLayout.parse({}))}, init_source=None)
+
+    assert plan.run("fuxi").init_source == "gfs"
+
+
+def test_a_source_a_model_cant_start_from_is_refused():
+    with pytest.raises(PlanError, match="can't start from GFS \\(NOAA\\): it needs one of IFS"):
+        _plan({"aifs_ensv2": (IFS_ONLY_ENS, ArchiveLayout.parse({}))}, init_source="gfs")
+
+
+def test_overrides_for_models_outside_the_forecast_are_refused():
+    with pytest.raises(PlanError, match="init sources given for models not in this forecast: aifs"):
+        _plan({"fuxi": (FUXI, ArchiveLayout.parse({}))}, init_sources={"aifs": "ifs"})
+
+
+def test_an_ensemble_can_run_fewer_members_under_its_own_store_prefix():
+    plan = _plan(
+        {"aifs_ensv2": (IFS_ONLY_ENS, ArchiveLayout.parse({}))},
+        init_source="ifs",
+        ensemble_members={"aifs_ensv2": 2},
+    )
+    run = plan.run("aifs_ensv2")
+
+    assert run.members == 2
+    assert run.ensemble == EnsembleSpec(members=2, batch_size=2)
+    assert plan.key(run).prefix("store").endswith("/lead45d/n2")
+    # A trajectory set tracks the registry's member count only.
+    assert plan.covered_dates() == {}
+    assert SeasonPlan.parse(json.loads(json.dumps(plan.to_dict()))) == plan
+
+
+def test_the_registry_member_count_is_no_override():
+    plan = _plan(
+        {"aifs_ensv2": (IFS_ONLY_ENS, ArchiveLayout.parse({}))},
+        init_source="ifs",
+        ensemble_members={"aifs_ensv2": 26},
+    )
+
+    assert plan.run("aifs_ensv2").members is None
+    assert plan.key(plan.run("aifs_ensv2")).prefix("store").endswith("/lead45d")
+    assert "aifs_ensv2" in plan.covered_dates()
+
+
+@pytest.mark.parametrize(
+    ("member", "model", "count", "message"),
+    [
+        ("aifs_ensv2", IFS_ONLY_ENS, 27, "can run 1 to 26 members, not 27"),
+        ("fuxi", FUXI, 4, "isn't an ensemble"),
+    ],
+)
+def test_a_member_count_the_model_cant_run_is_refused(member, model, count, message):
+    with pytest.raises(PlanError, match=message):
+        _plan(
+            {member: (model, ArchiveLayout.parse({}))},
+            init_source="ifs",
+            ensemble_members={member: count},
+        )
+
+
+def test_a_plan_saved_with_one_init_source_reads_back_with_it_on_every_run():
+    stored = _plan({"fuxi": (FUXI, ArchiveLayout.parse({}))}, init_source="ifs").to_dict()
+    for run in stored["runs"]:
+        del run["init_source"]
+        del run["model"]["init_sources"]
+    stored["init_source"] = "ifs"
+
+    plan = SeasonPlan.parse(stored)
+
+    assert plan.run("fuxi").init_source == "ifs"
+    assert plan.run("fuxi").model.init_sources == ("gfs", "ifs")
+
+
+def test_every_registry_model_parses_with_its_init_sources():
+    from ai_almanac.settings import get_packaged_forecast_models
+
+    models = {
+        entry["id"]: ForecastModel.parse(entry)
+        for entry in get_packaged_forecast_models()["models"]
+    }
+
+    assert models["aifs2ens"].init_sources == ("ifs",)
+    assert models["aurora1p5"].init_sources == ("ifs",)
+    assert models["aurora1p5"].earth2studio_class == "Aurora1p5"
+    assert models["graphcast"].init_sources == ("gfs", "ifs")
+
+
+def test_a_failed_mirror_falls_back_to_the_next():
+    from ai_almanac.server.services.forecast_pipeline import FallbackSource
+
+    asked = []
+
+    def mirror(name, fails):
+        def source(time, variable):
+            asked.append(name)
+            if fails:
+                raise OSError(f"{name} unavailable")
+            return f"{name} data"
+
+        return source
+
+    source = FallbackSource(
+        "IFS", [("azure", mirror("azure", True)), ("aws", mirror("aws", False)), ("ecmwf", None)]
+    )
+
+    assert source("t", ["u10m"]) == "aws data"
+    assert asked == ["azure", "aws"]
+
+
+def test_every_mirror_failing_names_each_failure():
+    from ai_almanac.server.services.forecast_pipeline import FallbackSource
+
+    def broken(name):
+        def source(time, variable):
+            raise OSError(f"{name} unavailable")
+
+        return source
+
+    source = FallbackSource("IFS", [("azure", broken("azure")), ("aws", broken("aws"))])
+
+    with pytest.raises(RuntimeError, match="azure: azure unavailable; aws: aws unavailable"):
+        source("t", ["u10m"])
+
+
+def test_ifs_reads_azure_then_aws_then_ecmwf_without_lingering_on_any(monkeypatch):
+    import sys
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    class _IFS:
+        def __init__(self, source, cache):
+            self.source = source
+            self.client = SimpleNamespace(maximum_retries=500, retry_after=120)
+
+    package = SimpleNamespace(data=SimpleNamespace(IFS=_IFS))
+    monkeypatch.setitem(sys.modules, "earth2studio", package)
+    monkeypatch.setitem(sys.modules, "earth2studio.data", package.data)
+
+    source = forecast_pipeline.resolve_data_source("ifs")
+
+    mirrors = source._sources
+    assert [name for name, _ in mirrors] == ["azure", "aws", "ecmwf"]
+    assert all(m.client.maximum_retries == forecast_pipeline.MIRROR_RETRIES for _, m in mirrors)
+    assert all(m.client.retry_after == forecast_pipeline.MIRROR_RETRY_SECONDS for _, m in mirrors)
+
+
+def test_aurora_1p5_steps_hourly_and_writes_only_its_hourly_precipitation():
+    from ai_almanac.server.services.forecast_pipeline import lead_steps, precip_output
+
+    class _Aurora:
+        def input_coords(self):
+            return {"variable": ["t2m", "msl"]}
+
+        def output_coords(self, _coords):
+            return {"variable": ["t2m", "msl", "tp1h", "sf1h"]}
+
+    assert lead_steps([45 * 24], "Aurora1p5") == (1080, 1)
+    assert precip_output(_Aurora()) == "tp1h"
+
+
+def test_a_model_whose_outputs_cant_be_listed_writes_everything():
+    from ai_almanac.server.services.forecast_pipeline import precip_output
+
+    assert precip_output(object()) is None
+
+
 def _stored_plan() -> dict:
     return _plan({"fuxi": (FUXI, ArchiveLayout.parse({}))}).to_dict()
 
@@ -152,6 +346,8 @@ def _stored_plan() -> dict:
         (lambda raw: raw["runs"][0].update(issue_dates=["not-a-date"]), "Malformed"),
         (lambda raw: raw["runs"][0].update(issue_dates=[]), "No issue dates for fuxi"),
         (lambda raw: raw.update(init_source="era5"), "Unknown init source"),
+        (lambda raw: raw["runs"][0].update(init_source="era5"), "can't start from 'era5'"),
+        (lambda raw: raw["runs"][0].update(members=4), "isn't an ensemble"),
         (lambda raw: raw.update(lead_day=0), "lead_day"),
         (lambda raw: raw["runs"].append(raw["runs"][0]), "member twice"),
         (lambda raw: raw["runs"][0]["model"].pop("earth2studio_class"), "missing"),
@@ -300,7 +496,7 @@ def _trajectory():
 MAY_4, MAY_7, MAY_11 = dt.date(2026, 5, 4), dt.date(2026, 5, 7), dt.date(2026, 5, 11)
 AIFS_GFS = TrajectoryKey("aifs", "gfs")
 FUXI_GFS = TrajectoryKey("fuxi", "gfs")
-FUXI_RUN = ModelRun("fuxi", FUXI, 1.0, None, (MAY_4, MAY_7))
+FUXI_RUN = ModelRun("fuxi", FUXI, 1.0, None, (MAY_4, MAY_7), "gfs")
 
 
 def test_stored_trajectory_reads_back_what_was_written(tmp_path):
@@ -566,7 +762,7 @@ def test_season_assembly_crops_each_issue_date_to_the_region_in_archive_units(tm
     from ai_almanac.server.services.forecast_pipeline import assemble_season_netcdf
 
     _store_season(tmp_path / "store", FUXI_GFS, (MAY_4, MAY_7))
-    run = ModelRun("fuxi", FUXI, 2.0, Bounds(2.0, 3.0, 11.0, 12.0), (MAY_4, MAY_7))
+    run = ModelRun("fuxi", FUXI, 2.0, Bounds(2.0, 3.0, 11.0, 12.0), (MAY_4, MAY_7), "gfs")
 
     tp = _assembled_tp(
         assemble_season_netcdf(
@@ -614,7 +810,7 @@ def test_season_assembly_from_gcs_holds_a_bounded_number_of_downloads(tmp_path, 
 
     monkeypatch.setattr(forecast_pipeline, "_gcs_blob", _Blob)
     monkeypatch.setattr(forecast_pipeline, "ASSEMBLY_DOWNLOADS", 2)
-    run = ModelRun("fuxi", FUXI, 1.0, None, dates)
+    run = ModelRun("fuxi", FUXI, 1.0, None, dates, "gfs")
 
     tp = _assembled_tp(
         forecast_pipeline.assemble_season_netcdf(
@@ -813,11 +1009,10 @@ def test_ensembles_are_stored_over_their_archive_domain_only():
     )
     plan = SeasonPlan(
         2026,
-        "gfs",
         45,
         (
-            ModelRun("ens", ens, 1000.0, india, (MAY_4,)),
-            ModelRun("det", AIFS2, 1000.0, india, (MAY_4,)),
+            ModelRun("ens", ens, 1000.0, india, (MAY_4,), "gfs"),
+            ModelRun("det", AIFS2, 1000.0, india, (MAY_4,), "gfs"),
         ),
     )
 
@@ -841,7 +1036,7 @@ def test_a_live_file_declares_the_archives_units_and_aggregation(tmp_path):
     ens = ForecastModel.parse(
         {"id": "aifs2ens", "earth2studio_class": "AIFS2ENS", "ensemble": True}
     )
-    run = ModelRun("ens", ens, 1000.0, None, (MAY_4,))
+    run = ModelRun("ens", ens, 1000.0, None, (MAY_4,), "gfs")
     key = TrajectoryKey("aifs2ens", "gfs")
     write_stored_trajectory(tmp_path / "store", key, MAY_4, daily_totals(_six_hourly(3), 2, 6))
 

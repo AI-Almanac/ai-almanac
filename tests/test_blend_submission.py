@@ -702,6 +702,97 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     assert all(run.issue_dates[-1] <= date(2026, 6, 15) for run in plan.runs)
 
 
+async def _ensemble_and_graphcast_blend(user_id: str) -> str:
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source("obs", "Ethiopia obs", "gs://data/obs/eth", grid_step=0.25)
+    ens_id = await _seed_source(
+        "model",
+        "AIFS ENS v2 Ethiopia",
+        "gs://data/models/aifs2ens",
+        grid_step=0.25,
+        extra_metadata={"forecast_model_id": "aifs2ens"},
+    )
+    graphcast_id = await _seed_source(
+        "model",
+        "GraphCast Ethiopia",
+        "gs://data/models/graphcast",
+        grid_step=0.25,
+        extra_metadata={"forecast_model_id": "graphcast_operational"},
+    )
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="ethiopia",
+            obs_dataset_id=obs_id,
+            model_ids=[ens_id, graphcast_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
+    return blend.id
+
+
+@pytest.mark.asyncio
+async def test_a_forecast_starts_each_model_from_its_own_source_and_member_count(
+    client, user_id: str, _stub_runner, monkeypatch
+) -> None:
+    from datetime import date
+
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.tables import forecast_runs
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 6, 15))
+    blend_id = await _ensemble_and_graphcast_blend(user_id)
+
+    forecast = await job_submission.create_forecast_for_user(
+        job_submission.ForecastCreate(
+            blend_id=blend_id,
+            params=job_submission.ForecastParams(
+                init_sources={"graphcast_ethiopia": "gfs"},
+                ensemble_members={"aifs_ens_v2_ethiopia": 8},
+            ),
+        ),
+        user_id,
+    )
+
+    assert forecast.init_sources == {"aifs_ens_v2_ethiopia": "ifs", "graphcast_ethiopia": "gfs"}
+    assert forecast.ensemble_members == {"aifs_ens_v2_ethiopia": 8}
+    async with get_db() as conn:
+        row = (
+            (await conn.execute(sa.select(jobs).where(jobs.c.id == forecast.id)))
+            .mappings()
+            .fetchone()
+        )
+        sets = (await conn.execute(sa.select(forecast_runs.c.model_name))).scalars().all()
+    # Fewer members than the registry's: rolled out, never served from a set.
+    assert row["runner_request"]["resources"]["gpus"] == 1
+    assert sorted(sets) == ["graphcast_ethiopia"]
+
+
+@pytest.mark.asyncio
+async def test_a_forecast_asking_a_model_for_a_source_it_cant_use_is_refused(
+    client, user_id: str, _stub_runner, monkeypatch
+) -> None:
+    from datetime import date
+
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 6, 15))
+    blend_id = await _ensemble_and_graphcast_blend(user_id)
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.create_forecast_for_user(
+            job_submission.ForecastCreate(
+                blend_id=blend_id, params=job_submission.ForecastParams(init_source="gfs")
+            ),
+            user_id,
+        )
+    assert exc.value.status_code == 409
+    assert "can't start from GFS (NOAA)" in exc.value.detail
+
+
 @pytest.mark.asyncio
 async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
     client, user_id: str, _stub_runner, monkeypatch

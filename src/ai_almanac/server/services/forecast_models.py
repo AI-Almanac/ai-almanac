@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError, model_validator
 
-from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES
+from ai_almanac.server.services.forecast_pipeline import INIT_SOURCES, ensemble_config
 from ai_almanac.settings import forecast_model_by_id, get_packaged_forecast_models
 
 logger = logging.getLogger(__name__)
@@ -139,12 +139,24 @@ def live_forecast_compatibility(
 
 
 async def load_forecast_model_registry() -> list[dict]:
-    """Public model list: registry entries with Modal-only fields stripped."""
+    """Public model list: registry entries with Modal-only fields stripped,
+    plus what the run form offers per model: the init sources it can start
+    from, and an ensemble's member count (None for deterministic models)."""
     registry = get_packaged_forecast_models()
     return [
         {k: v for k, v in model.items() if k not in _INTERNAL_FIELDS}
+        | {
+            "init_sources": list(model.get("init_sources") or INIT_SOURCES),
+            "ensemble_members": ensemble_member_count(model),
+        }
         for model in registry.get("models") or []
     ]
+
+
+def ensemble_member_count(model: dict) -> int | None:
+    """The members a registry model's ensemble rolls out by default."""
+    spec = ensemble_config(model)
+    return spec.members if spec else None
 
 
 def parse_init_source(value: str) -> str:

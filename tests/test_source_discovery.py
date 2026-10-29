@@ -69,7 +69,9 @@ def test_the_file_pattern_is_the_year_in_the_filenames(names, pattern) -> None:
         ("graphcast", 0.25, None),
         ("graphcast", 1.0, "graphcast"),
         ("AIFS_v2", 1.0, None),
-        ("aurora1p5", 0.25, None),
+        ("aurora1p5", 0.25, "aurora1p5"),
+        # The original Aurora is another model: no live link to Aurora 1.5.
+        ("aurora", 0.25, None),
         ("AIFS_v2", None, None),
     ],
 )

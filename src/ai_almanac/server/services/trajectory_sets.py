@@ -169,7 +169,9 @@ async def mark_coverage_from_config(conn: AsyncConnection, config: dict) -> None
     plan = SeasonPlan.parse(config.get("season_plan"))
     season = str(plan.season)
     for name, dates in plan.covered_dates().items():
-        row = await get_set(conn, model_name=name, init_source=plan.init_source, season=season)
+        row = await get_set(
+            conn, model_name=name, init_source=plan.run(name).init_source, season=season
+        )
         if row is None:
             continue
         await mark_dates_covered(conn, row["id"], dates)

@@ -1,8 +1,11 @@
-"""The onset_blending checkout and the onset-forest package are each pinned in
-two places — the local blend env (`ai_almanac.envs.manager` and
-`envs/blending.pixi.toml` respectively) and the Modal image
-(`modal/blending_app.py`). They drifted once (a99a5034 vs 8ba308eb), so local
-and cloud blends silently ran different code. Keep them identical.
+"""The onset_blending checkout is pinned in two places — the local blend env
+(`ai_almanac.envs.manager`) and the Modal image (`modal/blending_app.py`). They
+drifted once (a99a5034 vs 8ba308eb), so local and cloud blends silently ran
+different code. Keep them identical.
+
+The packages are pinned once each: the local env's onset-blending (whose own
+random forest is its day-level blend) in `envs/blending.pixi.toml`, and the
+Modal workflow's onset-forest in `modal/blending_app.py`.
 
 `modal/blending_app.py` imports `modal` at module scope, which the test env
 need not have, so the Modal side is read from source text.
@@ -34,14 +37,12 @@ def test_blending_repo_pins_match() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", manager.BLENDING_REPO_REF)
 
 
-def _blending_env_forest_pin() -> tuple[str, str]:
+def test_the_local_blend_env_pins_onset_blending_alone_by_commit() -> None:
     manifest = tomllib.loads((_REPO_ROOT / "src/ai_almanac/envs/blending.pixi.toml").read_text())
-    forest = manifest["pypi-dependencies"]["onset-forest"]
-    return forest["git"], forest["rev"]
+    packages = manifest["pypi-dependencies"]
+    assert "onset-forest" not in packages
+    assert re.fullmatch(r"[0-9a-f]{40}", packages["onset-blending"]["rev"])
 
 
-def test_forest_pins_match() -> None:
-    url, rev = _blending_env_forest_pin()
-    assert _modal_constant("FOREST_REPO_URL") == url
-    assert _modal_constant("FOREST_REPO_REF") == rev
-    assert re.fullmatch(r"[0-9a-f]{40}", rev)
+def test_the_modal_forest_pin_is_a_commit() -> None:
+    assert re.fullmatch(r"[0-9a-f]{40}", _modal_constant("FOREST_REPO_REF"))

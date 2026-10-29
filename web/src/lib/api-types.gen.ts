@@ -479,7 +479,8 @@ export interface paths {
         };
         /**
          * Assistant Status
-         * @description Startup progress of the locally run model, for a chat reopened mid-reply.
+         * @description The locally run model's startup progress, for a chat reopened mid-reply,
+         *     and whether a job has it paused, so the chat can say so before a turn.
          *
          *     A turn sent from this page streams its own progress; a page that comes back
          *     to a reply already waiting on the model has no stream, so it polls this.
@@ -2161,6 +2162,8 @@ export interface components {
         /** AssistantStatusOut */
         AssistantStatusOut: {
             startup: components["schemas"]["AssistantStartupOut"] | null;
+            /** Paused */
+            paused?: string | null;
         };
         /**
          * BandStatistics
@@ -3369,11 +3372,7 @@ export interface components {
             blend_id: string;
             /** Forecast Model Ids */
             forecast_model_ids?: string[] | null;
-            /**
-             * @default {
-             *       "init_source": "gfs"
-             *     }
-             */
+            /** @default {} */
             params: components["schemas"]["ForecastParams"];
             /** Run Id */
             run_id?: string | null;
@@ -3390,11 +3389,22 @@ export interface components {
             forecast_model_ids: string[];
             /** Init Time */
             init_time?: string | null;
+            /** Init Source */
+            init_source?: string | null;
             /**
-             * Init Source
-             * @default gfs
+             * Init Sources
+             * @default {}
              */
-            init_source: string;
+            init_sources: {
+                [key: string]: string;
+            };
+            /**
+             * Ensemble Members
+             * @default {}
+             */
+            ensemble_members: {
+                [key: string]: number;
+            };
             /** Region Id */
             region_id?: string | null;
             /** Created At */
@@ -3428,11 +3438,16 @@ export interface components {
             lead_hours?: number[] | null;
             /** Variables */
             variables?: string[] | null;
-            /**
-             * Init Source
-             * @default gfs
-             */
-            init_source: string;
+            /** Init Source */
+            init_source?: string | null;
+            /** Init Sources */
+            init_sources?: {
+                [key: string]: string;
+            } | null;
+            /** Ensemble Members */
+            ensemble_members?: {
+                [key: string]: number;
+            } | null;
             /** Max Issue Dates */
             max_issue_dates?: number | null;
         };

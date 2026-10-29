@@ -76,7 +76,7 @@ gcp_secret = modal.Secret.from_name(GCP_SECRET_NAME)
 # forecast.pixi.toml). A model's `env` field in forecast_models.yaml selects
 # which image runs it; keep these extras in sync with that manifest.
 _INFERENCE_EXTRAS = {
-    "base": ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"],
+    "base": ["aifs", "aifsens", "aurora", "data", "fuxi", "gencast", "graphcast"],
     "aifs2": ["aifs2", "data"],
     "aifs2ens": ["aifs2ens", "data"],
 }
@@ -99,13 +99,13 @@ def _inference_image(extras: list[str]) -> modal.Image:
         .run_commands(
             "python -m pip install --upgrade uv",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-            # Main SHA, not a release: 0.17.0 lacks the AIFS2/AIFS2ENS time-forcing
-            # fix (earth2studio PR #1009). Re-pin to 0.18.0 once tagged. Keep in
-            # sync with src/ai_almanac/envs/forecast.pixi.toml.
+            # The 0.19.0 release commit. Keep in sync with
+            # src/ai_almanac/envs/forecast.pixi.toml.
             f"'earth2studio[{spec}] @ git+https://github.com/NVIDIA/earth2studio.git"
-            "@96a9bd607013783da8560fbb7a0bb13a00018b66'",
+            "@1a6e3669db0b04c1b42253cf0e631ed1ee8817ea'",
             "unset PIP_CONSTRAINT && uv pip install --system --break-system-packages "
-            "google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs 'h5netcdf[h5py]' onnxruntime-gpu pyyaml",
+            "dask google-cloud-storage numpy 'xarray<2026.0.0' zarr gcsfs 'h5netcdf[h5py]' "
+            "onnxruntime-gpu pyyaml",
         )
         .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")

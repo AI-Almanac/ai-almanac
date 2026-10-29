@@ -42,24 +42,27 @@ cuda = "13"
 # Shared conda base — the PyTorch/CUDA + netCDF stack every environment needs. Only
 # the earth2studio extras (with their conflicting anemoi pins) differ per group.
 [dependencies]
-python = "3.11.*"
+# 3.12: earth2studio's graphcast/gencast extras need weathernext, which it
+# only declares for Python 3.12 and later (on 3.11 those models install
+# without their package).
+python = "3.12.*"
 pip = "*"
 pytorch = "*"
 # Prebuilt from conda-forge so the pypi solve never compiles the flash-attn
 # sdist (a 30+ minute CUDA build needing an in-env toolchain). Satisfies the
 # `flash-attn` requirement of every earth2studio AIFS extra — pixi maps the
 # conda package onto the pypi requirement — and is ABI-matched to conda-forge
-# pytorch, unlike upstream's release wheels (pypi-torch-only, no py311 aarch64).
+# pytorch, unlike upstream's release wheels (pypi-torch-only, no aarch64).
 flash-attn = "*"
 netcdf4 = "<1.7.3"
 # python-dateutil 3 breaks the pypi solve: earth2studio needs s3fs, s3fs needs
 # aiobotocore, and every aiobotocore caps python-dateutil<3.
 python-dateutil = "<3"
 h5netcdf = "*"
-# earth2studio's gencast/graphcast extras cap xarray<2026.4.0
-# (google-deepmind/graphcast#213); an uncapped conda solve picks a newer
-# xarray and makes the pypi solve unsatisfiable.
-xarray = "<2026.4.0"
+# weathernext (earth2studio's gencast/graphcast extras) caps xarray<=2026.2.0;
+# an uncapped conda solve picks a newer xarray and makes the pypi solve
+# unsatisfiable.
+xarray = "<=2026.2.0"
 zarr = "*"
 numpy = "*"
 pyyaml = "*"
@@ -68,15 +71,14 @@ pyyaml = "*"
 platformdirs = "*"
 pydantic-settings = "*"
 
-# Pinned to a main SHA rather than a release: 0.17.0 lacks the AIFS2/AIFS2ENS
-# time-forcing fix (earth2studio PR #1009); re-pin to 0.18.0 once it's tagged.
-# This SHA also brings the 0.17.0 GFS fetch hardening (async_workers/retries,
-# retries=3 by default).
+# earth2studio 0.19.0, pinned to its release commit. Keep the rev in step with
+# modal/forecasts_app.py's inference images.
 
-# base: everything whose deps coexist — the non-AIFS models plus AIFS v1
-# (anemoi-models 0.5.1, as proven in the 0.14.0 single-env build).
+# base: everything whose deps coexist — the non-AIFS models (Aurora 1.5 among
+# them, from the `aurora` extra) plus AIFS v1 (anemoi-models 0.5.1, as proven in
+# the 0.14.0 single-env build).
 [feature.base.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "1a6e3669db0b04c1b42253cf0e631ed1ee8817ea", extras = ["aifs", "aifsens", "aurora", "data", "fuxi", "gencast", "graphcast"] }
 
 # onnxruntime-gpu (fuxi extra) pin, linux-aarch64 only. earth2studio's uv
 # source maps onnxruntime-gpu to the ort-cuda-13-nightly feed, whose current
@@ -90,17 +92,33 @@ earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9
 # all PTX, and x86 hosts (e.g. A100 = sm_80) still need those. Pinned as a
 # direct wheel URL (PyPI hosts the identical CUDA-13 build as of 1.29) because
 # a version+index pin conflicts with earth2studio's uv source for the package.
-# cp311 matches the python = "3.11.*" pin above.
+# cp312 matches the python = "3.12.*" pin above.
 [feature.base.target.linux-aarch64.pypi-dependencies]
-onnxruntime-gpu = { url = "https://files.pythonhosted.org/packages/d5/83/07e4e4cef9329fcdbc42035f36f7a9128edd1281264b69054d0bd43a546c/onnxruntime_gpu-1.29.0-cp311-cp311-manylinux_2_34_aarch64.whl" }
+onnxruntime-gpu = { url = "https://files.pythonhosted.org/packages/fa/96/1be0b9711a614861fbf5c0c85c4da3aa2321f9da0b4734a717eb606f70ab/onnxruntime_gpu-1.29.0-cp312-cp312-manylinux_2_34_aarch64.whl" }
 
 # aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
 [feature.aifs2.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs2", "data"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "1a6e3669db0b04c1b42253cf0e631ed1ee8817ea", extras = ["aifs2", "data"] }
+# Season reassembly (forecast_pipeline) runs on dask; base has it from the
+# graphcast/gencast extras.
+dask = "*"
 
 # aifs2ens: AIFS-ENS v2 (anemoi-models 0.11.2).
+# Its graph attention runs as Triton kernels, and Triton builds a small C helper
+# against cuda.h the first time it starts: it needs a C compiler and the CUDA
+# headers (cuda-cudart-dev), neither of which the pytorch stack brings. The
+# Modal image gets both from its NGC base image. The headers are held to the
+# CUDA major the env is solved for: unpinned, the linux-64 solve trades the
+# whole stack down to CUDA 12 (and a pytorch without triton) to fit them.
+[feature.aifs2ens.dependencies]
+gcc = "*"
+cuda-cudart-dev = "13.*"
+
 [feature.aifs2ens.pypi-dependencies]
-earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs2ens", "data"] }
+earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "1a6e3669db0b04c1b42253cf0e631ed1ee8817ea", extras = ["aifs2ens", "data"] }
+# Season reassembly (forecast_pipeline) runs on dask; base has it from the
+# graphcast/gencast extras.
+dask = "*"
 
 [environments]
 base = ["base"]

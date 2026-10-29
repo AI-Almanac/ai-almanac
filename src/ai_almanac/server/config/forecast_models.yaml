@@ -20,9 +20,16 @@
 # checks evaluation years against it, so only record published values; leave
 # it out when unknown rather than estimating.
 #
-# `variables`/`default_lead_hours` are shared across all models (all are run
-# against the same GFS initial conditions) and are the single source of truth
-# for both the API's model list and the runners' inference defaults.
+# `init_sources` lists the initialization data sources (forecast_pipeline's
+# INIT_SOURCES) that carry every input a model reads; leave it out when every
+# source does. GFS lacks the soil, skin-temperature, total-column-water, snow
+# and wave fields the AIFS family and Aurora 1.5 read, and earth2studio would
+# zero-fill them, so those start from IFS only. A forecast can only pick a
+# listed source for a model.
+#
+# `variables`/`default_lead_hours` are shared across all models and are the
+# single source of truth for both the API's model list and the runners'
+# inference defaults.
 #
 # A model data source names the entry that produced it by `id` at registration
 # (metadata.forecast_model_id), so ids are a stored contract: add entries
@@ -36,6 +43,7 @@ models:
     display_name: "AIFS"
     earth2studio_class: "AIFS"
     env: base
+    init_sources: [ifs]
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF Artificial Intelligence Forecasting System (AIFS-Single v1)."
@@ -49,6 +57,7 @@ models:
     display_name: "AIFS ENS"
     earth2studio_class: "AIFSENS"
     env: base
+    init_sources: [ifs]
     ensemble: true
     nensemble: 8
     gpu: "A100-80GB"
@@ -64,6 +73,7 @@ models:
     display_name: "AIFS2"
     earth2studio_class: "AIFS2"
     env: aifs2
+    init_sources: [ifs]
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS-Single v2."
@@ -77,6 +87,7 @@ models:
     display_name: "AIFS2 ENS"
     earth2studio_class: "AIFS2ENS"
     env: aifs2ens
+    init_sources: [ifs]
     ensemble: true
     nensemble: 26
     gpu: "A100-80GB"
@@ -136,3 +147,14 @@ models:
       source: "https://arxiv.org/abs/2306.12873"
       periods:
       - {stage: pretraining, dataset: ERA5, start_year: 1979, end_year: 2015}
+
+  # Aurora 1.5, not earth2studio's original Aurora: a different checkpoint,
+  # class and archive.
+  - id: aurora1p5
+    display_name: "Aurora 1.5"
+    earth2studio_class: "Aurora1p5"
+    env: base
+    init_sources: [ifs]
+    gpu: "A100-80GB"
+    resolution_deg: 0.25
+    description: "Microsoft Aurora 1.5 at 0.25°, stepped hourly so its hourly precipitation sums to daily totals."

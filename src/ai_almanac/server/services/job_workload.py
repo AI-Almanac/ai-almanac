@@ -233,7 +233,6 @@ def _mark_trajectory_coverage(config: dict) -> None:
     from ai_almanac.server.tables import forecast_runs
 
     plan = SeasonPlan.parse(config.get("season_plan"))
-    init_source = plan.init_source
     season = str(plan.season)
     now = datetime.now(UTC).isoformat()
     covered_by_model = plan.covered_dates()
@@ -245,7 +244,7 @@ def _mark_trajectory_coverage(config: dict) -> None:
                 conn.execute(
                     sa.select(forecast_runs.c.id, forecast_runs.c.covered_init_dates).where(
                         forecast_runs.c.model_name == name,
-                        forecast_runs.c.init_source == init_source,
+                        forecast_runs.c.init_source == plan.run(name).init_source,
                         forecast_runs.c.season == season,
                     )
                 )

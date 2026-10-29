@@ -131,3 +131,62 @@ async def test_refresh_reads_a_saved_zero_issue_date_trim_as_no_trim(monkeypatch
     await job_submission.refresh_forecast_for_user("fc-zero", user["id"])
 
     assert captured["body"].params.max_issue_dates is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_replays_each_models_init_source_and_member_count(monkeypatch):
+    async with get_db() as conn:
+        user = await get_or_create_user(conn, external_id="refresh-user-per-model")
+        config = {
+            "job_type": "forecast",
+            "blend_id": "blend-123",
+            "forecast_model_ids": ["aifs_ensv2", "graphcast"],
+            "init_source": None,
+            "init_sources": {"aifs_ensv2": "ifs", "graphcast": "gfs"},
+            "ensemble_members": {"aifs_ensv2": 8},
+        }
+        await conn.execute(
+            sa.insert(jobs).values(
+                id="fc-per-model",
+                user_id=user["id"],
+                dataset_id="ds-1",
+                job_type="forecast",
+                status="complete",
+                config_json=json.dumps(config),
+                created_at="2026-05-10T00:00:00",
+            )
+        )
+
+    captured: dict = {}
+
+    async def fake_create(body, user_id, *, is_admin=False):
+        captured["body"] = body
+        return job_submission.ForecastOut(
+            id="fc-2", blend_id=body.blend_id, status="queued", forecast_model_ids=[], created_at=""
+        )
+
+    monkeypatch.setattr(job_submission, "create_forecast_for_user", fake_create)
+
+    await job_submission.refresh_forecast_for_user("fc-per-model", user["id"])
+
+    params = captured["body"].params
+    assert params.init_source is None
+    assert params.init_sources == {"aifs_ensv2": "ifs", "graphcast": "gfs"}
+    assert params.ensemble_members == {"aifs_ensv2": 8}
+
+
+def test_a_forecast_saved_with_one_init_source_reports_it_for_every_model():
+    row = {
+        "id": "fc-old",
+        "status": "complete",
+        "created_at": "2026-05-10T00:00:00",
+        "config_json": json.dumps(
+            {"blend_id": "b", "forecast_model_ids": ["fuxi", "graphcast"], "init_source": "ifs"}
+        ),
+    }
+
+    out = job_submission.forecast_row_to_out(row, None)
+
+    assert out.init_source == "ifs"
+    assert out.init_sources == {"fuxi": "ifs", "graphcast": "ifs"}
+    assert out.ensemble_members == {}

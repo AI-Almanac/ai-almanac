@@ -26,6 +26,8 @@ cartopy = ">=0.25.0,<0.26"
 kdepy = ">=1.1.12,<2"
 
 [pypi-dependencies]
-# Trains local blends and applies them to live forecasts (envs/blend_entrypoint.py).
-onset-blending = { git = "https://github.com/AI-Almanac/onset_blending.git", rev = "d1660d881a9712d127a7463b5b93bd43fd999529" }
-onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "61a7f5afe7518b3805b76eae43ca62afe2ba0c13" }
+# Trains local blends and applies them to live forecasts (envs/blend_entrypoint.py),
+# day-level forest included (onset_blending.evaluation.random_forest): local blends
+# no longer need onset-forest. 1dcb4ed lets a live ensemble hold fewer members
+# than the blend trained on (forecast_entrypoint asks for it when a job sets them).
+onset-blending = { git = "https://github.com/AI-Almanac/onset_blending.git", rev = "1dcb4ed656155abb2bbb4b53d606f62e3e1624f7" }

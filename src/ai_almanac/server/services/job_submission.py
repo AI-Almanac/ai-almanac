@@ -1189,8 +1189,14 @@ class ForecastParams(BaseModel):
     variables: list[str] | None = None
     # Which archived reanalysis/analysis a live rollout initializes from. Part
     # of a trajectory's identity (D6) — a GFS rollout is a different asset than
-    # the same date from ERA5 — so it keys the shared trajectory store.
-    init_source: Annotated[str, AfterValidator(parse_init_source)] = "gfs"
+    # the same date from ERA5 — so it keys the shared trajectory store. Unset,
+    # each model starts from its own default (GFS where it can).
+    init_source: Annotated[str, AfterValidator(parse_init_source)] | None = None
+    # Per blend member (model name): the init source it starts from, overriding
+    # init_source, and an ensemble's member count, below the registry's to save
+    # GPU time (the blend then scores shares of fewer members).
+    init_sources: dict[str, Annotated[str, AfterValidator(parse_init_source)]] | None = None
+    ensemble_members: dict[str, Annotated[int, Field(ge=1)]] | None = None
     # Smoke-test knob: shrink the season-long scoring loop to the most recent N
     # issue dates. Unset means the whole season-to-date.
     max_issue_dates: Annotated[int, Field(ge=1)] | None = None
@@ -1230,6 +1236,8 @@ def plan_live_season(
             season_start_month_day=(blend_config.get("blend_params") or {}).get("cutoff_month_day")
             or "05-01",
             init_source=params.init_source,
+            init_sources=params.init_sources,
+            ensemble_members=params.ensemble_members,
             today=today,
             max_issue_dates=params.max_issue_dates,
         )
@@ -1267,7 +1275,12 @@ class ForecastOut(BaseModel):
     status: str
     forecast_model_ids: list[str]
     init_time: str | None = None
-    init_source: str = "gfs"
+    # The init source asked for for every model, if one was.
+    init_source: str | None = None
+    # What each model started from, and the member counts set (ensembles not
+    # listed ran the registry's).
+    init_sources: dict[str, str] = {}
+    ensemble_members: dict[str, int] = {}
     region_id: str | None = None
     created_at: str
     completed_at: str | None = None
@@ -1286,7 +1299,9 @@ def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
         status=row["status"],
         forecast_model_ids=cfg.get("forecast_model_ids") or [],
         init_time=cfg.get("init_time"),
-        init_source=cfg.get("init_source") or "gfs",
+        init_source=cfg.get("init_source"),
+        init_sources=_forecast_init_sources(cfg),
+        ensemble_members=cfg.get("ensemble_members") or {},
         region_id=cfg.get("region_id"),
         created_at=row["created_at"],
         completed_at=row.get("completed_at"),
@@ -1295,6 +1310,16 @@ def forecast_row_to_out(row: dict, current_user_id: str | None) -> ForecastOut:
         visibility=row.get("visibility") or "private",
         run_id=row.get("run_id"),
     )
+
+
+def _forecast_init_sources(cfg: dict) -> dict[str, str]:
+    """What each of a forecast's models started from. Jobs saved before init
+    sources were per model name one for all of them, GFS when unset."""
+    sources = cfg.get("init_sources")
+    if isinstance(sources, dict):
+        return {str(name): str(source) for name, source in sources.items()}
+    source = cfg.get("init_source") or "gfs"
+    return {name: source for name in cfg.get("forecast_model_ids") or []}
 
 
 async def _resolve_parent_blend(blend_id: str, user_id: str) -> dict:
@@ -1404,7 +1429,6 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     # when cold) and every later run scores against the cache for free. The
     # coverage markers record the same plan, so a set they mark complete
     # satisfies this gate on the next run.
-    init_source = plan.init_source
     season = str(plan.season)
     from ai_almanac.paths import cache_dir as _cache_dir
 
@@ -1415,15 +1439,19 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     )
     needed = plan.covered_dates()
     async with get_db() as conn:
+        # A member rolled out with its own member count has no trajectory set
+        # (see SeasonPlan.covered_dates), so it always asks for a GPU; its
+        # rollout still skips any issue date already stored under its key.
         model_ready = {
-            name: await trajectory_sets.set_is_ready(
+            run.member: run.member in needed
+            and await trajectory_sets.set_is_ready(
                 conn,
-                model_name=name,
-                init_source=init_source,
+                model_name=run.member,
+                init_source=run.init_source,
                 season=season,
-                needed_dates=needed[name],
+                needed_dates=needed[run.member],
             )
-            for name in forecast_model_ids
+            for run in plan.runs
         }
     gpus = forecast_generation_gpus(model_ready)
 
@@ -1441,7 +1469,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         # What the runners execute and the coverage markers record. The fields
         # beside it are the request as submitted, kept for display and re-runs.
         "season_plan": plan.to_dict(),
-        "init_source": init_source,
+        "init_source": body.params.init_source,
+        # As resolved, so a re-run replays them even if a default changes.
+        "init_sources": {run.member: run.init_source for run in plan.runs},
+        "ensemble_members": {
+            run.member: run.members for run in plan.runs if run.members is not None
+        },
         "max_issue_dates": body.params.max_issue_dates,
         "region_id": blend_config.get("region_id"),
         "init_time": body.params.init_time,
@@ -1482,12 +1515,12 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
         row = dict(result.mappings().fetchone())
         # Ensure a trajectory-set row exists per model so coverage can be
         # marked on completion and the admin coverage view can see it.
-        for name in forecast_model_ids:
+        for name in needed:
             await trajectory_sets.create_or_get_set(
                 conn,
                 model_id=name,
                 model_name=name,
-                init_source=init_source,
+                init_source=plan.run(name).init_source,
                 season=season,
                 triggered_by_user_id=user_id,
                 storage_prefix=season_store_prefix,
@@ -1578,7 +1611,10 @@ def _saved_forecast_params(cfg: dict) -> ForecastParams:
     try:
         return ForecastParams(
             init_time=cfg.get("init_time"),
-            init_source=cfg.get("init_source") or "gfs",
+            # Jobs saved before init sources were per model always set one.
+            init_source=cfg.get("init_source") or (None if "init_sources" in cfg else "gfs"),
+            init_sources=cfg.get("init_sources"),
+            ensemble_members=cfg.get("ensemble_members") or None,
             # Older jobs saved 0 to mean "no trim", which None now means.
             max_issue_dates=cfg.get("max_issue_dates") or None,
             lead_hours=cfg.get("lead_hours"),

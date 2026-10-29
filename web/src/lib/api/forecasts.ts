@@ -9,7 +9,12 @@ export type Forecast = {
 	status: JobStatus;
 	forecast_model_ids: string[];
 	init_time: string | null;
-	init_source?: string;
+	// The init source asked for for every model, if one was.
+	init_source?: string | null;
+	// What each model (blend member name) started from, and the member counts
+	// set; an ensemble not listed ran its registry count.
+	init_sources?: Record<string, string>;
+	ensemble_members?: Record<string, number>;
 	region_id?: string | null;
 	created_at: string;
 	completed_at?: string | null;
@@ -22,8 +27,12 @@ export type Forecast = {
 export type ForecastParams = {
 	init_time?: string | null;
 	// Which archived analysis a live rollout initializes from (part of the
-	// trajectory's identity). Defaults to "gfs" server-side.
+	// trajectory's identity). Unset, each model starts from its own default.
 	init_source?: string | null;
+	// Per blend member (model name): its init source, overriding init_source,
+	// and an ensemble's member count.
+	init_sources?: Record<string, string> | null;
+	ensemble_members?: Record<string, number> | null;
 	// Smoke-test knob: shrink the season-long scoring loop to the most recent N
 	// issue dates. Unset means the whole season-to-date.
 	max_issue_dates?: number | null;
@@ -40,6 +49,10 @@ export type ForecastModel = {
 	display_name: string;
 	resolution_deg: number;
 	description: string;
+	// The init source ids the model can start from.
+	init_sources: string[];
+	// An ensemble's default member count; null for deterministic models.
+	ensemble_members: number | null;
 };
 
 export async function listForecasts(): Promise<Forecast[]> {
