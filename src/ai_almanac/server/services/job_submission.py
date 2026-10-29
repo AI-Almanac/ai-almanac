@@ -1040,7 +1040,8 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     )
     # The workflow reads observations by variable name and would otherwise
     # assume IMD's "RAINFALL"; Chirps, for one, calls it total_precipitation_24hr.
-    if obs_var := ((obs_source or {}).get("metadata") or {}).get("obs_var"):
+    obs_metadata = (obs_source or {}).get("metadata") or {}
+    if obs_var := obs_metadata.get("obs_var"):
         blend_params["obs_value_col"] = obs_var
     config = {
         "job_type": "blend",
@@ -1056,6 +1057,8 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "region_id": region_id,
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
+        # What an observation date marks, so the blend aligns it with lead days.
+        "obs_date_marks": obs_metadata.get("obs_date_marks") or "end",
         "train_day_level_blend": settings.enable_day_level_blend,
         "warnings": warnings,
     }

@@ -14,8 +14,10 @@ different environments:
     it must not live in a forecast env.
 
 forecast_pipeline is a plain module with no Modal dependency, imported normally
-here. The scoring step reuses blend_entrypoint's Modal-stubbing loader for
-blending_app.py's pure score_live_forecast function only.
+here. A blend trained by onset_blending (it has a trained.blend) is applied by
+it: every parameter comes from the blend, only the live files from here. Blends
+trained before that are scored through blend_entrypoint's Modal-stubbing loader
+for blending_app.py's score_live_forecast.
 """
 
 from __future__ import annotations
@@ -27,7 +29,12 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from ai_almanac.envs.blend_entrypoint import _forecast_files, _load_workflow, _netcdf_files
+from ai_almanac.envs.blend_entrypoint import (
+    TRAINED_BLEND,
+    _forecast_files,
+    _load_workflow,
+    _netcdf_files,
+)
 from ai_almanac.paths import cache_dir
 from ai_almanac.server.services import forecast_pipeline
 from ai_almanac.server.services.forecast_pipeline import SeasonPlan
@@ -57,15 +64,50 @@ def _local_blend_artifact(blend_output_uri: str, filename: str) -> bytes | None:
     return path.read_bytes() if path.is_file() else None
 
 
+def _local_trained_blend(blend_output_uri: str) -> Path | None:
+    """The trained blend onset_blending saved, when the blend ran locally."""
+    if not blend_output_uri or blend_output_uri.startswith("gs://"):
+        return None
+    path = Path(blend_output_uri) / TRAINED_BLEND
+    return path if path.is_file() else None
+
+
+def _forecast_with_trained_blend(
+    path: Path, live_forecast_paths: dict[str, Path], region_id: str | None, output_dir: Path
+) -> None:
+    """The blend's probabilities for every live issue date. The files must
+    cover what the blend was trained on (members, lead days, domain, units,
+    daily aggregation); anything more is trimmed, anything less refuses."""
+    from onset_blending import TrainedBlend
+
+    blend = TrainedBlend.load(path)
+    forecast = blend.forecast(dict(live_forecast_paths))
+    workflow = _load_workflow()
+    scores = workflow._with_live_centroids(
+        workflow.LiveScores(weekly_csv=forecast.weekly.to_csv(index=False).encode("utf-8")),
+        region_id,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    workflow._write_live_scores(scores, output_dir)
+
+
 def _score_live(
     config: dict, live_year: int, live_forecast_paths: dict[str, Path], output_dir: Path
 ) -> None:
-    """Score the staged live season files against the trained blend through
-    blending_app.py's score_live_season, the same path the Modal runner takes,
-    reading inputs from local files instead of GCS."""
-    workflow = _load_workflow()
+    """Score the staged live season files against the trained blend: with
+    onset_blending for a blend it trained, else through blending_app.py's
+    score_live_season, the same path the Modal runner takes, reading inputs
+    from local files instead of GCS."""
     blend_config = config["blend_config_snapshot"]
     blend_output_uri = str(blend_config.get("blend_output_uri") or "")
+    trained = _local_trained_blend(blend_output_uri)
+    if trained is not None:
+        print(f"==> Forecasting live season {live_year} with the trained blend", flush=True)
+        _forecast_with_trained_blend(
+            trained, live_forecast_paths, blend_config.get("region_id"), output_dir
+        )
+        return
+    workflow = _load_workflow()
 
     print(f"==> Scoring live season {live_year} against trained blend", flush=True)
     scores = workflow.score_live_season(

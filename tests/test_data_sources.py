@@ -429,6 +429,35 @@ async def test_invalid_initialization_days_are_rejected_during_validation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("marks", "status", "stored"),
+    [(None, "ready", "end"), ("Start", "ready", "start"), ("noon", "invalid", "noon")],
+)
+async def test_an_observation_source_records_what_its_dates_mark(
+    client: httpx.AsyncClient, marks: str | None, status: str, stored: str
+) -> None:
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
+    metadata = {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"}
+    if marks is not None:
+        metadata["obs_date_marks"] = marks
+
+    response = await client.post(
+        "/data-sources/validate",
+        json={
+            "kind": "obs",
+            "name": "Obs",
+            "path": str(root),
+            "region": "ethiopia",
+            "metadata": metadata,
+        },
+    )
+
+    draft = response.json()
+    assert draft["status"] == status, draft["validation_error"]
+    assert draft["metadata"]["obs_date_marks"] == stored
+
+
+@pytest.mark.asyncio
 async def test_invalid_source_can_be_revalidated(
     client: httpx.AsyncClient,
     tmp_path: Path,

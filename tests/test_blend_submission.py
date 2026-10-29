@@ -152,6 +152,35 @@ async def test_blend_config_names_the_observation_variable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("obs_metadata", "expected"), [({"obs_date_marks": "start"}, "start"), ({}, "end")]
+)
+async def test_blend_config_says_what_the_observation_dates_mark(
+    client, user_id: str, _stub_runner, obs_metadata: dict, expected: str
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    obs_id = await _seed_source(
+        "obs", "Chirps", "gs://data/obs/chirps", extra_metadata=obs_metadata
+    )
+    model_id = await _seed_source("model", "AIFS v2", "gs://data/models/aifs")
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="ethiopia",
+            obs_dataset_id=obs_id,
+            model_ids=[model_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["obs_date_marks"] == expected
+
+
+@pytest.mark.asyncio
 async def test_blend_config_carries_each_models_registered_dims_and_units(
     client, user_id: str, _stub_runner
 ) -> None:

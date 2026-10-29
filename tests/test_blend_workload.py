@@ -1,44 +1,12 @@
 from __future__ import annotations
 
-import io
-import json
-import tarfile
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from ai_almanac.envs.blend_entrypoint import _load_workflow, run
-
-
-def _archive(files: dict[str, bytes]) -> bytes:
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for name, data in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            archive.addfile(info, io.BytesIO(data))
-    return buffer.getvalue()
-
-
-def _built_intermediates(root: Path, combined: bytes) -> dict:
-    """What build_intermediates_from_dirs returns in-process: its output dir."""
-    output_dir = root / "intermediates"
-    output_dir.mkdir()
-    (output_dir / "combined_wide.pkl").write_bytes(combined)
-    return {"manifest": {}, "outputs_tar": None, "output_dir": str(output_dir)}
-
-
-class _LocalFunction:
-    def __init__(self, result: dict):
-        self.result = result
-        self.calls: list[tuple[tuple, dict]] = []
-
-    def local(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        self.calls.append((args, kwargs))
-        return self.result
-
-    __call__ = local
+from ai_almanac.envs.blend_entrypoint import _load_workflow
 
 
 def test_blending_workflow_loads_with_local_function_wrappers(monkeypatch) -> None:
@@ -49,106 +17,83 @@ def test_blending_workflow_loads_with_local_function_wrappers(monkeypatch) -> No
     assert hasattr(workflow.build_lat_lon_intermediates_bundle, "local")
 
 
-@pytest.mark.parametrize("day_level", [False, True])
-def test_local_blend_stages_inputs_trains_and_publishes_artifacts(
-    tmp_path: Path, day_level: bool
-) -> None:
-    obs_dir = tmp_path / "obs"
-    model_dir = tmp_path / "aifs"
-    obs_dir.mkdir()
-    model_dir.mkdir()
-    (obs_dir / "2023.nc").write_bytes(b"obs")
-    forecast_path = model_dir / "2023.nc"
-    forecast_path.write_bytes(b"forecast")
-    blending_root = tmp_path / "onset-blending"
-    source_marker = blending_root / "python" / "prepare_data" / "nc_utils.py"
-    source_marker.parent.mkdir(parents=True)
-    source_marker.write_text("")
+class _FakeTraining:
+    """onset_blending's train(), recording the recipe and what was saved."""
 
-    combined = b"combined-data"
-    built = _built_intermediates(tmp_path, combined)
-    prepare = _LocalFunction(built)
-    train = _LocalFunction(
+    def __init__(self, files: dict[str, bytes]):
+        self.files, self.recipes, self.saved = files, [], []
+
+    def modules(self) -> dict:
+        fake = self
+
+        class BlendConfig:
+            @staticmethod
+            def from_dict(recipe):
+                fake.recipes.append(recipe)
+                return SimpleNamespace(recipe=recipe)
+
+        class Result:
+            inputs = SimpleNamespace(timings={"evaluation and final fit": 1.0})
+
+            @staticmethod
+            def save(directory, *, intermediates):
+                fake.saved.append(intermediates)
+                Path(directory).mkdir(parents=True, exist_ok=True)
+                for name, data in fake.files.items():
+                    (Path(directory) / name).write_bytes(data)
+
+        training = SimpleNamespace(
+            Resources=SimpleNamespace(default=lambda: "resources"),
+            train=lambda config, *, resources: Result(),
+        )
+        return {
+            "onset_blending": SimpleNamespace(BlendConfig=BlendConfig),
+            "onset_blending.training": training,
+        }
+
+
+@pytest.mark.parametrize("day_level", [False, True])
+def test_a_local_blend_trains_with_onset_blending_from_its_recipe(
+    tmp_path: Path, monkeypatch, capsys, day_level: bool
+) -> None:
+    from ai_almanac.envs import blend_entrypoint
+
+    fake = _FakeTraining(
         {
-            "manifest": {"ok": True},
-            "outputs_tar": _archive(
-                {
-                    "manifest.json": json.dumps({"ok": True}).encode(),
-                    "weights.pkl": b"weights",
-                }
-            ),
+            "summary_models_pooled_fixed_cutoff_2022.csv": b"model,rps\nblended_model,0.4\n",
+            "summary_models_fixed_cutoff_2022.csv": b"id,rps\nA,0.4\nALL,0.4\n",
+            "trained.blend": b"blend",
         }
     )
-    day_level_calls = []
-
-    def train_day_level_bundle(combined_wide_path, model_names, **kwargs):
-        day_level_calls.append((combined_wide_path, model_names, kwargs))
-        out = tmp_path / "day-level-out"
-        out.mkdir()
-        (out / "forest.pkl").write_bytes(b"forest")
-        return {"manifest": {}, "output_dir": str(out)}
-
+    for name, module in fake.modules().items():
+        monkeypatch.setitem(sys.modules, name, module)
+    centroided = []
     workflow = SimpleNamespace(
-        BLENDING_ROOT=blending_root,
-        LOCAL_INTERMEDIATE_RESOURCES=_load_workflow().LOCAL_INTERMEDIATE_RESOURCES,
-        _read_tar_member_bytes=lambda data, name: combined,
-        _parse_years=lambda value: [int(year) for year in value.split(",") if year],
-        build_blend_intermediates=prepare,
-        train_blending_model_bundle=train,
-        train_day_level_bundle=train_day_level_bundle,
+        _with_area_centroids=lambda path: centroided.append(path.name) or b"with centroids"
     )
-    layouts = {
-        "aifs": {"forecast_dims": {"step": "prediction_timedelta_daily"}, "unit_cvt": 1000.0}
-    }
-    output_dir = tmp_path / "output"
+    monkeypatch.setattr(blend_entrypoint, "_load_workflow", lambda: workflow)
+    output_dir = tmp_path / "job" / "output"
     config = {
-        "obs_dir": str(obs_dir),
+        "blend_name": "test",
+        "obs_dir": str(tmp_path / "obs"),
         "model_names": ["aifs"],
-        "model_files": {"aifs": [str(forecast_path)]},
-        "model_layouts": layouts,
-        "region_id": "ethiopia",
-        "blend_params": {
-            "training_years": "2020,2021",
-            "cv_holdout_years": "2022",
-            "threshold_mm": 25.0,
-        },
-        "cache_dir": str(tmp_path / "blend-intermediates"),
+        "model_files": {"aifs": [str(tmp_path / "aifs" / "2023.nc")]},
+        "blend_params": {"training_years": "2020,2021", "cv_holdout_years": "2022"},
         "train_day_level_blend": day_level,
     }
 
-    run(config, output_dir, workflow)
+    blend_entrypoint.run(config, output_dir)
 
-    prep_args, prep_kwargs = prepare.calls[0]
-    staged_obs, staged_models, params = prep_args
-    # Inputs are linked into directories of their own, not copied.
-    assert [path.name for path in staged_obs.iterdir()] == ["2023.nc"]
-    assert (staged_obs / "2023.nc").resolve() == (obs_dir / "2023.nc").resolve()
-    assert list(staged_models) == ["aifs"]
-    assert (staged_models["aifs"] / "2023.nc").resolve() == forecast_path.resolve()
-    assert params == config["blend_params"]
-    assert prep_kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
-    assert prep_kwargs["model_layouts"] == layouts
-    assert prep_kwargs["region_id"] == "ethiopia"
-    _, train_kwargs = train.calls[0]
-    # Training reads the combined table from the build's output dir, not bytes.
-    assert train_kwargs["combined_wide_path"] == str(
-        Path(built["output_dir"]) / "combined_wide.pkl"
-    )
-    assert train_kwargs["model_names"] == ["aifs"]
-    assert train_kwargs["training_years"] == [2020, 2021]
-    assert train_kwargs["cv_holdout_years"] == [2022]
-    assert (output_dir / "combined_wide.pkl").read_bytes() == combined
-    assert (output_dir / "weights.pkl").read_bytes() == b"weights"
-    # The day-level blend trains from the same combined table, after the weekly one.
-    assert (output_dir / "forest.pkl").exists() is day_level
-    if day_level:
-        [(combined_wide_path, model_names, kwargs)] = day_level_calls
-        assert combined_wide_path == str(output_dir / "combined_wide.pkl")
-        assert model_names == ["aifs"]
-        assert kwargs["cv_holdout_years"] == [2022]
-        assert kwargs["cache_dir"] == str(tmp_path / "blend-intermediates")
-    else:
-        assert day_level_calls == []
+    [recipe] = fake.recipes
+    assert recipe["evaluation"]["years"] == {"training": [2020, 2021], "cv_holdout": [2022]}
+    assert recipe["models"][0]["files"] == {"paths": [str(tmp_path / "aifs" / "2023.nc")]}
+    # No wide intermediate tables are published.
+    assert fake.saved == [()]
+    assert (output_dir / "trained.blend").read_bytes() == b"blend"
+    # Per-point summaries get unit centroids; the pooled summary is left alone.
+    assert centroided == ["summary_models_fixed_cutoff_2022.csv"]
+    assert (output_dir / "summary_models_fixed_cutoff_2022.csv").read_bytes() == b"with centroids"
+    assert ("day-level blend is not trained" in capsys.readouterr().out) is day_level
 
 
 def test_intermediate_prep_kwargs_reads_legacy_mok_month_day() -> None:
@@ -367,21 +312,45 @@ def test_local_forecast_writes_daily_scores_only_when_the_blend_has_a_day_level_
     assert daily.exists() is has_day_level_model
 
 
-def test_a_failed_local_day_level_blend_leaves_the_weekly_blend_published(
-    tmp_path: Path, capsys
+def test_a_blend_onset_blending_trained_forecasts_with_its_trained_blend(
+    tmp_path: Path, monkeypatch
 ) -> None:
-    from ai_almanac.envs.blend_entrypoint import _train_day_level
+    import pandas as pd
 
+    from ai_almanac.envs import forecast_entrypoint
+
+    blend_output = tmp_path / "blend-output"
+    blend_output.mkdir()
+    (blend_output / "trained.blend").write_bytes(b"blend")
+    applied = []
+
+    class TrainedBlend:
+        @staticmethod
+        def load(path):
+            assert path == blend_output / "trained.blend"
+            return TrainedBlend()
+
+        def forecast(self, forecasts):
+            applied.append(forecasts)
+            weekly = pd.DataFrame(
+                {"id": ["10.00_40.00"], "time": ["2026-06-01"], "cv_week1": [0.5]}
+            )
+            return SimpleNamespace(weekly=weekly)
+
+    monkeypatch.setitem(sys.modules, "onset_blending", SimpleNamespace(TrainedBlend=TrainedBlend))
+    workflow = _load_workflow()
+    monkeypatch.setattr(forecast_entrypoint, "_load_workflow", lambda: workflow)
+    live = tmp_path / "aifs.nc"
     output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    (output_dir / "weights.pkl").write_bytes(b"weights")
 
-    def failing_bundle(*args, **kwargs):
-        raise RuntimeError("forest exploded")
+    forecast_entrypoint._score_live(
+        {"blend_config_snapshot": {"blend_output_uri": str(blend_output), "region_id": "india"}},
+        2026,
+        {"aifs": live},
+        output_dir,
+    )
 
-    workflow = SimpleNamespace(train_day_level_bundle=failing_bundle)
-
-    _train_day_level(workflow, output_dir / "combined_wide.pkl", ["aifs"], {}, {}, output_dir)
-
-    assert sorted(path.name for path in output_dir.iterdir()) == ["weights.pkl"]
-    assert "forest exploded" in capsys.readouterr().err
+    # Only the live files come from the forecast job; the blend holds the rest.
+    assert applied == [{"aifs": live}]
+    weekly = (output_dir / workflow.WEEKLY_FORECAST_FILENAME).read_text()
+    assert weekly.splitlines() == ["id,time,cv_week1", "10.00_40.00,2026-06-01,0.5"]

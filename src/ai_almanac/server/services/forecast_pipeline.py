@@ -48,7 +48,10 @@ TRAJECTORY_CACHE_VERSION = 2
 # over the lead day, and what a lead day's value covers. Live files declare
 # the same, which the blend checks.
 DAY_CELL_METHOD = "sum"
-DAY_WINDOW = "End of the UTC calendar-day aggregation window (00:00 UTC of the following date)"
+DAY_WINDOW = (
+    "End of the UTC calendar-day aggregation window (00:00 UTC of the following date), "
+    "as lead time relative to forecast initialization."
+)
 
 # Canonical rollout horizon for the trajectory store (D4). Real forecasts always
 # store the full 45-day trajectory, so their rollouts never split across lead
@@ -1067,7 +1070,7 @@ def live_dataset(slices):
     dataset["tp"].attrs.update(
         units="mm",
         cell_methods=f"day: {DAY_CELL_METHOD}",
-        description="Accumulation over the UTC calendar day ending at time + day",
+        description="Accumulation over the UTC calendar day ending at time + day.",
     )
     dataset["day"].attrs.update(units="days", description=DAY_WINDOW)
     return dataset

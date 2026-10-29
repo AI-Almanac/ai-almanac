@@ -265,6 +265,7 @@ def test_the_cli_registers_sources_under_the_names_file(tmp_path: Path) -> None:
         "sources:\n"
         "  ethiopia/obs:\n"
         "    name: Chirps (IMERG)\n"
+        "    obs_date_marks: start\n"
         "  ethiopia/models/fuxi:\n"
         "    name: FuXi\n"
         "    forecast_model_id: fuxi_live\n"
@@ -282,6 +283,7 @@ def test_the_cli_registers_sources_under_the_names_file(tmp_path: Path) -> None:
     assert set(rows) == {"Chirps (IMERG)", "FuXi"}
     assert rows["FuXi"]["metadata"]["forecast_model_id"] == "fuxi_live"
     assert rows["Chirps (IMERG)"]["region"] == "ethiopia"
+    assert rows["Chirps (IMERG)"]["metadata"]["obs_date_marks"] == "start"
 
 
 @pytest.mark.parametrize(

@@ -99,11 +99,12 @@ def sources_discover(
     asyncio.run(_discover_sources(roots, register, overrides))
 
 
-_SOURCE_NAME_KEYS = frozenset({"name", "forecast_model_id"})
+_SOURCE_NAME_KEYS = frozenset({"name", "forecast_model_id", "obs_date_marks"})
 
 
 def _load_source_names(path: Path) -> dict[str, dict]:
-    """Read a `sources:` map of relative path -> {name, forecast_model_id}."""
+    """Read a `sources:` map of relative path -> {name, forecast_model_id,
+    obs_date_marks}."""
     import yaml
 
     try:
@@ -141,6 +142,8 @@ def _apply_source_names(discovery, overrides: dict[str, dict]) -> list[str]:
         source.name = str(entry["name"]).strip()
         if source.kind == "model" and entry.get("forecast_model_id"):
             source.metadata = {**source.metadata, "forecast_model_id": entry["forecast_model_id"]}
+        if source.kind == "obs" and entry.get("obs_date_marks"):
+            source.metadata = {**source.metadata, "obs_date_marks": entry["obs_date_marks"]}
     return sorted(set(overrides) - found)
 
 

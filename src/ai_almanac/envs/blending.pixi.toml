@@ -26,4 +26,6 @@ cartopy = ">=0.25.0,<0.26"
 kdepy = ">=1.1.12,<2"
 
 [pypi-dependencies]
+# Trains local blends and applies them to live forecasts (envs/blend_entrypoint.py).
+onset-blending = { git = "https://github.com/AI-Almanac/onset_blending.git", rev = "b35b2812dc004a249c3947981dbcfcdaf4ad12ba" }
 onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "61a7f5afe7518b3805b76eae43ca62afe2ba0c13" }

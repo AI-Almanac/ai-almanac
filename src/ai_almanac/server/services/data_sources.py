@@ -177,6 +177,9 @@ def _normalized_initialization_days(value: object) -> str:
     return ",".join(str(day) for day in days)
 
 
+OBS_DATE_MARKS = ("end", "start")
+
+
 def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     normalized = dict(metadata)
     variable_key = "obs_var" if kind == "obs" else "model_var"
@@ -184,6 +187,12 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
     default_variable = "RAINFALL" if kind == "obs" else "tp"
     normalized[variable_key] = str(normalized.get(variable_key) or default_variable).strip()
     normalized[pattern_key] = str(normalized.get(pattern_key) or "{}.nc").strip()
+    if kind == "obs":
+        # Which end of its 24-hour window a date marks: "end" (IMD's 24 h to
+        # 08:30 IST) or "start" (calendar-day products such as CHIRPS). The files
+        # do not say; blends align these dates to the forecasts' lead days.
+        marks = str(normalized.get("obs_date_marks") or "end").strip().lower()
+        normalized["obs_date_marks"] = marks
 
     years = _coverage_years(files)
     start_year, end_year = (years[0], years[-1]) if years else (None, None)
@@ -444,6 +453,13 @@ def _finalize_inspection(
             else:
                 normalized.setdefault("start_date", f"{start_year}-01-01")
                 normalized.setdefault("end_date", f"{end_year}-12-31")
+    if kind == "obs" and normalized["obs_date_marks"] not in OBS_DATE_MARKS:
+        return (
+            "invalid",
+            f"obs_date_marks must be one of {', '.join(OBS_DATE_MARKS)}, "
+            f"got {normalized['obs_date_marks']!r}.",
+            normalized,
+        )
     if variable not in available:
         names = ", ".join(available[:8]) or "none"
         return (

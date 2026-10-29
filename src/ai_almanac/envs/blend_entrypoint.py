@@ -1,19 +1,30 @@
-"""Run the blending workflow inside its managed Pixi environment."""
+"""Run a blend inside its managed Pixi environment.
+
+Training goes through onset_blending (`run`): the job config becomes a
+BlendConfig (envs/blend_recipe.py), and every stage stays in memory as
+arrays, with no wide intermediate tables. The Modal workflow
+(modal/blending_app.py) is still loaded, with a local stand-in for modal, for
+what has not moved: the day-level blend, unit centroids, and scoring blends
+trained before onset_blending.
+"""
 
 from __future__ import annotations
 
 import argparse
 import atexit
 import importlib.util
-import io
 import json
 import os
 import shutil
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+try:  # imported as ai_almanac.envs.blend_entrypoint
+    from . import blend_recipe
+except ImportError:  # run as a script inside the blending env: its directory is on sys.path
+    import blend_recipe
 
 
 class _LocalFunction:
@@ -140,112 +151,50 @@ def _forecast_files(config: dict, model_name: str) -> list[Path]:
     return files
 
 
-def _staged_dir(files: list[Path]) -> Path:
-    """The files linked into a fresh directory of their own, as the builder reads them.
-
-    Links, not copies: the builder only reads its inputs and writes elsewhere,
-    and copying (as a gzipped tar held in memory) cost minutes and tens of GB
-    on large archives.
-    """
-    stage = Path(tempfile.mkdtemp(prefix="blend-input-"))
-    for path in files:
-        (stage / path.name).symlink_to(path.resolve())
-    return stage
+TRAINED_BLEND = "trained.blend"
 
 
-def _extract_tar(data: bytes, output_dir: Path) -> None:
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-        root = output_dir.resolve()
-        for member in archive.getmembers():
-            target = (output_dir / member.name).resolve()
-            if target != root and not target.is_relative_to(root):
-                raise ValueError(f"Unsafe path in blending artifacts: {member.name}")
-        archive.extractall(output_dir, filter="data")
+def blending_root() -> Path:
+    """The pinned blending checkout: the ADM3 district weights, and the code the
+    workflow's remaining steps run."""
+    return Path(os.environ.get("ALMANAC_BLENDING_ROOT", "/opt/onset_blending"))
 
 
-def run(config: dict, output_dir: Path, workflow: ModuleType) -> None:
-    source_marker = workflow.BLENDING_ROOT / "python" / "prepare_data" / "nc_utils.py"
-    if not source_marker.is_file():
-        raise RuntimeError(
-            "The blending source checkout is incomplete. Run `ai-almanac env prepare` "
-            f"and verify that {source_marker} exists."
-        )
-    params = config.get("blend_params") or {}
-    model_names = config.get("model_names") or []
-    if not model_names:
-        raise ValueError("Blend config has no models")
+def run(config: dict, output_dir: Path) -> None:
+    """Train a blend with onset_blending: its evaluation files (the summaries
+    the app reads), the trained blend live forecasts apply (TRAINED_BLEND) and
+    its recipe (config.yml), into output_dir."""
+    from onset_blending import BlendConfig
+    from onset_blending.training import Resources, train
 
-    print("==> Building blending intermediates", flush=True)
-    intermediates = workflow.build_blend_intermediates(
-        _staged_dir(_netcdf_files(config["obs_dir"])),
-        {name: _staged_dir(_forecast_files(config, name)) for name in model_names},
-        params,
-        region_id=config.get("region_id"),
-        cache_dir=config.get("cache_dir"),
-        resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
-        model_layouts=config.get("model_layouts"),
+    # The recipe's own inputs (area outlines, unit centroids) live with the job,
+    # not among its published outputs.
+    recipe_dir = Path(output_dir).parent / "blend-recipe"
+    recipe = blend_recipe.blend_config(config, work_dir=recipe_dir, blending_root=blending_root())
+    print("==> Training the blend", flush=True)
+    result = train(BlendConfig.from_dict(recipe), resources=Resources.default())
+    timings = ", ".join(
+        f"{stage} {seconds:.0f}s" for stage, seconds in result.inputs.timings.items()
     )
-    # Read from disk, never held as bytes: on large grids the combined table
-    # is the biggest object the run handles.
-    combined_path = Path(intermediates["output_dir"]) / "combined_wide.pkl"
-
-    # The same memory share the intermediates had: each CV fold worker holds
-    # its own copies of the weekly table.
-    train_kwargs = {
-        "cores": os.cpu_count() or 1,
-        "memory_budget_bytes": workflow.LOCAL_INTERMEDIATE_RESOURCES.file_memory_budget_bytes,
-    }
-    if params.get("formula_text"):
-        train_kwargs["formula_text"] = params["formula_text"]
-    years = {
-        "training_years": workflow._parse_years(params.get("training_years") or "") or [],
-        "cv_holdout_years": workflow._parse_years(params.get("cv_holdout_years") or "") or [],
-        "true_holdout_years": workflow._parse_years(params.get("true_holdout_years") or ""),
-    }
-    print("==> Training blend weights", flush=True)
-    training = workflow.train_blending_model_bundle.local(
-        None,
-        combined_wide_path=str(combined_path),
-        model_names=model_names,
-        return_outputs=True,
-        **years,
-        **train_kwargs,
-    )
-    if not training["manifest"].get("ok"):
-        tail = "\n".join(training["manifest"].get("stderr_tail") or [])
-        raise RuntimeError(f"Blend training pipeline failed:\n{tail}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if training.get("outputs_tar"):
-        _extract_tar(training["outputs_tar"], output_dir)
-    published_combined = output_dir / "combined_wide.pkl"
-    shutil.move(combined_path, published_combined)
+    print(f"==> Trained: {timings}", flush=True)
+    result.save(output_dir, intermediates=())
+    _attach_unit_centroids(output_dir)
     if config.get("train_day_level_blend"):
-        _train_day_level(workflow, published_combined, model_names, years, config, output_dir)
+        # The day-level blend still trains from the workflow's wide day-level
+        # table; it moves to onset_blending's arrays next.
+        print("==> The day-level blend is not trained on this path yet; skipped", flush=True)
     print("==> Model blending complete", flush=True)
 
 
-def _train_day_level(workflow, combined_path, model_names, years, config, output_dir) -> None:
-    """The day-level blend into output_dir, after the weekly one. As on Modal,
-    where it trains in its own container, its failure leaves the weekly blend
-    standing: it is logged here, not raised."""
-    import traceback
-
-    print("==> Training the day-level blend", flush=True)
-    try:
-        day_level = workflow.train_day_level_bundle(
-            str(combined_path),
-            model_names,
-            cache_dir=config.get("cache_dir"),
-            settings=(config.get("blend_params") or {}).get("day_level"),
-            **years,
-        )
-    except Exception:
-        traceback.print_exc()
-        print("==> Day-level blend failed; the weekly blend is unaffected", flush=True)
-        return
-    for path in Path(day_level["output_dir"]).iterdir():
-        shutil.move(path, output_dir / path.name)
+def _attach_unit_centroids(output_dir: Path) -> None:
+    """Named units (ADM3 districts) in the per-point summaries get a centroid,
+    so the skill map can place them, as the workflow publishes them."""
+    workflow = None
+    for path in sorted(Path(output_dir).glob("summary_models_*.csv")):
+        if path.name.startswith("summary_models_pooled"):
+            continue
+        workflow = workflow or _load_workflow()
+        path.write_bytes(workflow._with_area_centroids(path))
 
 
 def main() -> None:
@@ -254,7 +203,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
-    run(config, args.output_dir, _load_workflow())
+    run(config, args.output_dir)
 
 
 if __name__ == "__main__":

@@ -234,3 +234,21 @@ promotion to `main`. Phase 1 is the only step with fleet-wide blast radius
 forecast issuance. Phases 2–4 are additive and independently revertible.
 Before any push touching `modal/` or `src/ai_almanac/server/`, run
 `/security-review` per repo policy.
+
+## Local blends on the onset_blending package
+
+Local blends now train and forecast with the `onset_blending` package
+(`AI-Almanac/onset_blending`), pinned by commit in
+`src/ai_almanac/envs/blending.pixi.toml`. `envs/blend_recipe.py` turns a blend
+job into the package's `BlendConfig` with the workflow's settings, so a
+local blend is the one the workflow trains (checked against local runs of the
+Ethiopia and India benchmarks). Training writes the same summaries plus a
+`trained.blend`, and no wide intermediate tables; a live forecast applies
+the `trained.blend` to the live files, which must cover what it was trained
+on. Each observation source records what its dates mark
+(`obs_date_marks`: CHIRPS `start`, IMD `end`), so blends align them with the
+forecasts' lead days.
+
+The checkout pin above stays for what has not moved: the Modal workflow, the
+day-level blend, the ADM3 district weights, and scoring blends trained before
+this change.
