@@ -445,8 +445,8 @@ class BlendParams(BaseModel):
 
     The onset definition is the region's unless ``onset_definition`` names
     one: modified Moron-Robertson with the MOK filter in India (each cell's
-    climatological 5-day amount, on or after 06-02), ICPAC elsewhere (more
-    than 20 mm over 3 days from a wet day). ``threshold_mm``,
+    climatological 5-day amount, on or after 06-02), ICPAC elsewhere (at
+    least 20 mm over 5 days with 3 rain days, from a rain day). ``threshold_mm``,
     ``cutoff_month_day`` and ``ref_onset_month_day`` are optional and
     override the definition's. Its dry-spell check is off unless
     ``dry_spell_check`` turns it on.

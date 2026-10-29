@@ -29,16 +29,18 @@ DEFAULT_MIN_ONSET_YEARS = 10
 # (blend_params.dry_spell_check); dry_spell_days and dry_spell_window_days
 # override its two numbers.
 ONSET_DEFINITIONS = {
-    # ICPAC's operational onset: the first day of a wet spell (a day of at
-    # least 1 mm; drier days are dry) whose 3-day total exceeds 20 mm. Its dry-
-    # spell check: no dry run of 7 or more days within the 21 days after the
-    # onset day.
+    # ICPAC's operational onset: the first day of a 5-day window totalling at
+    # least 20 mm with at least 3 rain days (days of at least 1 mm; drier days
+    # are dry), itself a rain day. Its dry-spell check: no dry run of 7 or more
+    # days within the 21 days after the onset day.
     "icpac": {
         "definition": {
-            "window": 3,
+            "window": 5,
             "trigger_rule": "first_day_wet",
+            "min_wet_days": 3,
             "wet_day_min_mm": 1.0,
             "wet_day_comparison": "gte",
+            "threshold_comparison": "gte",
             "follow_days": 0,
         },
         "dry_spell": {

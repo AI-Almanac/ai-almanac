@@ -22,13 +22,13 @@ export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	icpac: {
 		label: 'ICPAC',
 		summary:
-			'The first day of a wet spell (a day of at least 1 mm) whose 3-day total exceeds 20 mm.',
+			'The first day, itself a rain day (at least 1 mm), of a 5-day window totalling at least 20 mm with at least 3 rain days.',
 		dry_spell: {
 			summary: 'a dry run (days under 1 mm) of this many days within the days after the onset day',
 			days: 7,
 			window_days: 21
 		},
-		window_days: 3,
+		window_days: 5,
 		threshold_mm: 20,
 		ref_onset_month_day: '06-01'
 	},

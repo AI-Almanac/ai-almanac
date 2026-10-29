@@ -913,7 +913,7 @@
 									'Onset rainfall threshold (mm)',
 									onsetRule.threshold_mm == null
 										? `Total rainfall over ${onsetRule.window_days} consecutive days that marks the start of the season. Default: each grid cell's mean ${onsetRule.window_days}-day rainfall, computed from the observations; a value here applies to every cell.`
-										: `Total rainfall over ${onsetRule.window_days} consecutive days that marks the start of the season. Default ${onsetRule.threshold_mm} mm.`
+										: `Total rainfall over ${onsetRule.window_days} consecutive days that marks the start of the season (at least this much). Default ${onsetRule.threshold_mm} mm.`
 								)}
 								<input
 									type="text"

@@ -258,8 +258,9 @@ Each region's blends use its own onset definition (`blend_recipe.ONSET_DEFINITIO
   1901-2024), with no dry-spell check. The amount is 5 x the cell's mean daily rain over
   April-October of 1991-2020, computed by onset_blending from the observations
   (`onset.threshold.climatology`) and stored with the trained blend.
-- **Everywhere else: ICPAC** (`icpac`): the first day of a wet spell (a day of at least
-  1 mm; drier days are dry) whose 3-day total exceeds 20 mm.
+- **Everywhere else: ICPAC** (`icpac`): the first day of a 5-day window totalling at least
+  20 mm with at least 3 rain days (days of at least 1 mm; drier days are dry), itself a
+  rain day.
 
 A job's `threshold_mm` and `ref_onset_month_day` still override the definition's.
 Neither checks a dry spell unless the job turns it on (`dry_spell_check`): ICPAC then

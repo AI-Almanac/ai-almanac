@@ -40,14 +40,16 @@ def _onset(region: str = "ethiopia", **params) -> dict:
     return blend_recipe.onset(params, region)
 
 
-def test_icpac_onsets_start_on_a_wet_day_and_check_no_dry_spell_by_default() -> None:
+def test_icpac_onsets_need_20_mm_over_5_days_with_3_rain_days_and_no_dry_spell_check() -> None:
     definition = _onset()["definition"]
 
     assert definition == {
-        "window": 3,
+        "window": 5,
         "trigger_rule": "first_day_wet",
+        "min_wet_days": 3,
         "wet_day_min_mm": 1.0,
         "wet_day_comparison": "gte",
+        "threshold_comparison": "gte",
         "follow_days": 0,
     }
     assert _onset()["threshold"] == {"mm": 20.0}
