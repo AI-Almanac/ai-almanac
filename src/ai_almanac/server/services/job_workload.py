@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -127,6 +128,13 @@ def _group_forecast_models_by_env(config: dict) -> dict[str, list[str]]:
     return groups
 
 
+def _init_conditions_dir(config: dict) -> Path:
+    """Where a season's rollouts keep their initial conditions."""
+    from ai_almanac.server.services.forecast_pipeline import SeasonPlan
+
+    return cache_dir() / "init-conditions" / str(SeasonPlan.parse(config.get("season_plan")).season)
+
+
 def _package_path(directory: Path) -> Path:
     """A directory holding just this ai_almanac package, for a workload env's
     PYTHONPATH.
@@ -167,6 +175,10 @@ def _run_forecast(job_id: str, config: dict) -> None:
 
     # Inference: one subprocess per model-group environment (the AIFS families
     # can't share an env). Each stages its models' season files into staging_dir.
+    # The initial conditions they download are kept for the season, so models
+    # that read the same fields, and a retry after a failure, download them once.
+    init_conditions = _init_conditions_dir(config)
+    inference_env = {**process_env, "EARTH2STUDIO_DATA_CACHE": str(init_conditions)}
     groups = _group_forecast_models_by_env(config)
     for env_name, model_ids in groups.items():
         print(f"==> Season inference [{env_name}]: {model_ids}", flush=True)
@@ -183,10 +195,13 @@ def _run_forecast(job_id: str, config: dict) -> None:
                 "--models",
                 ",".join(model_ids),
             ],
-            env=process_env,
+            env=inference_env,
             environment=env_name,
         )
         _stream_process(process)
+    # Every model's season is in the trajectory store now, so its initial
+    # conditions are never read again.
+    shutil.rmtree(init_conditions, ignore_errors=True)
 
     # Scoring runs once, in the blending env — it only needs blending's stack,
     # which conflicts with earth2studio's pins and so can't live in a forecast env.

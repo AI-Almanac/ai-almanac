@@ -119,19 +119,44 @@ def resolve_data_source(init_source: str):
     import earth2studio.data as e2s_data
 
     cls = getattr(e2s_data, entry["earth2studio_class"])
-    # No disk cache: every init date is fetched once (the trajectory store is
-    # the cache), and on Modal the default cache root is the weights Volume, so
-    # cached init data would be uploaded on every commit.
+    # Initial conditions are kept on disk only where earth2studio's data cache
+    # has a folder of its own (EARTH2STUDIO_DATA_CACHE): otherwise it shares
+    # the model weights' cache root, which on Modal is a Volume re-uploaded on
+    # every commit. The local runner gives a season's rollouts one, so models
+    # and retries that read the same fields share a download, and clears it
+    # once the season is stored (job_workload._run_forecast).
+    keep = bool(os.environ.get("EARTH2STUDIO_DATA_CACHE"))
     mirrors = entry.get("mirrors")
     if not mirrors:
-        return cls(cache=False)
+        return cls(cache=keep)
     sources = []
     for mirror in mirrors:
-        source = cls(source=mirror, cache=False)
+        source = cls(source=mirror, cache=keep)
         source.client.maximum_retries = MIRROR_RETRIES
         source.client.retry_after = MIRROR_RETRY_SECONDS
+        source.client = CompleteDownloads(source.client)
         sources.append((mirror, source))
     return FallbackSource(entry["display_name"], sources)
+
+
+class CompleteDownloads:
+    """An ecmwf-opendata client whose files appear under their name only once
+    complete. The client writes in place, and earth2studio's cache takes any
+    file at that name as a finished download, so one cut off midway would be
+    read back by every later run."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    def retrieve(self, request: dict):
+        target = request["target"]
+        partial = f"{target}.part"
+        result = self._client.retrieve({**request, "target": partial})
+        os.replace(partial, target)
+        return result
 
 
 class FallbackSource:

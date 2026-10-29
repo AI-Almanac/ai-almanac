@@ -250,3 +250,63 @@ def test_render_romp_config_rejects_dim_names_that_are_not_plain_names() -> None
 
     with pytest.raises(ValidationError):
         render_romp_config(config, Path("/tmp/out"), Path("/tmp/fig"))
+
+
+def _forecast_config() -> dict:
+    from datetime import date
+
+    from ai_almanac.server.services.forecast_pipeline import (
+        ArchiveLayout,
+        ForecastModel,
+        plan_season,
+    )
+
+    fuxi = ForecastModel.parse({"id": "fuxi", "earth2studio_class": "FuXi"})
+    plan = plan_season(
+        {"fuxi": (fuxi, ArchiveLayout.parse({}))},
+        season=2026,
+        season_start_month_day="05-01",
+        today=date(2026, 6, 1),
+    )
+    return {"job_type": "forecast", "season_plan": plan.to_dict(), "blend_config_snapshot": {}}
+
+
+@pytest.mark.parametrize("inference_fails", [False, True])
+def test_a_seasons_initial_conditions_are_kept_until_its_rollouts_are_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inference_fails: bool
+) -> None:
+    envs: dict[str, dict[str, str]] = {}
+
+    def fake_forecast_run(command: list[str], env=None, environment=None) -> _Process:
+        envs["inference"] = env
+        Path(env["EARTH2STUDIO_DATA_CACHE"], "ifs-opendata").mkdir(parents=True)
+        return _Process(exit_code=2 if inference_fails else 0)
+
+    def fake_blending_run(command: list[str], env=None) -> _Process:
+        envs["score"] = env
+        return _Process()
+
+    monkeypatch.setattr(
+        job_workload,
+        "get_storage",
+        lambda: _local_storage(tmp_path / "job" / "out", tmp_path / "f"),
+    )
+    monkeypatch.setattr(job_workload, "cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(job_workload, "blending_env_dir", lambda: tmp_path / "blend-env")
+    monkeypatch.setattr(job_workload, "forecast_pixi_run", fake_forecast_run)
+    monkeypatch.setattr(job_workload, "blending_pixi_run", fake_blending_run)
+    monkeypatch.setattr(job_workload, "_mark_trajectory_coverage", lambda config: None)
+    # Modal's functions set it when other tests run them in this process.
+    monkeypatch.delenv("EARTH2STUDIO_DATA_CACHE", raising=False)
+    season_cache = tmp_path / "cache" / "init-conditions" / "2026"
+
+    if inference_fails:
+        with pytest.raises(subprocess.CalledProcessError):
+            job_workload._run_forecast("job-1", _forecast_config())
+        # Kept, so the retry downloads nothing it already has.
+        assert season_cache.is_dir()
+    else:
+        job_workload._run_forecast("job-1", _forecast_config())
+        assert not season_cache.exists()
+        assert "EARTH2STUDIO_DATA_CACHE" not in envs["score"]
+    assert envs["inference"]["EARTH2STUDIO_DATA_CACHE"] == str(season_cache)

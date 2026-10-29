@@ -335,6 +335,56 @@ def test_ifs_reads_azure_then_aws_then_ecmwf_without_lingering_on_any(monkeypatc
     assert all(m.client.retry_after == forecast_pipeline.MIRROR_RETRY_SECONDS for _, m in mirrors)
 
 
+@pytest.mark.parametrize("data_cache", [None, "/data/cache/init-conditions/2026"])
+def test_initial_conditions_are_kept_only_where_the_data_cache_has_its_own_folder(
+    monkeypatch, data_cache
+):
+    import sys
+
+    from ai_almanac.server.services import forecast_pipeline
+
+    built = []
+
+    class _Source:
+        def __init__(self, cache, source=None):
+            built.append(cache)
+            self.client = SimpleNamespace(maximum_retries=500, retry_after=120)
+
+    package = SimpleNamespace(data=SimpleNamespace(IFS=_Source, GFS=_Source))
+    monkeypatch.setitem(sys.modules, "earth2studio", package)
+    monkeypatch.setitem(sys.modules, "earth2studio.data", package.data)
+    if data_cache:
+        monkeypatch.setenv("EARTH2STUDIO_DATA_CACHE", data_cache)
+    else:
+        monkeypatch.delenv("EARTH2STUDIO_DATA_CACHE", raising=False)
+
+    forecast_pipeline.resolve_data_source("gfs")
+    forecast_pipeline.resolve_data_source("ifs")
+
+    assert built == [bool(data_cache)] * 4  # GFS, then IFS's three mirrors
+
+
+def test_an_ifs_download_lands_under_its_name_only_once_complete(tmp_path):
+    from ai_almanac.server.services.forecast_pipeline import CompleteDownloads
+
+    class _Client:
+        def __init__(self, fails):
+            self.fails = fails
+
+        def retrieve(self, request):
+            Path(request["target"]).write_bytes(b"GRIB")
+            if self.fails:
+                raise OSError("connection reset")
+
+    target = tmp_path / "field.grib2"
+    with pytest.raises(OSError):
+        CompleteDownloads(_Client(fails=True)).retrieve({"target": str(target), "param": "2t"})
+    assert not target.exists()
+
+    CompleteDownloads(_Client(fails=False)).retrieve({"target": str(target), "param": "2t"})
+    assert target.read_bytes() == b"GRIB"
+
+
 def test_aurora_1p5_steps_hourly_and_writes_only_its_hourly_precipitation():
     from ai_almanac.server.services.forecast_pipeline import lead_steps, precip_output
 
