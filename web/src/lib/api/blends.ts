@@ -40,6 +40,8 @@ export type BlendParams = {
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
+	// Days the onset threshold is counted over; omitted, the definition's 5.
+	onset_window_days?: 3 | 5;
 	// The definition's dry-spell check, off unless switched on.
 	dry_spell_check?: boolean;
 	dry_spell_days?: number;

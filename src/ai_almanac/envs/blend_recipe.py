@@ -23,8 +23,8 @@ DEFAULT_MIN_ONSET_YEARS = 10
 
 # The onset definitions a blend can use, in BlendConfig's terms. A region
 # uses its own (REGION_ONSET_DEFINITIONS), others ICPAC's; a job may name one
-# (blend_params.onset_definition), and its threshold_mm and
-# ref_onset_month_day override the definition's. A definition's dry-spell
+# (blend_params.onset_definition), and its threshold_mm, ref_onset_month_day
+# and onset_window_days override the definition's. A definition's dry-spell
 # check ("dry_spell") is off unless the job turns it on
 # (blend_params.dry_spell_check); dry_spell_days and dry_spell_window_days
 # override its two numbers.
@@ -227,6 +227,11 @@ def onset(params: dict, region: str) -> dict:
     threshold = chosen["threshold"]
     if params.get("threshold_mm"):
         threshold = {"mm": float(params["threshold_mm"])}
+    elif "climatology" in threshold and params.get("onset_window_days"):
+        # A cell's own amount totals the trigger window's days.
+        threshold = {
+            "climatology": {**threshold["climatology"], "days": int(params["onset_window_days"])}
+        }
     reference = (
         params.get("ref_onset_month_day")
         or params.get("mok_month_day")
@@ -244,11 +249,18 @@ def onset(params: dict, region: str) -> dict:
 
 
 def definition(chosen: dict, params: dict) -> dict:
-    """The definition, with its dry-spell check when the job turns it on: the
-    job's dry_spell_days (the dry run, or the dry window, in days) and
-    dry_spell_window_days (the days after the onset it looks over) replace the
-    definition's."""
+    """The definition, with the job's onset_window_days as its trigger window,
+    and its dry-spell check when the job turns it on: the job's dry_spell_days
+    (the dry run, or the dry window, in days) and dry_spell_window_days (the
+    days after the onset it looks over) replace the definition's."""
     out = dict(chosen["definition"])
+    window = params.get("onset_window_days")
+    if window and int(window) != out["window"]:
+        out["window"] = int(window)
+        # A rain-day count belongs to the definition's own window (ICPAC's 3 of
+        # 5): in another, only the total counts, which for 3 days is ICPAC's
+        # onset as benchmarks count it.
+        out.pop("min_wet_days", None)
     if not params.get("dry_spell_check"):
         return out
     check = chosen["dry_spell"]

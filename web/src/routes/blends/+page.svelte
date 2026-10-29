@@ -45,11 +45,14 @@
 	import {
 		ONSET_DEFAULTS,
 		ONSET_DEFINITIONS,
+		ONSET_WINDOW_DAYS,
 		effectiveOnsetDefinition,
+		effectiveWindowDays,
 		onsetParamsBody,
 		onsetParamsError,
 		regionOnsetDefinition,
-		type OnsetDefinitionId
+		type OnsetDefinitionId,
+		type OnsetWindowDays
 	} from './onset-params';
 	import {
 		DAY_LEVEL_DEFAULTS,
@@ -177,6 +180,7 @@
 	let focusArea = $state<FocusAreaValue | null>(null);
 	// Onset definition overrides; blank means the workflow default.
 	let onsetDefinition = $state<OnsetDefinitionId | ''>('');
+	let onsetWindowDays = $state<'' | `${OnsetWindowDays}`>('');
 	let dryCheck = $state(false);
 	let dryDays = $state('');
 	let dryWindowDays = $state('');
@@ -261,11 +265,13 @@
 		thresholdMm,
 		cutoffMonthDay,
 		refOnsetMonthDay,
+		windowDays: onsetWindowDays,
 		dryCheck,
 		dryDays,
 		dryWindowDays
 	});
 	const onsetRule = $derived(effectiveOnsetDefinition(onsetInput));
+	const windowDays = $derived(effectiveWindowDays(onsetInput));
 	const onsetError = $derived(onsetParamsError(onsetInput));
 
 	const dayLevelInput = $derived({
@@ -888,9 +894,9 @@
 						</label>
 
 						<p class="muted advanced-group">
-							Onset definition — {onsetRule.label}: {onsetRule.summary} Leave the fields blank to use
-							its defaults. Changing them redefines what counts as onset for both the observations and
-							every model.
+							Onset definition — {onsetRule.label}: {onsetRule.summary(windowDays)} Leave the fields blank
+							to use its defaults. Changing them redefines what counts as onset for both the observations
+							and every model.
 						</p>
 						<div class="field-row" data-tour="blend-onset">
 							<label class="field">
@@ -912,8 +918,8 @@
 								{@render fieldLabel(
 									'Onset rainfall threshold (mm)',
 									onsetRule.threshold_mm == null
-										? `Total rainfall over ${onsetRule.window_days} consecutive days that marks the start of the season. Default: each grid cell's mean ${onsetRule.window_days}-day rainfall, computed from the observations; a value here applies to every cell.`
-										: `Total rainfall over ${onsetRule.window_days} consecutive days that marks the start of the season (at least this much). Default ${onsetRule.threshold_mm} mm.`
+										? `Total rainfall over ${windowDays} consecutive days that marks the start of the season. Default: each grid cell's mean ${windowDays}-day rainfall, computed from the observations; a value here applies to every cell.`
+										: `Total rainfall over ${windowDays} consecutive days that marks the start of the season (at least this much). Default ${onsetRule.threshold_mm} mm.`
 								)}
 								<input
 									type="text"
@@ -948,6 +954,18 @@
 							</label>
 						</div>
 						<div class="field-row">
+							<label class="field">
+								{@render fieldLabel(
+									'Wet window',
+									`Days the onset rainfall is counted over, from a rain day. Default ${onsetRule.window_days} days.`
+								)}
+								<select bind:value={onsetWindowDays}>
+									<option value="">Default ({onsetRule.window_days} days)</option>
+									{#each ONSET_WINDOW_DAYS as days (days)}
+										<option value={String(days)}>{days} days</option>
+									{/each}
+								</select>
+							</label>
 							<label class="field">
 								{@render fieldLabel(
 									'Dry-spell check',

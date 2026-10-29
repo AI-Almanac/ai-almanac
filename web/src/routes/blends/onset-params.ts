@@ -8,7 +8,8 @@ export type OnsetDefinitionId = 'icpac' | 'moron_robertson_mok';
 
 export type OnsetDefinition = {
 	label: string;
-	summary: string;
+	// The rule, for a trigger window of this many days.
+	summary: (windowDays: number) => string;
 	// The dry-spell check the switch turns on: what it vetoes, and its two numbers.
 	dry_spell: { summary: string; days: number; window_days: number };
 	// The trigger window in days, and its rainfall threshold; null when each
@@ -21,8 +22,10 @@ export type OnsetDefinition = {
 export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	icpac: {
 		label: 'ICPAC',
-		summary:
-			'The first day, itself a rain day (at least 1 mm), of a 5-day window totalling at least 20 mm with at least 3 rain days.',
+		// Its 3 rain days belong to the 5-day window; a 3-day window counts the
+		// total alone, as benchmarks count ICPAC's onset.
+		summary: (days) =>
+			`The first day, itself a rain day (at least 1 mm), of a ${days}-day window totalling at least 20 mm${days === 5 ? ' with at least 3 rain days' : ''}.`,
 		dry_spell: {
 			summary: 'a dry run (days under 1 mm) of this many days within the days after the onset day',
 			days: 7,
@@ -34,8 +37,8 @@ export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	},
 	moron_robertson_mok: {
 		label: 'Modified Moron–Robertson (MOK)',
-		summary:
-			"The first wet day (at least 1 mm) of the first 5-day spell totalling at least the grid cell's mean 5-day rainfall (April–October, 1991–2020), on or after 06-02, the median onset over Kerala.",
+		summary: (days) =>
+			`The first wet day (at least 1 mm) of the first ${days}-day spell totalling at least the grid cell's mean ${days}-day rainfall (April–October, 1991–2020), on or after 06-02, the median onset over Kerala.`,
 		dry_spell: {
 			summary: 'this many days totalling under 5 mm within the days after the 5-day wet spell',
 			days: 10,
@@ -56,6 +59,10 @@ export function regionOnsetDefinition(region: string | null | undefined): OnsetD
 	return REGION_ONSET_DEFINITIONS[(region ?? '').trim().toLowerCase()] ?? 'icpac';
 }
 
+// The trigger windows a blend can choose. Mirrors BlendParams.onset_window_days.
+export const ONSET_WINDOW_DAYS = [3, 5] as const;
+export type OnsetWindowDays = (typeof ONSET_WINDOW_DAYS)[number];
+
 // Defaults for the fields left blank, used as placeholders.
 export const ONSET_DEFAULTS = {
 	cutoff_month_day: '05-01'
@@ -68,6 +75,8 @@ export type OnsetParamsInput = {
 	thresholdMm: string;
 	cutoffMonthDay: string;
 	refOnsetMonthDay: string;
+	// '' for the definition's trigger window.
+	windowDays?: '' | `${OnsetWindowDays}`;
 	// The dry-spell check, off unless switched on; blanks keep the definition's numbers.
 	dryCheck?: boolean;
 	dryDays?: string;
@@ -79,6 +88,7 @@ export type OnsetParams = {
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
+	onset_window_days?: OnsetWindowDays;
 	dry_spell_check?: boolean;
 	dry_spell_days?: number;
 	dry_spell_window_days?: number;
@@ -96,6 +106,13 @@ export function effectiveOnsetDefinition(
 	input: Pick<OnsetParamsInput, 'definition' | 'region'>
 ): OnsetDefinition {
 	return ONSET_DEFINITIONS[input.definition || regionOnsetDefinition(input.region)];
+}
+
+/** The trigger window a blend with these inputs uses, in days. */
+export function effectiveWindowDays(
+	input: Pick<OnsetParamsInput, 'definition' | 'region' | 'windowDays'>
+): number {
+	return input.windowDays ? Number(input.windowDays) : effectiveOnsetDefinition(input).window_days;
 }
 
 // A calendar MM-DD that exists every year. Feb 29 is refused because each
@@ -150,6 +167,7 @@ export function onsetParamsBody(input: OnsetParamsInput): OnsetParams {
 	if (threshold) out.threshold_mm = Number(threshold);
 	if (cutoff) out.cutoff_month_day = cutoff;
 	if (refOnset) out.ref_onset_month_day = refOnset;
+	if (input.windowDays) out.onset_window_days = Number(input.windowDays) as OnsetWindowDays;
 	if (input.dryCheck) {
 		out.dry_spell_check = true;
 		const days = wholeDays(input.dryDays);

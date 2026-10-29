@@ -1,4 +1,5 @@
-"""The dry-spell check: off by default in benchmarks and blends, one switch turns it on."""
+"""The onset definition's knobs: the dry-spell check (off by default in benchmarks and
+blends, one switch turns it on) and the blend's 3- or 5-day trigger window."""
 
 from __future__ import annotations
 
@@ -87,6 +88,33 @@ def test_dry_spell_numbers_need_the_switch_and_must_fit() -> None:
     assert BlendParams(**years, dry_spell_check=True, dry_spell_days=5).dry_spell_days == 5
 
 
+def test_a_3_day_window_counts_icpacs_total_alone_as_benchmarks_do() -> None:
+    definition = _onset(onset_window_days=3)["definition"]
+
+    assert definition["window"] == 3
+    assert "min_wet_days" not in definition
+    assert definition["trigger_rule"] == "first_day_wet"
+    assert _onset(onset_window_days=3)["threshold"] == {"mm": 20.0}
+    # Choosing the definition's own window changes nothing.
+    assert _onset(onset_window_days=5) == _onset()
+
+
+def test_moron_robertsons_cell_amount_totals_the_chosen_window() -> None:
+    onset = _onset("india", onset_window_days=3)
+
+    assert onset["definition"]["window"] == 3
+    assert onset["threshold"]["climatology"]["days"] == 3
+    assert onset["threshold"]["climatology"]["years"] == [1991, 2020]
+    assert _onset("india", onset_window_days=3, threshold_mm=30)["threshold"] == {"mm": 30.0}
+
+
+def test_the_window_is_3_or_5_days() -> None:
+    years = {"training_years": "2008:2020", "cv_holdout_years": "2021"}
+    assert BlendParams(**years, onset_window_days=3).onset_window_days == 3
+    with pytest.raises(ValidationError):
+        BlendParams(**years, onset_window_days=4)
+
+
 def test_the_recipe_with_a_dry_spell_check_is_a_valid_blend_config(tmp_path: Path) -> None:
     onset_blending = pytest.importorskip("onset_blending")
     job = {
@@ -98,9 +126,11 @@ def test_the_recipe_with_a_dry_spell_check_is_a_valid_blend_config(tmp_path: Pat
             "training_years": "2008:2020",
             "cv_holdout_years": "2021",
             "dry_spell_check": True,
+            "onset_window_days": 3,
         },
     }
     config = onset_blending.BlendConfig.from_dict(
         blend_recipe.blend_config(job, work_dir=tmp_path, blending_root=tmp_path)
     )
     assert config.onset.definition.dry_spell.contained
+    assert config.onset.definition.window == 3

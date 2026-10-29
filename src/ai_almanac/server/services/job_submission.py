@@ -447,9 +447,9 @@ class BlendParams(BaseModel):
     one: modified Moron-Robertson with the MOK filter in India (each cell's
     climatological 5-day amount, on or after 06-02), ICPAC elsewhere (at
     least 20 mm over 5 days with 3 rain days, from a rain day). ``threshold_mm``,
-    ``cutoff_month_day`` and ``ref_onset_month_day`` are optional and
-    override the definition's. Its dry-spell check is off unless
-    ``dry_spell_check`` turns it on.
+    ``cutoff_month_day``, ``ref_onset_month_day`` and ``onset_window_days``
+    are optional and override the definition's. Its dry-spell check is off
+    unless ``dry_spell_check`` turns it on.
     """
 
     forecast_years: str | None = None
@@ -476,6 +476,13 @@ class BlendParams(BaseModel):
         default=None,
         description="MM-DD reference onset date (climatological onset) that the "
         "onset-before-reference probability is scored against.",
+    )
+    onset_window_days: Literal[3, 5] | None = Field(
+        default=None,
+        description="Days the onset rainfall threshold is counted over, from a rain day; "
+        "omitted, the definition's 5. ICPAC's 5-day window also needs 3 rain days, its "
+        "3-day window only the total (as benchmarks count ICPAC's onset); "
+        "Moron-Robertson's threshold becomes the cell's mean rainfall over that many days.",
     )
     dry_spell_check: bool | None = Field(
         default=None,

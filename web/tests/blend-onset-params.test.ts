@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	ONSET_DEFINITIONS,
 	effectiveOnsetDefinition,
+	effectiveWindowDays,
 	isMonthDay,
 	onsetParamsBody,
 	onsetParamsError,
@@ -107,5 +109,16 @@ describe('blend onset params', () => {
 		const india = { ...blank, region: 'india' };
 		expect(onsetParamsError({ ...india, cutoffMonthDay: '06-02' })).toBeNull();
 		expect(onsetParamsError({ ...india, cutoffMonthDay: '06-03' })).toMatch(/06-02 is before/);
+	});
+
+	it('sends a chosen wet window and describes the rule for it', () => {
+		expect(onsetParamsBody({ ...blank, windowDays: '3' })).toEqual({ onset_window_days: 3 });
+		expect(onsetParamsBody({ ...blank, windowDays: '' })).toEqual({});
+		expect(effectiveWindowDays(blank)).toBe(5);
+		expect(effectiveWindowDays({ ...blank, windowDays: '3' })).toBe(3);
+		// ICPAC's 3 rain days belong to its 5-day window; 3 days count the total alone.
+		expect(ONSET_DEFINITIONS.icpac.summary(5)).toMatch(/5-day window .* at least 3 rain days/);
+		expect(ONSET_DEFINITIONS.icpac.summary(3)).toMatch(/3-day window totalling at least 20 mm\.$/);
+		expect(ONSET_DEFINITIONS.moron_robertson_mok.summary(3)).toMatch(/mean 3-day rainfall/);
 	});
 });
