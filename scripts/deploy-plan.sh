@@ -44,6 +44,7 @@ ships_to_modal() {
 	src/ai_almanac/server/services/forecast_model_opt/*) return 0 ;;
 	src/ai_almanac/server/services/e2s.py) return 0 ;;
 	src/ai_almanac/server/services/focus_area.py) return 0 ;;
+	src/ai_almanac/server/services/season_masks/*) return 0 ;;
 	src/ai_almanac/server/services/romp.py) return 0 ;;
 	esac
 	return 1

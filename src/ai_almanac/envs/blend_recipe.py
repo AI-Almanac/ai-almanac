@@ -98,6 +98,14 @@ FORECAST_VARIABLE = "tp"
 ADM3_REGIONS = {"ethiopia"}
 ADM3_WEIGHTS = Path("Monsoon_Data") / "grid_to_district_mapping.csv"
 
+# Mirrors focus_area.SEASON_MASKS: a region's season mask, the cells whose
+# rains its onset is about (server/services/season_masks). A blend there keeps
+# the units at least SEASON_UNIT_SHARE inside it, by their regrid weights,
+# unless the job turns it off (blend_params.season_mask: false).
+SEASON_MASKS = {"ethiopia": "ethiopia_jjas_0p25.nc"}
+SEASON_MASK_DIR = Path(__file__).resolve().parents[1] / "server" / "services" / "season_masks"
+SEASON_UNIT_SHARE = 0.5
+
 # Registered dimension roles (data_sources._forecast_dims) as BlendConfig names.
 _ROLE_NAMES = {"init_time": "time", "step": "day", "member": "number", "lat": "lat", "lon": "lon"}
 
@@ -151,6 +159,10 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
     area = _area_of_interest(params.get("focus_area"), Path(work_dir), weights, domain)
     if area:
         domain["area_of_interest"] = area
+    # Read, trained, scored and forecast: only these units (within any area of interest).
+    units = season_units(region, params, weights, Path(work_dir))
+    if units is not None:
+        domain["dissemination"] = {"file": str(units), "id_col": "adm3_name"}
 
     models = []
     for name in model_names:
@@ -208,6 +220,51 @@ def random_forest(settings: dict | None) -> dict:
     return {key: settings[key] for key in _FOREST_SETTINGS if settings.get(key) is not None}
 
 
+def season_units(region: str, params: dict, weights: Path | None, work_dir: Path) -> Path | None:
+    """A unit table of the ADM3 units at least SEASON_UNIT_SHARE inside the
+    region's season mask, by their regrid weights; None without a mask, without
+    ADM3 units, or with the mask turned off."""
+    name = SEASON_MASKS.get(region)
+    if not name or weights is None or params.get("season_mask") is False:
+        return None
+    import csv
+
+    import numpy as np
+    import xarray as xr
+
+    with xr.open_dataset(SEASON_MASK_DIR / name) as ds:
+        lat_name = next(c for c in ds.coords if c.lower().startswith("lat"))
+        lon_name = next(c for c in ds.coords if c.lower().startswith("lon"))
+        values = next(iter(ds.data_vars.values())).transpose(lat_name, lon_name)
+        rows, cols = np.nonzero(values.values.astype(bool))
+        kept = {
+            (round(float(lat), 2), round(float(lon), 2))
+            for lat, lon in zip(ds[lat_name].values[rows], ds[lon_name].values[cols], strict=True)
+        }
+    total: dict[str, float] = {}
+    inside: dict[str, float] = {}
+    with open(weights, newline="") as handle:
+        for row in csv.DictReader(handle):
+            unit, weight = row["adm3_name"], float(row["weight"])
+            total[unit] = total.get(unit, 0.0) + weight
+            if (round(float(row["latitude"]), 2), round(float(row["longitude"]), 2)) in kept:
+                inside[unit] = inside.get(unit, 0.0) + weight
+    chosen = sorted(
+        unit
+        for unit, weight in total.items()
+        if weight > 0 and inside.get(unit, 0.0) / weight >= SEASON_UNIT_SHARE
+    )
+    if not chosen:
+        raise ValueError(f"No {region} units fall inside its season mask")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    path = work_dir / "season-units.csv"
+    with open(path, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["adm3_name"])
+        writer.writerows([unit] for unit in chosen)
+    return path
+
+
 def onset_definition_name(params: dict, region: str) -> str:
     """The job's onset definition: the one it names, else its region's."""
     name = params.get("onset_definition") or REGION_ONSET_DEFINITIONS.get(
@@ -255,12 +312,10 @@ def definition(chosen: dict, params: dict) -> dict:
     days after the onset it looks over) replace the definition's."""
     out = dict(chosen["definition"])
     window = params.get("onset_window_days")
-    if window and int(window) != out["window"]:
+    if window:
+        # ICPAC's 3 rain days stay: in a 3-day window every day is wet, as
+        # benchmarks (ROMP's wet_spell) count ICPAC's onset.
         out["window"] = int(window)
-        # A rain-day count belongs to the definition's own window (ICPAC's 3 of
-        # 5): in another, only the total counts, which for 3 days is ICPAC's
-        # onset as benchmarks count it.
-        out.pop("min_wet_days", None)
     if not params.get("dry_spell_check"):
         return out
     check = chosen["dry_spell"]

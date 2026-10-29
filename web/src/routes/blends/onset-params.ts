@@ -22,10 +22,12 @@ export type OnsetDefinition = {
 export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	icpac: {
 		label: 'ICPAC',
-		// Its 3 rain days belong to the 5-day window; a 3-day window counts the
-		// total alone, as benchmarks count ICPAC's onset.
+		// Its 3 rain days stay: a 3-day window is 3 wet days in a row, as
+		// benchmarks count ICPAC's onset.
 		summary: (days) =>
-			`The first day, itself a rain day (at least 1 mm), of a ${days}-day window totalling at least 20 mm${days === 5 ? ' with at least 3 rain days' : ''}.`,
+			days === 3
+				? 'The first of 3 days in a row, each a rain day (at least 1 mm), totalling at least 20 mm.'
+				: `The first day, itself a rain day (at least 1 mm), of a ${days}-day window totalling at least 20 mm with at least 3 rain days.`,
 		dry_spell: {
 			summary: 'a dry run (days under 1 mm) of this many days within the days after the onset day',
 			days: 7,

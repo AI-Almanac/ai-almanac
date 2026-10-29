@@ -116,9 +116,9 @@ describe('blend onset params', () => {
 		expect(onsetParamsBody({ ...blank, windowDays: '' })).toEqual({});
 		expect(effectiveWindowDays(blank)).toBe(5);
 		expect(effectiveWindowDays({ ...blank, windowDays: '3' })).toBe(3);
-		// ICPAC's 3 rain days belong to its 5-day window; 3 days count the total alone.
+		// ICPAC's 3 rain days stay: over 3 days that is every day wet.
 		expect(ONSET_DEFINITIONS.icpac.summary(5)).toMatch(/5-day window .* at least 3 rain days/);
-		expect(ONSET_DEFINITIONS.icpac.summary(3)).toMatch(/3-day window totalling at least 20 mm\.$/);
+		expect(ONSET_DEFINITIONS.icpac.summary(3)).toMatch(/3 days in a row, each a rain day/);
 		expect(ONSET_DEFINITIONS.moron_robertson_mok.summary(3)).toMatch(/mean 3-day rainfall/);
 	});
 });

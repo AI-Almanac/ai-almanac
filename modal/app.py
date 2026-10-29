@@ -210,12 +210,15 @@ _SERVICES_DIR = Path(__file__).resolve().parents[1] / "src/ai_almanac/server/ser
 E2S_METRICS_RUNNER = _SERVICES_DIR / "e2s.py"
 FOCUS_AREA_MODULE = _SERVICES_DIR / "focus_area.py"
 ROMP_SETTINGS_MODULE = _SERVICES_DIR / "romp.py"
+# focus_area reads its region's season mask from season_masks/ beside it.
+ETHIOPIA_SEASON_MASK = _SERVICES_DIR / "season_masks/ethiopia_jjas_0p25.nc"
 
 # Extends the ROMP image with earth2studio for metrics and public data readers.
 benchmark_image = (
     romp_image.pip_install("earth2studio[data]", "gcsfs", "zarr", "pydantic")
     .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
     .add_local_file(FOCUS_AREA_MODULE, "/almanac/focus_area.py")
+    .add_local_file(ETHIOPIA_SEASON_MASK, "/almanac/season_masks/ethiopia_jjas_0p25.nc")
     .add_local_file(ROMP_SETTINGS_MODULE, "/almanac/almanac_romp.py")
 )
 
@@ -888,8 +891,8 @@ def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
     return local_obs, local_model, local_out, local_fig
 
 
-# focus_area reaches ROMP as the nc_mask _with_focus_mask writes from it.
-_SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area"})
+# focus_area and season_mask reach ROMP as the nc_mask _with_focus_mask writes from them.
+_SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area", "season_mask"})
 
 
 def _almanac_module(name: str):
@@ -1020,9 +1023,8 @@ def _run_romp_entry(env: dict, local_out: Path, capture_output: bool) -> None:
 
 
 def _with_focus_mask(config: dict, local_obs: Path, mask_dir: Path) -> dict:
-    """Write the area-of-interest mask on the staged obs grid and point nc_mask at it."""
-    if not (config.get("romp_params") or {}).get("focus_area"):
-        return config
+    """Write the area-of-interest and season mask on the staged obs grid and point
+    nc_mask at it (a no-op without either)."""
     materialize_focus_mask = _almanac_module("focus_area").materialize_focus_mask
     return materialize_focus_mask({**config, "obs_dir": str(local_obs)}, mask_dir)
 

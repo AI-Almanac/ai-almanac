@@ -116,6 +116,7 @@ SHARED_ROMP_PARAM_KEYS = {
     "dry_spell",
     "dry_extent",
     "nc_mask",
+    "season_mask",
     "focus_area",
     "thresh_file",
     "ref_model",

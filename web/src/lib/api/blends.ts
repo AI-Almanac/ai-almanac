@@ -42,6 +42,8 @@ export type BlendParams = {
 	ref_onset_month_day?: string;
 	// Days the onset threshold is counted over; omitted, the definition's 5.
 	onset_window_days?: 3 | 5;
+	// false trains and scores every unit where the region has a season mask (on by default).
+	season_mask?: boolean;
 	// The definition's dry-spell check, off unless switched on.
 	dry_spell_check?: boolean;
 	dry_spell_days?: number;

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import InfoTip from '$lib/components/InfoTip.svelte';
+	import { seasonMaskLabel } from '$lib/season-masks';
 	import PerModelConfig from './PerModelConfig.svelte';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
@@ -431,6 +432,22 @@
 
 									<fieldset>
 										<legend>Masks and baseline</legend>
+										{#if seasonMaskLabel(selectedRegionId)}
+											<label>
+												<span class="label-with-help">
+													{seasonMaskLabel(selectedRegionId)}
+													<InfoTip
+														text="On by default: only the grid cells where June–September brings at least about half the year's rain are scored. Off: every cell. A mask file replaces it."
+													/>
+												</span>
+												<input
+													type="checkbox"
+													checked={sharedAdvancedParams.season_mask !== false}
+													onchange={(e) =>
+														setSharedParam('season_mask', (e.target as HTMLInputElement).checked)}
+												/>
+											</label>
+										{/if}
 										<label>
 											<span class="label-with-help">
 												Area mask file

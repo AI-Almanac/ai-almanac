@@ -42,6 +42,7 @@
 		yearSpecError
 	} from './year-coverage';
 	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
+	import { seasonMaskLabel } from '$lib/season-masks';
 	import {
 		ONSET_DEFAULTS,
 		ONSET_DEFINITIONS,
@@ -181,6 +182,8 @@
 	// Onset definition overrides; blank means the workflow default.
 	let onsetDefinition = $state<OnsetDefinitionId | ''>('');
 	let onsetWindowDays = $state<'' | `${OnsetWindowDays}`>('');
+	// The region's season mask, on unless switched off.
+	let seasonMaskOn = $state(true);
 	let dryCheck = $state(false);
 	let dryDays = $state('');
 	let dryWindowDays = $state('');
@@ -272,6 +275,7 @@
 	});
 	const onsetRule = $derived(effectiveOnsetDefinition(onsetInput));
 	const windowDays = $derived(effectiveWindowDays(onsetInput));
+	const seasonMask = $derived(seasonMaskLabel(selectedObs?.region));
 	const onsetError = $derived(onsetParamsError(onsetInput));
 
 	const dayLevelInput = $derived({
@@ -593,6 +597,7 @@
 				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
 				...(focusArea ? { focus_area: focusArea } : {}),
 				...onsetParamsBody(onsetInput),
+				...(seasonMask && !seasonMaskOn ? { season_mask: false } : {}),
 				...dayLevelBody()
 			}
 		};
@@ -954,6 +959,15 @@
 							</label>
 						</div>
 						<div class="field-row">
+							{#if seasonMask}
+								<label class="field">
+									{@render fieldLabel(
+										seasonMask,
+										"On by default: train and score only the woredas where June–September brings at least about half the year's rain. Off: every woreda."
+									)}
+									<input type="checkbox" bind:checked={seasonMaskOn} />
+								</label>
+							{/if}
 							<label class="field">
 								{@render fieldLabel(
 									'Wet window',
@@ -1493,7 +1507,7 @@
 	}
 
 	.advanced-group {
-		margin: 0.5rem 0 -0.5rem;
+		margin: 0.5rem 0 0;
 		padding-top: 0.75rem;
 		border-top: 1px solid var(--color-border-subtle);
 	}

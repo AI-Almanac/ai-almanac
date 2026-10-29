@@ -2566,9 +2566,14 @@ export interface components {
             ref_onset_month_day?: string | null;
             /**
              * Onset Window Days
-             * @description Days the onset rainfall threshold is counted over, from a rain day; omitted, the definition's 5. ICPAC's 5-day window also needs 3 rain days, its 3-day window only the total (as benchmarks count ICPAC's onset); Moron-Robertson's threshold becomes the cell's mean rainfall over that many days.
+             * @description Days the onset rainfall threshold is counted over, from a rain day; omitted, the definition's 5. ICPAC's window needs 3 rain days, so a 3-day window is 3 wet days in a row (as benchmarks count ICPAC's onset); Moron-Robertson's threshold becomes the cell's mean rainfall over that many days.
              */
             onset_window_days?: (3 | 5) | null;
+            /**
+             * Season Mask
+             * @description Train and score only the units mostly inside the region's season mask (Ethiopia: the woredas of its June-September rain areas); on by default where the region has one. false uses every unit.
+             */
+            season_mask?: boolean | null;
             /**
              * Dry Spell Check
              * @description Veto an onset followed by a dry spell (off by default). ICPAC: a dry run of 7 or more days (each under 1 mm) within the 21 days after the onset day; Moron-Robertson: 10 days totalling under 5 mm within the 30 days after the wet spell.
@@ -4614,6 +4619,11 @@ export interface components {
             shp_only?: boolean | null;
             /** Nc Mask */
             nc_mask?: string | null;
+            /**
+             * Season Mask
+             * @description Score only the region's season-mask cells (Ethiopia: its June-September rain areas); on by default where the region has one, and intersected with focus_area. false scores every cell; an nc_mask replaces it.
+             */
+            season_mask?: boolean | null;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             /** Ref Model Dir */

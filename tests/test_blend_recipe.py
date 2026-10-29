@@ -176,8 +176,12 @@ def test_observations_that_mark_the_day_itself_say_so(tmp_path: Path) -> None:
 
 
 def test_adm3_regions_regrid_with_the_checkouts_district_weights(tmp_path: Path) -> None:
+    # Without the season mask, which reads the weights (its own test covers it).
+    params = {**_job()["blend_params"], "season_mask": False}
     recipe = blend_recipe.blend_config(
-        _job(region_id="Ethiopia"), work_dir=tmp_path, blending_root=Path("/opt/blending")
+        _job(region_id="Ethiopia", blend_params=params),
+        work_dir=tmp_path,
+        blending_root=Path("/opt/blending"),
     )
 
     assert recipe["domain"]["regrid"] == {

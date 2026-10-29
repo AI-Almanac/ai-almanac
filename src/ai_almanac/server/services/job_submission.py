@@ -123,6 +123,12 @@ class RompParams(BaseModel):
     land_only: bool | None = None
     shp_only: bool | None = None
     nc_mask: DataPath | None = None
+    season_mask: bool | None = Field(
+        default=None,
+        description="Score only the region's season-mask cells (Ethiopia: its "
+        "June-September rain areas); on by default where the region has one, and "
+        "intersected with focus_area. false scores every cell; an nc_mask replaces it.",
+    )
     focus_area: FocusArea | None = None
     ref_model_dir: DataPath | None = None
     thresh_file: DataPath | None = None
@@ -480,9 +486,15 @@ class BlendParams(BaseModel):
     onset_window_days: Literal[3, 5] | None = Field(
         default=None,
         description="Days the onset rainfall threshold is counted over, from a rain day; "
-        "omitted, the definition's 5. ICPAC's 5-day window also needs 3 rain days, its "
-        "3-day window only the total (as benchmarks count ICPAC's onset); "
-        "Moron-Robertson's threshold becomes the cell's mean rainfall over that many days.",
+        "omitted, the definition's 5. ICPAC's window needs 3 rain days, so a 3-day window "
+        "is 3 wet days in a row (as benchmarks count ICPAC's onset); Moron-Robertson's "
+        "threshold becomes the cell's mean rainfall over that many days.",
+    )
+    season_mask: bool | None = Field(
+        default=None,
+        description="Train and score only the units mostly inside the region's season "
+        "mask (Ethiopia: the woredas of its June-September rain areas); on by default "
+        "where the region has one. false uses every unit.",
     )
     dry_spell_check: bool | None = Field(
         default=None,

@@ -65,6 +65,8 @@ export type JobParams = {
 	ref_model_dir?: string;
 	// Advanced — masks/thresholds
 	nc_mask?: string;
+	// false scores every cell where the region has a season mask (on by default).
+	season_mask?: boolean;
 	focus_area?: FocusAreaValue | null;
 	thresh_file?: string;
 };

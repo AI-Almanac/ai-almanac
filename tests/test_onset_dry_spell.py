@@ -88,11 +88,10 @@ def test_dry_spell_numbers_need_the_switch_and_must_fit() -> None:
     assert BlendParams(**years, dry_spell_check=True, dry_spell_days=5).dry_spell_days == 5
 
 
-def test_a_3_day_window_counts_icpacs_total_alone_as_benchmarks_do() -> None:
+def test_a_3_day_window_is_icpacs_3_wet_days_in_a_row_as_benchmarks_count_it() -> None:
     definition = _onset(onset_window_days=3)["definition"]
 
-    assert definition["window"] == 3
-    assert "min_wet_days" not in definition
+    assert (definition["window"], definition["min_wet_days"]) == (3, 3)
     assert definition["trigger_rule"] == "first_day_wet"
     assert _onset(onset_window_days=3)["threshold"] == {"mm": 20.0}
     # Choosing the definition's own window changes nothing.
@@ -113,6 +112,41 @@ def test_the_window_is_3_or_5_days() -> None:
     assert BlendParams(**years, onset_window_days=3).onset_window_days == 3
     with pytest.raises(ValidationError):
         BlendParams(**years, onset_window_days=4)
+
+
+def test_ethiopia_blends_keep_the_woredas_mostly_inside_its_season_mask(tmp_path: Path) -> None:
+    import csv
+
+    import xarray as xr
+
+    from ai_almanac.server.services import focus_area
+
+    assert blend_recipe.SEASON_MASKS == focus_area.SEASON_MASKS
+    with xr.open_dataset(focus_area.season_mask("ethiopia")) as ds:
+        kept = ds["precip"]
+        wet, dry = (13.0, 38.0), (5.0, 44.0)
+        assert bool(kept.sel(latitude=wet[0], longitude=wet[1]))
+        assert not bool(kept.sel(latitude=dry[0], longitude=dry[1]))
+    weights = tmp_path / "weights.csv"
+    with open(weights, "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["latitude", "longitude", "adm3_name", "weight"])
+        writer.writerows(
+            [
+                [*wet, "Highland", 1.0],
+                [*dry, "Lowland", 1.0],
+                # Mostly outside: 0.4 of its area in the mask.
+                [*wet, "Edge", 0.4],
+                [*dry, "Edge", 0.6],
+            ]
+        )
+
+    units = blend_recipe.season_units("ethiopia", {}, weights, tmp_path / "recipe")
+
+    with open(units) as handle:
+        assert [row["adm3_name"] for row in csv.DictReader(handle)] == ["Highland"]
+    assert blend_recipe.season_units("ethiopia", {"season_mask": False}, weights, tmp_path) is None
+    assert blend_recipe.season_units("kenya", {}, weights, tmp_path) is None
 
 
 def test_the_recipe_with_a_dry_spell_check_is_a_valid_blend_config(tmp_path: Path) -> None:

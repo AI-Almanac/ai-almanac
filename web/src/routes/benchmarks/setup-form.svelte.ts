@@ -258,6 +258,8 @@ export class BenchmarkSetupForm {
 				dry_extent: numberParam(params.dry_extent)
 			}),
 			...(stringParam(params.nc_mask) && { nc_mask: stringParam(params.nc_mask) }),
+			// The region's season mask is on unless switched off.
+			...(params.season_mask === false && { season_mask: false }),
 			// A cleared box must reach the server as null, or the merge keeps the old one.
 			...('focus_area' in params && { focus_area: focusAreaParam(params.focus_area) ?? null }),
 			...(stringParam(params.thresh_file) && { thresh_file: stringParam(params.thresh_file) }),
