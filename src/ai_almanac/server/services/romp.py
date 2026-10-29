@@ -340,7 +340,7 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "plot_bar_bss_rpss_auc": False,
         "show_plot": False,
         "show_panel": False,
-        "parallel": bool(params.get("parallel", not params.get("probabilistic", False))),
+        "parallel": bool(params.get("parallel", True)),
         "debug": False,
     }
     return "\n".join(f"{key} = {value!r}" for key, value in values.items()) + "\n"
