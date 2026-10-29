@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { SettingsField, SettingsGroup } from '$lib/api';
+	import type { FieldCondition, SettingsField, SettingsGroup } from '$lib/api';
 	import { inputType, type ConfigSettingsState } from '$lib/settings/config.svelte';
 
 	interface Props {
@@ -11,10 +11,28 @@
 	const { settings, group }: Props = $props();
 
 	const restartEdited = $derived(settings.restartFieldsEdited(group));
+
+	function holds(condition: FieldCondition): boolean {
+		return condition.one_of.includes(settings.value(condition.field) as string | boolean);
+	}
+
 	// Follows the form as edited, so turning a toggle on reveals its fields at once.
 	const shownFields = $derived(
-		group.fields.filter((field) => !field.shown_when || Boolean(settings.value(field.shown_when)))
+		group.fields.filter((field) => (field.shown_when ?? []).every(holds))
 	);
+	const topFields = $derived(shownFields.filter((field) => !field.advanced_section));
+	// The Advanced subsections in schema order, each with its shown fields.
+	const advancedSections = $derived.by(() => {
+		const sections = new Map<string, SettingsField[]>();
+		for (const field of shownFields) {
+			if (!field.advanced_section) continue;
+			sections.set(field.advanced_section, [
+				...(sections.get(field.advanced_section) ?? []),
+				field
+			]);
+		}
+		return [...sections];
+	});
 	const saving = $derived(settings.savingGroup === group.name);
 
 	const CUSTOM = '__custom__';
@@ -23,9 +41,8 @@
 	const customizing = new SvelteSet<string>();
 
 	function presetsFor(field: SettingsField) {
-		const when = field.presets_when;
 		if (!field.presets?.length) return null;
-		if (when && String(settings.value(when.field) ?? '') !== when.equals) return null;
+		if (field.presets_when && !holds(field.presets_when)) return null;
 		return field.presets;
 	}
 
@@ -44,6 +61,110 @@
 		settings.setValue(field, choice);
 	}
 </script>
+
+{#snippet fieldRow(field: SettingsField)}
+	<div class="field">
+		<label for={`f-${field.name}`}>
+			<span class="fieldname">{field.label}</span>
+			{#if !field.editable}<span class="badge">managed by environment</span>{/if}
+			{#if field.restart_required && field.editable}<span class="badge">restart</span>{/if}
+			{#if field.sensitive}<span class="badge">secret</span>{/if}
+		</label>
+		<p class="desc">{field.description}</p>
+		<div class="control">
+			{#if field.type === 'bool'}
+				<label class="checkrow">
+					<input
+						type="checkbox"
+						id={`f-${field.name}`}
+						checked={Boolean(settings.value(field.name))}
+						disabled={!field.editable}
+						onchange={(e) => settings.setValue(field, e.currentTarget.checked)}
+					/>
+					<span>{Boolean(settings.value(field.name)) ? 'enabled' : 'disabled'}</span>
+				</label>
+			{:else if field.choices}
+				<select
+					id={`f-${field.name}`}
+					value={String(settings.value(field.name) ?? field.default ?? '')}
+					disabled={!field.editable}
+					onchange={(e) => settings.setValue(field, e.currentTarget.value)}
+				>
+					{#each field.choices as choice (choice)}
+						<option value={choice}>{choice}</option>
+					{/each}
+				</select>
+			{:else if field.multiline}
+				<details class="long-editor">
+					<summary>Edit ({String(settings.value(field.name) ?? '').length} characters)</summary>
+					<textarea
+						id={`f-${field.name}`}
+						rows="16"
+						disabled={!field.editable}
+						value={String(settings.value(field.name) ?? '')}
+						oninput={(e) => settings.setValue(field, e.currentTarget.value)}></textarea>
+				</details>
+			{:else}
+				{@const presets = presetsFor(field)}
+				{@const choice = presets ? presetChoice(field, presets) : CUSTOM}
+				{#if presets}
+					<select
+						id={`f-${field.name}`}
+						aria-label={field.label}
+						value={choice}
+						disabled={!field.editable}
+						onchange={(e) => choosePreset(field, e.currentTarget.value)}
+					>
+						{#each presets as preset (preset.value)}
+							<option value={preset.value}>{preset.label}</option>
+						{/each}
+						<option value={CUSTOM}>Custom…</option>
+					</select>
+				{/if}
+				{#if choice === CUSTOM}
+					<input
+						id={presets ? `f-${field.name}-custom` : `f-${field.name}`}
+						aria-label={presets ? `${field.label} (custom)` : undefined}
+						type={inputType(field)}
+						list={field.suggestions?.length ? `s-${field.name}` : undefined}
+						value={String(settings.value(field.name) ?? '')}
+						disabled={!field.editable}
+						oninput={(e) => settings.setValue(field, e.currentTarget.value)}
+						placeholder={field.sensitive
+							? settings.configured[field.name]
+								? 'Enter a new key to replace'
+								: 'Not set — enter a key'
+							: String(field.default ?? '')}
+					/>
+					{#if field.suggestions?.length}
+						<datalist id={`s-${field.name}`}>
+							{#each field.suggestions as suggestion (suggestion)}
+								<option value={suggestion}></option>
+							{/each}
+						</datalist>
+					{/if}
+				{/if}
+				{#if field.sensitive && field.editable && settings.configured[field.name]}
+					<button
+						type="button"
+						class="secondary"
+						onclick={() => void settings.removeKey(field)}
+						title="Remove the stored key"
+					>
+						Remove
+					</button>
+				{/if}
+			{/if}
+		</div>
+		{#if field.sensitive}
+			<p class="desc">
+				{settings.configured[field.name]
+					? '✓ A key is configured. Its value is never shown — to change it, enter a new key or remove it.'
+					: 'No key configured.'}
+			</p>
+		{/if}
+	</div>
+{/snippet}
 
 <div class="group">
 	<header class="grouphead">
@@ -69,110 +190,24 @@
 	{/if}
 
 	<div class="fields">
-		{#each shownFields as field (field.name)}
-			<div class="field">
-				<label for={`f-${field.name}`}>
-					<span class="fieldname">{field.label}</span>
-					{#if !field.editable}<span class="badge">managed by environment</span>{/if}
-					{#if field.restart_required && field.editable}<span class="badge">restart</span>{/if}
-					{#if field.sensitive}<span class="badge">secret</span>{/if}
-				</label>
-				<p class="desc">{field.description}</p>
-				<div class="control">
-					{#if field.type === 'bool'}
-						<label class="checkrow">
-							<input
-								type="checkbox"
-								id={`f-${field.name}`}
-								checked={Boolean(settings.value(field.name))}
-								disabled={!field.editable}
-								onchange={(e) => settings.setValue(field, e.currentTarget.checked)}
-							/>
-							<span>{Boolean(settings.value(field.name)) ? 'enabled' : 'disabled'}</span>
-						</label>
-					{:else if field.choices}
-						<select
-							id={`f-${field.name}`}
-							value={String(settings.value(field.name) ?? field.default ?? '')}
-							disabled={!field.editable}
-							onchange={(e) => settings.setValue(field, e.currentTarget.value)}
-						>
-							{#each field.choices as choice (choice)}
-								<option value={choice}>{choice}</option>
-							{/each}
-						</select>
-					{:else if field.multiline}
-						<details class="long-editor">
-							<summary>Edit ({String(settings.value(field.name) ?? '').length} characters)</summary>
-							<textarea
-								id={`f-${field.name}`}
-								rows="16"
-								disabled={!field.editable}
-								value={String(settings.value(field.name) ?? '')}
-								oninput={(e) => settings.setValue(field, e.currentTarget.value)}></textarea>
-						</details>
-					{:else}
-						{@const presets = presetsFor(field)}
-						{@const choice = presets ? presetChoice(field, presets) : CUSTOM}
-						{#if presets}
-							<select
-								id={`f-${field.name}`}
-								aria-label={field.label}
-								value={choice}
-								disabled={!field.editable}
-								onchange={(e) => choosePreset(field, e.currentTarget.value)}
-							>
-								{#each presets as preset (preset.value)}
-									<option value={preset.value}>{preset.label}</option>
-								{/each}
-								<option value={CUSTOM}>Custom…</option>
-							</select>
-						{/if}
-						{#if choice === CUSTOM}
-							<input
-								id={presets ? `f-${field.name}-custom` : `f-${field.name}`}
-								aria-label={presets ? `${field.label} (custom)` : undefined}
-								type={inputType(field)}
-								list={field.suggestions?.length ? `s-${field.name}` : undefined}
-								value={String(settings.value(field.name) ?? '')}
-								disabled={!field.editable}
-								oninput={(e) => settings.setValue(field, e.currentTarget.value)}
-								placeholder={field.sensitive
-									? settings.configured[field.name]
-										? 'Enter a new key to replace'
-										: 'Not set — enter a key'
-									: String(field.default ?? '')}
-							/>
-							{#if field.suggestions?.length}
-								<datalist id={`s-${field.name}`}>
-									{#each field.suggestions as suggestion (suggestion)}
-										<option value={suggestion}></option>
-									{/each}
-								</datalist>
-							{/if}
-						{/if}
-						{#if field.sensitive && field.editable && settings.configured[field.name]}
-							<button
-								type="button"
-								class="secondary"
-								onclick={() => void settings.removeKey(field)}
-								title="Remove the stored key"
-							>
-								Remove
-							</button>
-						{/if}
-					{/if}
-				</div>
-				{#if field.sensitive}
-					<p class="desc">
-						{settings.configured[field.name]
-							? '✓ A key is configured. Its value is never shown — to change it, enter a new key or remove it.'
-							: 'No key configured.'}
-					</p>
-				{/if}
-			</div>
+		{#each topFields as field (field.name)}
+			{@render fieldRow(field)}
 		{/each}
 	</div>
+
+	{#if advancedSections.length > 0}
+		<details class="advanced">
+			<summary>Advanced</summary>
+			{#each advancedSections as [heading, fields] (heading)}
+				<h3>{heading}</h3>
+				<div class="fields">
+					{#each fields as field (field.name)}
+						{@render fieldRow(field)}
+					{/each}
+				</div>
+			{/each}
+		</details>
+	{/if}
 </div>
 
 <style>
@@ -213,6 +248,26 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.1rem;
+	}
+	.advanced {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--color-border-subtle);
+	}
+	.advanced summary {
+		cursor: pointer;
+		font-weight: 600;
+		font-size: 0.92rem;
+	}
+	.advanced h3 {
+		margin: 0.75rem 0 0;
+		font-size: 0.78rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--color-text-muted);
 	}
 	.field {
 		display: flex;

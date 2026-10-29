@@ -143,16 +143,60 @@ def test_secret_overlay_value_is_sealed_at_rest(
     assert _unseal_secret("plain") == "plain"
 
 
-def test_draft_model_fields_show_only_while_speculative_decoding_is_on(
+MANAGED = {"field": "llm_engine", "one_of": ["managed"]}
+
+
+def test_the_model_page_leads_with_the_model_and_tucks_the_rest_under_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    [model] = [g for g in get_schema(_admin=None).groups if g["name"] == "Model"]
+    sections = [(f["name"], f["advanced_section"]) for f in model["fields"]]
+
+    assert sections[:3] == [
+        ("llm_model", None),
+        ("llm_speculative_decoding", None),
+        ("llm_gpu_memory_utilization", None),
+    ]
+    assert [name for name, section in sections if section == "Connection"] == [
+        "llm_provider",
+        "llm_base_url",
+        "llm_engine",
+        "llm_api_key",
+    ]
+    assert {section for _, section in sections[3:]} == {"Connection", "Local server", "Limits"}
+
+
+def test_each_server_shows_only_the_settings_it_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    fields = _fields(get_schema(_admin=None))
+
+    external = {"field": "llm_engine", "one_of": ["external"]}
+    for name in ("llm_provider", "llm_base_url", "llm_api_key"):
+        assert fields[name]["shown_when"] == [external]
+    for name in ("llm_gpu_memory_utilization", "llm_port", "llm_serve_args"):
+        assert fields[name]["shown_when"] == [MANAGED]
+    assert fields["llm_model"]["shown_when"] is None
+    assert fields["llm_engine"]["shown_when"] is None
+
+
+def test_speculative_decoding_shows_only_for_a_model_with_a_tested_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "deployment_mode", "personal")
     fields = _fields(get_schema(_admin=None))
 
-    assert fields["llm_speculative_decoding"]["type"] == "bool"
+    [managed, drafted] = fields["llm_speculative_decoding"]["shown_when"]
+    assert managed == MANAGED
+    assert drafted["field"] == "llm_model"
+    assert "nvidia/Qwen3.8-27B-NVFP4" in drafted["one_of"]
+    assert "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4" not in drafted["one_of"]
     for name in ("llm_draft_model", "llm_draft_tokens"):
-        assert fields[name]["shown_when"] == "llm_speculative_decoding"
-    assert fields["llm_speculative_decoding"]["shown_when"] is None
+        assert fields[name]["shown_when"] == [
+            managed,
+            drafted,
+            {"field": "llm_speculative_decoding", "one_of": [True]},
+        ]
     assert "z-lab/Qwen3.8-27B-DFlash2" in fields["llm_draft_model"]["suggestions"]
 
 
@@ -162,7 +206,7 @@ def test_model_field_offers_the_local_catalog_while_the_server_is_managed(
     monkeypatch.setattr(settings, "deployment_mode", "personal")
     model = _fields(get_schema(_admin=None))["llm_model"]
 
-    assert model["presets_when"] == {"field": "llm_engine", "equals": "managed"}
+    assert model["presets_when"] == MANAGED
     labels = {p["value"]: p["label"] for p in model["presets"]}
     assert labels["nvidia/Qwen3.8-27B-NVFP4"] == "Qwen3.8 27B (NVFP4) + DFlash 2 · 25.7 GB"
     assert labels["RedHatAI/Qwen3.6-35B-A3B-NVFP4"].endswith("· untested")

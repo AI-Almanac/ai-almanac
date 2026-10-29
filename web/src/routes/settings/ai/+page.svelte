@@ -144,11 +144,8 @@
 
 <div class="wrap">
 	<header>
-		<h2>Model &amp; API keys</h2>
-		<p class="lede">
-			Choose which language model powers the assistant. Use the shared model your administrator
-			provides, or bring your own API key.
-		</p>
+		<h2>Providers</h2>
+		<p class="lede">Use the shared model your administrator provides, or bring your own API key.</p>
 	</header>
 
 	{#if error}<div class="banner err">{error}</div>{/if}
@@ -157,7 +154,7 @@
 		<p class="muted">Loading…</p>
 	{:else}
 		<section>
-			<h2>Which model to use</h2>
+			<h2>Provider</h2>
 			<div class="choices">
 				<label class="choice">
 					<input
@@ -280,7 +277,7 @@
 
 		{#if isAdmin}
 			<section class="admin">
-				<h2>Providers <span class="badge">admin</span></h2>
+				<h2>Manage providers <span class="badge">admin</span></h2>
 				<p class="lede">
 					Providers define an LLM backend. Attach a shared key to let everyone use it without their
 					own.

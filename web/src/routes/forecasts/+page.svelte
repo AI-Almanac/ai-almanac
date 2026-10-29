@@ -664,7 +664,7 @@
 										<p class="muted">
 											{fewerMembers(entry)} of {entry.model.ensemble_members} members rolls out faster,
 											but the blend's onset probabilities become shares of fewer members than it was trained
-											on: coarser and noisier.
+											on.
 										</p>
 									{/if}
 								{/each}

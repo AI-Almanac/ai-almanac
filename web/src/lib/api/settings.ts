@@ -15,12 +15,20 @@ export interface SettingsField {
 	choices: string[] | null;
 	/** Common values for a free-text field; the input offers them while typing. */
 	suggestions?: string[] | null;
-	/** A bool field that must be on (in the form, saved or not) for this one to show. */
-	shown_when?: string | null;
+	/** Conditions that must all hold (in the form, saved or not) for this one to show. */
+	shown_when?: FieldCondition[] | null;
+	/** The subheading under the group's Advanced section; null shows it above. */
+	advanced_section?: string | null;
 	/** Labelled values offered in a select, beside a custom-value input. */
 	presets?: { value: string; label: string }[] | null;
-	/** Offer the presets only while this field (as edited) has this value. */
-	presets_when?: { field: string; equals: string } | null;
+	/** Offer the presets only while this holds. */
+	presets_when?: FieldCondition | null;
+}
+
+/** Holds while `field` (as edited) has one of `one_of`. */
+export interface FieldCondition {
+	field: string;
+	one_of: (string | boolean)[];
 }
 
 export interface SettingsGroup {

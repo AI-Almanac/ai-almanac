@@ -5,6 +5,7 @@ import type { SettingsGroup } from '$lib/api';
 
 const GROUPS = [
 	{ name: 'Benchmark runner', fields: [] },
+	{ name: 'Model', fields: [] },
 	{ name: 'Assistant guardrails', fields: [] }
 ] as unknown as SettingsGroup[];
 
@@ -16,8 +17,12 @@ describe('settings navigation', () => {
 	it('files assistant config groups under Assistant and the rest under Platform', () => {
 		const [platform, assistant] = settingsNav(GROUPS);
 
-		expect(platform.links.map((l) => l.label)).toContain('Benchmark runner');
-		expect(assistant.links.map((l) => l.label)).toContain('Assistant guardrails');
+		expect(platform.links.map((l) => l.label)).toEqual(['Overview', 'Benchmark runner']);
+		expect(assistant.links.map((l) => l.label).slice(0, 3)).toEqual([
+			'Providers',
+			'Model',
+			'Assistant guardrails'
+		]);
 	});
 
 	it('drops the comparison page when the feature is off', () => {
@@ -28,12 +33,12 @@ describe('settings navigation', () => {
 		);
 		// Rulesets and Feedback are not comparison features and stay.
 		expect(labels(settingsNav(GROUPS, { comparisonsEnabled: false }))).toEqual(
-			expect.arrayContaining(['Rulesets', 'Feedback', 'Model & API keys'])
+			expect.arrayContaining(['Rulesets', 'Feedback', 'Providers'])
 		);
 	});
 
 	it('slugs a group name into its route', () => {
 		expect(sectionSlug('Weather data access')).toBe('weather-data-access');
-		expect(sectionSlug('AI assistant')).toBe('ai-assistant');
+		expect(sectionSlug('Assistant guardrails')).toBe('assistant-guardrails');
 	});
 });

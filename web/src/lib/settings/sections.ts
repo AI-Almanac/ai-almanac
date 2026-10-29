@@ -19,10 +19,11 @@ export function sectionSlug(groupName: string): string {
 		.replace(/^-|-$/g, '');
 }
 
-/** Config groups whose subject is the assistant, so the nav can file them with
- * the ruleset and feedback pages rather than with the platform settings. */
+/** Config groups whose subject is the assistant (its model, and the groups
+ * named "Assistant …"), so the nav can file them with the ruleset and feedback
+ * pages rather than with the platform settings. */
 function isAssistantGroup(group: SettingsGroup): boolean {
-	return /^(ai |assistant)/i.test(group.name);
+	return group.name === 'Model' || /^assistant/i.test(group.name);
 }
 
 /**
@@ -50,7 +51,7 @@ export function settingsNav(
 		{
 			heading: 'Assistant',
 			links: [
-				{ label: 'Model & API keys', href: '/settings/ai', adminOnly: false },
+				{ label: 'Providers', href: '/settings/ai', adminOnly: false },
 				...groups.filter(isAssistantGroup).map(link),
 				{ label: 'Rulesets', href: '/settings/assistant', adminOnly: true },
 				// Hidden with the feature: its endpoints 404 when the flag is off.

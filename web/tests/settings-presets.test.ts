@@ -20,7 +20,7 @@ function field(name: string, label: string, extra: Partial<SettingsField> = {}):
 }
 
 const GROUP = {
-	name: 'AI assistant',
+	name: 'Model',
 	fields: [
 		field('llm_engine', 'Model server', { choices: ['external', 'managed'] }),
 		field('llm_model', 'Model', {
@@ -28,7 +28,7 @@ const GROUP = {
 				{ value: 'nvidia/Qwen3.8-27B-NVFP4', label: 'Qwen3.8 27B' },
 				{ value: 'nvidia/Nemotron', label: 'Nemotron' }
 			],
-			presets_when: { field: 'llm_engine', equals: 'managed' }
+			presets_when: { field: 'llm_engine', one_of: ['managed'] }
 		})
 	]
 };

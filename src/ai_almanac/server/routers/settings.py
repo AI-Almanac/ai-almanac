@@ -72,8 +72,25 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ],
     ),
     (
-        "AI assistant",
+        "Model",
         [
+            (
+                "llm_model",
+                "Model",
+                "Model identifier; with the managed server, the Hugging Face id it serves",
+            ),
+            (
+                "llm_speculative_decoding",
+                "Speculative decoding",
+                "Serve the chosen model with a draft model that proposes tokens for it to "
+                "check: faster replies, same answers, a few GB more memory. Off runs the "
+                "model alone",
+            ),
+            (
+                "llm_gpu_memory_utilization",
+                "Memory share",
+                "Fraction of GPU memory the managed vLLM claims (unified memory: system RAM)",
+            ),
             (
                 "llm_provider",
                 "Provider type",
@@ -81,43 +98,26 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
             ),
             ("llm_base_url", "Provider URL", "Base URL for OpenAI-compatible providers"),
             (
-                "llm_model",
-                "Model",
-                "Model identifier; with the managed server, the Hugging Face id it serves",
+                "llm_engine",
+                "Model server",
+                "'managed' runs the bundled vLLM on this machine; 'external' uses the URL above",
             ),
             (
                 "llm_api_key",
                 "API key",
                 "API key (use 'placeholder' for local servers that don't check)",
             ),
-            (
-                "llm_engine",
-                "Model server",
-                "'managed' runs the bundled vLLM on this machine; 'external' uses the URL above",
-            ),
-            ("llm_port", "Local model port", "Loopback port for the managed vLLM server"),
-            (
-                "llm_gpu_memory_utilization",
-                "Local model memory share",
-                "Fraction of GPU memory the managed vLLM claims (unified memory: system RAM)",
-            ),
-            (
-                "llm_idle_sleep_minutes",
-                "Local model idle sleep (minutes)",
-                "Release the managed model's memory after this long without chat; 0 = never",
-            ),
+            ("llm_port", "Port", "Loopback port for the managed vLLM server"),
             (
                 "llm_serve_args",
-                "Local model server flags",
+                "Server flags",
                 "Extra `vllm serve` flags (tool-call parser, context length); blank uses "
                 "the flags tested for the chosen model",
             ),
             (
-                "llm_speculative_decoding",
-                "Local model speculative decoding",
-                "Serve the chosen model with a draft model that proposes tokens for it to "
-                "check: faster replies, same answers, a few GB more memory. Off runs the "
-                "model alone",
+                "llm_idle_sleep_minutes",
+                "Idle sleep (minutes)",
+                "Release the managed model's memory after this long without chat; 0 = never",
             ),
             (
                 "llm_draft_model",
@@ -259,10 +259,21 @@ MULTILINE_FIELDS: frozenset[str] = frozenset()
 _LIVE_DEFAULTS: dict[str, Any] = {}
 
 
-# Field name -> the bool field that must be on for the UI to show it.
-_SHOWN_WHEN: dict[str, str] = {
-    "llm_draft_model": "llm_speculative_decoding",
-    "llm_draft_tokens": "llm_speculative_decoding",
+# Field name -> the subheading it sits under in its group's collapsed Advanced
+# section; fields not listed are shown above it.
+_ADVANCED_SECTIONS: dict[str, str] = {
+    "llm_provider": "Connection",
+    "llm_base_url": "Connection",
+    "llm_engine": "Connection",
+    "llm_api_key": "Connection",
+    "llm_port": "Local server",
+    "llm_serve_args": "Local server",
+    "llm_idle_sleep_minutes": "Local server",
+    "llm_draft_model": "Local server",
+    "llm_draft_tokens": "Local server",
+    "llm_timeout_seconds": "Limits",
+    "llm_history_max_messages": "Limits",
+    "llm_tool_result_max_chars": "Limits",
 }
 
 
@@ -272,8 +283,38 @@ class FieldOption(BaseModel):
 
 
 class FieldCondition(BaseModel):
+    """Holds while `field` (as edited in the form) has one of `one_of`."""
+
     field: str
-    equals: str
+    one_of: list[str | bool]
+
+
+_MANAGED = FieldCondition(field="llm_engine", one_of=["managed"])
+_EXTERNAL = FieldCondition(field="llm_engine", one_of=["external"])
+_LOCAL_SERVER_FIELDS = (
+    "llm_gpu_memory_utilization",
+    "llm_port",
+    "llm_serve_args",
+    "llm_idle_sleep_minutes",
+)
+_IGNORED_BY_LOCAL_SERVER = ("llm_provider", "llm_base_url", "llm_api_key")
+
+
+def _shown_when(field_name: str) -> list[FieldCondition] | None:
+    """What must hold for the UI to show a field. The managed server sets its
+    own provider, URL and key, and only it reads the local-server settings;
+    speculative decoding needs a model the catalog pairs with a draft."""
+    if field_name in _IGNORED_BY_LOCAL_SERVER:
+        return [_EXTERNAL]
+    if field_name in _LOCAL_SERVER_FIELDS:
+        return [_MANAGED]
+    if field_name in ("llm_speculative_decoding", "llm_draft_model", "llm_draft_tokens"):
+        drafted = [m["id"] for m in get_local_llm_models() if m.get("speculative_config")]
+        conditions = [_MANAGED, FieldCondition(field="llm_model", one_of=drafted)]
+        if field_name != "llm_speculative_decoding":
+            conditions.append(FieldCondition(field="llm_speculative_decoding", one_of=[True]))
+        return conditions
+    return None
 
 
 class FieldSchema(BaseModel):
@@ -290,8 +331,10 @@ class FieldSchema(BaseModel):
     choices: list[str] | None = None
     # Common values for a free-text field; the UI offers them while typing.
     suggestions: list[str] | None = None
-    # A bool field that must be on for this one to be shown.
-    shown_when: str | None = None
+    # Conditions that must all hold for the field to be shown.
+    shown_when: list[FieldCondition] | None = None
+    # The subheading under its group's Advanced section, or None for the top.
+    advanced_section: str | None = None
     # Labelled values the UI offers in a select, beside a custom-value input,
     # while `presets_when` holds (always, when it is unset).
     presets: list[FieldOption] | None = None
@@ -341,7 +384,7 @@ def _presets(field_name: str) -> tuple[list[FieldOption], FieldCondition] | None
         options = [
             FieldOption(value=m["id"], label=_preset_label(m)) for m in get_local_llm_models()
         ]
-        return options, FieldCondition(field="llm_engine", equals="managed")
+        return options, _MANAGED
     return None
 
 
@@ -403,7 +446,8 @@ def get_schema(_admin: AdminUser) -> SettingsSchema:
                     multiline=field_name in MULTILINE_FIELDS,
                     choices=_choices(info.annotation),
                     suggestions=None if shared else _suggestions(field_name),
-                    shown_when=_SHOWN_WHEN.get(field_name),
+                    shown_when=_shown_when(field_name),
+                    advanced_section=_ADVANCED_SECTIONS.get(field_name),
                     presets=presets[0] if presets else None,
                     presets_when=presets[1] if presets else None,
                 )
