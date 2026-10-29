@@ -74,9 +74,11 @@ def _run_pixi(job_id: str, config: dict) -> None:
 
 
 def _prefetch_boundaries(process_env: dict) -> None:
-    """Fetch the country borders once, so ROMP's parallel workers don't race to download them.
+    """Fetch the country borders and land shapes once, so ROMP's parallel workers
+    don't race to download them.
 
-    A failure is left for ROMP to report: runs that don't mask by country never need them.
+    A failure is left for ROMP to report: runs that don't mask by country or land
+    never need them.
     """
     script = Path(__file__).parents[2] / "envs" / "prefetch_boundaries.py"
     try:
