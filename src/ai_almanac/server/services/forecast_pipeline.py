@@ -39,7 +39,16 @@ from typing import Any
 # Bump when the reduction logic, units, or on-disk schema of a cached
 # trajectory changes so stale entries become misses instead of being served
 # with the wrong shape (D4). It is part of the cache key.
-TRAJECTORY_CACHE_VERSION = 1
+# v2: day k is the UTC day ending at issue + k days (the archives'
+# convention), ensemble members are kept, ensembles are stored cropped to
+# their archive's domain.
+TRAJECTORY_CACHE_VERSION = 2
+
+# The daily aggregation every registered archive declares: tp's cell method
+# over the lead day, and what a lead day's value covers. Live files declare
+# the same, which the blend checks.
+DAY_CELL_METHOD = "sum"
+DAY_WINDOW = "End of the UTC calendar-day aggregation window (00:00 UTC of the following date)"
 
 # Canonical rollout horizon for the trajectory store (D4). Real forecasts always
 # store the full 45-day trajectory, so their rollouts never split across lead
@@ -115,8 +124,8 @@ class EnsembleSpec:
 
     Ensemble models (AIFS-ENS) carry their own initial-condition noise, so the
     spread comes from the model, not from perturbing the input — see run_rollout.
-    The members are averaged to the ensemble mean downstream (the mean keeps the
-    day×lat×lon schema the blend was trained on).
+    The members are kept apart (`number`), as in the archives the blends train
+    on: a blend's ensemble probabilities are the share of members with an onset.
     """
 
     members: int
@@ -490,7 +499,8 @@ class SeasonPlan:
         raise PlanError(f"The season plan has no run for {member!r}")
 
     def key(self, run: ModelRun) -> TrajectoryKey:
-        return TrajectoryKey(run.model.registry_id, self.init_source, self.lead_day)
+        bounds = run.spatial_bounds if run.model.ensemble is not None else None
+        return TrajectoryKey(run.model.registry_id, self.init_source, self.lead_day, bounds)
 
     def dates_by_key(self) -> dict[TrajectoryKey, tuple[dt.date, ...]]:
         """Every issue date each store key needs. Members whose archives link to
@@ -561,15 +571,15 @@ def _daily_precip_trajectory(
     step_hours: int,
     scratch_root: Path,
     ensemble_spec: EnsembleSpec | None,
+    bounds: Bounds | None = None,
 ):
     """Run one issue date out to max_lead_day and reduce to one daily precip
-    total per lead day (ROMP's `day` dimension), at the model's native grid.
-    Ensemble models are reduced to the ensemble mean (see run_rollout).
+    total per lead day (see daily_totals), at the model's native grid, within
+    `bounds` when given. Ensemble members are kept.
     """
     import shutil
 
     import dask
-    import numpy as np
     import xarray as xr
     from earth2studio.io import ZarrBackend
 
@@ -602,46 +612,54 @@ def _daily_precip_trajectory(
         xr.open_zarr(zarr_path) as dataset,
     ):
         tp = select_variable(dataset, "tp")
-        # Ensemble models write a member dim; average to the ensemble mean before
-        # reducing (kept lazy, so peak memory stays ~one member). Mean and per-day
-        # sum commute, so meaning first gives the same daily totals.
-        if "ensemble" in tp.dims:
-            tp = tp.mean("ensemble")
-        tp = tp.squeeze()
-        lat_name, lon_name = lat_lon_names(tp)
-        # unit_cvt (from the archived data source's metadata, applied by the
-        # caller) converts the model's native units to the mm/day convention
-        # ROMP/blending expect.
-        # ponytail: native model grid, not reprojected to match the historical
-        # archive's exact lat/lon cells — the blend joins by rounded lat/lon id,
-        # so close-enough grids still join, just not cell-for-cell identical.
-        # Upgrade: regrid to the archived source's exact grid if join quality
-        # against historical years turns out to matter.
-        lead_hours_coord = (tp["lead_time"].values / np.timedelta64(1, "h")).astype(int)
-        daily_totals = []
-        for lead_day in range(max_lead_day + 1):
-            day_start = lead_day * 24
-            day_end = day_start + 24
-            mask = (lead_hours_coord >= day_start) & (lead_hours_coord < day_end)
-            if not mask.any():
-                daily_totals.append(xr.full_like(tp.isel(lead_time=0), np.nan).compute())
-                continue
-            window = tp.isel(lead_time=np.where(mask)[0])
-            # tp06/tp12 are period accumulations (precip since the *previous*
-            # step, resetting every step), not cumulative-since-init — so a
-            # day's total is the sum of the steps inside it, not a diff across
-            # days.
-            daily_totals.append(window.sum(dim="lead_time").compute())
+        # One issue date: drop its singleton dims, but never the member dim.
+        tp = tp.squeeze([d for d in tp.dims if tp.sizes[d] == 1 and d != "ensemble"])
+        # Cropping first (lazily) means only the region's values are read and
+        # reduced: 26 members at the native global grid would be ~5 GB a date.
+        # ponytail: native model grid, not reprojected to the archive's exact
+        # cells; the blend refuses a live grid of another resolution, and
+        # reads only the trained cells of a larger one.
+        if bounds is not None:
+            tp = select_lat_lon_bounds(tp, bounds)
+        result = daily_totals(tp, max_lead_day, step_hours)
 
     del tp
     print(f"    zarr reduce done in {time.perf_counter() - t0:.1f}s", flush=True)
     shutil.rmtree(zarr_path, ignore_errors=True)
-
-    stacked = xr.concat(daily_totals, dim="day")
-    stacked = stacked.assign_coords(day=list(range(max_lead_day + 1)))
-    per_day = stacked.clip(min=0)
-    result = per_day.transpose("day", lat_name, lon_name)
     return result
+
+
+def daily_totals(tp, max_lead_day: int, step_hours: int):
+    """Daily precipitation totals of a rollout, as the archives hold them.
+
+    tp holds a period accumulation per step over `lead_time` (each step's
+    precipitation since the previous step, tp06/tp12, not cumulative since
+    the issue). Day k is the UTC day ending at the issue time plus k days:
+    the sum of the steps with lead hours in (24(k-1), 24k], k = 1..max_lead_day,
+    NaN where a day lacks one of its steps. Ensemble members stay apart, as
+    `number` 0..N-1. Totals are clipped at 0, in the model's native units.
+    Returns (number,) day, lat, lon.
+    """
+    import numpy as np
+    import xarray as xr
+
+    lead_hours = (tp["lead_time"].values / np.timedelta64(1, "h")).astype(int)
+    steps_per_day = 24 // step_hours
+    totals = []
+    for day in range(1, max_lead_day + 1):
+        window = np.flatnonzero((lead_hours > 24 * (day - 1)) & (lead_hours <= 24 * day))
+        if len(window) != steps_per_day:
+            totals.append(xr.full_like(tp.isel(lead_time=0), np.nan).compute())
+            continue
+        totals.append(tp.isel(lead_time=window).sum(dim="lead_time", skipna=False).compute())
+    stacked = xr.concat(totals, dim="day").assign_coords(day=np.arange(1, max_lead_day + 1))
+    stacked = stacked.drop_vars("lead_time", errors="ignore")
+    if "ensemble" in stacked.dims:
+        members = stacked.sizes["ensemble"]
+        stacked = stacked.rename(ensemble="number").assign_coords(number=np.arange(members))
+    lat_name, lon_name = lat_lon_names(stacked)
+    order = (["number"] if "number" in stacked.dims else []) + ["day", lat_name, lon_name]
+    return stacked.clip(min=0).transpose(*order)
 
 
 def select_lat_lon_bounds(data_array, bounds: Bounds):
@@ -716,15 +734,25 @@ class TrajectoryKey:
     model_id: str
     init_source: str
     lead_day: int = CANONICAL_LEAD_DAY
+    # Ensemble trajectories are stored over their archive's domain only (26
+    # members at the native global grid would be ~5 GB a date); deterministic
+    # ones stay global, so one entry serves every region.
+    bounds: Bounds | None = None
 
     def __post_init__(self) -> None:
         if self.lead_day < 1:
             raise ValueError(f"lead_day must be at least 1, got {self.lead_day}")
 
     def prefix(self, store: Path | str) -> str:
+        domain = (
+            f"/lat{self.bounds.lat_min:g}_{self.bounds.lat_max:g}"
+            f"_lon{self.bounds.lon_min:g}_{self.bounds.lon_max:g}"
+            if self.bounds is not None
+            else ""
+        )
         return (
             f"{str(store).rstrip('/')}/{self.model_id}/{self.init_source}"
-            f"/v{TRAJECTORY_CACHE_VERSION}/lead{self.lead_day}d"
+            f"/v{TRAJECTORY_CACHE_VERSION}/lead{self.lead_day}d{domain}"
         )
 
     def uri(self, store: Path | str, issue_date: dt.date) -> str:
@@ -925,6 +953,7 @@ def roll_out_issue_dates(
                     step_hours,
                     scratch_root,
                     run.model.ensemble,
+                    key.bounds,
                 )
                 write_stored_trajectory(store, key, issue_date, trajectory)
             except Exception as exc:
@@ -1010,13 +1039,52 @@ def _map_ahead(pool, fn, items, ahead: int):
 
 def season_slice(trajectory, issue_date: dt.date, run: ModelRun):
     """One issue date's slice of the season: the stored trajectory cropped to
-    the run's bounds, in the archive's units. Cropping first means a lazily
-    opened trajectory only ever reads and converts the region."""
+    the run's bounds, in millimetres (the archive's unit_cvt takes the
+    model's native units, which the archives share, to mm). Cropping first
+    means a lazily opened trajectory only ever reads and converts the region."""
     import numpy as np
 
     if run.spatial_bounds:
         trajectory = select_lat_lon_bounds(trajectory, run.spatial_bounds)
     return trajectory.assign_coords(time=np.datetime64(issue_date)) * run.unit_cvt
+
+
+def live_dataset(slices):
+    """Issue-date slices (season_slice) as a live forecast file's dataset:
+    tp (time, [number,] day, lat, lon) in mm, declaring the archives' daily
+    aggregation, which the blend checks against what it was trained on."""
+    import xarray as xr
+
+    tp = xr.concat(
+        [s.expand_dims("time") if "time" not in s.dims else s for s in slices], dim="time"
+    )
+    order = (
+        ["time"]
+        + (["number"] if "number" in tp.dims else [])
+        + [d for d in tp.dims if d not in ("time", "number")]
+    )
+    dataset = tp.transpose(*order).rename("tp").to_dataset()
+    dataset["tp"].attrs.update(
+        units="mm",
+        cell_methods=f"day: {DAY_CELL_METHOD}",
+        description="Accumulation over the UTC calendar day ending at time + day",
+    )
+    dataset["day"].attrs.update(units="days", description=DAY_WINDOW)
+    return dataset
+
+
+def assemble_issue_netcdf(
+    store: Path | str, key: TrajectoryKey, run: ModelRun, issue_date: dt.date, out_path: Path
+) -> Path:
+    """One issue date's live forecast file for a member: the operational input
+    a trained blend forecasts from (one initialisation per model)."""
+    with tempfile.TemporaryDirectory(prefix="issue-") as tmp:
+        path = stored_trajectory_file(store, key, issue_date, Path(tmp))
+        with open_trajectory(path) as trajectory:
+            dataset = live_dataset([season_slice(trajectory, issue_date, run)])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            dataset.to_netcdf(out_path)
+    return out_path
 
 
 def assemble_season_netcdf(
@@ -1050,7 +1118,7 @@ def assemble_season_netcdf(
             # concat runs out of it. open_mfdataset reassembles them lazily below.
             slice_path = scratch_root / f"slice_{i:03d}.nc"
             with open_trajectory(path) as trajectory:
-                season_slice(trajectory, issue_date, run).rename("tp").to_netcdf(slice_path)
+                live_dataset([season_slice(trajectory, issue_date, run)]).to_netcdf(slice_path)
             if path.parent == downloads:
                 path.unlink()
             slice_paths.append(slice_path)

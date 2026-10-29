@@ -29,8 +29,9 @@ def test_the_bundled_pipeline_builds_store_keys_when_loaded_by_path(forecasts_ap
     pipeline = forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
     key = pipeline.TrajectoryKey("fuxi", "gfs", lead_day=2)
 
+    version = pipeline.TRAJECTORY_CACHE_VERSION
     assert key.uri("gs://bucket/season-forecasts", dt.date(2026, 5, 4)) == (
-        "gs://bucket/season-forecasts/fuxi/gfs/v1/lead2d/2026-05-04.nc"
+        f"gs://bucket/season-forecasts/fuxi/gfs/v{version}/lead2d/2026-05-04.nc"
     )
 
 

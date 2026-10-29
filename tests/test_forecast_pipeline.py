@@ -542,7 +542,8 @@ def test_gcs_store_sweep_lists_the_key_prefix_once_and_reads_dates_from_names(mo
     )
 
     assert missing == [MAY_7]
-    assert listings == [("data-bucket", "season-forecasts/aifs/gfs/v1/lead45d/")]
+    version = forecast_pipeline.TRAJECTORY_CACHE_VERSION
+    assert listings == [("data-bucket", f"season-forecasts/aifs/gfs/v{version}/lead45d/")]
 
 
 def _assembled_tp(path: Path):
@@ -747,3 +748,112 @@ def test_ensemble_models_roll_out_one_date_per_chunk():
     chunks = chunk_rollouts(plan, {TrajectoryKey("aifsens", "gfs"): may}, 4)
 
     assert [chunk.issue_dates for chunk in chunks] == [(may[0],), (may[1],)]
+
+
+def _six_hourly(members: int | None, days: int = 2):
+    """tp06 over lead hours 0..24*days: each step's value is its lead hour, so
+    a day's total names the steps it summed."""
+    import numpy as np
+    import xarray as xr
+
+    lead = np.arange(0, 24 * days + 1, 6)
+    values = np.broadcast_to(lead[:, None, None].astype("float32"), (len(lead), 2, 3))
+    dims, coords = (
+        ("lead_time", "lat", "lon"),
+        {
+            "lead_time": lead.astype("timedelta64[h]"),
+            "lat": [2.0, 1.0],
+            "lon": [10.0, 11.0, 12.0],
+        },
+    )
+    if members:
+        values = np.stack([values + 1000 * m for m in range(members)])
+        dims, coords = ("ensemble",) + dims, {**coords, "ensemble": np.arange(members)}
+    return xr.DataArray(values, dims=dims, coords=coords)
+
+
+def test_a_lead_day_is_the_utc_day_ending_at_the_issue_plus_its_lead():
+    from ai_almanac.server.services.forecast_pipeline import daily_totals
+
+    days = daily_totals(_six_hourly(None), 2, 6)
+
+    # Day 1 sums the steps at 6, 12, 18 and 24 h (not the lead-0 initial
+    # condition); day 2 those at 30..48 h: the archives' (24(k-1), 24k] windows.
+    assert days["day"].values.tolist() == [1, 2]
+    assert days.sel(day=1).values.flat[0] == 6 + 12 + 18 + 24
+    assert days.sel(day=2).values.flat[0] == 30 + 36 + 42 + 48
+
+
+def test_ensemble_members_stay_apart_as_number():
+    from ai_almanac.server.services.forecast_pipeline import daily_totals
+
+    days = daily_totals(_six_hourly(3), 2, 6)
+
+    assert days.dims == ("number", "day", "lat", "lon")
+    assert days["number"].values.tolist() == [0, 1, 2]
+    assert days.sel(number=2, day=1).values.flat[0] == (6 + 12 + 18 + 24) + 4 * 2000
+
+
+def test_a_day_missing_a_step_is_missing():
+    import numpy as np
+
+    from ai_almanac.server.services.forecast_pipeline import daily_totals
+
+    tp = _six_hourly(None).drop_isel(lead_time=[7])  # the 42 h step
+    days = daily_totals(tp, 2, 6)
+
+    assert np.isfinite(days.sel(day=1).values).all()
+    assert np.isnan(days.sel(day=2).values).all()
+
+
+def test_ensembles_are_stored_over_their_archive_domain_only():
+    india = Bounds(6.5, 38.5, 66.5, 100.0)
+    ens = ForecastModel.parse(
+        {"id": "aifs2ens", "earth2studio_class": "AIFS2ENS", "ensemble": True, "nensemble": 26}
+    )
+    plan = SeasonPlan(
+        2026,
+        "gfs",
+        45,
+        (
+            ModelRun("ens", ens, 1000.0, india, (MAY_4,)),
+            ModelRun("det", AIFS2, 1000.0, india, (MAY_4,)),
+        ),
+    )
+
+    assert plan.key(plan.run("ens")).bounds == india
+    assert plan.key(plan.run("det")).bounds is None
+    assert plan.key(plan.run("ens")).prefix("store").endswith("/lead45d/lat6.5_38.5_lon66.5_100")
+    assert plan.key(plan.run("det")).prefix("store").endswith("/lead45d")
+
+
+def test_a_live_file_declares_the_archives_units_and_aggregation(tmp_path):
+    import numpy as np
+    import xarray as xr
+
+    from ai_almanac.server.services.forecast_pipeline import (
+        DAY_WINDOW,
+        assemble_issue_netcdf,
+        daily_totals,
+        write_stored_trajectory,
+    )
+
+    ens = ForecastModel.parse(
+        {"id": "aifs2ens", "earth2studio_class": "AIFS2ENS", "ensemble": True}
+    )
+    run = ModelRun("ens", ens, 1000.0, None, (MAY_4,))
+    key = TrajectoryKey("aifs2ens", "gfs")
+    write_stored_trajectory(tmp_path / "store", key, MAY_4, daily_totals(_six_hourly(3), 2, 6))
+
+    path = assemble_issue_netcdf(tmp_path / "store", key, run, MAY_4, tmp_path / "live.nc")
+
+    with xr.open_dataset(path) as ds:
+        tp = ds["tp"]
+        assert tp.dims == ("time", "number", "day", "lat", "lon")
+        assert [str(t)[:13] for t in ds["time"].values] == ["2026-05-04T00"]
+        assert tp.attrs["units"] == "mm"
+        assert tp.attrs["cell_methods"] == "day: sum"
+        assert ds["day"].attrs["description"] == DAY_WINDOW
+        assert ds["day"].values.tolist() == [1, 2]
+        # The model's metres in mm.
+        np.testing.assert_allclose(tp.isel(time=0, number=0, day=0).values, 60 * 1000.0)

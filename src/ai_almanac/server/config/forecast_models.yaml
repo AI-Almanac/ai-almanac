@@ -9,8 +9,11 @@
 # `env` names the execution environment that can run the model — the AIFS
 # families pin incompatible anemoi-models versions, so they live in separate
 # environments (see forecast.pixi.toml and modal/forecasts_app.py). `ensemble:
-# true` models are rolled out with earth2studio's ensemble workflow and reduced
-# to the ensemble mean; `nensemble` is the member count (a cost/accuracy knob).
+# true` models are rolled out with earth2studio's ensemble workflow and their
+# members kept apart, as in the archives blends train on; `nensemble` is the
+# member count. A blend refuses a live ensemble with fewer members than it was
+# trained on (and reads only the trained ones of a larger one), so it must be
+# at least the archive's: 26 for AIFS-ENS v2.
 #
 # `training` lists the years and datasets a checkpoint was pretrained and
 # fine-tuned on, with the publication they come from. The benchmark assistant
@@ -75,7 +78,7 @@ models:
     earth2studio_class: "AIFS2ENS"
     env: aifs2ens
     ensemble: true
-    nensemble: 8
+    nensemble: 26
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS Ensemble v2 (reported as the ensemble mean)."
