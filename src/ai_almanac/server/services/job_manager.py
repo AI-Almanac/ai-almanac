@@ -375,8 +375,9 @@ def execute_job(job_id: str) -> None:
         log_path.write_text("")
         # The job is already `starting`, so chat turns are refused from here
         # on; the model wakes lazily on the first turn after the job ends.
-        if _is_forecast_job(engine, job_id):
-            _park_local_llm(engine, job_id, worker_id, log_path)
+        kind = _pausing_kind(engine, job_id)
+        if kind is not None:
+            _park_local_llm(engine, job_id, worker_id, log_path, kind)
         workload = _start_workload(job_id, log_path)
         pgid = workload.pid
         with engine.begin() as conn:
@@ -441,17 +442,20 @@ def execute_job(job_id: str) -> None:
         raise
 
 
-def _is_forecast_job(engine, job_id: str) -> bool:
+def _pausing_kind(engine, job_id: str) -> str | None:
+    from ai_almanac.server.services import local_llm
+
     with engine.connect() as conn:
         row = conn.execute(sa.select(jobs.c.config_json).where(jobs.c.id == job_id)).fetchone()
     try:
-        return json.loads((row and row[0]) or "{}").get("job_type") == "forecast"
+        return local_llm.pausing_kind(json.loads((row and row[0]) or "{}"))
     except json.JSONDecodeError:
-        return False
+        return None
 
 
-def _park_local_llm(engine, job_id: str, worker_id: str, log_path: Path) -> None:
-    """Release the managed chat model's memory before a forecast claims the GPU.
+def _park_local_llm(engine, job_id: str, worker_id: str, log_path: Path, kind: str) -> None:
+    """Release the managed chat model's memory before a forecast, an ensemble
+    benchmark or a blend claims it.
 
     Parking can wait minutes (draining a reply, or a chat-triggered wake that
     holds the model lock), so it runs in a thread while this loop keeps the
@@ -464,7 +468,7 @@ def _park_local_llm(engine, job_id: str, worker_id: str, log_path: Path) -> None
     if not local_llm.is_managed():
         return
     with log_path.open("a") as log, ThreadPoolExecutor(max_workers=1) as pool:
-        log.write("==> Parking the local assistant model to free GPU memory...\n")
+        log.write(f"==> Parking the local assistant model to free memory for this {kind}...\n")
         log.flush()
         future = pool.submit(local_llm.park_for_gpu_job)
         while True:

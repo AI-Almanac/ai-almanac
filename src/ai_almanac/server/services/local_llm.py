@@ -1,10 +1,10 @@
 """The bundled vLLM server behind the chat assistant (`llm_engine = "managed"`).
 
-On unified-memory hosts (DGX Spark) the model and a forecast share one pool of
-RAM, so the model steps aside while a forecast runs: the job supervisor parks
-it (vLLM sleep level 2 discards weights and KV cache, keeping the process and
-its CUDA graphs), chat turns refuse with `AssistantPaused` until the forecast
-finishes, and the next turn afterwards wakes it. Sleep level 1 would offload
+On unified-memory hosts (DGX Spark) the model and a job share one pool of
+RAM, so the model steps aside while a forecast, an ensemble benchmark or a
+blend runs: the job supervisor parks it (vLLM sleep level 2 discards weights
+and KV cache, keeping the process and its CUDA graphs), chat turns refuse with
+`AssistantPaused` until the job finishes, and the next turn afterwards wakes it. Sleep level 1 would offload
 the weights to CPU RAM, which on the Spark is the same memory and frees
 nothing.
 
@@ -44,12 +44,17 @@ logger = logging.getLogger(__name__)
 
 AssistantStatus = Literal["off", "loading", "ready", "sleeping", "paused"]
 
-PAUSED_MESSAGE = (
-    "The assistant is paused while a forecast runs. It'll be back when the forecast finishes."
-)
+# The jobs the model steps aside for, as a chat names them: the job, then what
+# finishes. An ensemble benchmark scores every member in parallel workers, and a
+# blend grows its forest on every core.
+_PAUSING_JOBS = {
+    "forecast": ("a forecast", "the forecast"),
+    "ensemble benchmark": ("an ensemble benchmark", "the benchmark"),
+    "blend": ("a blend", "the blend"),
+}
 LOADING_MESSAGE = "The assistant is starting up. Try again in a few minutes."
 
-# Forecast jobs this far into their lifecycle may be holding GPU memory.
+# Jobs this far into their lifecycle may be holding the memory.
 _GPU_JOB_STATUSES = ("starting", "running", "canceling")
 _FORBIDDEN_SERVE_FLAGS = ("--host", "--port")
 # Flags for a model outside local_llm_models.yaml when llm_serve_args is blank:
@@ -103,9 +108,17 @@ class AssistantUnavailable(RuntimeError):
     """The managed model cannot answer right now; `str(exc)` is user-facing."""
 
 
+def paused_message(kind: str) -> str:
+    job, finishing = _PAUSING_JOBS[kind]
+    return (
+        f"The assistant is paused while {job} runs. "
+        f"It'll be back when {finishing} finishes."
+    )
+
+
 class AssistantPaused(AssistantUnavailable):
-    def __init__(self) -> None:
-        super().__init__(PAUSED_MESSAGE)
+    def __init__(self, kind: str = "forecast") -> None:
+        super().__init__(paused_message(kind))
 
 
 class AssistantLoading(AssistantUnavailable):
@@ -820,12 +833,23 @@ def wake() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Forecast coordination
+# Job coordination
 # ---------------------------------------------------------------------------
 
 
-def gpu_job_active() -> bool:
-    """True while a local forecast job may be using the GPU.
+def pausing_kind(config: dict) -> str | None:
+    """The kind of job, from its config, that the model steps aside for; None
+    for one it doesn't (a deterministic benchmark)."""
+    job_type = config.get("job_type")
+    if job_type in ("forecast", "blend"):
+        return job_type
+    if job_type in (None, "benchmark") and (config.get("romp_params") or {}).get("probabilistic"):
+        return "ensemble benchmark"
+    return None
+
+
+def pausing_job() -> str | None:
+    """The kind of local job running that the model steps aside for, if any.
 
     Only jobs with a live supervisor count: a crashed job must not pause the
     assistant until reconciliation catches up.
@@ -849,9 +873,10 @@ def gpu_job_active() -> bool:
             config = json.loads(config_json or "{}")
         except json.JSONDecodeError:
             continue
-        if config.get("job_type") == "forecast":
-            return True
-    return False
+        kind = pausing_kind(config)
+        if kind is not None:
+            return kind
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -861,11 +886,12 @@ class ParkResult:
 
 
 def park_for_gpu_job() -> ParkResult:
-    """Free the model's memory before a forecast starts. Never raises.
+    """Free the model's memory before a job it steps aside for starts. Never
+    raises.
 
     Drains in-flight requests, sleeps at level 2, and confirms via
     /is_sleeping. If any step fails the server is killed instead: memory
-    safety wins over wake latency. The next chat turn after the forecast
+    safety wins over wake latency. The next chat turn after the job
     restarts it.
     """
     with _lock():
@@ -898,8 +924,9 @@ def ensure_awake() -> None:
     """Make the model ready for a chat turn, or raise AssistantUnavailable."""
     global _last_used
     with _lock():
-        if gpu_job_active():
-            raise AssistantPaused()
+        kind = pausing_job()
+        if kind is not None:
+            raise AssistantPaused(kind)
         running = _live_pid()
         if running is None:
             # Stopped by a failed park (or crashed). Bring it back; the load
@@ -954,7 +981,7 @@ def status() -> AssistantStatus:
         return "loading"
     _mark_ready()
     try:
-        if gpu_job_active():
+        if pausing_job() is not None:
             return "paused"
         return "sleeping" if is_sleeping() else "ready"
     except httpx.HTTPError:

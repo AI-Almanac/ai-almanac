@@ -110,7 +110,12 @@ def managed(monkeypatch: pytest.MonkeyPatch):
     local_llm.pid_path().unlink(missing_ok=True)
 
 
-def _insert_job(status: str, job_type: str = "forecast", runner: str = "local") -> str:
+def _insert_job(
+    status: str,
+    job_type: str | None = "forecast",
+    runner: str = "local",
+    romp_params: dict | None = None,
+) -> str:
     job_id = f"llm-{uuid.uuid4().hex[:8]}"
     with sqlite3.connect(database_path()) as conn:
         conn.execute(
@@ -123,7 +128,7 @@ def _insert_job(status: str, job_type: str = "forecast", runner: str = "local") 
             (
                 job_id,
                 status,
-                json.dumps({"job_type": job_type}),
+                json.dumps({"job_type": job_type, "romp_params": romp_params or {}}),
                 runner,
                 "2026-01-01T00:00:00",
                 datetime.now(UTC).isoformat(),
@@ -188,10 +193,33 @@ def test_ensure_awake_pauses_while_forecast_runs(managed, clean_jobs) -> None:
     assert "POST /wake_up?tags=weights" not in fake.calls
 
 
-def test_ensure_awake_ignores_non_forecast_and_modal_jobs(managed, clean_jobs) -> None:
+@pytest.mark.parametrize(
+    ("job_type", "romp_params", "says"),
+    [
+        ("blend", None, "while a blend runs"),
+        (None, {"probabilistic": True}, "while an ensemble benchmark runs"),
+    ],
+    ids=["blend", "ensemble-benchmark"],
+)
+def test_ensure_awake_pauses_while_a_blend_or_ensemble_benchmark_runs(
+    managed, clean_jobs, job_type, romp_params, says
+) -> None:
+    """Both take the memory the model would hold: a blend grows its forest on
+    every core and an ensemble benchmark scores every member in parallel."""
     use, _ = managed
     use(FakeVllm())
-    _insert_job("running", job_type="blend")
+    _insert_job("running", job_type=job_type, romp_params=romp_params)
+
+    with pytest.raises(local_llm.AssistantPaused, match=says):
+        local_llm.ensure_awake()
+    assert local_llm.status() == "paused"
+
+
+def test_ensure_awake_ignores_deterministic_benchmarks_and_modal_jobs(managed, clean_jobs) -> None:
+    use, _ = managed
+    use(FakeVllm())
+    _insert_job("running", job_type=None, romp_params={"probabilistic": False})
+    _insert_job("running", job_type="blend", runner="modal")
     _insert_job("running", runner="modal")
 
     local_llm.ensure_awake()
@@ -923,7 +951,7 @@ def test_supervisor_heartbeats_while_parking(managed, monkeypatch, tmp_path) -> 
     log_path = tmp_path / "job.log"
     log_path.write_text("")
 
-    job_manager._park_local_llm(object(), "job-1", "worker-1", log_path)
+    job_manager._park_local_llm(object(), "job-1", "worker-1", log_path, "forecast")
 
     assert beats[:2] == ["job-1", "job-1"]
     assert "memory released" in log_path.read_text()

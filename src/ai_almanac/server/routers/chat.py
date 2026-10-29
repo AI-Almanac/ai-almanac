@@ -317,16 +317,24 @@ class AssistantStartupOut(BaseModel):
 class AssistantStatusOut(BaseModel):
     # Only set while a locally run model is starting; null otherwise.
     startup: AssistantStartupOut | None
+    # Why the locally run model is paused for a job; null when it isn't.
+    paused: str | None = None
 
 
 @router.get("/assistant-status", response_model=AssistantStatusOut)
 async def assistant_status(_user: CurrentUser):
-    """Startup progress of the locally run model, for a chat reopened mid-reply.
+    """The locally run model's startup progress, for a chat reopened mid-reply,
+    and whether a job has it paused, so the chat can say so before a turn.
 
     A turn sent from this page streams its own progress; a page that comes back
     to a reply already waiting on the model has no stream, so it polls this.
     """
-    if not local_llm.is_managed() or await asyncio.to_thread(local_llm.status) != "loading":
+    if not local_llm.is_managed():
+        return AssistantStatusOut(startup=None)
+    kind = await asyncio.to_thread(local_llm.pausing_job)
+    if kind is not None:
+        return AssistantStatusOut(startup=None, paused=local_llm.paused_message(kind))
+    if await asyncio.to_thread(local_llm.status) != "loading":
         return AssistantStatusOut(startup=None)
     progress = await asyncio.to_thread(local_llm.startup_progress)
     return AssistantStatusOut(startup=AssistantStartupOut(**vars(progress)))
