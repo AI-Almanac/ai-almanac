@@ -420,6 +420,8 @@ class ForecastModel:
     # The init sources that carry every input the model reads, in the
     # registry's order; every source when the entry doesn't say.
     init_sources: tuple[str, ...] = tuple(INIT_SOURCES)
+    # The first issue date the model's inputs exist for, if there is one.
+    earliest_issue_date: dt.date | None = None
 
     def __post_init__(self) -> None:
         # The registry id is a trajectory-store path segment.
@@ -442,6 +444,7 @@ class ForecastModel:
                 env=str(entry.get("env") or "base"),
                 ensemble=ensemble_config(entry),
                 init_sources=tuple(str(s) for s in entry.get("init_sources") or INIT_SOURCES),
+                earliest_issue_date=_parse_optional_date(entry.get("earliest_issue_date")),
             )
         except PlanError:
             raise
@@ -471,7 +474,17 @@ class ForecastModel:
                 "nensemble": self.ensemble.members,
                 "nensemble_batch": self.ensemble.batch_size,
             }
+        if self.earliest_issue_date is not None:
+            out["earliest_issue_date"] = self.earliest_issue_date.isoformat()
         return out
+
+
+def _parse_optional_date(value) -> dt.date | None:
+    """An ISO date, from the registry (YAML may already have made it a date) or
+    a stored plan."""
+    if value is None:
+        return None
+    return value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
 
 
 @dataclass(frozen=True)
@@ -699,6 +712,10 @@ def plan_season(
     member count, up to its registry's; the registry's own count is recorded as
     no override, so such runs share the stored trajectories.
 
+    The blend scores only the dates every member has, so a season starts no
+    earlier than any member's earliest issue date (its inputs don't exist
+    before it).
+
     `max_issue_dates` keeps only the most recent N dates — a smoke-test knob, as
     is a `lead_day` shorter than the canonical horizon.
     """
@@ -716,6 +733,10 @@ def plan_season(
     shared_month_days = sorted(
         {entry for _, layout in members.values() for entry in layout.init_month_days}
     )
+    first_issue_date = max(
+        (model.earliest_issue_date for model, _ in members.values() if model.earliest_issue_date),
+        default=None,
+    )
     runs = []
     for member, (model, layout) in members.items():
         dates = season_issue_dates(
@@ -725,6 +746,8 @@ def plan_season(
             shared_month_days or None,
             today=today,
         )
+        if first_issue_date is not None:
+            dates = [d for d in dates if d >= first_issue_date]
         if max_issue_dates is not None:
             dates = dates[-max_issue_dates:]
         count = ensemble_members.get(member)

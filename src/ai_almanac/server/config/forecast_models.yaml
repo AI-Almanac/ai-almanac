@@ -27,6 +27,12 @@
 # zero-fill them, so those start from IFS only. A forecast can only pick a
 # listed source for a model.
 #
+# `earliest_issue_date` is the first date a model's inputs exist for; a season
+# with the model in it starts there for every member, since the blend scores
+# only the dates all of them have. ECMWF's open data carries the AIFS v2
+# models' 10 hPa level and extended wave fields only from its 2026-05-12
+# 06 UTC run, and a 00 UTC issue also reads the previous day's 18 UTC run.
+#
 # `variables`/`default_lead_hours` are shared across all models and are the
 # single source of truth for both the API's model list and the runners'
 # inference defaults.
@@ -74,6 +80,7 @@ models:
     earth2studio_class: "AIFS2"
     env: aifs2
     init_sources: [ifs]
+    earliest_issue_date: "2026-05-13"
     gpu: "A100-80GB"
     resolution_deg: 0.25
     description: "ECMWF AIFS-Single v2."
@@ -88,6 +95,7 @@ models:
     earth2studio_class: "AIFS2ENS"
     env: aifs2ens
     init_sources: [ifs]
+    earliest_issue_date: "2026-05-13"
     ensemble: true
     nensemble: 26
     gpu: "A100-80GB"

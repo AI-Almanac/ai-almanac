@@ -242,6 +242,23 @@ def test_a_plan_saved_with_one_init_source_reads_back_with_it_on_every_run():
     assert plan.run("fuxi").model.init_sources == ("gfs", "ifs")
 
 
+def test_a_season_starts_where_every_member_has_inputs():
+    late = ForecastModel.parse(
+        {"id": "aifs2", "earth2studio_class": "AIFS2", "earliest_issue_date": "2026-05-13"}
+    )
+    plan = _plan(
+        {"aifs_v2": (late, ArchiveLayout.parse({})), "fuxi": (FUXI, ArchiveLayout.parse({}))},
+        today=dt.date(2026, 6, 30),
+    )
+
+    # The blend scores only shared dates, so neither member rolls out before.
+    for member in ("aifs_v2", "fuxi"):
+        dates = plan.run(member).issue_dates
+        assert dates[0] >= dt.date(2026, 5, 13) and dates[0] < dt.date(2026, 5, 20)
+    assert plan.run("aifs_v2").issue_dates == plan.run("fuxi").issue_dates
+    assert SeasonPlan.parse(json.loads(json.dumps(plan.to_dict()))) == plan
+
+
 def test_every_registry_model_parses_with_its_init_sources():
     from ai_almanac.settings import get_packaged_forecast_models
 
@@ -254,6 +271,9 @@ def test_every_registry_model_parses_with_its_init_sources():
     assert models["aurora1p5"].init_sources == ("ifs",)
     assert models["aurora1p5"].earth2studio_class == "Aurora1p5"
     assert models["graphcast"].init_sources == ("gfs", "ifs")
+    for aifs_v2 in ("aifs2", "aifs2ens"):
+        assert models[aifs_v2].earliest_issue_date == dt.date(2026, 5, 13)
+    assert models["graphcast"].earliest_issue_date is None
 
 
 def test_a_failed_mirror_falls_back_to_the_next():
