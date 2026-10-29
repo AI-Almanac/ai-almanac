@@ -14,7 +14,7 @@ import re
 import uuid
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime
-from typing import Annotated, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -437,9 +437,11 @@ def normalize_year_spec(value: object) -> object:
 class BlendParams(BaseModel):
     """Blend preparation and training hyperparameters.
 
-    The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
-    ``ref_onset_month_day``) is optional; unset values fall back to the
-    workflow defaults (20 mm, 05-01, 06-01).
+    The onset definition is the region's unless ``onset_definition`` names
+    one: modified Moron-Robertson with the MOK filter in India (each cell's
+    climatological 5-day amount, on or after 06-02), ICPAC elsewhere (20 mm
+    over 3 days). ``threshold_mm``, ``cutoff_month_day`` and
+    ``ref_onset_month_day`` are optional and override the definition's.
     """
 
     forecast_years: str | None = None
@@ -448,6 +450,11 @@ class BlendParams(BaseModel):
     cv_holdout_years: str
     true_holdout_years: str | None = None
     formula_text: str | None = None
+    onset_definition: Literal["icpac", "moron_robertson_mok"] | None = Field(
+        default=None,
+        description="Onset rule; omitted, the region's: moron_robertson_mok (modified "
+        "Moron-Robertson with the MOK filter) in India, icpac elsewhere.",
+    )
     threshold_mm: float | None = Field(
         default=None,
         description="Rainfall accumulation (mm) over the onset window that triggers onset.",

@@ -75,11 +75,15 @@ def test_a_job_becomes_the_workflows_blend(tmp_path: Path) -> None:
         "rain_predictors": [{"agg": "diff", "window": "trigger"}],
     }
     assert det["dims"] == {"lat": "lat", "lon": "lon", "prediction_timedelta_daily": "day"}
+    # India's onset: modified Moron-Robertson with the MOK filter.
     assert recipe["onset"] == {
-        "threshold": {"mm": 20.0},
+        "threshold": {
+            "climatology": {"days": 5, "start": "04-01", "end": "10-31", "years": [1991, 2020]}
+        },
         "season_start": "05-01",
-        "reference_onset": {"month_day": "06-01"},
-        "definition": blend_recipe.ONSET_DEFINITION,
+        "reference_onset": {"month_day": "06-02"},
+        "fixed_cutoff": "06-02",
+        "definition": blend_recipe.ONSET_DEFINITIONS["moron_robertson_mok"]["definition"],
     }
     assert recipe["climatology"] == {
         "forecast_window": 45,
@@ -96,6 +100,52 @@ def test_a_job_becomes_the_workflows_blend(tmp_path: Path) -> None:
             "blended_model": "outcome ~ prob_clim_qx * diff_aifs_ensv2_qx * diff_aifsv2_qx"
         },
     }
+
+
+def test_india_uses_moron_robertson_and_other_regions_icpac(tmp_path: Path) -> None:
+    india = blend_recipe.blend_config(_job(), work_dir=tmp_path)["onset"]
+    kenya = blend_recipe.blend_config(_job(region_id="Kenya"), work_dir=tmp_path)["onset"]
+
+    mr = india["definition"]
+    assert (mr["window"], mr["trigger_rule"], mr["threshold_comparison"], mr["follow_days"]) == (
+        5,
+        "first_day_wet",
+        "gte",
+        0,
+    )
+    assert india["reference_onset"] == {"month_day": "06-02"}
+    assert kenya == {
+        "threshold": {"mm": 20.0},
+        "season_start": "05-01",
+        "reference_onset": {"month_day": "06-01"},
+        "definition": blend_recipe.ONSET_DEFINITIONS["icpac"]["definition"],
+    }
+
+
+def test_a_job_may_choose_its_onset_definition(tmp_path: Path) -> None:
+    params = {**_job()["blend_params"], "onset_definition": "icpac"}
+    icpac_in_india = blend_recipe.blend_config(_job(blend_params=params), work_dir=tmp_path)[
+        "onset"
+    ]
+    params = {**_job()["blend_params"], "onset_definition": "moron_robertson_mok"}
+    mr_in_kenya = blend_recipe.blend_config(
+        _job(region_id="kenya", blend_params=params), work_dir=tmp_path
+    )["onset"]
+
+    assert icpac_in_india["definition"] == blend_recipe.ONSET_DEFINITIONS["icpac"]["definition"]
+    assert icpac_in_india["threshold"] == {"mm": 20.0}
+    assert "climatology" in mr_in_kenya["threshold"]
+    with pytest.raises(ValueError, match="Unknown onset definition"):
+        params = {**_job()["blend_params"], "onset_definition": "sivakumar"}
+        blend_recipe.blend_config(_job(blend_params=params), work_dir=tmp_path)
+
+
+def test_a_threshold_set_by_hand_replaces_the_computed_one(tmp_path: Path) -> None:
+    params = {**_job()["blend_params"], "threshold_mm": 30}
+    recipe = blend_recipe.blend_config(_job(blend_params=params), work_dir=tmp_path)
+
+    assert recipe["onset"]["threshold"] == {"mm": 30.0}
+    assert recipe["onset"]["definition"]["window"] == 5
 
 
 def test_the_users_onset_rule_and_formula_carry_over(tmp_path: Path) -> None:

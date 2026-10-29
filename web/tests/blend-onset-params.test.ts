@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
-import { isMonthDay, onsetParamsBody, onsetParamsError } from '../src/routes/blends/onset-params';
+import {
+	effectiveOnsetDefinition,
+	isMonthDay,
+	onsetParamsBody,
+	onsetParamsError,
+	regionOnsetDefinition
+} from '../src/routes/blends/onset-params';
 
-const blank = { thresholdMm: '', cutoffMonthDay: '', refOnsetMonthDay: '' };
+// An ICPAC region's blank form.
+const blank = {
+	definition: '' as const,
+	region: 'ethiopia',
+	thresholdMm: '',
+	cutoffMonthDay: '',
+	refOnsetMonthDay: ''
+};
 
 describe('blend onset params', () => {
 	it('accepts real MM-DD dates only', () => {
@@ -47,8 +60,36 @@ describe('blend onset params', () => {
 	});
 
 	it('only sends fields the user filled in, trimmed and typed', () => {
-		expect(
-			onsetParamsBody({ thresholdMm: ' 25 ', cutoffMonthDay: '', refOnsetMonthDay: '06-10' })
-		).toEqual({ threshold_mm: 25, ref_onset_month_day: '06-10' });
+		expect(onsetParamsBody({ ...blank, thresholdMm: ' 25 ', refOnsetMonthDay: '06-10' })).toEqual({
+			threshold_mm: 25,
+			ref_onset_month_day: '06-10'
+		});
+	});
+
+	it('uses modified Moron–Robertson in India and ICPAC elsewhere', () => {
+		expect(regionOnsetDefinition('india')).toBe('moron_robertson_mok');
+		expect(regionOnsetDefinition('India')).toBe('moron_robertson_mok');
+		expect(regionOnsetDefinition('ethiopia')).toBe('icpac');
+		expect(regionOnsetDefinition(null)).toBe('icpac');
+		const india = effectiveOnsetDefinition({ definition: '', region: 'india' });
+		expect([india.window_days, india.threshold_mm, india.ref_onset_month_day]).toEqual([
+			5,
+			null,
+			'06-02'
+		]);
+	});
+
+	it('sends a chosen definition, and nothing for the region default', () => {
+		const india = { ...blank, region: 'india' };
+		expect(onsetParamsBody({ ...india, definition: 'icpac' })).toEqual({
+			onset_definition: 'icpac'
+		});
+		expect(onsetParamsBody(india)).toEqual({});
+	});
+
+	it("checks a search start against the definition's reference onset", () => {
+		const india = { ...blank, region: 'india' };
+		expect(onsetParamsError({ ...india, cutoffMonthDay: '06-02' })).toBeNull();
+		expect(onsetParamsError({ ...india, cutoffMonthDay: '06-03' })).toMatch(/06-02 is before/);
 	});
 });

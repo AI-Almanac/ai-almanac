@@ -17,17 +17,52 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# The workflow's onset rule (ONSET_RULE) and defaults, in BlendConfig's terms.
 DEFAULT_THRESHOLD_MM = 20.0
 DEFAULT_SEASON_START = "05-01"
-DEFAULT_REFERENCE_ONSET = "06-01"
 DEFAULT_MIN_ONSET_YEARS = 10
-ONSET_DEFINITION = {
-    "window": 3,
-    "wet_day_min_mm": 1.0,
-    "follow_days": 21,
-    "dry_spell": {"mode": "consecutive_dry", "min_dry_days": 5, "dry_day_min_mm": 1.0},
+
+# The onset definitions a blend can use, in BlendConfig's terms. A region
+# uses its own (REGION_ONSET_DEFINITIONS), others ICPAC's; a job may name one
+# (blend_params.onset_definition), and its threshold_mm and
+# ref_onset_month_day override the definition's.
+ONSET_DEFINITIONS = {
+    # ICPAC's: 3 wet days (each at least 1 mm) totalling more than 20 mm, not
+    # followed by a dry spell in the next 21 days. The workflow's ONSET_RULE.
+    "icpac": {
+        "definition": {
+            "window": 3,
+            "wet_day_min_mm": 1.0,
+            "follow_days": 21,
+            "dry_spell": {"mode": "consecutive_dry", "min_dry_days": 5, "dry_day_min_mm": 1.0},
+        },
+        "threshold": {"mm": DEFAULT_THRESHOLD_MM},
+        "reference_onset": "06-01",
+    },
+    # Moron and Robertson's local onset, modified with the MOK filter: the
+    # first wet day (at least 1 mm) of the first 5-day spell totalling at
+    # least the cell's climatological 5-day amount, on or after June 2 (the
+    # median onset over Kerala, 1901-2024), with no dry-spell check (it would
+    # lean on long-lead rainfall forecasts). The local amount is 5 x the cell's
+    # mean daily rain over April-October of 1991-2020 (ROMP's registry,
+    # moron_robertson_mok).
+    "moron_robertson_mok": {
+        "definition": {
+            "window": 5,
+            "trigger_rule": "first_day_wet",
+            "wet_day_min_mm": 1.0,
+            "wet_day_comparison": "gte",
+            "threshold_comparison": "gte",
+            "follow_days": 0,
+        },
+        "threshold": {
+            "climatology": {"days": 5, "start": "04-01", "end": "10-31", "years": [1991, 2020]}
+        },
+        "reference_onset": "06-02",
+        "fixed_cutoff": "06-02",
+    },
 }
+REGION_ONSET_DEFINITIONS = {"india": "moron_robertson_mok"}
+DEFAULT_ONSET_DEFINITION = "icpac"
 FORECAST_WINDOW = 45
 GRID_ID_DIGITS = 2
 OBS_VARIABLE = "RAINFALL"
@@ -110,9 +145,6 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
             }
         )
 
-    reference = (
-        params.get("ref_onset_month_day") or params.get("mok_month_day") or DEFAULT_REFERENCE_ONSET
-    )
     years = {
         "training": _years(params.get("training_years")),
         "cv_holdout": _years(params.get("cv_holdout_years")),
@@ -134,12 +166,7 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
             "date_marks": job.get("obs_date_marks") or "end",
         },
         "models": models,
-        "onset": {
-            "threshold": {"mm": float(params.get("threshold_mm") or DEFAULT_THRESHOLD_MM)},
-            "season_start": params.get("cutoff_month_day") or DEFAULT_SEASON_START,
-            "reference_onset": {"month_day": reference},
-            "definition": ONSET_DEFINITION,
-        },
+        "onset": onset(params, region),
         "climatology": {
             "forecast_window": FORECAST_WINDOW,
             "cv_by_year": False,
@@ -154,6 +181,41 @@ def random_forest(settings: dict | None) -> dict:
     as the workflow's (blended_forest), with the job's day-level settings."""
     settings = settings or {}
     return {key: settings[key] for key in _FOREST_SETTINGS if settings.get(key) is not None}
+
+
+def onset_definition_name(params: dict, region: str) -> str:
+    """The job's onset definition: the one it names, else its region's."""
+    name = params.get("onset_definition") or REGION_ONSET_DEFINITIONS.get(
+        region, DEFAULT_ONSET_DEFINITION
+    )
+    if name not in ONSET_DEFINITIONS:
+        raise ValueError(
+            f"Unknown onset definition {name!r}: one of {', '.join(ONSET_DEFINITIONS)}"
+        )
+    return name
+
+
+def onset(params: dict, region: str) -> dict:
+    """The BlendConfig onset section: the definition, with the job's own
+    threshold, search start and reference onset where it sets them."""
+    chosen = ONSET_DEFINITIONS[onset_definition_name(params, region)]
+    threshold = chosen["threshold"]
+    if params.get("threshold_mm"):
+        threshold = {"mm": float(params["threshold_mm"])}
+    reference = (
+        params.get("ref_onset_month_day")
+        or params.get("mok_month_day")
+        or chosen["reference_onset"]
+    )
+    out = {
+        "threshold": threshold,
+        "season_start": params.get("cutoff_month_day") or DEFAULT_SEASON_START,
+        "reference_onset": {"month_day": reference},
+        "definition": chosen["definition"],
+    }
+    if "fixed_cutoff" in chosen:
+        out["fixed_cutoff"] = chosen["fixed_cutoff"]
+    return out
 
 
 def _years(value) -> list[int]:

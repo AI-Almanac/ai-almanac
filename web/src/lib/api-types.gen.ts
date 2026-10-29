@@ -2520,9 +2520,11 @@ export interface components {
          * BlendParams
          * @description Blend preparation and training hyperparameters.
          *
-         *     The onset-definition trio (``threshold_mm``, ``cutoff_month_day``,
-         *     ``ref_onset_month_day``) is optional; unset values fall back to the
-         *     workflow defaults (20 mm, 05-01, 06-01).
+         *     The onset definition is the region's unless ``onset_definition`` names
+         *     one: modified Moron-Robertson with the MOK filter in India (each cell's
+         *     climatological 5-day amount, on or after 06-02), ICPAC elsewhere (20 mm
+         *     over 3 days). ``threshold_mm``, ``cutoff_month_day`` and
+         *     ``ref_onset_month_day`` are optional and override the definition's.
          */
         BlendParams: {
             /** Forecast Years */
@@ -2537,6 +2539,11 @@ export interface components {
             true_holdout_years?: string | null;
             /** Formula Text */
             formula_text?: string | null;
+            /**
+             * Onset Definition
+             * @description Onset rule; omitted, the region's: moron_robertson_mok (modified Moron-Robertson with the MOK filter) in India, icpac elsewhere.
+             */
+            onset_definition?: ("icpac" | "moron_robertson_mok") | null;
             /**
              * Threshold Mm
              * @description Rainfall accumulation (mm) over the onset window that triggers onset.

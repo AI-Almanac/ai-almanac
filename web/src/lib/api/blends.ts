@@ -34,7 +34,9 @@ export type BlendParams = {
 	obs_years?: string;
 	true_holdout_years?: string;
 	formula_text?: string;
-	// Onset definition; omitted fields use the workflow defaults (20 mm, 05-01, 06-01).
+	// Onset definition; omitted, the region's (modified Moron–Robertson in India,
+	// ICPAC elsewhere), and omitted fields use its defaults.
+	onset_definition?: 'icpac' | 'moron_robertson_mok';
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;

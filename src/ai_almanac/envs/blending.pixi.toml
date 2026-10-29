@@ -27,5 +27,5 @@ kdepy = ">=1.1.12,<2"
 
 [pypi-dependencies]
 # Trains local blends and applies them to live forecasts (envs/blend_entrypoint.py).
-onset-blending = { git = "https://github.com/AI-Almanac/onset_blending.git", rev = "fef017033ae8aed0fe7e521768a224cb1773885b" }
+onset-blending = { git = "https://github.com/AI-Almanac/onset_blending.git", rev = "0ed42781f16cc53e920da20f2b451551e25a699c" }
 onset-forest = { git = "https://github.com/AI-Almanac/onset-forest.git", rev = "61a7f5afe7518b3805b76eae43ca62afe2ba0c13" }

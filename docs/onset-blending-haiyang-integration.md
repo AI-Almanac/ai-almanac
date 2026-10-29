@@ -249,6 +249,22 @@ on. Each observation source records what its dates mark
 (`obs_date_marks`: CHIRPS `start`, IMD `end`), so blends align them with the
 forecasts' lead days.
 
+Each region's blends use its own onset definition (`blend_recipe.ONSET_DEFINITIONS`,
+`REGION_ONSET_DEFINITIONS`), unless a job names one (`blend_params.onset_definition`):
+
+- **India: modified Moron-Robertson with the MOK filter** (`moron_robertson_mok`): the
+  first wet day (at least 1 mm) of the first 5-day spell totalling at least the grid
+  cell's climatological 5-day amount, on or after 06-02 (the median onset over Kerala,
+  1901-2024), with no dry-spell check. The amount is 5 x the cell's mean daily rain over
+  April-October of 1991-2020, computed by onset_blending from the observations
+  (`onset.threshold.climatology`) and stored with the trained blend.
+- **Everywhere else: ICPAC** (`icpac`): 3 wet days totalling more than 20 mm, with no
+  5-day dry spell in the next 21 days.
+
+A job's `threshold_mm` and `ref_onset_month_day` still override the definition's.
+Local blends only: the Modal workflow still applies ICPAC's rule (`ONSET_RULE`) in
+every region, so cloud India blends do not use Moron-Robertson yet.
+
 The day-level blend (`train_day_level_blend`) is the package's random forest
 (`evaluation.random_forest`, onset-forest's numerics on arrays), trained and
 scored with the weekly blend: its rows (`blended_forest`) are in the same
