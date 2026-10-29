@@ -38,7 +38,8 @@ supports without the NVIDIA runtime's `no-cgroups` setting.
 ## Use
 
 ```bash
-scripts/spark.sh up        # build, start (setting up on first run), print the URL to open
+scripts/spark.sh up        # build, start (setting up on first run, else updating any
+                           # workload environment the image changed), print the URL to open
 scripts/spark.sh prepare   # reinstall the workload environments
 scripts/spark.sh url       # print the URL again
 scripts/spark.sh logs

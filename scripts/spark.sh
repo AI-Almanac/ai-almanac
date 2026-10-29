@@ -34,7 +34,8 @@ usage: scripts/spark.sh <command>
 
   up        build the image, start the container, print the URL to open; on a
             fresh data directory, also set up (local assistant model, workload
-            environments, model weights), then register any new datasets
+            environments, model weights), else reinstall any workload
+            environment the new image changed, then register any new datasets
   prepare   install the workload environments inside the container
   init ...  headless first-run setup (ai-almanac init --yes ...), then restart
   discover [--register]
@@ -126,6 +127,13 @@ case "$cmd" in
       $compose exec -T almanac ai-almanac init --yes --if-needed --local-llm \
         --llm-model "$ALMANAC_LLM_MODEL" --dataset-mount-roots /datasets
       setup_ran=1
+    else
+      # A rebuild may change a workload environment's pins, and jobs refuse to
+      # run in one installed for another version.
+      if ! $compose exec -T almanac ai-almanac env prepare --if-stale; then
+        printf '\nCould not update the workload environments; jobs will refuse to run until\n' >&2
+        printf 'scripts/spark.sh prepare succeeds\n' >&2
+      fi
     fi
     # Sources are read per request, so registered ones appear without a restart.
     printf '\nRegistering new datasets in %s\n' "$ALMANAC_DATASETS_DIR"

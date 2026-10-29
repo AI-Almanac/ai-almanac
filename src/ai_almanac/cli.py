@@ -377,7 +377,15 @@ app.add_typer(env_app, name="env")
 
 
 @env_app.command("prepare")
-def env_prepare() -> None:
+def env_prepare(
+    if_stale: Annotated[
+        bool,
+        typer.Option(
+            "--if-stale",
+            help="Only reinstall the environments this version of AI Almanac changed.",
+        ),
+    ] = False,
+) -> None:
     """Install or update the benchmark, blending, and forecast environments.
 
     Also installs the local model server (and its weights) when the assistant
@@ -385,23 +393,41 @@ def env_prepare() -> None:
     """
     import subprocess
 
-    from ai_almanac.envs.manager import download_llm_model, ensure_env, llm_env_ready
+    from ai_almanac.envs.manager import (
+        download_llm_model,
+        ensure_env,
+        llm_env_ready,
+        stale_envs,
+    )
     from ai_almanac.settings import reload_settings, settings
 
     reload_settings()
     include_llm = settings.llm_engine == "managed"
+    only = None
+    if if_stale:
+        only = stale_envs(include_llm=include_llm)
+        if not only:
+            typer.echo("workload environments are up to date")
+            return
+        typer.echo(f"updating the {', '.join(only)} environment(s) this version changed")
+
+    def wanted(name: str) -> bool:
+        return only is None or name in only
+
     try:
-        benchmark_dir, blending_dir, forecast_dir = ensure_env(include_llm=include_llm)
-        if include_llm and llm_env_ready():
+        benchmark_dir, blending_dir, forecast_dir = ensure_env(include_llm=include_llm, only=only)
+        if include_llm and wanted("llm") and llm_env_ready():
             download_llm_model(settings.llm_model)
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"benchmark env ready at {benchmark_dir}")
-    typer.echo(f"blending env ready at {blending_dir}")
+    if wanted("benchmark"):
+        typer.echo(f"benchmark env ready at {benchmark_dir}")
+    if wanted("blending"):
+        typer.echo(f"blending env ready at {blending_dir}")
     if forecast_dir is not None:
         typer.echo(f"forecast env ready at {forecast_dir}")
-    if include_llm and llm_env_ready():
+    if include_llm and wanted("llm") and llm_env_ready():
         typer.echo(f"local model {settings.llm_model} ready")
 
 

@@ -10,10 +10,11 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -40,6 +41,10 @@ BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 
 _FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
 FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
+
+# Written into an environment once it installs: what it was installed from, so
+# a newer app can tell which environments its manifests changed.
+_INSTALLED_STAMP = ".installed-from"
 
 EventKind = Literal["phase_started", "line", "phase_finished", "phase_skipped", "phase_failed"]
 
@@ -203,6 +208,7 @@ def _ensure_blending_env(progress: ProgressCallback) -> Path:
     )
     source_ready = (source_dir / BLENDING_SOURCE_MARKER).is_file()
     if current.returncode == 0 and current.stdout.strip() == BLENDING_REPO_REF and source_ready:
+        _mark_installed("blending")
         return env_dir
     _run_streaming(
         [
@@ -236,6 +242,7 @@ def _ensure_blending_env(progress: ProgressCallback) -> Path:
         raise RuntimeError(
             f"Blending source checkout is incomplete: missing {BLENDING_SOURCE_MARKER}"
         )
+    _mark_installed("blending")
     return env_dir
 
 
@@ -274,6 +281,7 @@ def _ensure_forecast_env(progress: ProgressCallback) -> Path | None:
         progress=progress,
         environments=FORECAST_ENVIRONMENTS,
     )
+    _mark_installed("forecast")
     return env_dir
 
 
@@ -304,6 +312,7 @@ def _ensure_llm_env(progress: ProgressCallback) -> Path | None:
         return None
     env_dir = llm_env_dir()
     _install(_llm_pixi_spec(), env_dir, "llm", progress)
+    _mark_installed("llm")
     return env_dir
 
 
@@ -405,31 +414,103 @@ def ensure_env(
     progress: ProgressCallback | None = None,
     include_forecast: bool = True,
     include_llm: bool = False,
+    only: Collection[str] | None = None,
 ) -> tuple[Path, Path, Path | None]:
     """Idempotently prepare all local workload environments.
 
     Returns (benchmark_dir, blending_dir, forecast_dir) — forecast_dir is
     None when skipped on an unsupported platform or when include_forecast=False.
     include_llm also installs the bundled vLLM env (see llm_env_dir()); model
-    weights are fetched separately by download_llm_model.
+    weights are fetched separately by download_llm_model. `only` limits the
+    install to those environments (see stale_envs); the others are left as
+    they are.
     """
     progress = progress or _default_progress
+
+    def wanted(name: str) -> bool:
+        return only is None or name in only
+
     with file_lock(
         env_root() / ".prepare.lock",
         message="another instance is preparing environments in this env root; waiting…",
     ):
         _ensure_pixi(progress)
         env_dir = benchmark_env_dir()
-        _install(_pixi_spec(), env_dir, "benchmark", progress)
-        blending_dir = _ensure_blending_env(progress)
-        forecast_dir = _ensure_forecast_env(progress) if include_forecast else None
-        if include_llm:
+        if wanted("benchmark"):
+            _install(_pixi_spec(), env_dir, "benchmark", progress)
+            _mark_installed("benchmark")
+        blending_dir = _ensure_blending_env(progress) if wanted("blending") else blending_env_dir()
+        forecast_dir = (
+            _ensure_forecast_env(progress) if include_forecast and wanted("forecast") else None
+        )
+        if include_llm and wanted("llm"):
             _ensure_llm_env(progress)
     return env_dir, blending_dir, forecast_dir
 
 
+def _env_install(name: str) -> tuple[Path, Path, str]:
+    """An environment's manifest, its install directory, and anything else its
+    install pins (the blending env's source checkout, the forecast env's
+    environment list)."""
+    if name == "benchmark":
+        return _pixi_spec(), benchmark_env_dir(), ""
+    if name == "blending":
+        return _blending_pixi_spec(), blending_env_dir(), BLENDING_REPO_REF
+    if name == "forecast":
+        return _forecast_pixi_spec(), forecast_env_dir(), ",".join(FORECAST_ENVIRONMENTS)
+    if name == "llm":
+        return _llm_pixi_spec(), llm_env_dir(), ""
+    raise ValueError(f"Unknown environment {name!r}")
+
+
+def _install_digest(name: str) -> str:
+    spec, _, pinned = _env_install(name)
+    return hashlib.sha256(f"{spec.read_text()}\n{pinned}".encode()).hexdigest()
+
+
+def _mark_installed(name: str) -> None:
+    _, env_dir, _ = _env_install(name)
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / _INSTALLED_STAMP).write_text(_install_digest(name) + "\n")
+
+
+def env_is_current(name: str) -> bool:
+    """Whether an environment was installed from this app's manifest for it.
+
+    Installs from before the stamp existed count when their manifest matches.
+    """
+    spec, env_dir, _ = _env_install(name)
+    stamp = env_dir / _INSTALLED_STAMP
+    if stamp.is_file():
+        return stamp.read_text().strip() == _install_digest(name)
+    manifest = env_dir / "pixi.toml"
+    return manifest.is_file() and manifest.read_text() == spec.read_text()
+
+
+def stale_envs(include_llm: bool = False) -> list[str]:
+    """The environments this platform installs that aren't current."""
+    names = ["benchmark", "blending"]
+    if _current_pixi_platform() in _FORECAST_PLATFORMS:
+        names.append("forecast")
+        if include_llm:
+            names.append("llm")
+    return [name for name in names if not env_is_current(name)]
+
+
+def _require_current(name: str) -> None:
+    """Refuse to run a workload in an environment from another version of the
+    app: its packages aren't the ones this code expects."""
+    if not env_is_current(name):
+        raise RuntimeError(
+            f"The {name} environment was installed for another version of AI Almanac. "
+            "Run `ai-almanac env prepare` (`scripts/spark.sh prepare` on a DGX Spark), "
+            "then try again."
+        )
+
+
 def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
     """Spawn a process inside the benchmark env. Streams stdout/stderr."""
+    _require_current("benchmark")
     pixi = _ensure_pixi()
     env_dir = benchmark_env_dir()
     full_cmd = [pixi, "run", "--manifest-path", str(env_dir / "pixi.toml"), "--", *cmd]
@@ -445,6 +526,7 @@ def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
 
 def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
     """Spawn a process inside the blending environment."""
+    _require_current("blending")
     pixi = _ensure_pixi()
     env_dir = blending_env_dir()
     full_cmd = [
@@ -469,6 +551,7 @@ def run_forecast(
     cmd: list[str], env: dict[str, str] | None = None, environment: str = "base"
 ) -> subprocess.Popen:
     """Spawn a process inside one forecast model-group environment."""
+    _require_current("forecast")
     pixi = _ensure_pixi()
     env_dir = forecast_env_dir()
     full_cmd = [
