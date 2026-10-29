@@ -288,6 +288,70 @@ def test_the_cli_registers_sources_under_the_names_file(tmp_path: Path) -> None:
     assert rows["Chirps (IMERG)"]["metadata"]["obs_date_marks"] == "start"
 
 
+def test_registering_again_brings_listed_sources_in_line_with_the_names_file(
+    tmp_path: Path,
+) -> None:
+    """A source registered before its names-file entry gained a key (or a
+    rename, or more years on disk) is updated by the next --register; a preview
+    only says what it would change."""
+    import asyncio
+
+    from ai_almanac.cli import app
+    from ai_almanac.server.services import data_sources
+
+    data = tmp_path / "datasets"
+    obs = _copy_years(_TESTDATA / "obs", data / "ethiopia" / "obs", "data_{}.nc")
+    _copy_years(_TESTDATA / "fuxi", data / "ethiopia" / "models" / "fuxi")
+    names = tmp_path / "names.yaml"
+    names.write_text(
+        "sources:\n  ethiopia/obs:\n    name: Chirps\n  ethiopia/models/fuxi:\n    name: FuXi\n"
+    )
+    first = runner.invoke(
+        app, ["sources", "discover", str(data), "--register", "--names", str(names)]
+    )
+    assert first.exit_code == 0, first.output
+
+    def rows() -> dict:
+        return {row["path"]: row for row in asyncio.run(data_sources.list_sources())}
+
+    before = rows()
+    obs_row = before[str(obs.resolve())]
+    years = obs_row["metadata"]["years"]
+    newest = obs / f"data_{years[-1]}.nc"
+    shutil.copy(newest, obs / f"data_{years[-1] + 1}.nc")
+    names.write_text(
+        "sources:\n"
+        "  ethiopia/obs:\n    name: Chirps (IMERG)\n    obs_date_marks: start\n"
+        "  ethiopia/models/fuxi:\n    name: FuXi\n    forecast_model_id: fuxi_live\n"
+    )
+
+    preview = runner.invoke(app, ["sources", "discover", str(data), "--names", str(names)])
+    assert preview.exit_code == 0, preview.output
+    assert "--register updates: name 'Chirps' -> 'Chirps (IMERG)'" in preview.output
+    assert rows() == before
+
+    update = runner.invoke(
+        app, ["sources", "discover", str(data), "--register", "--names", str(names)]
+    )
+    assert update.exit_code == 0, update.output
+    assert f"years {years[0]}–{years[-1]} -> {years[0]}–{years[-1] + 1}" in update.output
+    assert "registered 0 source(s), updated 2 to match the names file" in update.output
+    after = rows()
+    updated = after[str(obs.resolve())]
+    assert updated["id"] == obs_row["id"]
+    assert updated["name"] == "Chirps (IMERG)"
+    assert updated["metadata"]["obs_date_marks"] == "start"
+    assert updated["metadata"]["years"][-1] == years[-1] + 1
+    fuxi = next(row for row in after.values() if row["kind"] == "model")
+    assert fuxi["metadata"]["forecast_model_id"] == "fuxi_live"
+
+    again = runner.invoke(
+        app, ["sources", "discover", str(data), "--register", "--names", str(names)]
+    )
+    assert "already registered as 'Chirps (IMERG)'" in again.output
+    assert "updated" not in again.output
+
+
 @pytest.mark.parametrize(
     "body",
     [

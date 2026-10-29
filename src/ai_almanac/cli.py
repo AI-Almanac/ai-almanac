@@ -128,9 +128,10 @@ def _load_source_names(path: Path) -> dict[str, dict]:
     return {str(Path(rel)): entry for rel, entry in sources.items()}
 
 
-def _apply_source_names(discovery, overrides: dict[str, dict]) -> list[str]:
-    """Rename discovered sources the overrides list; return the listed paths not found."""
-    found = set()
+def _apply_source_names(discovery, overrides: dict[str, dict]) -> tuple[list[str], dict]:
+    """Rename discovered sources the overrides list; return the listed paths not
+    found, and the found sources' entries by source path."""
+    found, listed = set(), {}
     for source in discovery.sources:
         path = Path(source.path)
         root = next((Path(r) for r in discovery.roots if path.is_relative_to(r)), None)
@@ -139,12 +140,43 @@ def _apply_source_names(discovery, overrides: dict[str, dict]) -> list[str]:
         if entry is None:
             continue
         found.add(rel)
+        listed[source.path] = entry
         source.name = str(entry["name"]).strip()
         if source.kind == "model" and entry.get("forecast_model_id"):
             source.metadata = {**source.metadata, "forecast_model_id": entry["forecast_model_id"]}
         if source.kind == "obs" and entry.get("obs_date_marks"):
             source.metadata = {**source.metadata, "obs_date_marks": entry["obs_date_marks"]}
-    return sorted(set(overrides) - found)
+    return sorted(set(overrides) - found), listed
+
+
+# What a names file decides about a source, by kind.
+_LISTED_KEYS = {"model": ("forecast_model_id",), "obs": ("obs_date_marks",)}
+
+
+def _span(years) -> str:
+    return f"{years[0]}–{years[-1]}" if years else "none"
+
+
+def _listed_changes(source, entry: dict) -> tuple[list[str], dict]:
+    """How a registered source the names file lists differs from it and from
+    its files: the changes, described, and the metadata that brings it in
+    line. Only shared sources are kept in line; one a user registered is
+    theirs."""
+    row = source.registered
+    if row is None or row.get("owner_id"):
+        return [], {}
+    metadata = dict(row["metadata"])
+    changes = []
+    if row["name"] != source.name:
+        changes.append(f"name {row['name']!r} -> {source.name!r}")
+    for key in _LISTED_KEYS[source.kind]:
+        if entry.get(key) and metadata.get(key) != entry[key]:
+            changes.append(f"{key} {metadata.get(key) or 'unset'} -> {entry[key]}")
+            metadata[key] = entry[key]
+    # Years added or removed on disk; validating the update reads them again.
+    if source.metadata.get("years") and source.metadata["years"] != metadata.get("years"):
+        changes.append(f"years {_span(metadata.get('years'))} -> {_span(source.metadata['years'])}")
+    return changes, metadata
 
 
 async def _discover_sources(
@@ -156,7 +188,7 @@ async def _discover_sources(
     try:
         await region_catalog.seed_packaged_regions()
         discovery = await source_discovery.discover_sources(roots)
-        missing = _apply_source_names(discovery, overrides or {})
+        missing, listed = _apply_source_names(discovery, overrides or {})
         typer.echo(f"scanned {', '.join(discovery.roots)}")
         for rel in missing:
             typer.secho(f"  named but not found: {rel}", fg=typer.colors.YELLOW)
@@ -166,7 +198,7 @@ async def _discover_sources(
                 "scan a narrower directory to see the rest",
                 fg=typer.colors.YELLOW,
             )
-        registered = 0
+        registered = updated = 0
         for source in discovery.sources:
             metadata = source.metadata
             years = f"{metadata.get('start_year')}–{metadata.get('end_year')}"
@@ -179,7 +211,31 @@ async def _discover_sources(
             )
             if source.validation_error:
                 typer.secho(f"          {source.validation_error}", fg=typer.colors.RED)
-            if source.registered_as:
+            changes, listed_metadata = (
+                _listed_changes(source, listed[source.path])
+                if source.registered and source.path in listed
+                else ([], {})
+            )
+            if changes and register:
+                row = await data_sources.update_source(
+                    source.registered["id"],
+                    name=source.name,
+                    path=source.registered["path"],
+                    region=source.registered.get("region"),
+                    metadata=listed_metadata,
+                )
+                updated += 1
+                typer.secho(
+                    f"          updated {source.registered_as!r} ({row['status']}): "
+                    + "; ".join(changes),
+                    fg=typer.colors.GREEN,
+                )
+            elif changes:
+                typer.echo(
+                    f"          registered as {source.registered_as!r}; --register updates: "
+                    + "; ".join(changes)
+                )
+            elif source.registered_as:
                 typer.echo(f"          already registered as {source.registered_as!r}")
             elif register and source.status == "ready" and source.region:
                 row = await data_sources.create_source(
@@ -203,7 +259,10 @@ async def _discover_sources(
         if not discovery.sources:
             typer.echo("no data sources found")
         elif register:
-            typer.echo(f"registered {registered} source(s)")
+            typer.echo(
+                f"registered {registered} source(s)"
+                + (f", updated {updated} to match the names file" if updated else "")
+            )
         else:
             typer.echo("re-run with --register to register the ready sources")
     finally:

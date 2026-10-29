@@ -36,10 +36,12 @@ usage: scripts/spark.sh <command>
             fresh data directory, also set up (local assistant model, workload
             environments, model weights), else reinstall any workload
             environment the new image changed, then register any new datasets
+            (and update the ones deploy/spark-datasets.yaml lists)
   prepare   install the workload environments inside the container
   init ...  headless first-run setup (ai-almanac init --yes ...), then restart
   discover [--register]
             list the data sources found under /datasets; --register adds the ready ones
+            and brings listed ones in line with deploy/spark-datasets.yaml
   url       print the access (and first-run setup) URL again
   logs      follow the container logs
   shell     open a shell in the running container

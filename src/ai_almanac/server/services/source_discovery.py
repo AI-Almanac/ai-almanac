@@ -63,6 +63,9 @@ class DiscoveredSource:
     validation_error: str | None
     # Name of the registered source already pointing at this directory, if any.
     registered_as: str | None = None
+    # That source's row, which `sources discover --register` brings up to date
+    # with its names file (not part of the discovery API's response).
+    registered: dict | None = None
 
 
 @dataclass
@@ -323,7 +326,7 @@ def _inspect_candidate(
     )
 
 
-def _scan(roots: list[Path], regions: list[dict], registered: dict[str, str]) -> Discovery:
+def _scan(roots: list[Path], regions: list[dict], registered: dict[str, dict]) -> Discovery:
     discovery = Discovery(roots=[str(root) for root in roots])
     directories, discovery.truncated = _candidate_directories(roots)
     for directory in directories:
@@ -332,7 +335,8 @@ def _scan(roots: list[Path], regions: list[dict], registered: dict[str, str]) ->
         if isinstance(result, SkippedDirectory):
             discovery.skipped.append(result)
             continue
-        result.registered_as = registered.get(result.path)
+        result.registered = registered.get(result.path)
+        result.registered_as = result.registered["name"] if result.registered else None
         discovery.sources.append(result)
     return discovery
 
@@ -341,7 +345,7 @@ async def discover_sources(roots: list[Path]) -> Discovery:
     """Scan `roots` (resolved, existing directories) for data sources."""
     regions = await region_catalog.list_regions()
     registered = {
-        str(Path(source["path"]).resolve()): source["name"] for source in await svc.list_sources()
+        str(Path(source["path"]).resolve()): source for source in await svc.list_sources()
     }
     resolved = [root.resolve() for root in roots]
     return await asyncio.to_thread(_scan, resolved, regions, registered)

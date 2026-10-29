@@ -87,6 +87,13 @@ sources:
     forecast_model_id: graphcast_operational
 ```
 
+A dataset the file lists stays in line with it: when `up` finds one already
+registered, it updates the name, `forecast_model_id` or `obs_date_marks` the
+file now gives, and the years if yearly files were added or removed, in place
+(earlier jobs keep the settings they ran with). Sources the file doesn't list,
+or that a user registered as their own, are left as they are.
+`scripts/spark.sh discover` shows what `up` would change.
+
 `up` creates an empty datasets directory if there isn't one, so data can be
 copied in later; the next `up` registers it. Copy into the directory rather
 than replacing it: a container keeps seeing the directory it started with, so
