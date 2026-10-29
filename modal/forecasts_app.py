@@ -92,7 +92,15 @@ def _inference_image(extras: list[str]) -> modal.Image:
     spec = ",".join(extras)
     return (
         modal.Image.from_registry("nvcr.io/nvidia/pytorch:25.12-py3")
-        .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+        .env(
+            {
+                "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+                # JAX grows its pool as needed rather than taking 75% up front,
+                # leaving the rest to torch (job_workload._run_forecast does
+                # the same locally).
+                "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+            }
+        )
         .apt_install(
             "git",
             "make",

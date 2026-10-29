@@ -410,6 +410,22 @@ def test_an_aifs_models_own_invariant_fetch_reads_the_mirrors(monkeypatch):
     assert all(m.cache and m.client.maximum_retries == 3 for _, m in source._sources)
 
 
+def test_model_weights_in_gcs_are_read_without_credentials():
+    from ai_almanac.server.services.forecast_pipeline import _anonymous_gcs
+
+    class _Package:
+        def __init__(self, root, fs_options=None, cache_options=None):
+            self.root, self.fs_options = root, fs_options or {}
+            self.cache_options = cache_options or {"cache_storage": "/cache/graphcast"}
+
+    graphcast = _anonymous_gcs(_Package("gs://dm_graphcast/graphcast"))
+    hugging_face = _Package("hf://ecmwf/aifs-ens-2.0")
+
+    assert graphcast.fs_options == {"token": "anon"}
+    assert graphcast.cache_options == {"cache_storage": "/cache/graphcast"}
+    assert _anonymous_gcs(hugging_face) is hugging_face
+
+
 def test_aurora_1p5_steps_hourly_and_writes_only_its_hourly_precipitation():
     from ai_almanac.server.services.forecast_pipeline import lead_steps, precip_output
 

@@ -217,12 +217,24 @@ def load_model(model_class: str):
     torch.set_default_device("cuda")
     cls = getattr(px, model_class)
     _model_ifs_through_mirrors(cls)
-    package = cls.load_default_package()
+    package = _anonymous_gcs(cls.load_default_package())
     model = cls.load_model(package)
     applied = _aifs_speedups().apply(model)
     if applied:
         print(f"==> {model_class} speed-ups: {', '.join(applied)}", flush=True)
     return model
+
+
+def _anonymous_gcs(package):
+    """A model package in a GCS bucket (GraphCast's and GenCast's weights,
+    which are public), read without credentials. Otherwise gcsfs first looks
+    for credentials through the Google Cloud metadata server, which off Google
+    Cloud (a DGX Spark) costs a connect timeout, about two minutes, per file."""
+    if not package.root.startswith("gs://"):
+        return package
+    return type(package)(
+        package.root, fs_options={"token": "anon"}, cache_options=package.cache_options
+    )
 
 
 def _aifs_speedups():
