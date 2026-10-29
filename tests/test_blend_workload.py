@@ -376,3 +376,39 @@ def test_a_blend_onset_blending_trained_forecasts_with_its_trained_blend(
             "id,time,cv_week1,p_day_1,p_later",
             "10.00_40.00,2026-06-01,0.5,0.25,0.75",
         ]
+
+
+def test_forecast_workloads_see_the_package_and_nothing_else_beside_it(tmp_path) -> None:
+    """Installed, the package's parent is the server's site-packages; on a
+    forecast env's path its numpy, built for the server's Python, shadowed the
+    env's own and the first local forecast failed to import it."""
+    import ai_almanac
+    from ai_almanac.server.services.job_workload import _package_path
+
+    path = _package_path(tmp_path / "package-path")
+
+    assert [entry.name for entry in path.iterdir()] == ["ai_almanac"]
+    assert (path / "ai_almanac").resolve() == Path(ai_almanac.__file__).parent.resolve()
+    assert _package_path(path) == path  # a second phase reuses it
+
+
+def test_the_package_imports_where_it_is_not_installed(tmp_path) -> None:
+    """A workload env has the package on its path without its metadata."""
+    import subprocess
+
+    import ai_almanac
+    from ai_almanac.server.services.job_workload import _package_path
+
+    path = _package_path(tmp_path / "package-path")
+    # -S: no site-packages, so no installed ai-almanac metadata either.
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import ai_almanac; print(ai_almanac.__version__)"],
+        env={"PYTHONPATH": str(path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0+unknown"
+    assert ai_almanac.__version__ != "0+unknown"

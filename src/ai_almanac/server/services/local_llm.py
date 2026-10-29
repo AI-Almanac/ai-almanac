@@ -110,10 +110,7 @@ class AssistantUnavailable(RuntimeError):
 
 def paused_message(kind: str) -> str:
     job, finishing = _PAUSING_JOBS[kind]
-    return (
-        f"The assistant is paused while {job} runs. "
-        f"It'll be back when {finishing} finishes."
-    )
+    return f"The assistant is paused while {job} runs. It'll be back when {finishing} finishes."
 
 
 class AssistantPaused(AssistantUnavailable):

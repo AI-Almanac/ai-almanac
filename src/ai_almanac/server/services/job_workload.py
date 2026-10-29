@@ -127,6 +127,22 @@ def _group_forecast_models_by_env(config: dict) -> dict[str, list[str]]:
     return groups
 
 
+def _package_path(directory: Path) -> Path:
+    """A directory holding just this ai_almanac package, for a workload env's
+    PYTHONPATH.
+
+    forecast_entrypoint imports ai_almanac (forecast_pipeline, blend_entrypoint),
+    which the forecast and blending envs don't install. The package's own
+    parent won't do: installed, that is the server's site-packages, whose numpy
+    and the rest, built for the server's Python, would shadow the env's own.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    link = directory / "ai_almanac"
+    if not link.exists():
+        link.symlink_to(Path(__file__).parents[2], target_is_directory=True)
+    return directory
+
+
 def _run_forecast(job_id: str, config: dict) -> None:
     storage = get_storage()
     output_dir_raw, _ = storage.job_output_uri(job_id)
@@ -136,10 +152,7 @@ def _run_forecast(job_id: str, config: dict) -> None:
     staging_dir = output_dir.parent / "season-staging"
     entrypoint = Path(__file__).parents[2] / "envs" / "forecast_entrypoint.py"
     process_env = os.environ.copy()
-    # forecast_entrypoint imports ai_almanac (settings, forecast_pipeline,
-    # blend_entrypoint), but the forecast envs don't install the package —
-    # expose this checkout/site-packages copy to the subprocess.
-    package_root = str(Path(__file__).parents[3])
+    package_root = str(_package_path(output_dir.parent / "package-path"))
     process_env["PYTHONPATH"] = (
         f"{package_root}{os.pathsep}{process_env['PYTHONPATH']}"
         if process_env.get("PYTHONPATH")
