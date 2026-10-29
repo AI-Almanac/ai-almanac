@@ -128,6 +128,7 @@ async def lifespan(app: FastAPI):
     await _seed_regions()
     await _seed_assistant_rulesets()
     await _reconcile_jobs(at_startup=True)
+    await _fail_orphaned_chat_replies()
     await _start_local_llm()
     reconciler = asyncio.create_task(_job_reconciler_loop())
     try:
@@ -136,7 +137,27 @@ async def lifespan(app: FastAPI):
         reconciler.cancel()
         with suppress(asyncio.CancelledError):
             await reconciler
+        await _cancel_chat_replies()
         await _suspend_local_llm()
+
+
+async def _cancel_chat_replies() -> None:
+    """Save replies still running as failed, while the database is still up."""
+    from ai_almanac.server.services.chat_turns import cancel_running_replies
+
+    await cancel_running_replies()
+
+
+async def _fail_orphaned_chat_replies() -> None:
+    """Save as failed the replies a crash or kill left marked streaming. Only a
+    personal deployment's one process writes replies, so at startup none is
+    running; on a shared one another instance may be writing them."""
+    if settings.deployment_mode != "personal":
+        return
+    from ai_almanac.server.services.chat_turns import fail_orphaned_replies
+
+    if changed := await fail_orphaned_replies():
+        logger.info("saved interrupted chat replies in %d session(s) as failed", changed)
 
 
 async def _start_local_llm() -> None:

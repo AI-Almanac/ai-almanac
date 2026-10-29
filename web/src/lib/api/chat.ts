@@ -422,6 +422,8 @@ export async function* sendChatMessage(
 	});
 	if (!res.ok) {
 		const body = await res.text();
+		// A reply still being written in the chat: the server says so in words.
+		if (res.status === 409) throw new Error(errorDetail(body) ?? body);
 		throw new Error(`Chat message failed (${res.status}): ${body}`);
 	}
 
@@ -431,6 +433,16 @@ export async function* sendChatMessage(
 	}
 
 	throw new Error('Chat stream ended before a terminal event was received.');
+}
+
+/** A FastAPI error body's `detail`, when it is a message. */
+function errorDetail(body: string): string | null {
+	try {
+		const detail = (JSON.parse(body) as { detail?: unknown }).detail;
+		return typeof detail === 'string' ? detail : null;
+	} catch {
+		return null;
+	}
 }
 
 export async function getChatJobActivity(sessionId: string): Promise<ChatJobActivity> {

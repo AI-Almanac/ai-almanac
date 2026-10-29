@@ -310,3 +310,111 @@ def test_cli_env_prepare_no_longer_requires_path_pixi(
     runner = CliRunner()
     result = runner.invoke(app, ["env", "prepare"])
     assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# Which environments this version of the app changed
+# ---------------------------------------------------------------------------
+
+
+def _manifests(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
+    """Packaged manifests the test controls, one per environment."""
+    specs = {}
+    for name, getter in (
+        ("benchmark", "_pixi_spec"),
+        ("blending", "_blending_pixi_spec"),
+        ("forecast", "_forecast_pixi_spec"),
+        ("llm", "_llm_pixi_spec"),
+    ):
+        spec = tmp_path / "packaged" / f"{name}.pixi.toml"
+        spec.parent.mkdir(exist_ok=True)
+        spec.write_text(f"[workspace]\nname = '{name}'\n")
+        monkeypatch.setattr(mgr, getter, lambda spec=spec: spec)
+        specs[name] = spec
+    return specs
+
+
+def test_an_environment_is_stale_once_the_app_changes_its_manifest(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    specs = _manifests(monkeypatch, data_dir)
+    for name in ("benchmark", "blending", "forecast"):
+        mgr._mark_installed(name)
+
+    assert mgr.stale_envs() == []
+
+    specs["forecast"].write_text("[workspace]\nname = 'forecast'\n# python 3.12\n")
+    assert mgr.stale_envs() == ["forecast"]
+    # The local model server counts only when it runs here.
+    assert mgr.stale_envs(include_llm=True) == ["forecast", "llm"]
+
+
+def test_an_install_from_before_stamps_counts_when_its_manifest_matches(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    specs = _manifests(monkeypatch, data_dir)
+    env_dir = mgr.forecast_env_dir()
+    env_dir.mkdir(parents=True)
+
+    (env_dir / "pixi.toml").write_text(specs["forecast"].read_text())
+    assert mgr.env_is_current("forecast")
+    (env_dir / "pixi.toml").write_text("[workspace]\nname = 'older'\n")
+    assert not mgr.env_is_current("forecast")
+
+
+def test_a_workload_refuses_an_environment_from_another_version(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    _manifests(monkeypatch, data_dir)
+    monkeypatch.setattr(mgr, "_ensure_pixi", lambda progress=None: pytest.fail("must not spawn"))
+
+    with pytest.raises(
+        RuntimeError, match="forecast environment was installed for another version"
+    ):
+        mgr.run_forecast(["python", "-V"], environment="aifs2ens")
+
+
+def test_prepare_installs_only_the_environments_asked_for(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    _manifests(monkeypatch, data_dir)
+    installed: list[str] = []
+    monkeypatch.setattr(mgr, "_ensure_pixi", lambda progress=None: "/bin/echo")
+    monkeypatch.setattr(
+        mgr,
+        "_install",
+        lambda spec, env_dir, phase, progress, environments=None: installed.append(phase),
+    )
+    monkeypatch.setattr(mgr, "_ensure_blending_env", lambda progress: installed.append("blending"))
+
+    mgr.ensure_env(only=["forecast"])
+
+    assert installed == ["forecast"]
+    assert mgr.env_is_current("forecast")
+
+
+@pytest.mark.parametrize("stale", [[], ["forecast"]])
+def test_cli_env_prepare_if_stale_updates_only_what_changed(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path, stale: list[str]
+) -> None:
+    from typer.testing import CliRunner
+
+    from ai_almanac.cli import app
+
+    calls: list[dict] = []
+    monkeypatch.setattr("ai_almanac.envs.manager.stale_envs", lambda include_llm=False: stale)
+    monkeypatch.setattr(
+        "ai_almanac.envs.manager.ensure_env",
+        lambda **kwargs: calls.append(kwargs) or (data_dir / "b", data_dir / "bl", data_dir / "f"),
+    )
+
+    result = CliRunner().invoke(app, ["env", "prepare", "--if-stale"])
+
+    assert result.exit_code == 0, result.output
+    if stale:
+        assert calls[0]["only"] == ["forecast"]
+        assert "forecast env ready" in result.output
+        assert "benchmark env ready" not in result.output
+    else:
+        assert calls == []
+        assert "up to date" in result.output

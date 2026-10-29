@@ -629,7 +629,9 @@ async def stream_chat_turn(
                 message="The reply was stopped but could not be saved",
             )
     except asyncio.CancelledError as exc:
-        try:
+        # Shielded, or a second cancel (shutdown cancelling what is left) would
+        # skip the write and leave the turn marked streaming for good.
+        async def persist_cancelled(exc: BaseException) -> None:
             async with get_db() as conn:
                 await _persist_failed_turn(
                     conn,
@@ -640,8 +642,9 @@ async def stream_chat_turn(
                     exc,
                     scope,
                 )
-        except Exception:
-            pass
+
+        with suppress(Exception):
+            await asyncio.shield(persist_cancelled(exc))
         return
     except Exception as exc:
         if not isinstance(exc, AssistantUnavailable):
@@ -682,3 +685,126 @@ async def stream_chat_turn(
             del _running_turns[session_id]
     if terminal_event is not None:
         yield terminal_event
+
+
+# Replies running in the background, by session. A reply runs apart from the
+# request that asked for it, so reloading the page does not end it: the page
+# that comes back finds the turn still streaming and follows it to the end.
+_reply_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+def reply_running(session_id: str) -> bool:
+    """Whether a reply in this session is still being written, here."""
+    return session_id in _reply_tasks
+
+
+def start_chat_turn(
+    session_id: str,
+    user_id: str,
+    content: str,
+    requested_scope: ChatScope | None,
+    *,
+    active_ruleset: Ruleset | None = None,
+) -> AsyncIterator[str]:
+    """Start ``stream_chat_turn`` in the background and return its events.
+
+    The task starts here, not on first iteration, so a second send to the same
+    session sees it at once (see ``reply_running``). The returned stream only
+    relays: dropping it leaves the reply running and saving its outcome.
+    """
+    events: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            async with aclosing(
+                stream_chat_turn(
+                    session_id, user_id, content, requested_scope, active_ruleset=active_ruleset
+                )
+            ) as stream:
+                async for event in stream:
+                    events.put_nowait(event)
+        finally:
+            events.put_nowait(None)
+
+    task = asyncio.create_task(run())
+    _reply_tasks[session_id] = task
+
+    def finished(done: asyncio.Task[None]) -> None:
+        if _reply_tasks.get(session_id) is done:
+            del _reply_tasks[session_id]
+        if not done.cancelled() and done.exception() is not None:
+            logger.error("Chat reply for session %s failed", session_id, exc_info=done.exception())
+
+    task.add_done_callback(finished)
+
+    async def relay() -> AsyncIterator[str]:
+        while (event := await events.get()) is not None:
+            yield event
+
+    return relay()
+
+
+async def cancel_running_replies() -> None:
+    """End the replies still running, saving each as failed. For shutdown."""
+    tasks = list(_reply_tasks.values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+INTERRUPTED_REPLY = "The reply stopped when the app stopped or restarted."
+
+
+def _writing_reply(session_id: str) -> bool:
+    """Whether this process is writing a reply in the session: sent from a
+    chat (from the send until it is saved) or a comparison's."""
+    return session_id in _reply_tasks or session_id in _running_turns
+
+
+async def fail_orphaned_replies(session_id: str | None = None) -> int:
+    """Save as failed the replies still marked streaming that nothing is
+    writing: every session's at startup, or one session's when a stop finds
+    no reply running. Returns how many sessions changed.
+
+    Only where this process is the one writing replies (a personal
+    deployment); elsewhere another instance may be writing them.
+    """
+    query = "SELECT id FROM chat_sessions WHERE CAST(transcript AS TEXT) LIKE :streaming"
+    params: dict[str, str] = {"streaming": '%"streaming"%'}
+    if session_id is not None:
+        query += " AND id = :id"
+        params["id"] = session_id
+    async with get_db() as conn:
+        candidates = (await conn.execute(text(query), params)).scalars().all()
+    changed = 0
+    for candidate in candidates:
+        async with get_db() as conn:
+            # Locked as a send locks it, so a reply starting now can't be lost.
+            lock_clause = await lock_for_update(conn)
+            row = (
+                (
+                    await conn.execute(
+                        text("SELECT transcript FROM chat_sessions WHERE id = :id" + lock_clause),
+                        {"id": candidate},
+                    )
+                )
+                .mappings()
+                .fetchone()
+            )
+            if row is None or _writing_reply(candidate):
+                continue
+            transcript = json_list(row["transcript"])
+            settled = [
+                {**turn, "status": "failed", "error": INTERRUPTED_REPLY}
+                if turn.get("role") == "assistant" and turn.get("status") == "streaming"
+                else turn
+                for turn in transcript
+            ]
+            if settled == transcript:
+                continue
+            await conn.execute(
+                text("UPDATE chat_sessions SET transcript = :transcript WHERE id = :id"),
+                {"transcript": json.dumps(settled), "id": candidate},
+            )
+            changed += 1
+    return changed

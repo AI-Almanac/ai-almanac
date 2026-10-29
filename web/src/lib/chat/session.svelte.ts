@@ -168,9 +168,16 @@ export class ChatSessionState {
 			// Fall through to dropping the connection.
 		}
 		if (!stopped) this.abort?.abort();
-		// A reply followed from an earlier visit has no stream here: the follow
-		// loop shows the stopped turn on its next check, and clears this then.
-		if (!this.sending && !stopped) this.stopping = false;
+		// A reply followed from an earlier visit has no stream here. Stopped, the
+		// follow loop shows the stopped turn on its next check and clears this
+		// then. Not, nothing on the server was writing it, and it has saved what
+		// it had (a turn cut off mid-reply as failed): show that now. A turn still
+		// streaming is another instance's to finish, so it stays followed.
+		if (!this.sending && !stopped) {
+			this.stopping = false;
+			const turnId = this.earlierReplyId;
+			if (turnId) await this.readEarlierReply(sessionId, turnId).catch(() => false);
+		}
 	}
 
 	/** Stop following an earlier reply once the panel showing it is gone. */
@@ -197,10 +204,29 @@ export class ChatSessionState {
 		void this.followEarlierReply(sessionId, last);
 	}
 
+	private followingReply(sessionId: string, turnId: string): boolean {
+		return !this.disposed && this.sessionId === sessionId && this.earlierReplyId === turnId;
+	}
+
+	/**
+	 * Read the session again and, once the followed reply is no longer being
+	 * written, show what the server saved. True once it isn't followed any more.
+	 */
+	private async readEarlierReply(sessionId: string, turnId: string): Promise<boolean> {
+		const detail = await getChatSession(sessionId);
+		if (!this.followingReply(sessionId, turnId)) return true;
+		const latest = detail.transcript.find((existing) => existing.id === turnId);
+		if (latest?.status === 'streaming') return false;
+		this.messages = detail.transcript;
+		this.earlierReplyId = null;
+		this.assistantStartup = null;
+		this.stopping = false;
+		return true;
+	}
+
 	private async followEarlierReply(sessionId: string, turn: ChatMessage) {
 		this.earlierReplyId = turn.id;
-		const following = () =>
-			!this.disposed && this.sessionId === sessionId && this.earlierReplyId === turn.id;
+		const following = () => this.followingReply(sessionId, turn.id);
 		const deadline = Date.parse(turn.created_at) + EARLIER_REPLY_TIMEOUT_MS;
 		while (following()) {
 			try {
@@ -212,16 +238,7 @@ export class ChatSessionState {
 			await new Promise((resolve) => setTimeout(resolve, EARLIER_REPLY_POLL_MS));
 			if (!following()) return;
 			try {
-				const detail = await getChatSession(sessionId);
-				const latest = detail.transcript.find((existing) => existing.id === turn.id);
-				if (!following()) return;
-				if (latest?.status !== 'streaming') {
-					this.messages = detail.transcript;
-					this.earlierReplyId = null;
-					this.assistantStartup = null;
-					this.stopping = false;
-					return;
-				}
+				if (await this.readEarlierReply(sessionId, turn.id)) return;
 			} catch {
 				// A failed refresh is retried on the next tick.
 			}

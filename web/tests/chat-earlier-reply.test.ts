@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({
 	getChatSessions: vi.fn(),
 	getChatSession: vi.fn(),
 	getChatJobActivity: vi.fn(),
-	getAssistantStartup: vi.fn()
+	getAssistantStartup: vi.fn(),
+	stopChatReply: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
@@ -96,6 +97,31 @@ describe('a chat reopened while its reply is still being written', () => {
 		expect(chat.earlierReplyId).toBeNull();
 		expect(chat.canSend).toBe(true);
 		expect(chat.error).toMatch(/interrupted/);
+	});
+
+	it('shows what the server saved when a stop finds nothing writing the reply', async () => {
+		const chat = await openChat([asked, reply('streaming')]);
+		api.stopChatReply.mockResolvedValue({ stopped: false });
+		const interrupted = { ...reply('failed'), error: 'The reply stopped when the app restarted.' };
+		api.getChatSession.mockResolvedValue(session([asked, interrupted]));
+
+		await chat.stop();
+
+		expect(chat.messages.at(-1)).toMatchObject({ status: 'failed' });
+		expect(chat.earlierReplyId).toBeNull();
+		expect(chat.canSend).toBe(true);
+		expect(chat.error).toBeNull();
+	});
+
+	it('keeps following a reply a stop could not reach that is still being written', async () => {
+		const chat = await openChat([asked, reply('streaming')]);
+		api.stopChatReply.mockResolvedValue({ stopped: false });
+
+		await chat.stop();
+
+		expect(chat.earlierReplyId).toBe('a1');
+		expect(chat.stopping).toBe(false);
+		expect(chat.canSend).toBe(false);
 	});
 
 	it('stops checking once the panel is gone', async () => {

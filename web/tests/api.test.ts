@@ -47,6 +47,17 @@ async function collectEvents(stream: AsyncGenerator<ChatEvent>): Promise<ChatEve
 }
 
 describe('sendChatMessage', () => {
+	it('says in words why a send to a chat still replying was refused', async () => {
+		const detail = 'A reply in this chat is still being written. Send yours once it finishes.';
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(JSON.stringify({ detail }), { status: 409 })
+		);
+
+		await expect(collectEvents(sendChatMessage('session-1', 'hi'))).rejects.toThrow(
+			new RegExp(`^${detail}$`)
+		);
+	});
+
 	it('parses chunked SSE and stops on done', async () => {
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			streamingResponse([

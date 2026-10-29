@@ -60,13 +60,15 @@ from ..services.chat_tools import (
     SubmitBlendApproval,
 )
 from ..services.chat_turns import (
+    fail_orphaned_replies,
     get_session_provider_scope,
     json_dict,
     json_list,
+    reply_running,
     request_stop,
     resume_deferred_setup_tool,
     save_provider_state,
-    stream_chat_turn,
+    start_chat_turn,
     validate_scope,
 )
 from ..services.llm import llm_is_configured
@@ -686,8 +688,14 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
         else None
     )
 
+    # Checked with no await before the start, so two sends cannot both pass.
+    if reply_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A reply in this chat is still being written. Send yours once it finishes.",
+        )
     return StreamingResponse(
-        stream_chat_turn(
+        start_chat_turn(
             session_id, user.id, body.content, requested_scope, active_ruleset=session_ruleset
         ),
         media_type="text/event-stream",
@@ -716,7 +724,13 @@ async def stop_reply(session_id: str, user: CurrentUser):
         ).fetchone()
     if not owned:
         raise HTTPException(status_code=404, detail="Session not found")
-    return StopOut(stopped=request_stop(session_id))
+    stopped = request_stop(session_id)
+    if not stopped and settings.deployment_mode == "personal":
+        # Nothing in the one process that writes replies is writing it, so a
+        # turn still marked streaming was cut off (the app restarted, say):
+        # save it as failed, for the page to show on its next read.
+        await fail_orphaned_replies(session_id)
+    return StopOut(stopped=stopped)
 
 
 @router.post(
