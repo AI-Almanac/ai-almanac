@@ -177,6 +177,9 @@
 	let focusArea = $state<FocusAreaValue | null>(null);
 	// Onset definition overrides; blank means the workflow default.
 	let onsetDefinition = $state<OnsetDefinitionId | ''>('');
+	let dryCheck = $state(false);
+	let dryDays = $state('');
+	let dryWindowDays = $state('');
 	let thresholdMm = $state('');
 	let cutoffMonthDay = $state('');
 	let refOnsetMonthDay = $state('');
@@ -257,7 +260,10 @@
 		region: selectedObs?.region,
 		thresholdMm,
 		cutoffMonthDay,
-		refOnsetMonthDay
+		refOnsetMonthDay,
+		dryCheck,
+		dryDays,
+		dryWindowDays
 	});
 	const onsetRule = $derived(effectiveOnsetDefinition(onsetInput));
 	const onsetError = $derived(onsetParamsError(onsetInput));
@@ -940,6 +946,41 @@
 									placeholder={onsetRule.ref_onset_month_day}
 								/>
 							</label>
+						</div>
+						<div class="field-row">
+							<label class="field">
+								{@render fieldLabel(
+									'Dry-spell check',
+									`Off by default. On: an onset is not counted if followed by ${onsetRule.dry_spell.summary}.`
+								)}
+								<input type="checkbox" bind:checked={dryCheck} />
+							</label>
+							{#if dryCheck}
+								<label class="field">
+									{@render fieldLabel(
+										'Dry spell (days)',
+										`Default ${onsetRule.dry_spell.days} days.`
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={dryDays}
+										placeholder={String(onsetRule.dry_spell.days)}
+									/>
+								</label>
+								<label class="field">
+									{@render fieldLabel(
+										'Within (days after onset)',
+										`Default ${onsetRule.dry_spell.window_days} days.`
+									)}
+									<input
+										type="text"
+										inputmode="numeric"
+										bind:value={dryWindowDays}
+										placeholder={String(onsetRule.dry_spell.window_days)}
+									/>
+								</label>
+							{/if}
 						</div>
 						{#if onsetError}
 							<p class="error">{onsetError}</p>

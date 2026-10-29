@@ -50,6 +50,11 @@ class BenchmarkAdvancedParams(BaseModel):
     wet_threshold: float | None = None
     wet_init: float | None = None
     wet_spell: int | None = None
+    dry_spell_check: bool | None = PydanticField(
+        default=None,
+        description="Veto an onset followed by a dry spell (off by default): with dry_spell and "
+        "dry_extent unset, a dry run of 7 or more days within the 21 days after the onset day.",
+    )
     dry_spell: int | None = None
     dry_extent: int | None = None
     nc_mask: DataPath | None = None

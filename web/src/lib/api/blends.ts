@@ -40,6 +40,10 @@ export type BlendParams = {
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
+	// The definition's dry-spell check, off unless switched on.
+	dry_spell_check?: boolean;
+	dry_spell_days?: number;
+	dry_spell_window_days?: number;
 	focus_area?: FocusAreaValue;
 	// The day-level blend's CV and forest settings; omitted ones keep its defaults.
 	day_level?: DayLevelSettings;

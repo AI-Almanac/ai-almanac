@@ -53,6 +53,8 @@ export type JobParams = {
 	wet_threshold?: number;
 	wet_init?: number;
 	wet_spell?: number;
+	// Off by default: a dry run of 7+ days within the 21 days after the onset day.
+	dry_spell_check?: boolean;
 	dry_spell?: number;
 	dry_extent?: number;
 	// Advanced — probabilistic

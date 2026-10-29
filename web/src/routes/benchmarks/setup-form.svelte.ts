@@ -15,7 +15,7 @@ import {
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
 import { gridsMatch } from '$lib/source-coverage';
 
-type SharedParamValue = string | number | FocusAreaValue | null;
+type SharedParamValue = string | number | boolean | FocusAreaValue | null;
 type ModelOverrideValue = string | boolean | number;
 type ModelOverrides = Record<string, Record<string, ModelOverrideValue>>;
 
@@ -248,6 +248,9 @@ export class BenchmarkSetupForm {
 			...(numberParam(params.wet_spell) !== undefined && {
 				wet_spell: numberParam(params.wet_spell)
 			}),
+			// Off unless switched on: then a dry run of dry_spell days within the
+			// onset day and the dry_extent - 1 after it vetoes an onset.
+			...(params.dry_spell_check === true && { dry_spell_check: true }),
 			...(numberParam(params.dry_spell) !== undefined && {
 				dry_spell: numberParam(params.dry_spell)
 			}),

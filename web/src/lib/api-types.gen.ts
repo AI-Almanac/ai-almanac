@@ -2522,9 +2522,11 @@ export interface components {
          *
          *     The onset definition is the region's unless ``onset_definition`` names
          *     one: modified Moron-Robertson with the MOK filter in India (each cell's
-         *     climatological 5-day amount, on or after 06-02), ICPAC elsewhere (20 mm
-         *     over 3 days). ``threshold_mm``, ``cutoff_month_day`` and
-         *     ``ref_onset_month_day`` are optional and override the definition's.
+         *     climatological 5-day amount, on or after 06-02), ICPAC elsewhere (more
+         *     than 20 mm over 3 days from a wet day). ``threshold_mm``,
+         *     ``cutoff_month_day`` and ``ref_onset_month_day`` are optional and
+         *     override the definition's. Its dry-spell check is off unless
+         *     ``dry_spell_check`` turns it on.
          */
         BlendParams: {
             /** Forecast Years */
@@ -2559,6 +2561,21 @@ export interface components {
              * @description MM-DD reference onset date (climatological onset) that the onset-before-reference probability is scored against.
              */
             ref_onset_month_day?: string | null;
+            /**
+             * Dry Spell Check
+             * @description Veto an onset followed by a dry spell (off by default). ICPAC: a dry run of 7 or more days (each under 1 mm) within the 21 days after the onset day; Moron-Robertson: 10 days totalling under 5 mm within the 30 days after the wet spell.
+             */
+            dry_spell_check?: boolean | null;
+            /**
+             * Dry Spell Days
+             * @description With dry_spell_check: the dry run (ICPAC) or dry window (Moron-Robertson) length in days, instead of the definition's 7 or 10.
+             */
+            dry_spell_days?: number | null;
+            /**
+             * Dry Spell Window Days
+             * @description With dry_spell_check: the days after the onset the check looks over, instead of the definition's 21 or 30.
+             */
+            dry_spell_window_days?: number | null;
             /** Focus Area */
             focus_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
             day_level?: components["schemas"]["DayLevelSettings"] | null;
@@ -4527,6 +4544,11 @@ export interface components {
             wet_init?: number | null;
             /** Wet Spell */
             wet_spell?: number | null;
+            /**
+             * Dry Spell Check
+             * @description Veto an onset followed by a dry spell: with dry_spell and dry_extent unset, a dry run of 7 or more days within the 21 days after the onset day. Off by default.
+             */
+            dry_spell_check?: boolean | null;
             /** Dry Spell */
             dry_spell?: number | null;
             /** Dry Extent */

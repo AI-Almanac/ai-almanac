@@ -24,16 +24,32 @@ DEFAULT_MIN_ONSET_YEARS = 10
 # The onset definitions a blend can use, in BlendConfig's terms. A region
 # uses its own (REGION_ONSET_DEFINITIONS), others ICPAC's; a job may name one
 # (blend_params.onset_definition), and its threshold_mm and
-# ref_onset_month_day override the definition's.
+# ref_onset_month_day override the definition's. A definition's dry-spell
+# check ("dry_spell") is off unless the job turns it on
+# (blend_params.dry_spell_check); dry_spell_days and dry_spell_window_days
+# override its two numbers.
 ONSET_DEFINITIONS = {
-    # ICPAC's: 3 wet days (each at least 1 mm) totalling more than 20 mm, not
-    # followed by a dry spell in the next 21 days. The workflow's ONSET_RULE.
+    # ICPAC's operational onset: the first day of a wet spell (a day of at
+    # least 1 mm; drier days are dry) whose 3-day total exceeds 20 mm. Its dry-
+    # spell check: no dry run of 7 or more days within the 21 days after the
+    # onset day.
     "icpac": {
         "definition": {
             "window": 3,
+            "trigger_rule": "first_day_wet",
             "wet_day_min_mm": 1.0,
+            "wet_day_comparison": "gte",
+            "follow_days": 0,
+        },
+        "dry_spell": {
             "follow_days": 21,
-            "dry_spell": {"mode": "consecutive_dry", "min_dry_days": 5, "dry_day_min_mm": 1.0},
+            "followup_anchor": "onset_day",
+            "dry_spell": {
+                "mode": "consecutive_dry",
+                "min_dry_days": 7,
+                "dry_day_min_mm": 1.0,
+                "contained": True,
+            },
         },
         "threshold": {"mm": DEFAULT_THRESHOLD_MM},
         "reference_onset": "06-01",
@@ -53,6 +69,13 @@ ONSET_DEFINITIONS = {
             "wet_day_comparison": "gte",
             "threshold_comparison": "gte",
             "follow_days": 0,
+        },
+        # Moron and Robertson's own second criterion, if turned on: no 10 days
+        # totalling under 5 mm within the 30 days after the 5-day wet spell.
+        "dry_spell": {
+            "follow_days": 30,
+            "followup_anchor": "after_trigger",
+            "dry_spell": {"mode": "window_sum", "sum_window": 10, "sum_min_mm": 5.0},
         },
         "threshold": {
             "climatology": {"days": 5, "start": "04-01", "end": "10-31", "years": [1991, 2020]}
@@ -211,10 +234,31 @@ def onset(params: dict, region: str) -> dict:
         "threshold": threshold,
         "season_start": params.get("cutoff_month_day") or DEFAULT_SEASON_START,
         "reference_onset": {"month_day": reference},
-        "definition": chosen["definition"],
+        "definition": definition(chosen, params),
     }
     if "fixed_cutoff" in chosen:
         out["fixed_cutoff"] = chosen["fixed_cutoff"]
+    return out
+
+
+def definition(chosen: dict, params: dict) -> dict:
+    """The definition, with its dry-spell check when the job turns it on: the
+    job's dry_spell_days (the dry run, or the dry window, in days) and
+    dry_spell_window_days (the days after the onset it looks over) replace the
+    definition's."""
+    out = dict(chosen["definition"])
+    if not params.get("dry_spell_check"):
+        return out
+    check = chosen["dry_spell"]
+    spell = dict(check["dry_spell"])
+    if params.get("dry_spell_days"):
+        length = "min_dry_days" if spell["mode"] == "consecutive_dry" else "sum_window"
+        spell[length] = int(params["dry_spell_days"])
+    out.update(
+        follow_days=int(params.get("dry_spell_window_days") or check["follow_days"]),
+        followup_anchor=check["followup_anchor"],
+        dry_spell=spell,
+    )
     return out
 
 

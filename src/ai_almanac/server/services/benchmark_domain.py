@@ -112,6 +112,7 @@ SHARED_ROMP_PARAM_KEYS = {
     "wet_threshold",
     "wet_init",
     "wet_spell",
+    "dry_spell_check",
     "dry_spell",
     "dry_extent",
     "nc_mask",

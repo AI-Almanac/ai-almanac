@@ -258,10 +258,16 @@ Each region's blends use its own onset definition (`blend_recipe.ONSET_DEFINITIO
   1901-2024), with no dry-spell check. The amount is 5 x the cell's mean daily rain over
   April-October of 1991-2020, computed by onset_blending from the observations
   (`onset.threshold.climatology`) and stored with the trained blend.
-- **Everywhere else: ICPAC** (`icpac`): 3 wet days totalling more than 20 mm, with no
-  5-day dry spell in the next 21 days.
+- **Everywhere else: ICPAC** (`icpac`): the first day of a wet spell (a day of at least
+  1 mm; drier days are dry) whose 3-day total exceeds 20 mm.
 
 A job's `threshold_mm` and `ref_onset_month_day` still override the definition's.
+Neither checks a dry spell unless the job turns it on (`dry_spell_check`): ICPAC then
+rejects an onset with a dry run of 7 or more days within the 21 days after the onset
+day, Moron-Robertson one with 10 days totalling under 5 mm within the 30 days after the
+wet spell; `dry_spell_days` and `dry_spell_window_days` change the two numbers.
+Benchmarks take the same switch (`dry_spell_check`), which sets ROMP's `dry_spell: 7`
+and `dry_extent: 22` (the onset day and the 21 after it) unless those are given.
 Local blends only: the Modal workflow still applies ICPAC's rule (`ONSET_RULE`) in
 every region, so cloud India blends do not use Moron-Robertson yet.
 

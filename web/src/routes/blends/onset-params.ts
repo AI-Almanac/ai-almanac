@@ -9,6 +9,8 @@ export type OnsetDefinitionId = 'icpac' | 'moron_robertson_mok';
 export type OnsetDefinition = {
 	label: string;
 	summary: string;
+	// The dry-spell check the switch turns on: what it vetoes, and its two numbers.
+	dry_spell: { summary: string; days: number; window_days: number };
 	// The trigger window in days, and its rainfall threshold; null when each
 	// grid cell's threshold is computed from the observations.
 	window_days: number;
@@ -20,7 +22,12 @@ export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	icpac: {
 		label: 'ICPAC',
 		summary:
-			'3 wet days (each at least 1 mm) totalling more than 20 mm, with no 5-day dry spell in the next 21 days.',
+			'The first day of a wet spell (a day of at least 1 mm) whose 3-day total exceeds 20 mm.',
+		dry_spell: {
+			summary: 'a dry run (days under 1 mm) of this many days within the days after the onset day',
+			days: 7,
+			window_days: 21
+		},
 		window_days: 3,
 		threshold_mm: 20,
 		ref_onset_month_day: '06-01'
@@ -28,7 +35,12 @@ export const ONSET_DEFINITIONS: Record<OnsetDefinitionId, OnsetDefinition> = {
 	moron_robertson_mok: {
 		label: 'Modified Moron–Robertson (MOK)',
 		summary:
-			"The first wet day (at least 1 mm) of the first 5-day spell totalling at least the grid cell's mean 5-day rainfall (April–October, 1991–2020), on or after 06-02, the median onset over Kerala; no dry-spell check.",
+			"The first wet day (at least 1 mm) of the first 5-day spell totalling at least the grid cell's mean 5-day rainfall (April–October, 1991–2020), on or after 06-02, the median onset over Kerala.",
+		dry_spell: {
+			summary: 'this many days totalling under 5 mm within the days after the 5-day wet spell',
+			days: 10,
+			window_days: 30
+		},
 		window_days: 5,
 		threshold_mm: null,
 		ref_onset_month_day: '06-02'
@@ -56,6 +68,10 @@ export type OnsetParamsInput = {
 	thresholdMm: string;
 	cutoffMonthDay: string;
 	refOnsetMonthDay: string;
+	// The dry-spell check, off unless switched on; blanks keep the definition's numbers.
+	dryCheck?: boolean;
+	dryDays?: string;
+	dryWindowDays?: string;
 };
 
 export type OnsetParams = {
@@ -63,7 +79,17 @@ export type OnsetParams = {
 	threshold_mm?: number;
 	cutoff_month_day?: string;
 	ref_onset_month_day?: string;
+	dry_spell_check?: boolean;
+	dry_spell_days?: number;
+	dry_spell_window_days?: number;
 };
+
+function wholeDays(value: string | undefined): number | null | undefined {
+	const text = (value ?? '').trim();
+	if (!text) return undefined;
+	const n = Number(text);
+	return Number.isInteger(n) && n >= 1 ? n : null;
+}
 
 /** The definition a blend with these inputs uses. */
 export function effectiveOnsetDefinition(
@@ -98,6 +124,15 @@ export function onsetParamsError(input: OnsetParamsInput): string | null {
 		return 'Reference onset date must be a date in MM-DD form, e.g. 06-01.';
 	// Compare effective values so one override is checked against the other's
 	// default. Zero-padded MM-DD strings compare lexically in calendar order.
+	if (input.dryCheck) {
+		const days = wholeDays(input.dryDays);
+		const windowDays = wholeDays(input.dryWindowDays);
+		if (days === null || windowDays === null)
+			return 'Dry-spell days must be whole numbers of days, at least 1.';
+		const rule = effectiveOnsetDefinition(input).dry_spell;
+		if ((days ?? rule.days) > (windowDays ?? rule.window_days))
+			return `A ${days ?? rule.days}-day dry spell cannot fit in ${windowDays ?? rule.window_days} days after the onset.`;
+	}
 	const effectiveCutoff = cutoff || ONSET_DEFAULTS.cutoff_month_day;
 	const effectiveRefOnset = refOnset || effectiveOnsetDefinition(input).ref_onset_month_day;
 	if (effectiveRefOnset < effectiveCutoff)
@@ -115,5 +150,12 @@ export function onsetParamsBody(input: OnsetParamsInput): OnsetParams {
 	if (threshold) out.threshold_mm = Number(threshold);
 	if (cutoff) out.cutoff_month_day = cutoff;
 	if (refOnset) out.ref_onset_month_day = refOnset;
+	if (input.dryCheck) {
+		out.dry_spell_check = true;
+		const days = wholeDays(input.dryDays);
+		const windowDays = wholeDays(input.dryWindowDays);
+		if (days) out.dry_spell_days = days;
+		if (windowDays) out.dry_spell_window_days = windowDays;
+	}
 	return out;
 }

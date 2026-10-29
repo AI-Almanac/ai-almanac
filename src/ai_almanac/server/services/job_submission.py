@@ -90,6 +90,12 @@ class RompParams(BaseModel):
     wet_threshold: FiniteFloat | None = None
     wet_init: FiniteFloat | None = None
     wet_spell: int | None = None
+    dry_spell_check: bool | None = Field(
+        default=None,
+        description="Veto an onset followed by a dry spell: with dry_spell and dry_extent "
+        "unset, a dry run of 7 or more days within the 21 days after the onset day. Off by "
+        "default.",
+    )
     dry_spell: int | None = None
     dry_extent: int | None = None
     start_date: date | None = None
@@ -439,9 +445,11 @@ class BlendParams(BaseModel):
 
     The onset definition is the region's unless ``onset_definition`` names
     one: modified Moron-Robertson with the MOK filter in India (each cell's
-    climatological 5-day amount, on or after 06-02), ICPAC elsewhere (20 mm
-    over 3 days). ``threshold_mm``, ``cutoff_month_day`` and
-    ``ref_onset_month_day`` are optional and override the definition's.
+    climatological 5-day amount, on or after 06-02), ICPAC elsewhere (more
+    than 20 mm over 3 days from a wet day). ``threshold_mm``,
+    ``cutoff_month_day`` and ``ref_onset_month_day`` are optional and
+    override the definition's. Its dry-spell check is off unless
+    ``dry_spell_check`` turns it on.
     """
 
     forecast_years: str | None = None
@@ -469,6 +477,26 @@ class BlendParams(BaseModel):
         description="MM-DD reference onset date (climatological onset) that the "
         "onset-before-reference probability is scored against.",
     )
+    dry_spell_check: bool | None = Field(
+        default=None,
+        description="Veto an onset followed by a dry spell (off by default). ICPAC: a dry run "
+        "of 7 or more days (each under 1 mm) within the 21 days after the onset day; "
+        "Moron-Robertson: 10 days totalling under 5 mm within the 30 days after the wet spell.",
+    )
+    dry_spell_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=30,
+        description="With dry_spell_check: the dry run (ICPAC) or dry window (Moron-Robertson) "
+        "length in days, instead of the definition's 7 or 10.",
+    )
+    dry_spell_window_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=60,
+        description="With dry_spell_check: the days after the onset the check looks over, "
+        "instead of the definition's 21 or 30.",
+    )
     focus_area: FocusArea | None = None
     # Omitted, the day-level blend trains with DayLevelSettings' defaults.
     day_level: DayLevelSettings | None = None
@@ -495,6 +523,17 @@ class BlendParams(BaseModel):
         errors = onset_param_errors(
             self.threshold_mm, self.cutoff_month_day, self.ref_onset_month_day
         )
+        if not self.dry_spell_check and (self.dry_spell_days or self.dry_spell_window_days):
+            errors.append("dry_spell_days and dry_spell_window_days need dry_spell_check")
+        if (
+            self.dry_spell_days
+            and self.dry_spell_window_days
+            and self.dry_spell_days > self.dry_spell_window_days
+        ):
+            errors.append(
+                f"A {self.dry_spell_days}-day dry spell cannot fit in "
+                f"{self.dry_spell_window_days} days after the onset"
+            )
         if errors:
             raise ValueError("; ".join(errors))
         return self

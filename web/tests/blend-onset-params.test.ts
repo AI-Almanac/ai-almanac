@@ -87,6 +87,22 @@ describe('blend onset params', () => {
 		expect(onsetParamsBody(india)).toEqual({});
 	});
 
+	it('sends the dry-spell check only when switched on, with the numbers typed', () => {
+		expect(onsetParamsBody({ ...blank, dryDays: '5' })).toEqual({});
+		expect(onsetParamsBody({ ...blank, dryCheck: true })).toEqual({ dry_spell_check: true });
+		expect(
+			onsetParamsBody({ ...blank, dryCheck: true, dryDays: ' 5 ', dryWindowDays: '15' })
+		).toEqual({ dry_spell_check: true, dry_spell_days: 5, dry_spell_window_days: 15 });
+	});
+
+	it('flags dry-spell numbers that are not whole days or cannot fit', () => {
+		expect(onsetParamsError({ ...blank, dryCheck: true, dryDays: '2.5' })).toMatch(/whole/);
+		expect(onsetParamsError({ ...blank, dryCheck: true, dryWindowDays: '5' })).toMatch(
+			/7-day dry spell cannot fit in 5 days/
+		);
+		expect(onsetParamsError({ ...blank, dryCheck: true, dryDays: '5' })).toBeNull();
+	});
+
 	it("checks a search start against the definition's reference onset", () => {
 		const india = { ...blank, region: 'india' };
 		expect(onsetParamsError({ ...india, cutoffMonthDay: '06-02' })).toBeNull();

@@ -38,7 +38,7 @@
 	const setRegionId = (id: string) => form.setRegionId(id);
 	const setForecastWindowDays = (days: number | null) => form.setForecastWindowDays(days);
 	const toggleModel = (id: string) => form.toggleModel(id);
-	const setSharedParam = (key: string, value: string | number | FocusAreaValue | null) =>
+	const setSharedParam = (key: string, value: string | number | boolean | FocusAreaValue | null) =>
 		form.setSharedParam(key, value);
 	const getOverride = <T,>(modelId: string, key: string, fallback: T): T =>
 		form.getOverride(modelId, key, fallback);
@@ -381,6 +381,20 @@
 										</label>
 										<label>
 											<span class="label-with-help">
+												Dry-spell check
+												<InfoTip
+													text="Off by default. On: an onset is not counted if a dry run (days under the wet-day amount) of 7 or more days falls within the 21 days after the onset day, unless the two fields below say otherwise."
+												/>
+											</span>
+											<input
+												type="checkbox"
+												checked={sharedAdvancedParams.dry_spell_check === true}
+												onchange={(e) =>
+													setSharedParam('dry_spell_check', (e.target as HTMLInputElement).checked)}
+											/>
+										</label>
+										<label>
+											<span class="label-with-help">
 												Dry spell limit
 												<InfoTip
 													text="Consecutive dry days used to reject false onsets after an initial wet period."
@@ -404,7 +418,9 @@
 											</span>
 											<input
 												type="number"
-												placeholder={defaultValue(parameterDefaults?.dry_extent)}
+												placeholder={sharedAdvancedParams.dry_spell_check === true
+													? '22'
+													: defaultValue(parameterDefaults?.dry_extent)}
 												value={sharedAdvancedParams.dry_extent ?? ''}
 												oninput={(e) =>
 													setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}

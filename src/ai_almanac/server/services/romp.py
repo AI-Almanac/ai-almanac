@@ -298,8 +298,10 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "wet_threshold": params.get("wet_threshold", 20),
         "wet_spell": params.get("wet_spell", 3),
         "dry_threshold": 1,
+        # The dry-spell check is off (dry_extent 0) unless dry_spell_check turns
+        # it on: then no dry run of 7+ days within the onset day and the 21 after it.
         "dry_spell": params.get("dry_spell", 7),
-        "dry_extent": params.get("dry_extent", 0),
+        "dry_extent": params.get("dry_extent", 22 if params.get("dry_spell_check") else 0),
         "thresh_file": params.get("thresh_file"),
         "thresh_var": None,
         "onset_percentage_threshold": 0.5,
