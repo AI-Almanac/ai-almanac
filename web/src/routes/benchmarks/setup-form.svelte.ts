@@ -173,7 +173,8 @@ export class BenchmarkSetupForm {
 			end_year_clim: clampYear(cfg.end_year_clim),
 			init_days: cfg.init_days,
 			...(cfg.date_filter_year != null && { date_filter_year: cfg.date_filter_year }),
-			parallel: !cfg.probabilistic,
+			// Ensembles too: ROMP finds their onsets a block of init dates at a time.
+			parallel: true,
 			probabilistic: cfg.probabilistic,
 			members: cfg.members ?? '',
 			model_var: cfg.model_var !== 'tp' ? cfg.model_var : '',
@@ -289,7 +290,7 @@ export class BenchmarkSetupForm {
 					date_filter_year: numberParam(raw.date_filter_year)
 				}),
 				...(probabilistic !== undefined && { probabilistic }),
-				parallel: probabilistic ? false : Boolean(raw.parallel ?? true),
+				parallel: Boolean(raw.parallel ?? true),
 				...(stringParam(raw.members) && { members: stringParam(raw.members) }),
 				...(stringParam(raw.model_var) && { model_var: stringParam(raw.model_var) }),
 				...(stringParam(raw.file_pattern) && { file_pattern: stringParam(raw.file_pattern) })

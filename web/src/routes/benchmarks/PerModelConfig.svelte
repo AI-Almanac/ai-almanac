@@ -98,20 +98,17 @@
 				oninput={(e) => setOverride(modelId, 'init_days', (e.target as HTMLInputElement).value)}
 			/>
 		</label>
-		{#if !getOverride(modelId, 'probabilistic', cfg?.probabilistic ?? false)}
-			<label class="checkbox-label">
-				<input
-					type="checkbox"
-					checked={getOverride(modelId, 'parallel', true)}
-					onchange={(e) => setOverride(modelId, 'parallel', (e.target as HTMLInputElement).checked)}
-				/>
-				<span class="label-text"
-					>Run Years Concurrently <InfoTip
-						text="Run years concurrently for faster results."
-					/></span
-				>
-			</label>
-		{/if}
+		<label class="checkbox-label">
+			<input
+				type="checkbox"
+				checked={getOverride(modelId, 'parallel', true)}
+				onchange={(e) => setOverride(modelId, 'parallel', (e.target as HTMLInputElement).checked)}
+			/>
+			<span class="label-text"
+				>Run Years Concurrently <InfoTip text="Run years concurrently for faster results." /></span
+			>
+		</label>
+
 		<label class="checkbox-label">
 			<input
 				type="checkbox"

@@ -586,7 +586,8 @@ def _clamp_model_params(model: dict, spec: BenchmarkRunSpec) -> dict:
         "start_year_clim": model["start_year_clim"],
         "end_year_clim": model["end_year_clim"],
         "init_days": model["init_days"],
-        "parallel": not bool(model.get("probabilistic")),
+        # Ensembles too: ROMP finds their onsets a block of init dates at a time.
+        "parallel": True,
         "probabilistic": bool(model.get("probabilistic")),
     }
     if model.get("members"):
