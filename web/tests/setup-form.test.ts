@@ -162,4 +162,39 @@ describe('BenchmarkSetupForm', () => {
 		expect(form.perModelOverrides).toEqual({ fuxi: { init_days: '0' } });
 		expect(api.getModels).toHaveBeenCalledWith('india');
 	});
+
+	it('reports the years and onset sections as customised only once the user changes them', async () => {
+		api.getModels.mockResolvedValue([modelConfig()]);
+		const form = setupForm();
+		form.setDatasetId('obs-india');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+		form.setSharedParam('obs_file_pattern', '{}.nc');
+
+		expect(form.yearsCustomised).toBe(false);
+		expect(form.onsetCustomised).toBe(false);
+
+		form.setOverride('fuxi', 'start_date', '2019-05-01');
+		form.setSharedParam('wet_spell', 5);
+
+		expect(form.yearsCustomised).toBe(true);
+		expect(form.onsetCustomised).toBe(true);
+	});
+
+	it('keeps the years section at its defaults across a dataset switch and a retyped default', async () => {
+		api.getModels.mockResolvedValue([modelConfig()]);
+		const form = setupForm();
+		form.datasets = [
+			dataset(),
+			dataset({ id: 'obs-india-long', obs_year_start: 2000, obs_year_end: 2024 })
+		];
+		form.setDatasetId('obs-india');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+
+		form.setDatasetId('obs-india-long');
+		form.setOverride('fuxi', 'start_year_clim', '2018');
+
+		expect(form.yearsCustomised).toBe(false);
+	});
 });

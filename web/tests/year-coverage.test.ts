@@ -125,6 +125,22 @@ describe('yearSpecError', () => {
 	])('accepts $case', ({ training, cv }) => {
 		expect(yearSpecError(cov, training, cv, '', '')).toBeNull();
 	});
+	it('rejects split years outside explicit forecast years', () => {
+		// The config that crashed the real run: forecasts staged for 2020-2024
+		// only, training years far outside them -> empty training set.
+		expect(yearSpecError(null, '1998:2015', '2011,2012', '2011:2012', '')).toMatch(
+			/Training years 1998–2015 have no forecast data/
+		);
+		expect(yearSpecError(cov, '2008:2010', '2011', '2008:2010', '')).toMatch(
+			/CV holdout years 2011 have no forecast data/
+		);
+		expect(yearSpecError(cov, '2008:2010', '2008:2010', '2008:2010', '2012')).toMatch(
+			/True holdout years 2012 have no forecast data/
+		);
+	});
+	it('accepts splits inside explicit forecast years, even without coverage metadata', () => {
+		expect(yearSpecError(null, '2008:2010', '2011:2012', '2008:2012', '')).toBeNull();
+	});
 	it('rejects forecast years a chosen source is missing', () => {
 		const gappy = { ...cov, missing: [2010] };
 		expect(yearSpecError(gappy, '2008:2012', '', '', '')).toMatch(/no data for 2010/);

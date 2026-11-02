@@ -19,6 +19,7 @@ import sqlalchemy as sa
 from ai_almanac.server.db import get_db
 from ai_almanac.server.services import trajectory_sets
 from ai_almanac.server.services.execution import ExecutionSnapshot
+from ai_almanac.server.services.job_heartbeat import heartbeat_is_fresh
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.sync_db import lock_capacity, sync_engine
 from ai_almanac.server.tables import jobs
@@ -28,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = ("queued", "starting", "running", "canceling")
 TERMINAL_STATUSES = ("complete", "failed", "canceled")
-HEARTBEAT_TIMEOUT_SECONDS = 15
 # ~5 minutes of failed Modal polls at the reconciler's 5 s tick.
 UNKNOWN_POLL_ESCALATION = 60
 
@@ -47,16 +47,6 @@ def _process_exists(pid: int | None) -> bool:
     except (ProcessLookupError, PermissionError):
         return False
     return True
-
-
-def _heartbeat_is_fresh(value: str | None) -> bool:
-    if not value:
-        return False
-    try:
-        heartbeat = datetime.fromisoformat(value)
-    except ValueError:
-        return False
-    return (datetime.now(UTC) - heartbeat).total_seconds() <= HEARTBEAT_TIMEOUT_SECONDS
 
 
 class LocalProcessProvisioner:
@@ -241,7 +231,7 @@ async def reconcile_jobs() -> None:
             await _reconcile_modal_job(row)
             continue
         if row["status"] == "queued":
-            if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(
+            if _process_exists(row.get("worker_pid")) and heartbeat_is_fresh(
                 row.get("heartbeat_at")
             ):
                 continue
@@ -253,7 +243,7 @@ async def reconcile_jobs() -> None:
                 )
             await launch_job(row["id"])
             continue
-        if _process_exists(row.get("worker_pid")) and _heartbeat_is_fresh(row.get("heartbeat_at")):
+        if _process_exists(row.get("worker_pid")) and heartbeat_is_fresh(row.get("heartbeat_at")):
             continue
         _terminate_process_group(row.get("process_group_id"), row.get("workload_pid"))
         final_status = "canceled" if row["status"] == "canceling" else "failed"
@@ -297,7 +287,7 @@ def _register_supervisor(engine, job_id: str, worker_id: str) -> bool:
             row["worker_id"]
             and row["worker_id"] != worker_id
             and _process_exists(row["worker_pid"])
-            and _heartbeat_is_fresh(row["heartbeat_at"])
+            and heartbeat_is_fresh(row["heartbeat_at"])
         ):
             return False
         conn.execute(
@@ -334,7 +324,7 @@ def _claim_capacity(engine, job_id: str, worker_id: str) -> bool:
                 jobs.c.status.in_(("starting", "running")), jobs.c.id != job_id
             )
         ).fetchall()
-        active = sum(1 for (heartbeat,) in active_rows if _heartbeat_is_fresh(heartbeat))
+        active = sum(1 for (heartbeat,) in active_rows if heartbeat_is_fresh(heartbeat))
         if active >= settings.max_local_jobs:
             return False
         now = _now()
@@ -390,6 +380,11 @@ def execute_job(job_id: str) -> None:
 
         log_path = get_storage().log_path(job_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("")
+        # The job is already `starting`, so chat turns are refused from here
+        # on; the model wakes lazily on the first turn after the job ends.
+        if _is_forecast_job(engine, job_id):
+            _park_local_llm(engine, job_id, worker_id, log_path)
         workload = _start_workload(job_id, log_path)
         pgid = workload.pid
         with engine.begin() as conn:
@@ -454,8 +449,43 @@ def execute_job(job_id: str) -> None:
         raise
 
 
+def _is_forecast_job(engine, job_id: str) -> bool:
+    with engine.connect() as conn:
+        row = conn.execute(sa.select(jobs.c.config_json).where(jobs.c.id == job_id)).fetchone()
+    try:
+        return json.loads((row and row[0]) or "{}").get("job_type") == "forecast"
+    except json.JSONDecodeError:
+        return False
+
+
+def _park_local_llm(engine, job_id: str, worker_id: str, log_path: Path) -> None:
+    """Release the managed chat model's memory before a forecast claims the GPU.
+
+    Parking can wait minutes (draining a reply, or a chat-triggered wake that
+    holds the model lock), so it runs in a thread while this loop keeps the
+    heartbeat fresh — a stale one would get the job reconciled as crashed.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ai_almanac.server.services import local_llm
+
+    if not local_llm.is_managed():
+        return
+    with log_path.open("a") as log, ThreadPoolExecutor(max_workers=1) as pool:
+        log.write("==> Parking the local assistant model to free GPU memory...\n")
+        log.flush()
+        future = pool.submit(local_llm.park_for_gpu_job)
+        while True:
+            try:
+                result = future.result(timeout=1)
+                break
+            except TimeoutError:
+                _heartbeat(engine, job_id, worker_id)
+        log.write(f"==> {result.detail}\n")
+
+
 def _start_workload(job_id: str, log_path: Path) -> subprocess.Popen:
-    log_file = log_path.open("w")
+    log_file = log_path.open("a")
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "stdout": log_file,

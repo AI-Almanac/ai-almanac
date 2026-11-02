@@ -8,9 +8,18 @@
 		open: boolean;
 		form: BenchmarkSetupForm;
 		onClose: () => void;
+		focusSection?: 'plan' | 'models' | null;
 	}
 
-	const { open, form, onClose }: Props = $props();
+	const { open, form, onClose, focusSection = null }: Props = $props();
+
+	let panelBody = $state<HTMLElement | null>(null);
+	$effect(() => {
+		if (!open || !focusSection) return;
+		panelBody
+			?.querySelector(`[data-section="${focusSection}"]`)
+			?.scrollIntoView({ block: 'start' });
+	});
 
 	const regions = $derived(form.regions);
 	const datasets = $derived(form.datasets);
@@ -65,13 +74,13 @@
 
 {#if open}
 	<div class="panel-layer" role="presentation">
-		<button class="scrim" type="button" aria-label="Close manual configuration" onclick={onClose}
+		<button class="scrim" type="button" aria-label="Close benchmark settings" onclick={onClose}
 		></button>
 		<div class="config-panel" aria-modal="true" role="dialog" aria-labelledby="advanced-title">
 			<header class="panel-header">
 				<div>
 					<p class="eyebrow">Benchmark setup</p>
-					<h2 id="advanced-title">Manual configuration</h2>
+					<h2 id="advanced-title">Benchmark settings</h2>
 					<p class="panel-subtitle">
 						{selectedRegion?.display_name ?? 'No region'} · {selectedDataset?.name ??
 							'No ground truth'}
@@ -80,24 +89,30 @@
 				<button
 					class="icon-button"
 					type="button"
-					aria-label="Close manual configuration"
+					aria-label="Close benchmark settings"
 					onclick={onClose}>×</button
 				>
 			</header>
 
-			<div class="panel-body">
+			<div class="panel-body" bind:this={panelBody}>
 				<div class="settings-form">
 					<section
 						class="form-section plan-section"
 						aria-label="Core benchmark settings"
+						data-section="plan"
 						data-tour="config-plan"
 					>
 						<div class="section-kicker">1</div>
 						<div class="section-content">
 							<div class="section-heading">
 								<div>
-									<h3>Plan</h3>
-									<p>Set the core benchmark inputs used to validate model and data choices.</p>
+									<h3>
+										What to score against <span class="section-badge required">Required</span>
+									</h3>
+									<p>
+										Models are scored on how well they predicted the onset dates observed in this
+										record, over this coverage, at these lead times.
+									</p>
 								</div>
 							</div>
 
@@ -173,13 +188,18 @@
 						</div>
 					</section>
 
-					<section class="form-section" aria-label="Model selection" data-tour="config-models">
+					<section
+						class="form-section"
+						aria-label="Model selection"
+						data-section="models"
+						data-tour="config-models"
+					>
 						<div class="section-kicker">2</div>
 						<div class="section-content">
 							<div class="section-heading">
 								<div>
-									<h3>Models</h3>
-									<p>Choose the forecast systems included in this benchmark.</p>
+									<h3>Which models to test <span class="section-badge required">Required</span></h3>
+									<p>Only models with forecasts covering the selected region appear here.</p>
 								</div>
 								<strong>{selectedModelIds.length} selected</strong>
 							</div>
@@ -242,30 +262,48 @@
 					>
 						<div class="section-kicker">3</div>
 						<div class="section-content">
-							<div class="section-heading">
-								<div>
-									<h3>Model run windows</h3>
-									<p>Set evaluation dates and model-specific options for each selected model.</p>
-								</div>
-								<strong>{selectedModels.length} models</strong>
-							</div>
+							<details class="section-details">
+								<summary>
+									<div class="section-heading">
+										<div>
+											<h3>
+												Which years count <span class="section-badge"
+													>{form.yearsCustomised ? 'Customised' : 'Defaults applied'}</span
+												>
+											</h3>
+											<p>
+												More evaluation years give more trustworthy scores — but years that overlap
+												a model's training look better than they should, and pre-satellite years
+												(before 1979) look worse. Defaults use each model's full available range.
+											</p>
+										</div>
+										<strong>
+											{selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
+											<span class="chevron" aria-hidden="true"></span>
+										</strong>
+									</div>
+								</summary>
 
-							{#if selectedModels.length === 0}
-								<p class="empty">
-									Select at least one model before editing model-specific settings.
-								</p>
-							{:else}
-								<div class="model-config-list">
-									{#each selectedModelIds as modelId}
-										<PerModelConfig
-											{modelId}
-											cfg={models.find((model) => model.id === modelId)}
-											{getOverride}
-											{setOverride}
-										/>
-									{/each}
+								<div class="details-body">
+									{#if selectedModels.length === 0}
+										<p class="empty">
+											Select at least one model before editing model-specific settings.
+										</p>
+									{:else}
+										<div class="model-config-list">
+											{#each selectedModelIds as modelId}
+												<PerModelConfig
+													{modelId}
+													cfg={models.find((model) => model.id === modelId)}
+													{getOverride}
+													{setOverride}
+													guardrails={form.guardrails}
+												/>
+											{/each}
+										</div>
+									{/if}
 								</div>
-							{/if}
+							</details>
 						</div>
 					</section>
 
@@ -276,179 +314,195 @@
 					>
 						<div class="section-kicker">4</div>
 						<div class="section-content">
-							<div class="section-heading">
-								<div>
-									<h3>Shared settings</h3>
-									<p>Optional settings applied to every selected model in this benchmark.</p>
+							<details class="section-details">
+								<summary>
+									<div class="section-heading">
+										<div>
+											<h3>
+												How onset is detected <span class="section-badge"
+													>{form.onsetCustomised ? 'Customised' : 'Defaults applied'}</span
+												>
+											</h3>
+											<p>
+												These define what counts as a monsoon onset and the baseline skill is
+												measured against. The defaults follow the standard ROMP definition — most
+												benchmarks should keep them.
+											</p>
+										</div>
+										<strong>Optional <span class="chevron" aria-hidden="true"></span></strong>
+									</div>
+								</summary>
+
+								<div class="details-body settings-columns">
+									<fieldset>
+										<legend>Event detection</legend>
+										<label>
+											<span class="label-with-help">
+												Wet-day threshold
+												<InfoTip
+													text="Rainfall amount used to classify a day as wet when detecting onset behavior."
+												/>
+											</span>
+											<input
+												type="number"
+												step="any"
+												placeholder={defaultValue(parameterDefaults?.wet_threshold)}
+												value={sharedAdvancedParams.wet_threshold ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_threshold', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_threshold)} mm</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Minimum wet-day rainfall
+												<InfoTip
+													text="Minimum daily rainfall counted toward a wet spell during onset detection."
+												/>
+											</span>
+											<input
+												type="number"
+												step="any"
+												placeholder={defaultValue(parameterDefaults?.wet_init)}
+												value={sharedAdvancedParams.wet_init ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_init)} mm</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Wet spell length
+												<InfoTip
+													text="Number of consecutive wet days required before a wet spell can support onset."
+												/>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.wet_spell)}
+												value={sharedAdvancedParams.wet_spell ?? ''}
+												oninput={(e) =>
+													setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.wet_spell)} days</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Dry spell limit
+												<InfoTip
+													text="Consecutive dry days used to reject false onsets after an initial wet period."
+												/>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.dry_spell)}
+												value={sharedAdvancedParams.dry_spell ?? ''}
+												oninput={(e) =>
+													setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.dry_spell)} days</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Dry spell search extension
+												<InfoTip
+													text="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
+												/>
+											</span>
+											<input
+												type="number"
+												placeholder={defaultValue(parameterDefaults?.dry_extent)}
+												value={sharedAdvancedParams.dry_extent ?? ''}
+												oninput={(e) =>
+													setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.dry_extent)} days</small>
+										</label>
+									</fieldset>
+
+									<fieldset>
+										<legend>Masks and baseline</legend>
+										<label>
+											<span class="label-with-help">
+												Area mask file
+												<InfoTip
+													text="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
+												/>
+											</span>
+											<input
+												placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
+												value={sharedAdvancedParams.nc_mask ?? ''}
+												oninput={(e) =>
+													setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
+											/>
+											<small>Default: {defaultValue(parameterDefaults?.nc_mask, 'No mask')}</small>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Onset threshold file
+												<InfoTip
+													text="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
+												/>
+											</span>
+											<input
+												placeholder={defaultValue(
+													parameterDefaults?.thresh_file,
+													'Dataset default'
+												)}
+												value={sharedAdvancedParams.thresh_file ?? ''}
+												oninput={(e) =>
+													setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(
+													parameterDefaults?.thresh_file,
+													'Dataset default'
+												)}</small
+											>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Baseline forecast
+												<InfoTip
+													text="Reference forecast used for skill comparisons; climatology is the standard baseline."
+												/>
+											</span>
+											<input
+												value={sharedAdvancedParams.ref_model ?? ''}
+												placeholder={defaultValue(parameterDefaults?.ref_model, 'climatology')}
+												oninput={(e) =>
+													setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(parameterDefaults?.ref_model, 'climatology')}</small
+											>
+										</label>
+										<label>
+											<span class="label-with-help">
+												Baseline data path
+												<InfoTip
+													text="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
+												/>
+											</span>
+											<input
+												placeholder={defaultValue(
+													parameterDefaults?.ref_model_dir,
+													'Ground truth path'
+												)}
+												value={sharedAdvancedParams.ref_model_dir ?? ''}
+												oninput={(e) =>
+													setSharedParam('ref_model_dir', (e.target as HTMLInputElement).value)}
+											/>
+											<small
+												>Default: {defaultValue(
+													parameterDefaults?.ref_model_dir,
+													'Ground truth path'
+												)}</small
+											>
+										</label>
+									</fieldset>
 								</div>
-							</div>
-
-							<div class="settings-columns">
-								<fieldset>
-									<legend>Event detection</legend>
-									<label>
-										<span class="label-with-help">
-											Wet-day threshold
-											<InfoTip
-												text="Rainfall amount used to classify a day as wet when detecting onset behavior."
-											/>
-										</span>
-										<input
-											type="number"
-											step="any"
-											placeholder={defaultValue(parameterDefaults?.wet_threshold)}
-											value={sharedAdvancedParams.wet_threshold ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_threshold', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_threshold)} mm</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Minimum wet-day rainfall
-											<InfoTip
-												text="Minimum daily rainfall counted toward a wet spell during onset detection."
-											/>
-										</span>
-										<input
-											type="number"
-											step="any"
-											placeholder={defaultValue(parameterDefaults?.wet_init)}
-											value={sharedAdvancedParams.wet_init ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_init)} mm</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Wet spell length
-											<InfoTip
-												text="Number of consecutive wet days required before a wet spell can support onset."
-											/>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.wet_spell)}
-											value={sharedAdvancedParams.wet_spell ?? ''}
-											oninput={(e) =>
-												setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.wet_spell)} days</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Dry spell limit
-											<InfoTip
-												text="Consecutive dry days used to reject false onsets after an initial wet period."
-											/>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.dry_spell)}
-											value={sharedAdvancedParams.dry_spell ?? ''}
-											oninput={(e) =>
-												setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.dry_spell)} days</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Dry spell search extension
-											<InfoTip
-												text="Extra days searched for dry spells after candidate onset; larger values make onset validation stricter."
-											/>
-										</span>
-										<input
-											type="number"
-											placeholder={defaultValue(parameterDefaults?.dry_extent)}
-											value={sharedAdvancedParams.dry_extent ?? ''}
-											oninput={(e) =>
-												setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.dry_extent)} days</small>
-									</label>
-								</fieldset>
-
-								<fieldset>
-									<legend>Masks and baseline</legend>
-									<label>
-										<span class="label-with-help">
-											Area mask file
-											<InfoTip
-												text="Optional NetCDF mask limiting which grid cells contribute to benchmark metrics."
-											/>
-										</span>
-										<input
-											placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
-											value={sharedAdvancedParams.nc_mask ?? ''}
-											oninput={(e) =>
-												setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
-										/>
-										<small>Default: {defaultValue(parameterDefaults?.nc_mask, 'No mask')}</small>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Onset threshold file
-											<InfoTip
-												text="Optional threshold file for onset detection; leave empty to use the standard dataset-derived thresholds."
-											/>
-										</span>
-										<input
-											placeholder={defaultValue(parameterDefaults?.thresh_file, 'Dataset default')}
-											value={sharedAdvancedParams.thresh_file ?? ''}
-											oninput={(e) =>
-												setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(
-												parameterDefaults?.thresh_file,
-												'Dataset default'
-											)}</small
-										>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Baseline forecast
-											<InfoTip
-												text="Reference forecast used for skill comparisons; climatology is the standard baseline."
-											/>
-										</span>
-										<input
-											value={sharedAdvancedParams.ref_model ?? ''}
-											placeholder={defaultValue(parameterDefaults?.ref_model, 'climatology')}
-											oninput={(e) =>
-												setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(parameterDefaults?.ref_model, 'climatology')}</small
-										>
-									</label>
-									<label>
-										<span class="label-with-help">
-											Baseline data path
-											<InfoTip
-												text="Optional path for baseline forecast files; leave empty to use the benchmark ground-truth data path."
-											/>
-										</span>
-										<input
-											placeholder={defaultValue(
-												parameterDefaults?.ref_model_dir,
-												'Ground truth path'
-											)}
-											value={sharedAdvancedParams.ref_model_dir ?? ''}
-											oninput={(e) =>
-												setSharedParam('ref_model_dir', (e.target as HTMLInputElement).value)}
-										/>
-										<small
-											>Default: {defaultValue(
-												parameterDefaults?.ref_model_dir,
-												'Ground truth path'
-											)}</small
-										>
-									</label>
-								</fieldset>
-							</div>
+							</details>
 						</div>
 					</section>
 				</div>
@@ -618,6 +672,52 @@
 	.section-heading strong {
 		color: var(--color-text-muted);
 		white-space: nowrap;
+	}
+
+	.section-badge {
+		margin-left: 0.4rem;
+		vertical-align: middle;
+		border: 1px solid var(--color-border);
+		border-radius: 999rem;
+		background: var(--color-bg);
+		color: var(--color-text-muted);
+		padding: 0.12rem 0.5rem;
+		font-size: 0.66rem;
+		font-weight: 750;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.section-badge.required {
+		border-color: var(--color-accent-border);
+		background: var(--color-accent-light);
+		color: var(--color-accent);
+	}
+
+	.section-details summary {
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.section-details summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.section-details summary:hover h3 {
+		color: var(--color-accent);
+	}
+
+	.chevron::after {
+		content: '▸';
+	}
+
+	.section-details[open] .chevron::after {
+		content: '▾';
+	}
+
+	.details-body {
+		margin-top: 0.9rem;
 	}
 
 	.model-table {

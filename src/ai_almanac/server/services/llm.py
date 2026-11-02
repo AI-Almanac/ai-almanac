@@ -14,13 +14,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from asyncio import Lock, Semaphore
+from asyncio import Lock, Semaphore, to_thread
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
+import httpx
 from pydantic import Field
 from pydantic_ai import (
     Agent,
@@ -54,7 +55,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
 
-from . import chat_tools, rulesets
+from . import chat_tools, local_llm, rulesets
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_state import (
@@ -175,7 +176,14 @@ def _build_model() -> OpenAIChatModel | str:
 
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    return _openai_compatible_model(settings.llm_model, settings.llm_base_url, settings.llm_api_key)
+    http_client = None
+    if settings.llm_engine == "managed":
+        from ai_almanac.server.services import local_llm
+
+        http_client = local_llm.async_http_client(settings.llm_timeout_seconds)
+    return _openai_compatible_model(
+        settings.llm_model, settings.llm_base_url, settings.llm_api_key, http_client=http_client
+    )
 
 
 # OpenRouter only returns reasoning when asked. Claude Sonnet 5.5 writes its
@@ -190,7 +198,12 @@ def _is_openrouter(base_url: str) -> bool:
     return host == "openrouter.ai" or host.endswith(".openrouter.ai")
 
 
-def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None):
+def _openai_compatible_model(
+    model_name: str,
+    base_url: str,
+    api_key: str | None,
+    http_client: httpx.AsyncClient | None = None,
+):
     """Build a chat-completions model, using OpenRouter's dialect when the URL is OpenRouter's.
 
     The OpenRouter model streams reasoning and replays its `reasoning_details`
@@ -198,7 +211,12 @@ def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None
     """
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=settings.llm_timeout_seconds)
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=settings.llm_timeout_seconds,
+        http_client=http_client,
+    )
     if _is_openrouter(base_url):
         return OpenRouterModel(
             model_name,
@@ -727,6 +745,12 @@ async def stream_response(
     comparison_id: str | None = None,
     turn_id: str | None = None,
 ) -> AsyncIterator[str]:
+    if local_llm.is_managed():
+        # Raises AssistantUnavailable while a forecast holds the GPU. A wake
+        # reloads the weights (tens of seconds), so say so before blocking on it.
+        if await to_thread(local_llm.needs_wake):
+            yield json.dumps({"type": "assistant_status", "status": "waking"})
+        await to_thread(local_llm.ensure_awake)
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None

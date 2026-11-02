@@ -1,15 +1,34 @@
 <script lang="ts">
 	import InfoTip from '$lib/components/InfoTip.svelte';
-	import type { ModelConfig } from '$lib/api';
+	import type { GuardrailThresholds, ModelConfig } from '$lib/api';
 
 	interface Props {
 		modelId: string;
 		cfg: ModelConfig | undefined;
 		getOverride: <T>(modelId: string, key: string, fallback: T) => T;
 		setOverride: (modelId: string, key: string, value: string | boolean | number) => void;
+		guardrails: GuardrailThresholds | null;
 	}
 
-	const { modelId, cfg, getOverride, setOverride }: Props = $props();
+	const { modelId, cfg, getOverride, setOverride, guardrails }: Props = $props();
+
+	function yearOf(date: string): number | null {
+		const year = Number(date.slice(0, 4));
+		return Number.isInteger(year) && year > 0 ? year : null;
+	}
+
+	const startYear = $derived(yearOf(getOverride(modelId, 'start_date', cfg?.start_date ?? '')));
+	const endYear = $derived(yearOf(getOverride(modelId, 'end_date', cfg?.end_date ?? '')));
+	const seasons = $derived(
+		startYear !== null && endYear !== null && endYear >= startYear ? endYear - startYear + 1 : null
+	);
+	// Advisory only: the server applies the same thresholds at submit time.
+	const smallSample = $derived(
+		guardrails !== null && seasons !== null && seasons < guardrails.small_sample_years
+	);
+	const presatellite = $derived(
+		guardrails !== null && startYear !== null && startYear <= guardrails.presatellite_end_year
+	);
 </script>
 
 <fieldset class="nested-fieldset">
@@ -122,6 +141,19 @@
 			</label>
 		{/if}
 	</div>
+	{#if seasons !== null}
+		<p class="season-note" class:warn={smallSample || presatellite}>
+			Scores {seasons} onset season{seasons === 1 ? '' : 's'}.
+			{#if smallSample}
+				Under {guardrails?.small_sample_years} seasons the scores are noisy — differences between models
+				may not be real.
+			{/if}
+			{#if presatellite}
+				Includes pre-satellite years (up to {guardrails?.presatellite_end_year}), where AI-model
+				skill is understated.
+			{/if}
+		</p>
+	{/if}
 </fieldset>
 
 <style>
@@ -160,6 +192,16 @@
 		flex-wrap: wrap;
 		gap: 0.75rem;
 		align-items: flex-end;
+	}
+
+	.season-note {
+		margin: 0.6rem 0 0;
+		font-size: 0.78rem;
+		color: var(--color-text-muted);
+	}
+
+	.season-note.warn {
+		color: var(--color-status-running);
 	}
 
 	label {

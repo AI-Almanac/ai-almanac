@@ -60,21 +60,37 @@ It is in early development, so releases are published as pre-releases
 ### Workload environments
 
 Benchmarks, blends, and forecasts each need a scientific Python stack that is
-kept apart from the app. [Pixi](https://pixi.sh) installs and manages them:
+kept apart from the app. [Pixi](https://pixi.sh) installs and manages them, and
+first-run setup takes care of both:
 
 ```bash
-curl -fsSL https://pixi.sh/install.sh | bash   # one-time
-ai-almanac env prepare                         # a few minutes the first time
+ai-almanac init
 ```
 
-| Workflow   | Runs on                                                              |
-| ---------- | -------------------------------------------------------------------- |
-| Benchmarks | Linux or Apple Silicon macOS, CPU only                               |
-| Blends     | Linux or Apple Silicon macOS, CPU only                               |
-| Forecasts  | Linux with an NVIDIA GPU (CUDA); model weights download on first run |
+This walks through first-run configuration (storage, LLM endpoint) and
+installs the workload environments — downloading pixi itself if it isn't on
+your PATH. Expect the first install to take a few minutes; `--yes` runs it
+headless.
 
-On macOS, `env prepare` skips the forecast environment. Re-run it after
-upgrading AI Almanac to pick up new pinned versions.
+On a Linux machine with an NVIDIA GPU, `init` can also run the assistant's
+model locally with a bundled vLLM. Its weights are a large download (about
+22 GB for the default model), so `--yes` skips it unless you add `--local-llm`:
+
+```bash
+ai-almanac init --yes --local-llm
+```
+
+| Workflow   | Runs on                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| Benchmarks | Linux or Apple Silicon macOS, CPU only                                                                           |
+| Blends     | Linux or Apple Silicon macOS, CPU only                                                                           |
+| Forecasts  | Linux with an NVIDIA GPU, a CUDA 13 driver, and glibc 2.34+ (Ubuntu 22.04+); model weights download on first run |
+
+The forecast environments are included by default when an NVIDIA GPU is
+detected (`--include-forecast` forces them); on macOS they are skipped.
+Subsequent `ai-almanac serve` runs reuse the environments. Run
+`ai-almanac env prepare` after upgrading AI Almanac to pick up new pinned
+versions.
 
 ---
 
@@ -115,9 +131,11 @@ Without an LLM, every workflow still works through manual configuration.
 ## Usage
 
 ```bash
+ai-almanac init                  # first-run setup: config + environments
 ai-almanac serve                 # 127.0.0.1:8765, opens a browser tab
 ai-almanac serve --port 9000     # alternate port
 ai-almanac serve --no-open       # don't open a browser tab
+ai-almanac serve --reload        # dev mode (uvicorn auto-reload)
 ai-almanac env prepare           # install or update workload environments
 ai-almanac env info              # show benchmark package versions
 ai-almanac db upgrade            # apply database migrations (serve does this too)

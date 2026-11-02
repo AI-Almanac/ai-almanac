@@ -128,18 +128,18 @@ export function benchmarkSetupSteps(openManualConfig: () => void): DriveStep[] {
 		{
 			element: '[data-tour="config-windows"]',
 			popover: {
-				title: 'Model run windows',
+				title: 'Which years count',
 				description:
-					'Per-model forecast lengths and initialization days. The defaults are fine to start with.',
+					'Which years each model is scored on, plus its forecast length and initialization days. Click the heading to change them; the defaults are fine to start with.',
 				side: 'bottom'
 			}
 		},
 		{
 			element: '[data-tour="config-shared"]',
 			popover: {
-				title: 'Shared settings',
+				title: 'How onset is detected',
 				description:
-					'How onset is detected (wet thresholds and spell lengths) and the climatology baseline. Defaults follow the standard definition; change them when you know you need to.',
+					'Wet thresholds, spell lengths, and the climatology baseline. Click the heading to change them; the defaults follow the standard definition.',
 				side: 'top'
 			}
 		}

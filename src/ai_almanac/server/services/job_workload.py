@@ -121,6 +121,19 @@ def _run_forecast(job_id: str, config: dict) -> None:
     staging_dir = output_dir.parent / "season-staging"
     entrypoint = Path(__file__).parents[2] / "envs" / "forecast_entrypoint.py"
     process_env = os.environ.copy()
+    # forecast_entrypoint imports ai_almanac (settings, forecast_pipeline,
+    # blend_entrypoint), but the forecast envs don't install the package —
+    # expose this checkout/site-packages copy to the subprocess.
+    package_root = str(Path(__file__).parents[3])
+    process_env["PYTHONPATH"] = (
+        f"{package_root}{os.pathsep}{process_env['PYTHONPATH']}"
+        if process_env.get("PYTHONPATH")
+        else package_root
+    )
+    # Let the caching allocator return freed blocks instead of fragmenting;
+    # on unified-memory hosts the chat model wakes into what is left over.
+    # Matches the Modal inference images (modal/forecasts_app.py).
+    process_env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     print(f"==> Forecast config: {config_path}", flush=True)
 
@@ -150,7 +163,7 @@ def _run_forecast(job_id: str, config: dict) -> None:
     # Scoring runs once, in the blending env — it only needs blending's stack,
     # which conflicts with earth2studio's pins and so can't live in a forecast env.
     print("==> Scoring against trained blend...", flush=True)
-    score_env = os.environ.copy()
+    score_env = process_env.copy()
     score_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
     process = blending_pixi_run(
         [

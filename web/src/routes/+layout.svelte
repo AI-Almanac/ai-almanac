@@ -6,7 +6,7 @@
 	import ViewAsUserBanner from '$lib/components/ViewAsUserBanner.svelte';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import { browser } from '$app/environment';
-	import { afterNavigate } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { isAnonRoute } from '$lib/anon-routes';
 	import { account } from '$lib/account.svelte';
@@ -29,17 +29,30 @@
 		});
 	});
 
-	if (browser && !isCallback) {
-		account.load();
+	if (browser) {
+		const path = window.location.pathname;
+		const setupRequired = window.__ALMANAC_CONFIG__?.setupRequired;
+		if (setupRequired && !path.startsWith('/setup')) {
+			// Setup is required — redirect to wizard; skip nav/footer/account load
+			goto('/setup');
+		} else if (!isCallback && !path.startsWith('/setup')) {
+			account.load();
+		}
 	}
+
+	const isSetupPage = $derived($page.url.pathname.startsWith('/setup'));
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-<ViewAsUserBanner />
-<Nav />
-{#if browser && USE_BEARER_AUTH && !isCallback && !$isAuthenticated && !isAnonRoute($page.url.pathname)}
+{#if !isSetupPage}
+	<ViewAsUserBanner />
+	<Nav />
+{/if}
+{#if browser && USE_BEARER_AUTH && !isCallback && !isSetupPage && !$isAuthenticated && !isAnonRoute($page.url.pathname)}
 	<LoginPrompt />
 {:else}
 	{@render children()}
 {/if}
-<Footer />
+{#if !isSetupPage}
+	<Footer />
+{/if}

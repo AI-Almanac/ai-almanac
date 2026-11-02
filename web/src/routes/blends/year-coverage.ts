@@ -140,9 +140,16 @@ export function memberCountWarning(modelCount: number): string | null {
 	);
 }
 
-// Validate user-entered specs against coverage. Returns an error message or null.
+function span(years: number[]): string {
+	const lo = years[0];
+	const hi = years[years.length - 1];
+	return lo === hi ? `${lo}` : `${lo}–${hi}`;
+}
+
+// Validate user-entered specs against coverage (when known) and against each
+// other. Returns an error message or null.
 export function yearSpecError(
-	cov: Coverage,
+	cov: Coverage | null,
 	training: string,
 	cvHoldout: string,
 	forecast: string,
@@ -154,6 +161,23 @@ export function yearSpecError(
 	const leaked = trueHold.filter((y) => train.includes(y) || cv.includes(y));
 	if (leaked.length)
 		return `True holdout years must stay out of training and cross-validation — remove ${leaked.join(', ')} from one or the other.`;
+	// The blend trains and validates only on years with staged forecast data, so
+	// every split year must be inside an explicit forecast-years spec. Mirrors
+	// the server's blend_split_errors.
+	if (explicit.length) {
+		const staged = new Set(explicit);
+		const splits: [string, number[]][] = [
+			['Training', train],
+			['CV holdout', cv],
+			['True holdout', trueHold]
+		];
+		for (const [label, years] of splits) {
+			const missing = years.filter((y) => !staged.has(y));
+			if (missing.length)
+				return `${label} years ${span(missing)} have no forecast data — forecast years cover ${span(explicit)}.`;
+		}
+	}
+	if (cov === null) return null;
 	const forecastYears = explicit.length ? explicit : [...train, ...cv, ...trueHold];
 	if (forecastYears.length === 0) return null;
 	const min = Math.min(...forecastYears);
