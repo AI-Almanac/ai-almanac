@@ -239,6 +239,18 @@ class Settings(BaseSettings):
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
+    # Optional bearer-token gate for personal installs exposed on a shared host
+    # (e.g. a dev server others can reach). When set, every request must present
+    # the token as `?token=`, a cookie, or `Authorization: Bearer`. Deliberately
+    # excluded from _FIELD_GROUPS so it never reaches the settings UI schema.
+    serve_access_token: str = ""
+
+    # Whether first-run setup has been completed. Set via the web wizard or
+    # `ai-almanac init`. Never a settings-UI field; grandfathered to True on
+    # existing installs (see server.services.setup.grandfather_existing_install).
+    # SETUP_COMPLETE=1 env var wins (used by conftest.py and cloud deploys).
+    setup_complete: bool = False
+
     # Shared-host quotas.
     max_active_jobs_per_user: int = 10
     max_concurrent_llm_requests_per_user: int = 2
@@ -336,6 +348,7 @@ SENSITIVE_FIELDS: frozenset[str] = frozenset(
         "database_url",
         "db_password",
         "globus_client_secret",
+        "serve_access_token",
     }
 )
 
@@ -373,6 +386,16 @@ SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
         "enable_run_code_sandbox",
     }
 )
+
+
+def _load_secrets_file() -> dict:
+    """Load the auto-generated secrets.env layer; swallow all errors."""
+    try:
+        from ai_almanac.secrets_bootstrap import load_secrets_file
+
+        return load_secrets_file()
+    except Exception:
+        return {}
 
 
 def _load_config_yaml() -> dict:
@@ -487,9 +510,11 @@ def reload_settings() -> Settings:
     env/defaults.
     """
     fresh = Settings()  # defaults + env (no overlay)
+    secrets_overlay = _load_secrets_file()  # auto-generated secrets; below config.yaml
     yaml_overlay = _load_config_yaml()
     db_overlay = _load_db_overlay()
-    _apply_overlay(fresh, yaml_overlay)  # config.yaml seed; env beats it
+    _apply_overlay(fresh, secrets_overlay)  # secrets.env (lowest user-writable layer)
+    _apply_overlay(fresh, yaml_overlay)  # config.yaml seed (beats secrets.env); env beats it
     _apply_overlay(fresh, db_overlay, env_wins=False)  # admin UI edits beat env
     _apply_legacy_audience_flags(fresh, yaml_overlay, db_overlay)
     for name in type(fresh).model_fields:

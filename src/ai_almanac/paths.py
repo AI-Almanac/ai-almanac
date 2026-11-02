@@ -44,16 +44,34 @@ def bin_dir() -> Path:
     return data_root() / "bin"
 
 
+def secrets_env_path() -> Path:
+    return data_root() / "secrets.env"
+
+
+def env_root() -> Path:
+    """Shared pixi environment root, honoring `$AI_ALMANAC_ENV_ROOT` if set.
+
+    When multiple per-user ai-almanac instances share a host they can point at
+    separate data dirs (separate DBs, uploads, job outputs) but share a single
+    expensive pixi environment tree by setting AI_ALMANAC_ENV_ROOT to a common
+    path. Defaults to data_root() so single-instance installs are unchanged.
+    """
+    override = os.environ.get("AI_ALMANAC_ENV_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return data_root()
+
+
 def benchmark_env_dir() -> Path:
-    return data_root() / "benchmark-env"
+    return env_root() / "benchmark-env"
 
 
 def blending_env_dir() -> Path:
-    return data_root() / "blending-env"
+    return env_root() / "blending-env"
 
 
 def forecast_env_dir() -> Path:
-    return data_root() / "forecast-env"
+    return env_root() / "forecast-env"
 
 
 def cache_dir() -> Path:

@@ -32,6 +32,9 @@ os.environ["OUTPUT_DIR"] = ""
 os.environ["RUNNER_MODE"] = "stub"
 # Chat routers refuse to operate without an LLM URL; tests mock the client.
 os.environ["LLM_BASE_URL"] = "http://test-llm.local"
+# Disable the setup gate for the entire test suite. Setup-specific tests
+# monkeypatch.delenv this and set settings.setup_complete = False explicitly.
+os.environ["SETUP_COMPLETE"] = "1"
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
