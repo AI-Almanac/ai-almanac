@@ -257,7 +257,7 @@ def test_llm_managed_saves_without_probing(
         reload_settings()
         assert settings.llm_engine == "managed"
         assert settings.llm_model == "org/some-model"
-        assert settings.llm_base_url == f"http://127.0.0.1:{settings.llm_port}/v1"
+        assert settings.llm_base_url == "http://localhost/v1"
         assert "llm" in client.get("/api/setup/state", headers=authed).json()["envs"]
     finally:
         write_settings_overlay({"llm_engine": None, "llm_model": None})

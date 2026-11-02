@@ -95,7 +95,6 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Model server",
                 "'managed' runs the bundled vLLM on this machine; 'external' uses the URL above",
             ),
-            ("llm_port", "Local model port", "Loopback port for the managed vLLM server"),
             (
                 "llm_gpu_memory_utilization",
                 "Local model memory share",

@@ -89,7 +89,7 @@ def managed(monkeypatch: pytest.MonkeyPatch):
             local_llm,
             "_client",
             lambda timeout=5.0: httpx.Client(
-                base_url="http://127.0.0.1:8766", transport=transport, timeout=timeout
+                base_url="http://localhost", transport=transport, timeout=timeout
             ),
         )
         return fake
@@ -227,15 +227,28 @@ def test_idle_sleep_waits_for_timeout(managed, monkeypatch) -> None:
     assert fake.sleeping
 
 
-def test_serve_args_bind_loopback_and_reject_host_overrides(monkeypatch) -> None:
+def test_serve_args_listen_only_on_the_private_socket(monkeypatch) -> None:
     monkeypatch.setattr(settings, "llm_serve_args", "--max-model-len 4096")
     args = local_llm.serve_args()
-    assert args[args.index("--host") + 1] == "127.0.0.1"
+    assert args[args.index("--uds") + 1] == str(local_llm.socket_path())
+    assert "--host" not in args and "--port" not in args
     assert "--enable-sleep-mode" in args
 
-    monkeypatch.setattr(settings, "llm_serve_args", "--host=0.0.0.0")
-    with pytest.raises(ValueError, match="--host"):
-        local_llm.serve_args()
+    for override in ("--host=0.0.0.0", "--port 8000", "--uds /tmp/llm.sock"):
+        monkeypatch.setattr(settings, "llm_serve_args", override)
+        with pytest.raises(ValueError, match=override.split("=")[0].split()[0]):
+            local_llm.serve_args()
+
+
+def test_socket_directory_is_owner_only(monkeypatch) -> None:
+    local_llm.socket_path().parent.mkdir(parents=True, exist_ok=True)
+    local_llm.socket_path().parent.chmod(0o755)
+    local_llm.socket_path().write_text("stale")
+
+    local_llm._prepare_socket_dir()
+
+    assert local_llm.socket_path().parent.stat().st_mode & 0o777 == 0o700
+    assert not local_llm.socket_path().exists()
 
 
 def test_serve_args_follow_the_catalog_model(monkeypatch) -> None:
@@ -302,10 +315,9 @@ def test_llm_model_cached_needs_every_shard(monkeypatch, tmp_path) -> None:
 
 def test_managed_engine_derives_base_url(monkeypatch) -> None:
     monkeypatch.setenv("LLM_ENGINE", "managed")
-    monkeypatch.setenv("LLM_PORT", "9123")
     try:
         reload_settings()
-        assert settings.llm_base_url == "http://127.0.0.1:9123/v1"
+        assert settings.llm_base_url == "http://localhost/v1"
         # The hosted-provider default model is not something vLLM can serve.
         assert settings.llm_model == DEFAULT_LOCAL_LLM_MODEL
 

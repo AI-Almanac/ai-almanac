@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
+import httpx
 from pydantic import Field
 from pydantic_ai import (
     Agent,
@@ -175,7 +176,14 @@ def _build_model() -> OpenAIChatModel | str:
 
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    return _openai_compatible_model(settings.llm_model, settings.llm_base_url, settings.llm_api_key)
+    http_client = None
+    if settings.llm_engine == "managed":
+        from ai_almanac.server.services import local_llm
+
+        http_client = local_llm.async_http_client(settings.llm_timeout_seconds)
+    return _openai_compatible_model(
+        settings.llm_model, settings.llm_base_url, settings.llm_api_key, http_client=http_client
+    )
 
 
 # OpenRouter only returns reasoning when asked. Claude Sonnet 5.5 writes its
@@ -190,7 +198,12 @@ def _is_openrouter(base_url: str) -> bool:
     return host == "openrouter.ai" or host.endswith(".openrouter.ai")
 
 
-def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None):
+def _openai_compatible_model(
+    model_name: str,
+    base_url: str,
+    api_key: str | None,
+    http_client: httpx.AsyncClient | None = None,
+):
     """Build a chat-completions model, using OpenRouter's dialect when the URL is OpenRouter's.
 
     The OpenRouter model streams reasoning and replays its `reasoning_details`
@@ -198,7 +211,12 @@ def _openai_compatible_model(model_name: str, base_url: str, api_key: str | None
     """
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=settings.llm_timeout_seconds)
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=settings.llm_timeout_seconds,
+        http_client=http_client,
+    )
     if _is_openrouter(base_url):
         return OpenRouterModel(
             model_name,

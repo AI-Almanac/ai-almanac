@@ -189,7 +189,7 @@ def test_headless_yes_prepares_envs_by_default(mock_gpu, mock_platform, tmp_path
     assert mock_download.call_args.args[0] == DEFAULT_LOCAL_LLM_MODEL
     reload_settings()
     assert settings.llm_engine == "managed"
-    assert settings.llm_base_url == f"http://127.0.0.1:{settings.llm_port}/v1"
+    assert settings.llm_base_url == "http://localhost/v1"
 
 
 @patch("ai_almanac.server.services.setup.probe_gpu")

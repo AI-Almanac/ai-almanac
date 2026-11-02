@@ -15,7 +15,9 @@ supervisor-triggered sleep. All functions here are synchronous and block;
 call them via `asyncio.to_thread` from async code.
 
 vLLM's sleep/wake endpoints need VLLM_SERVER_DEV_MODE and are unauthenticated
-(its --api-key only guards /v1), so the server only ever binds to loopback.
+(its --api-key only guards /v1), so the server listens on a Unix socket in a
+directory only this account can open, never on TCP: a loopback port would be
+reachable from other local users and from any web page in a local browser.
 """
 
 from __future__ import annotations
@@ -50,7 +52,9 @@ LOADING_MESSAGE = "The assistant is starting up. Try again in a few minutes."
 
 # Forecast jobs this far into their lifecycle may be holding GPU memory.
 _GPU_JOB_STATUSES = ("starting", "running", "canceling")
-_FORBIDDEN_SERVE_FLAGS = ("--host", "--port")
+_FORBIDDEN_SERVE_FLAGS = ("--host", "--port", "--uds")
+# Requests travel over the socket, so the host part of the URL is never resolved.
+_VLLM_URL = "http://localhost"
 # Flags for a model outside local_llm_models.yaml when llm_serve_args is blank:
 # the Spark startup tuning only. Without a tool-call parser the assistant's
 # tools fail, so a custom model needs its parser set in llm_serve_args.
@@ -108,12 +112,27 @@ def _lock():
     )
 
 
-def _base_url() -> str:
-    return f"http://127.0.0.1:{settings.llm_port}"
+def socket_path() -> Path:
+    return data_root() / "run" / "llm.sock"
+
+
+def _prepare_socket_dir() -> None:
+    """Create the socket's directory as owner-only and clear a stale socket."""
+    run_dir = socket_path().parent
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    run_dir.chmod(0o700)
+    socket_path().unlink(missing_ok=True)
 
 
 def _client(timeout: float = 5.0) -> httpx.Client:
-    return httpx.Client(base_url=_base_url(), timeout=timeout)
+    transport = httpx.HTTPTransport(uds=str(socket_path()))
+    return httpx.Client(base_url=_VLLM_URL, transport=transport, timeout=timeout)
+
+
+def async_http_client(timeout: float) -> httpx.AsyncClient:
+    """An HTTP client for the chat assistant's OpenAI client to reach the socket."""
+    transport = httpx.AsyncHTTPTransport(uds=str(socket_path()))
+    return httpx.AsyncClient(transport=transport, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -220,17 +239,15 @@ def serve_args() -> list[str]:
         name = flag.split("=", 1)[0]
         if name in _FORBIDDEN_SERVE_FLAGS:
             raise ValueError(
-                f"llm_serve_args must not set {name}: the local model server binds "
-                "to loopback on llm_port"
+                f"llm_serve_args must not set {name}: the local model server listens "
+                "only on its private socket in the data dir"
             )
     return [
         "vllm",
         "serve",
         settings.llm_model,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(settings.llm_port),
+        "--uds",
+        str(socket_path()),
         "--enable-sleep-mode",
         "--gpu-memory-utilization",
         str(gpu_memory_utilization()),
@@ -304,6 +321,7 @@ def _start_locked(identity: dict | None = None) -> None:
     from ai_almanac.envs.manager import run_llm_server
 
     identity = identity or _launch_identity()
+    _prepare_socket_dir()
     env = {**os.environ, "VLLM_SERVER_DEV_MODE": "1"}
     _proc = run_llm_server(identity["args"], env=env, log_path=log_path())
     pid_path().write_text(json.dumps({"pid": _proc.pid, **identity}))

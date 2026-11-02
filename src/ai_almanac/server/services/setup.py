@@ -314,8 +314,8 @@ def save_llm(
     engine: Literal["external", "managed"] = "external",
 ) -> None:
     """Persist the assistant's model server. `managed` runs vLLM on this
-    machine serving `model` (a Hugging Face id); its URL is derived from
-    llm_port, so any stored base URL is cleared."""
+    machine serving `model` (a Hugging Face id) over a Unix socket, so any
+    stored base URL is cleared."""
     from ai_almanac.settings import reload_settings, write_settings_overlay
 
     updates: dict = {
