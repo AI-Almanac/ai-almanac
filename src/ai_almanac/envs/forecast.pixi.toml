@@ -27,18 +27,43 @@ channels = ["conda-forge"]
 # needs a Linux GPU host (see the `self-host-local-gpu` deployment profile).
 platforms = ["linux-64", "linux-aarch64"]
 
+# onnxruntime-gpu (fuxi extra) ships its only aarch64 wheel as
+# manylinux_2_34; without this floor pixi assumes an older glibc and the
+# pypi solve finds no compatible wheel. Requires hosts with glibc >= 2.34
+# (Ubuntu 22.04+).
+[system-requirements]
+libc = { family = "glibc", version = "2.34" }
+# Without an explicit cuda requirement pixi hides the __cuda virtual
+# package from the solver and conda-forge resolves CPU-only pytorch.
+# Requires a CUDA 13 driver on forecast hosts; keeps the solved pytorch,
+# cuda-nvcc, and flash-attn build all on the same CUDA major.
+cuda = "13"
+
 # Shared conda base — the PyTorch/CUDA + netCDF stack every environment needs. Only
 # the earth2studio extras (with their conflicting anemoi pins) differ per group.
 [dependencies]
 python = "3.11.*"
 pip = "*"
 pytorch = "*"
+# Prebuilt from conda-forge so the pypi solve never compiles the flash-attn
+# sdist (a 30+ minute CUDA build needing an in-env toolchain). Satisfies the
+# `flash-attn` requirement of every earth2studio AIFS extra — pixi maps the
+# conda package onto the pypi requirement — and is ABI-matched to conda-forge
+# pytorch, unlike upstream's release wheels (pypi-torch-only, no py311 aarch64).
+flash-attn = "*"
 netcdf4 = "<1.7.3"
 h5netcdf = "*"
-xarray = "*"
+# earth2studio's gencast/graphcast extras cap xarray<2026.4.0
+# (google-deepmind/graphcast#213); an uncapped conda solve picks a newer
+# xarray and makes the pypi solve unsatisfiable.
+xarray = "<2026.4.0"
 zarr = "*"
 numpy = "*"
 pyyaml = "*"
+# forecast_entrypoint imports ai_almanac (paths/settings/forecast_pipeline)
+# via PYTHONPATH; these are that import chain's only non-stdlib deps.
+platformdirs = "*"
+pydantic-settings = "*"
 
 # Pinned to a main SHA rather than a release: 0.17.0 lacks the AIFS2/AIFS2ENS
 # time-forcing fix (earth2studio PR #1009); re-pin to 0.18.0 once it's tagged.
@@ -49,6 +74,22 @@ pyyaml = "*"
 # (anemoi-models 0.5.1, as proven in the 0.14.0 single-env build).
 [feature.base.pypi-dependencies]
 earth2studio = { git = "https://github.com/NVIDIA/earth2studio.git", rev = "96a9bd607013783da8560fbb7a0bb13a00018b66", extras = ["aifs", "aifsens", "data", "fuxi", "gencast", "graphcast"] }
+
+# onnxruntime-gpu (fuxi extra) pin, linux-aarch64 only. earth2studio's uv
+# source maps onnxruntime-gpu to the ort-cuda-13-nightly feed, whose current
+# builds (1.25.0.dev–1.28.0.dev and the 1.26.0 release) ship no GB10 (sm_121)
+# SASS — only sm_120a, which is arch-exact and won't run on sm_121 — plus PTX
+# compiled by CUDA 13.1 (ISA 9.1), which a CUDA 13.0 driver's JIT rejects with
+# cudaErrorUnsupportedPtxVersion (seen on DGX Spark, driver 580.x). The 1.29.0
+# release on the onnxruntime-cuda-13 feed ships native sm_121a SASS, so it
+# runs without any PTX JIT and works on 13.0 drivers. linux-64 keeps the
+# earth2studio default: the 1.29.0 aarch64 wheel drops sm_75/80/86 SASS and
+# all PTX, and x86 hosts (e.g. A100 = sm_80) still need those. Pinned as a
+# direct wheel URL (PyPI hosts the identical CUDA-13 build as of 1.29) because
+# a version+index pin conflicts with earth2studio's uv source for the package.
+# cp311 matches the python = "3.11.*" pin above.
+[feature.base.target.linux-aarch64.pypi-dependencies]
+onnxruntime-gpu = { url = "https://files.pythonhosted.org/packages/d5/83/07e4e4cef9329fcdbc42035f36f7a9128edd1281264b69054d0bd43a546c/onnxruntime_gpu-1.29.0-cp311-cp311-manylinux_2_34_aarch64.whl" }
 
 # aifs2: AIFS-Single/ENS v2 deterministic (anemoi-models 0.9.3–0.9.5).
 [feature.aifs2.pypi-dependencies]

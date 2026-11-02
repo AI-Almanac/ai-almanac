@@ -12,6 +12,7 @@ declare global {
 			submittedByEnabled?: boolean;
 			version?: string;
 			feedbackEnabled?: boolean;
+			setupRequired?: boolean;
 		};
 	}
 }

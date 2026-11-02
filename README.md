@@ -60,12 +60,17 @@ It is in early development, so releases are published as pre-releases
 ### Workload environments
 
 Benchmarks, blends, and forecasts each need a scientific Python stack that is
-kept apart from the app. [Pixi](https://pixi.sh) installs and manages them:
+kept apart from the app. [Pixi](https://pixi.sh) installs and manages them, and
+first-run setup takes care of both:
 
 ```bash
-curl -fsSL https://pixi.sh/install.sh | bash   # one-time
-ai-almanac env prepare                         # a few minutes the first time
+ai-almanac init
 ```
+
+This walks through first-run configuration (storage, LLM endpoint) and
+installs the workload environments — downloading pixi itself if it isn't on
+your PATH. Expect the first install to take a few minutes; `--yes` runs it
+headless.
 
 | Workflow   | Runs on                                                              |
 | ---------- | -------------------------------------------------------------------- |
@@ -73,16 +78,19 @@ ai-almanac env prepare                         # a few minutes the first time
 | Blends     | Linux or Apple Silicon macOS, CPU only                               |
 | Forecasts  | Linux with an NVIDIA GPU (CUDA); model weights download on first run |
 
-On macOS, `env prepare` skips the forecast environment. Re-run it after
-upgrading AI Almanac to pick up new pinned versions.
+The forecast environments are included by default when an NVIDIA GPU is
+detected (`--include-forecast` forces them); on macOS they are skipped.
+Subsequent `ai-almanac serve` runs reuse the environments. Run
+`ai-almanac env prepare` after upgrading AI Almanac to pick up new pinned
+versions.
 
 ---
 
 ## Getting started
 
 1. **Add data.** Open **Data** and register an observation dataset and one or
-   more model forecast datasets. Each is a pointer to a local directory or a
-   `gs://` prefix of NetCDF files. AI Almanac checks the files and variable
+   more model forecast datasets. Each is a pointer to a local directory of
+   NetCDF files. AI Almanac checks the files and variable
    before saving and never modifies them. A fresh install has no datasets.
 2. **Run a benchmark.** Open **Benchmarks**, describe it to the assistant or
    choose **Manual configuration**, and submit.
@@ -115,9 +123,11 @@ Without an LLM, every workflow still works through manual configuration.
 ## Usage
 
 ```bash
+ai-almanac init                  # first-run setup: config + environments
 ai-almanac serve                 # 127.0.0.1:8765, opens a browser tab
 ai-almanac serve --port 9000     # alternate port
 ai-almanac serve --no-open       # don't open a browser tab
+ai-almanac serve --reload        # dev mode (uvicorn auto-reload)
 ai-almanac env prepare           # install or update workload environments
 ai-almanac env info              # show benchmark package versions
 ai-almanac db upgrade            # apply database migrations (serve does this too)
