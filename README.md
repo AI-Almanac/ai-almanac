@@ -72,6 +72,14 @@ installs the workload environments — downloading pixi itself if it isn't on
 your PATH. Expect the first install to take a few minutes; `--yes` runs it
 headless.
 
+On a Linux machine with an NVIDIA GPU, `init` can also run the assistant's
+model locally with a bundled vLLM. Its weights are a large download (about
+22 GB for the default model), so `--yes` skips it unless you add `--local-llm`:
+
+```bash
+ai-almanac init --yes --local-llm
+```
+
 | Workflow   | Runs on                                                                                                          |
 | ---------- | ---------------------------------------------------------------------------------------------------------------- |
 | Benchmarks | Linux or Apple Silicon macOS, CPU only                                                                           |

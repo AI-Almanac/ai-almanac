@@ -224,6 +224,17 @@ llm_app = typer.Typer(help="Manage the local assistant model server (vLLM).")
 app.add_typer(llm_app, name="llm")
 
 
+def _local_model_download_note(model_id: str) -> str:
+    """How much downloading this model takes, or "" if it is not in the catalog."""
+    from ai_almanac.envs.manager import llm_model_cached
+    from ai_almanac.settings import local_llm_model
+
+    entry = local_llm_model(model_id)
+    if entry is None or llm_model_cached(model_id):
+        return ""
+    return f"downloads about {entry['weights_gb']:.0f} GB"
+
+
 def _local_llm_model_lines() -> list[str]:
     from ai_almanac.envs.manager import llm_model_cached
     from ai_almanac.settings import get_local_llm_models
@@ -419,8 +430,9 @@ def init(
         typer.Option(
             "--local-llm/--no-local-llm",
             help=(
-                "Run the assistant's model on this machine with a bundled vLLM "
-                "(default with --yes: when an NVIDIA GPU is detected on Linux)."
+                "Run the assistant's model on this machine with a bundled vLLM. "
+                "With --yes it is off unless this flag is passed, because the model "
+                "weights are a large download (about 22 GB for the default model)."
             ),
         ),
     ] = None,
@@ -528,11 +540,23 @@ def init(
         if base_url_val:
             local_llm = False
         elif yes:
-            local_llm = can_run_local
+            # The weights are a large download, so headless setup never pulls
+            # them unless --local-llm asks for it.
+            local_llm = False
+            if can_run_local:
+                note = _local_model_download_note(DEFAULT_LOCAL_LLM_MODEL)
+                typer.echo(
+                    "skipping the local assistant model"
+                    + (f" ({note})" if note else "")
+                    + "; re-run with --local-llm to install it, "
+                    "or pass --llm-base-url to use an existing server"
+                )
         else:
+            note = _local_model_download_note(DEFAULT_LOCAL_LLM_MODEL)
             choice = typer.prompt(
-                "Assistant model — [1] run a model on this machine, "
-                "[2] connect to an existing server",
+                "Assistant model — [1] run a model on this machine"
+                + (f" ({note})" if note else "")
+                + ", [2] connect to an existing server",
                 default="1" if can_run_local else "2",
                 type=click.Choice(["1", "2"]),
                 show_choices=False,
@@ -545,7 +569,8 @@ def init(
         # No connection test: the server is installed below and started by
         # `serve`, which reports when it's ready.
         save_llm("", model_val, None, engine="managed")
-        typer.echo(f"assistant will run {model_val} locally")
+        note = _local_model_download_note(model_val)
+        typer.echo(f"assistant will run {model_val} locally" + (f" ({note})" if note else ""))
     else:
         if not base_url_val and not yes:
             base_url_val = typer.prompt("LLM base URL", default="http://localhost:11434/v1")

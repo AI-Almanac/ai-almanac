@@ -183,7 +183,31 @@ def test_headless_yes_prepares_envs_by_default(mock_gpu, mock_platform, tmp_path
     mock_env.assert_called_once()
     _, kwargs = mock_env.call_args
     assert kwargs.get("include_forecast") is True
-    # A GPU on Linux defaults the assistant to the bundled local model.
+    # The local model's weights are a large download, so --yes alone skips them
+    # and says how to opt in.
+    assert kwargs.get("include_llm") is False
+    mock_download.assert_not_called()
+    assert "--local-llm" in result.output
+    reload_settings()
+    assert settings.llm_engine == "external"
+
+
+@patch("ai_almanac.server.services.setup.detect_platform")
+@patch("ai_almanac.server.services.setup.probe_gpu")
+def test_headless_yes_with_local_llm_installs_the_local_model(
+    mock_gpu, mock_platform, tmp_path: Path
+) -> None:
+    mock_gpu.return_value = {"name": "NVIDIA GB10", "memory_total_mb": 128000}
+    mock_platform.return_value = {"platform": "linux-aarch64", "machine": "aarch64"}
+    with (
+        patch("ai_almanac.envs.manager.ensure_env") as mock_env,
+        patch("ai_almanac.envs.manager.llm_env_ready", return_value=True),
+        patch("ai_almanac.envs.manager.download_llm_model") as mock_download,
+    ):
+        mock_env.return_value = (tmp_path / "benchmark", tmp_path / "blending", tmp_path / "fc")
+        result = runner.invoke(app, ["init", "--yes", "--local-llm"])
+    assert result.exit_code == 0, result.output
+    _, kwargs = mock_env.call_args
     assert kwargs.get("include_llm") is True
     mock_download.assert_called_once()
     assert mock_download.call_args.args[0] == DEFAULT_LOCAL_LLM_MODEL
