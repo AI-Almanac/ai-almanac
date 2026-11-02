@@ -266,7 +266,11 @@
 								<summary>
 									<div class="section-heading">
 										<div>
-											<h3>Which years count <span class="section-badge">Defaults applied</span></h3>
+											<h3>
+												Which years count <span class="section-badge"
+													>{form.yearsCustomised ? 'Customised' : 'Defaults applied'}</span
+												>
+											</h3>
 											<p>
 												More evaluation years give more trustworthy scores — but years that overlap
 												a model's training look better than they should, and pre-satellite years
@@ -293,6 +297,7 @@
 													cfg={models.find((model) => model.id === modelId)}
 													{getOverride}
 													{setOverride}
+													guardrails={form.guardrails}
 												/>
 											{/each}
 										</div>
@@ -314,7 +319,9 @@
 									<div class="section-heading">
 										<div>
 											<h3>
-												How onset is detected <span class="section-badge">Defaults applied</span>
+												How onset is detected <span class="section-badge"
+													>{form.onsetCustomised ? 'Customised' : 'Defaults applied'}</span
+												>
 											</h3>
 											<p>
 												These define what counts as a monsoon onset and the baseline skill is

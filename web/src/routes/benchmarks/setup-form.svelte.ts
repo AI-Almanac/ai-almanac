@@ -9,6 +9,7 @@ import {
 	type JobParams,
 	type ModelConfig,
 	type FocusAreaValue,
+	type GuardrailThresholds,
 	type Region,
 	type RompDefaults
 } from '$lib/api';
@@ -39,6 +40,32 @@ function booleanParam(value: unknown): boolean | undefined {
 	return typeof value === 'boolean' ? value : undefined;
 }
 
+// The shared ROMP parameters under "How onset is detected".
+const ONSET_PARAM_KEYS = [
+	'wet_threshold',
+	'wet_init',
+	'wet_spell',
+	'dry_spell',
+	'dry_extent',
+	'nc_mask',
+	'thresh_file',
+	'ref_model',
+	'ref_model_dir'
+] as const;
+
+function hasValue(value: unknown): boolean {
+	return value !== undefined && value !== null && value !== '';
+}
+
+function differsFromDefaults(
+	current: Record<string, unknown>,
+	defaults: Record<string, unknown>
+): boolean {
+	return Object.keys(current).some(
+		(key) => JSON.stringify(current[key]) !== JSON.stringify(defaults[key])
+	);
+}
+
 /**
  * Owns benchmark-setup state for the manual form and the chat-assisted flow.
  * Components read fields and call the action methods; all selection and
@@ -48,6 +75,7 @@ export class BenchmarkSetupForm {
 	regions = $state<Region[]>([]);
 	datasets = $state<Dataset[]>([]);
 	parameterDefaults = $state<RompDefaults | null>(null);
+	guardrails = $state<GuardrailThresholds | null>(null);
 	dataLoaded = $state(false);
 
 	spec = $state<BenchmarkRunSpec | null>(null);
@@ -78,6 +106,14 @@ export class BenchmarkSetupForm {
 	);
 	readonly selectedModels = $derived(
 		this.models.filter((model) => this.selectedModelIds.includes(model.id))
+	);
+	readonly onsetCustomised = $derived(
+		ONSET_PARAM_KEYS.some((key) => hasValue(this.sharedAdvancedParams[key]))
+	);
+	readonly yearsCustomised = $derived(
+		this.selectedModelIds.some((id) =>
+			differsFromDefaults(this.perModelOverrides[id] ?? {}, this.defaultModelOverride(id))
+		)
 	);
 	readonly canRun = $derived(
 		Boolean(

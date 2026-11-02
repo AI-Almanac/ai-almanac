@@ -12,16 +12,14 @@ from __future__ import annotations
 
 import subprocess
 from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
 
 from ai_almanac.envs.pixi_bootstrap import (
     _current_pixi_platform,
     ensure_pixi,
 )
+from ai_almanac.envs.progress import EnvProgressEvent, ProgressCallback
 from ai_almanac.locking import file_lock
 from ai_almanac.paths import benchmark_env_dir, blending_env_dir, env_root, forecast_env_dir
 
@@ -33,19 +31,6 @@ BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 
 _FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
 FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
-
-EventKind = Literal["phase_started", "line", "phase_finished", "phase_skipped", "phase_failed"]
-
-
-@dataclass(frozen=True, slots=True)
-class EnvProgressEvent:
-    kind: EventKind
-    phase: str
-    line: str | None = None
-    detail: str | None = None
-
-
-ProgressCallback = Callable[[EnvProgressEvent], None]
 
 
 def _default_progress(event: EnvProgressEvent) -> None:
