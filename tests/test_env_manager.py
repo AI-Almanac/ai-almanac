@@ -310,3 +310,22 @@ def test_cli_env_prepare_no_longer_requires_path_pixi(
     runner = CliRunner()
     result = runner.invoke(app, ["env", "prepare"])
     assert result.exit_code == 0, result.output
+
+
+def test_refused_pixi_download_raises_actionable_error(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    import httpx
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    def refused(url: str, on_line) -> bytes:
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError(
+            "rate limited", request=request, response=httpx.Response(403, request=request)
+        )
+
+    monkeypatch.setattr(pb, "_download", refused)
+
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        pb.ensure_pixi()

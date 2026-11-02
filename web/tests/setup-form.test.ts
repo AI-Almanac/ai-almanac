@@ -180,4 +180,21 @@ describe('BenchmarkSetupForm', () => {
 		expect(form.yearsCustomised).toBe(true);
 		expect(form.onsetCustomised).toBe(true);
 	});
+
+	it('keeps the years section at its defaults across a dataset switch and a retyped default', async () => {
+		api.getModels.mockResolvedValue([modelConfig()]);
+		const form = setupForm();
+		form.datasets = [
+			dataset(),
+			dataset({ id: 'obs-india-long', obs_year_start: 2000, obs_year_end: 2024 })
+		];
+		form.setDatasetId('obs-india');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+
+		form.setDatasetId('obs-india-long');
+		form.setOverride('fuxi', 'start_year_clim', '2018');
+
+		expect(form.yearsCustomised).toBe(false);
+	});
 });

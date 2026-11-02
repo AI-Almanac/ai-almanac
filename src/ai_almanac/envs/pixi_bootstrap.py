@@ -23,11 +23,13 @@ import platform
 import shutil
 import tarfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 
 from ai_almanac.envs.progress import EnvProgressEvent, ProgressCallback
+from ai_almanac.paths import bin_dir
 
 PIXI_VERSION = "0.67.2"
 
@@ -86,7 +88,7 @@ def _extract_pixi(tarball: bytes, dest: Path) -> None:
     dest.chmod(0o755)
 
 
-def _download(url: str, progress_lines: list[str]) -> bytes:
+def _download(url: str, on_line: Callable[[str], None]) -> bytes:
     with httpx.Client(
         follow_redirects=True,
         timeout=httpx.Timeout(30.0, read=120.0),
@@ -100,8 +102,7 @@ def _download(url: str, progress_lines: list[str]) -> bytes:
                 chunks.append(chunk)
                 downloaded += len(chunk)
                 if downloaded - last_reported >= 8 * 1024 * 1024:
-                    msg = f"downloading pixi: {downloaded // (1024 * 1024)} MB"
-                    progress_lines.append(msg)
+                    on_line(f"downloading pixi: {downloaded // (1024 * 1024)} MB")
                     last_reported = downloaded
     return b"".join(chunks)
 
@@ -122,11 +123,9 @@ def ensure_pixi(progress: ProgressCallback | None = None) -> str:
     if system_pixi:
         return system_pixi
 
-    from ai_almanac.paths import data_root
-
-    bin_dir = data_root() / "bin"
-    cached = bin_dir / "pixi"
-    stamp = bin_dir / "pixi.version"
+    cache_dir = bin_dir()
+    cached = cache_dir / "pixi"
+    stamp = cache_dir / "pixi.version"
 
     # 2. Valid cache hit.
     if (
@@ -151,17 +150,16 @@ def ensure_pixi(progress: ProgressCallback | None = None) -> str:
     if progress is not None:
         progress(EnvProgressEvent(kind="phase_started", phase="pixi-bootstrap", detail=url))
 
-    progress_lines: list[str] = []
-    tarball = _download_with_retry(url, progress_lines)
-
-    if progress is not None:
-        for line in progress_lines:
+    def on_line(line: str) -> None:
+        if progress is not None:
             progress(EnvProgressEvent(kind="line", phase="pixi-bootstrap", line=line))
+
+    tarball = _download_with_retry(url, on_line)
 
     _verify_sha256(tarball, expected_sha)
 
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    tmp = bin_dir / f".pixi.tmp-{os.getpid()}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp = cache_dir / f".pixi.tmp-{os.getpid()}"
     try:
         _extract_pixi(tarball, tmp)
         tmp.rename(cached)
@@ -178,13 +176,13 @@ def ensure_pixi(progress: ProgressCallback | None = None) -> str:
     return str(cached)
 
 
-def _download_with_retry(url: str, progress_lines: list[str]) -> bytes:
+def _download_with_retry(url: str, on_line: Callable[[str], None]) -> bytes:
     last_exc: Exception | None = None
     for delay in _RETRY_DELAYS:
         if delay:
             time.sleep(delay)
         try:
-            return _download(url, progress_lines)
+            return _download(url, on_line)
         except httpx.TransportError as exc:
             last_exc = exc
             continue
@@ -197,15 +195,16 @@ def _download_with_retry(url: str, progress_lines: list[str]) -> bytes:
             if exc.response.status_code >= 500:
                 last_exc = exc
                 continue
-            raise
-
-    from ai_almanac.paths import data_root
+            raise RuntimeError(
+                f"GitHub refused the pixi download (HTTP {exc.response.status_code}) at {url}. "
+                f"Install pixi from https://pixi.sh, or place a pixi binary at {bin_dir() / 'pixi'}."
+            ) from exc
 
     raise RuntimeError(
         f"Could not download pixi after {len(_RETRY_DELAYS)} attempts ({last_exc}). "
         "To fix, try one of:\n"
         "  1. Install pixi from https://pixi.sh\n"
-        f"  2. Place a pixi binary at {data_root() / 'bin' / 'pixi'} "
-        f"and write '{PIXI_VERSION}' to {data_root() / 'bin' / 'pixi.version'}\n"
+        f"  2. Place a pixi binary at {bin_dir() / 'pixi'} "
+        f"and write '{PIXI_VERSION}' to {bin_dir() / 'pixi.version'}\n"
         "  3. Restore network connectivity and re-run `ai-almanac env prepare`"
     )
