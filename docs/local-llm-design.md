@@ -1,11 +1,13 @@
 # Bundle a local vLLM that steps aside for forecasts
 
 ## Context
+
 The platform already runs end to end on a single DGX Spark, but the chat assistant still needs someone to run an OpenAI-compatible LLM server by hand. We want `ai-almanac init` / `serve` to install, start, and manage vLLM. The Spark's 128 GB is **unified memory**, so a medium or large model plus an AIWP forecast can OOM the whole machine, not just the GPU.
 
 Decisions so far: we use **vLLM**, installed as a **managed pixi env**. **While a forecast runs, chat pauses with a message.**
 
 ### Why sleep level 2 (and not level 1)
+
 - Level 1 offloads the weights to CPU RAM. On the Spark that is the same physical memory, so level 1 frees nothing. Level 2 discards the weights and KV cache. Wake then reloads the weights from disk, mostly from page cache, which is also reclaimable.
 - Level 2 keeps the process, the CUDA context, and the captured graphs, so waking is much cheaper than a cold start.
 - Fallback: if a sleep can't be confirmed, kill the vLLM process. Memory safety wins over wake latency.
@@ -13,6 +15,7 @@ Decisions so far: we use **vLLM**, installed as a **managed pixi env**. **While 
 ## Design
 
 ### 1. Managed env: `src/ai_almanac/envs/llm.pixi.toml`
+
 - Targets `linux-64` and `linux-aarch64`, with `cuda = "13"` and pypi `vllm`, plus `huggingface_hub` for downloads.
 - **Step 0 spike (do first, on the Spark):**
   1. Confirm the vLLM wheels resolve and run on GB10 (sm_121).
@@ -36,11 +39,12 @@ Decisions so far: we use **vLLM**, installed as a **managed pixi env**. **While 
      which lets in-flight requests finish instead of aborting them. A request
      sent while asleep hangs rather than erroring, so the chat gate is
      required. `--api-key` guards only `/v1`, `/v2`, `/inference`, and
-     `/cohere`; the dev endpoints stay open whatever the config, so loopback is
-     the boundary.
+     `/cohere`; the dev endpoints stay open whatever the config. A loopback port would
+     leave them reachable from other local users and from web pages in a local
+     browser, so the server listens on an owner-only Unix socket instead.
   4. Default model: `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4`
      (~20 GB) with `--tool-call-parser qwen3_coder --reasoning-parser
-     nemotron_v3 --enable-auto-tool-choice --max-model-len 65536`. A tool call
+nemotron_v3 --enable-auto-tool-choice --max-model-len 65536`. A tool call
      parses correctly. `evals/assistant` has not been run against it yet.
   5. Cold start: 438 s (weights 121 s, then profiling, compile, and CUDA graph
      capture). Level-2 wake: 132 s, nearly all of it `reload_weights`
@@ -87,19 +91,21 @@ Decisions so far: we use **vLLM**, installed as a **managed pixi env**. **While 
   - `ensure_env(..., include_llm=...)` gains the new flag.
 
 ### 2. Settings (`src/ai_almanac/settings.py`)
+
 - New fields:
   - `llm_engine: Literal["external", "managed"] = "external"`
-  - `llm_port = 8766`
   - `llm_gpu_memory_utilization = 0.45`: required on the Spark. vLLM's default of 0.9 would claim ~115 GB of unified memory for KV cache.
   - `llm_idle_sleep_minutes = 10`
   - `llm_serve_args: str`: extra vLLM flags such as `--enable-auto-tool-choice --tool-call-parser <x> --max-model-len`, with the default taken from the spike.
-- When the engine is managed, `llm_base_url` is derived as `http://127.0.0.1:{llm_port}/v1`.
+- When the engine is managed, `llm_base_url` is set to `http://localhost/v1`. Only its path is used: the chat client reaches vLLM over the socket (`local_llm.async_http_client`).
 - Managed mode is allowed only when `deployment_mode == "personal"`.
 
 ### 3. `src/ai_almanac/server/services/local_llm.py` (new)
+
 This file owns the vLLM process and its state changes. Its functions:
+
 - `start()` / `suspend()` / `stop()`:
-  - Launch through `run_llm_server` with `--host 127.0.0.1 --enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1`. The dev endpoints are unauthenticated, so the server must bind to localhost only.
+  - Launch through `run_llm_server` with `--uds <data dir>/run/llm.sock --enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1`. The dev endpoints are unauthenticated, so the server listens only on that socket, in a directory created mode 0700. `llm_serve_args` may not set `--host`, `--port` or `--uds`.
   - Write the PID and the launch flags to `data_root()/llm.pid`. On startup, reuse a live server whose recorded flags match the current ones: one a previous `serve` left asleep, or one still running after a crash. A cold start costs ~6 min. A live server with different flags is replaced.
   - `suspend()` runs at `serve` shutdown. It sleeps the model rather than killing it, so the next start wakes it (~25 s) and an exited `serve` doesn't leave its memory claimed. A server that is still loading is stopped instead. `ai-almanac llm stop` shuts the server down fully.
 - `sleep()` / `wake()`: the HTTP sequence from the spike, sent with `httpx`, which is already a dependency.
@@ -109,6 +115,7 @@ This file owns the vLLM process and its state changes. Its functions:
 - All state changes go through `locking.file_lock(data_root()/"llm.lock")`, called via `asyncio.to_thread` from async code. This stops a chat-triggered wake from racing with a supervisor-triggered sleep.
 
 ### 4. Hook points (existing code)
+
 - **Forecast gate:** in `job_manager.execute_job` (`src/ai_almanac/server/services/job_manager.py`), call `local_llm.park_for_gpu_job()` after `_claim_capacity` succeeds and before `_start_workload`, but only when the job type is `forecast` and the engine is managed. The job is already in `starting`, so new chat turns are refused from that point on.
 - **No auto-wake afterwards.** The next chat turn wakes the model lazily.
 - **Chat:** call `ensure_awake()` at the top of `llm.stream_response` (`src/ai_almanac/server/services/llm.py`, next to `_acquire_llm_slot`). Map `AssistantPaused` to a user-facing event: "The assistant is paused while a forecast runs. It'll be back when the forecast finishes."
@@ -117,13 +124,15 @@ This file owns the vLLM process and its state changes. Its functions:
 - **`/ready` and `GET /api/setup/state`:** report the assistant status as `off`, `loading`, `ready`, `sleeping`, or `paused`.
 
 ### 5. Forecast-side memory hygiene
+
 - In `job_workload._run_forecast`, set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` in `process_env`, the same as `modal/forecasts_app.py:87`.
 - In `forecast_entrypoint.run_inference`, call `torch.cuda.empty_cache()` between models so the caching allocator doesn't hold the previous model's memory.
 
 ### 6. Setup
+
 - **`ai-almanac init` (`cli.py`):**
   - The LLM step asks "Run a model on this machine" (default when `probe_gpu()` finds a GPU and the platform is linux) or "Connect to an existing server" (the current flow).
-  - New flags: `--local-llm/--no-local-llm` and `--llm-model <hf-id>`. `--yes` picks local when a GPU is present.
+  - New flags: `--local-llm/--no-local-llm` and `--llm-model <hf-id>`. `--yes` skips the local model unless `--local-llm` is passed, because its weights are a large download (about 22 GB for the default model). When it skips on a host that could run the model, it prints how to opt in.
   - Local path: `save_llm(engine="managed", model=...)`, then `ensure_env(include_llm=True)`, then `download_llm_model`. The connection test is skipped at init because the server isn't running yet; `serve` reports readiness.
 - **Web wizard:**
   - `LlmStep.svelte` gets the same two choices.
@@ -133,10 +142,12 @@ This file owns the vLLM process and its state changes. Its functions:
 - `services/setup.py`: `env_status()` adds `llm`. `save_llm` writes `llm_engine`.
 
 ## Critical files
+
 - New: `src/ai_almanac/envs/llm.pixi.toml`, `src/ai_almanac/server/services/local_llm.py`, and one test file.
 - Changed: `envs/manager.py`, `settings.py`, `server/services/job_manager.py`, `server/services/llm.py`, `server/app.py`, `server/services/setup.py`, `server/routers/setup.py`, `cli.py`, `server/services/job_workload.py`, `envs/forecast_entrypoint.py`, `web/src/routes/setup/LlmStep.svelte`, and the chat UI where the paused event is shown.
 
 ## Model catalog
+
 `src/ai_almanac/server/config/local_llm_models.yaml` lists the models offered by
 the setup wizard, `ai-almanac init`, `ai-almanac llm models`, and the Settings
 model field. Each entry carries its own `vllm serve` flags and memory share,
@@ -152,6 +163,7 @@ recorded flags no longer match and restarts it.
 
 Only Nemotron 3.5 Lightning is `verified: true`. To verify another entry on a
 Spark:
+
 1. Run `ai-almanac llm use <id>`.
 2. Chat, and confirm a tool call parses.
 3. Submit a forecast, and confirm `/is_sleeping` and that the memory is freed.
@@ -159,18 +171,20 @@ Spark:
 5. Flip the flag, and record the timings here.
 
 ## Deliberately skipped
+
 - Letting a small LLM run alongside a forecast when memory fits. We can add a memory-budget check later if someone wants that.
 - Parking for blend/ROMP jobs. They are CPU-bound and much smaller.
 - The cloud/shared deployment keeps using an external LLM.
 
 ## Verification
+
 1. **Unit test** `tests/test_local_llm.py`, using a fake vLLM HTTP server (httpx `MockTransport`):
    - `park_for_gpu_job` drains, then sleeps, and kills the PID when the sleep fails.
    - `ensure_awake` raises `AssistantPaused` while a forecast job row is `running`.
    - `ensure_awake` wakes the model when it is asleep and no job is running.
 2. `pixi run check && pixi run test`, and `pixi run generate-api-types`.
 3. **On the Spark:**
-   1. Run `ai-almanac init --yes`. The LLM env installs and the weights download.
+   1. Run `ai-almanac init --yes --local-llm`. The LLM env installs and the weights download.
    2. Run `ai-almanac serve` and chat. The model answers and tool calls work.
    3. Submit a forecast while chatting. The in-flight reply finishes, the job log shows the model parked, `/is_sleeping` returns true, and `free -g` shows the memory released.
    4. Chat during the forecast shows the paused message. The forecast completes without OOM.
