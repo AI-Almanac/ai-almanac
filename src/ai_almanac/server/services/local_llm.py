@@ -36,6 +36,7 @@ import httpx
 
 from ai_almanac.locking import file_lock, try_file_lock
 from ai_almanac.paths import data_root
+from ai_almanac.server.services.job_heartbeat import heartbeat_is_fresh
 from ai_almanac.settings import Settings, local_llm_model, settings
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,7 @@ def _signal_group(pid: int, sig: signal.Signals) -> None:
     try:
         os.killpg(pid, sig)
     except ProcessLookupError:
-        pass
+        return  # the group already exited
     except PermissionError:
         logger.warning("cannot signal local model process group %s", pid)
 
@@ -390,7 +391,6 @@ def gpu_job_active() -> bool:
     """
     import sqlalchemy as sa
 
-    from ai_almanac.server.services.job_manager import _heartbeat_is_fresh
     from ai_almanac.server.sync_db import sync_engine
     from ai_almanac.server.tables import jobs
 
@@ -401,7 +401,7 @@ def gpu_job_active() -> bool:
             )
         ).fetchall()
     for config_json, runner, heartbeat_at in rows:
-        if runner == "modal" or not _heartbeat_is_fresh(heartbeat_at):
+        if runner == "modal" or not heartbeat_is_fresh(heartbeat_at):
             continue
         try:
             config = json.loads(config_json or "{}")

@@ -11,11 +11,10 @@ validation; the LLM operates through typed tool calls.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
-from asyncio import Lock, Semaphore
+from asyncio import Lock, Semaphore, to_thread
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass, replace
@@ -731,9 +730,9 @@ async def stream_response(
     if local_llm.is_managed():
         # Raises AssistantUnavailable while a forecast holds the GPU. A wake
         # reloads the weights (tens of seconds), so say so before blocking on it.
-        if await asyncio.to_thread(local_llm.needs_wake):
+        if await to_thread(local_llm.needs_wake):
             yield json.dumps({"type": "assistant_status", "status": "waking"})
-        await asyncio.to_thread(local_llm.ensure_awake)
+        await to_thread(local_llm.ensure_awake)
     semaphore = await _acquire_llm_slot(user_id)
     started = time.perf_counter()
     failure_category: str | None = None
