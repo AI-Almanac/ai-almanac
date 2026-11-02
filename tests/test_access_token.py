@@ -113,3 +113,45 @@ def test_empty_token_setting_allows_all(open_client: TestClient) -> None:
     resp = open_client.get("/api/regions", headers={"accept": "application/json"})
     # Should not 401 (may still get other errors like 503 if DB not ready, but not 401)
     assert resp.status_code != 401
+
+
+def test_non_ascii_token_is_rejected_not_an_error(client: TestClient) -> None:
+    resp = client.get("/api/regions?token=%C3%A9", headers={"accept": "application/json"})
+    assert resp.status_code == 401
+
+    resp = client.get("/api/regions", headers={"authorization": b"Bearer \xe9"})
+    assert resp.status_code == 401
+
+
+@pytest.fixture()
+def setup_pending(monkeypatch: pytest.MonkeyPatch) -> str:
+    from ai_almanac.server.services.setup import _token_path, get_or_create_bootstrap_token
+
+    monkeypatch.setattr(settings, "deployment_mode", "personal")
+    monkeypatch.setattr(settings, "setup_complete", False)
+    yield get_or_create_bootstrap_token()
+    _token_path().unlink(missing_ok=True)
+
+
+def test_wizard_loads_and_hands_over_the_cookie_while_setup_is_pending(
+    client: TestClient, setup_pending: str
+) -> None:
+    assert client.get("/config.js").status_code != 401
+
+    resp = client.get(f"/setup?token={setup_pending}", follow_redirects=False)
+    assert resp.status_code != 401
+    assert resp.cookies.get("almanac_token") == TOKEN
+
+
+def test_wrong_bootstrap_token_gets_no_access_cookie(
+    client: TestClient, setup_pending: str
+) -> None:
+    resp = client.get("/setup?token=not-the-token", follow_redirects=False)
+    assert "almanac_token" not in resp.cookies
+
+
+def test_non_ascii_bootstrap_token_is_rejected(setup_pending: str) -> None:
+    from ai_almanac.server.services.setup import verify_bootstrap_token
+
+    assert verify_bootstrap_token("é") is False
+    assert verify_bootstrap_token(setup_pending) is True
