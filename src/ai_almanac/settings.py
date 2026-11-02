@@ -394,7 +394,7 @@ SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
 def _load_secrets_file() -> dict:
     """Load the auto-generated secrets.env layer; swallow all errors."""
     try:
-        from ai_almanac.secrets_bootstrap import load_secrets_file
+        from ai_almanac.secrets_file import load_secrets_file
 
         return load_secrets_file()
     except Exception:

@@ -3,7 +3,7 @@
 	import { type BenchmarkStore } from '$lib/benchmarks.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import { goToBlend } from '$lib/blend-nav';
-	import type { Dataset, Region, RompDefaults } from '$lib/api';
+	import type { Dataset, GuardrailThresholds, Region, RompDefaults } from '$lib/api';
 	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
 	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
@@ -17,6 +17,7 @@
 		datasets,
 		dataLoaded,
 		parameterDefaults,
+		guardrails,
 		initialPrompt = '',
 		initialManualOpen = false,
 		chatAvailable = false,
@@ -27,6 +28,7 @@
 		datasets: Dataset[];
 		dataLoaded: boolean;
 		parameterDefaults: RompDefaults | null;
+		guardrails: GuardrailThresholds | null;
 		initialPrompt?: string;
 		initialManualOpen?: boolean;
 		chatAvailable?: boolean;
@@ -47,6 +49,7 @@
 		form.regions = regions;
 		form.datasets = datasets;
 		form.parameterDefaults = parameterDefaults;
+		form.guardrails = guardrails;
 		form.dataLoaded = dataLoaded;
 	});
 

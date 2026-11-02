@@ -30,8 +30,6 @@ def open_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def test_api_without_token_returns_401_json(client: TestClient) -> None:
-    resp = client.get("/health")  # health is exempt; use /ready
-    # Actually test a gated route:
     resp = client.get("/api/regions", headers={"accept": "application/json"})
     assert resp.status_code == 401
     assert resp.json()["detail"] == "Access token required"

@@ -27,6 +27,8 @@ from pathlib import Path
 
 import httpx
 
+from ai_almanac.envs.progress import EnvProgressEvent, ProgressCallback
+
 PIXI_VERSION = "0.67.2"
 
 # Map pixi platform → (release asset name, sha256 of the tarball)
@@ -104,7 +106,7 @@ def _download(url: str, progress_lines: list[str]) -> bytes:
     return b"".join(chunks)
 
 
-def ensure_pixi(progress=None) -> str:  # noqa: ANN001
+def ensure_pixi(progress: ProgressCallback | None = None) -> str:
     """Resolve or download the pinned pixi binary; return its absolute path.
 
     Resolution order:
@@ -112,8 +114,7 @@ def ensure_pixi(progress=None) -> str:  # noqa: ANN001
       2. Cached $DATA_DIR/bin/pixi with a matching version stamp.
       3. Download from GitHub, verify sha256, cache.
 
-    `progress` is an optional ProgressCallback (from manager.py). When a
-    download actually happens, emits phase_started / line / phase_finished
+    When a download actually happens, `progress` receives phase_started / line / phase_finished
     events under phase="pixi-bootstrap".
     """
     # 1. PATH wins — never download when pixi is already installed.
@@ -148,16 +149,12 @@ def ensure_pixi(progress=None) -> str:  # noqa: ANN001
     url = f"{_GITHUB_BASE}/v{PIXI_VERSION}/{asset_name}"
 
     if progress is not None:
-        from ai_almanac.envs.manager import EnvProgressEvent
-
         progress(EnvProgressEvent(kind="phase_started", phase="pixi-bootstrap", detail=url))
 
     progress_lines: list[str] = []
     tarball = _download_with_retry(url, progress_lines)
 
     if progress is not None:
-        from ai_almanac.envs.manager import EnvProgressEvent
-
         for line in progress_lines:
             progress(EnvProgressEvent(kind="line", phase="pixi-bootstrap", line=line))
 
@@ -174,8 +171,6 @@ def ensure_pixi(progress=None) -> str:  # noqa: ANN001
         raise
 
     if progress is not None:
-        from ai_almanac.envs.manager import EnvProgressEvent
-
         progress(
             EnvProgressEvent(kind="phase_finished", phase="pixi-bootstrap", detail=str(cached))
         )

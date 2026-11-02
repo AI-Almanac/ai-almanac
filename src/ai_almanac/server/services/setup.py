@@ -7,6 +7,7 @@ two paths cannot drift from each other.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import platform
 import secrets
@@ -23,6 +24,8 @@ from ai_almanac.settings import settings
 
 if TYPE_CHECKING:
     from ai_almanac.envs.manager import EnvProgressEvent
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +76,7 @@ def get_or_create_bootstrap_token() -> str:
             if t:
                 return t
         except OSError:
-            pass
+            logger.warning("could not read setup token at %s; issuing a new one", p)
     t = secrets.token_urlsafe(32)
     fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
