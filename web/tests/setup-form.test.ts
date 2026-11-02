@@ -162,4 +162,22 @@ describe('BenchmarkSetupForm', () => {
 		expect(form.perModelOverrides).toEqual({ fuxi: { init_days: '0' } });
 		expect(api.getModels).toHaveBeenCalledWith('india');
 	});
+
+	it('reports the years and onset sections as customised only once the user changes them', async () => {
+		api.getModels.mockResolvedValue([modelConfig()]);
+		const form = setupForm();
+		form.setDatasetId('obs-india');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+		form.setSharedParam('obs_file_pattern', '{}.nc');
+
+		expect(form.yearsCustomised).toBe(false);
+		expect(form.onsetCustomised).toBe(false);
+
+		form.setOverride('fuxi', 'start_date', '2019-05-01');
+		form.setSharedParam('wet_spell', 5);
+
+		expect(form.yearsCustomised).toBe(true);
+		expect(form.onsetCustomised).toBe(true);
+	});
 });

@@ -13,9 +13,11 @@
 	import {
 		getDatasets,
 		getCapabilities,
+		getGuardrailThresholds,
 		getRegions,
 		getRompDefaults,
 		type Dataset,
+		type GuardrailThresholds,
 		type Job,
 		type Region,
 		type RompDefaults
@@ -33,6 +35,7 @@
 	let regions = $state<Region[]>([]);
 	let datasets = $state<Dataset[]>([]);
 	let parameterDefaults = $state<RompDefaults | null>(null);
+	let guardrails = $state<GuardrailThresholds | null>(null);
 	let dataLoaded = $state(false);
 	let chatAvailable = $state(false);
 	let resultsSidebarOpen = $state(true);
@@ -71,8 +74,19 @@
 			store.showForm = true;
 			store.selectedGroupKey = null;
 		}
-		const [fetchedRegions, fetchedDatasets, fetchedParameterDefaults, fetchedCapabilities] =
-			await Promise.allSettled([getRegions(), getDatasets(), getRompDefaults(), getCapabilities()]);
+		const [
+			fetchedRegions,
+			fetchedDatasets,
+			fetchedParameterDefaults,
+			fetchedCapabilities,
+			fetchedGuardrails
+		] = await Promise.allSettled([
+			getRegions(),
+			getDatasets(),
+			getRompDefaults(),
+			getCapabilities(),
+			getGuardrailThresholds()
+		]);
 		if (fetchedRegions.status === 'fulfilled') regions = fetchedRegions.value;
 		if (fetchedDatasets.status === 'fulfilled') datasets = fetchedDatasets.value;
 		if (fetchedParameterDefaults.status === 'fulfilled') {
@@ -81,6 +95,7 @@
 		if (fetchedCapabilities.status === 'fulfilled') {
 			chatAvailable = fetchedCapabilities.value.chat;
 		}
+		if (fetchedGuardrails.status === 'fulfilled') guardrails = fetchedGuardrails.value;
 		dataLoaded = true;
 	}
 
@@ -225,6 +240,7 @@
 				{datasets}
 				{dataLoaded}
 				{parameterDefaults}
+				{guardrails}
 				{initialPrompt}
 				{chatAvailable}
 				initialManualOpen={manualSetupRequested}
