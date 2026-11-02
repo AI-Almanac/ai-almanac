@@ -90,6 +90,8 @@ export class SetupWizardState {
 	async attachStream(after: number): Promise<void> {
 		if (this.streaming) return;
 		this.streaming = true;
+		// A fresh stream follows a new run, whose seq restarts at 0.
+		if (after === -1) this.lastSeq = -1;
 		try {
 			for await (const evt of streamPrepareEvents(after)) {
 				this._handleEvent(evt);

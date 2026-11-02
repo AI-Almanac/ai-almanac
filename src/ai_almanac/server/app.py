@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -396,6 +396,17 @@ _TOKEN_COOKIE = "almanac_token"
 _TOKEN_MAX_AGE = 2592000  # 30 days
 
 
+def _set_access_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        _TOKEN_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        max_age=_TOKEN_MAX_AGE,
+    )
+
+
 @app.middleware("http")
 async def enforce_access_token(request: Request, call_next):
     """Bearer-token gate for personal installs on shared hosts.
@@ -418,18 +429,24 @@ async def enforce_access_token(request: Request, call_next):
     if request.url.path == "/health":
         return await call_next(request)
 
-    # During setup, the /setup page and /api/setup/* use their own bootstrap-token
-    # auth; don't apply the serve-token gate so they remain reachable.
-    if request.url.path == "/setup" or request.url.path.startswith("/api/setup/"):
-        from ai_almanac.server.services.setup import setup_required as _setup_required
-
-        if _setup_required():
-            return await call_next(request)
-
     def _valid(candidate: str | None) -> bool:
         if not candidate:
             return False
-        return hmac.compare_digest(candidate, token)
+        # Bytes, not str: compare_digest raises TypeError on non-ASCII str input.
+        return hmac.compare_digest(candidate.encode(), token.encode())
+
+    # During setup the wizard (page, its assets, /config.js, /api/setup/*) answers
+    # to its own bootstrap token, not this one. A valid bootstrap link also hands
+    # over the access cookie, so the app works once the wizard finishes.
+    from ai_almanac.server.services.setup import setup_required, verify_bootstrap_token
+
+    if setup_required() and _reachable_during_setup(request):
+        response = await call_next(request)
+        if request.url.path == "/setup" and verify_bootstrap_token(
+            request.query_params.get("token")
+        ):
+            _set_access_cookie(response, token)
+        return response
 
     # Cookie
     if _valid(request.cookies.get(_TOKEN_COOKIE)):
@@ -446,14 +463,7 @@ async def enforce_access_token(request: Request, call_next):
         if _valid(query_token):
             redirect_url = str(request.url.remove_query_params("token"))
             response = RedirectResponse(redirect_url, status_code=303)
-            response.set_cookie(
-                _TOKEN_COOKIE,
-                token,
-                httponly=True,
-                samesite="lax",
-                path="/",
-                max_age=_TOKEN_MAX_AGE,
-            )
+            _set_access_cookie(response, token)
             return response
 
     # Reject
@@ -470,6 +480,19 @@ _SETUP_ALLOWLIST_PREFIXES = ("/api/setup/", "/config.js", "/ready", "/health")
 _SETUP_EXACT = {"/setup"}
 
 
+def _reachable_during_setup(request: Request) -> bool:
+    """The wizard's page, its API, and the static files it loads."""
+    path = request.url.path
+    if path in _SETUP_EXACT or any(path.startswith(p) for p in _SETUP_ALLOWLIST_PREFIXES):
+        return True
+    # Static assets — containment check prevents path traversal
+    if request.method == "GET" and _STATIC_READY:
+        rel = path.lstrip("/") or "index.html"
+        candidate = (_STATIC_DIR / rel).resolve()
+        return candidate.is_file() and candidate.is_relative_to(_STATIC_DIR.resolve())
+    return False
+
+
 @app.middleware("http")
 async def _setup_gate(request: Request, call_next):
     """Redirect all non-setup traffic to the wizard while setup is pending."""
@@ -478,22 +501,8 @@ async def _setup_gate(request: Request, call_next):
     if not setup_required():
         return await call_next(request)
 
-    path = request.url.path
-
-    # Exact allowlist
-    if path in _SETUP_EXACT:
+    if _reachable_during_setup(request):
         return await call_next(request)
-
-    # Prefix allowlist
-    if any(path.startswith(p) for p in _SETUP_ALLOWLIST_PREFIXES):
-        return await call_next(request)
-
-    # Static assets — containment check prevents path traversal
-    if request.method == "GET" and _STATIC_READY:
-        rel = path.lstrip("/") or "index.html"
-        candidate = (_STATIC_DIR / rel).resolve()
-        if candidate.is_file() and candidate.is_relative_to(_STATIC_DIR.resolve()):
-            return await call_next(request)
 
     # Navigation: redirect to /setup
     if _is_page_navigation(request):

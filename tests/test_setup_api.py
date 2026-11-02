@@ -344,3 +344,18 @@ def test_grandfather_noop_when_fresh_install(tmp_path: Path) -> None:
     ):
         result = setup_svc.grandfather_existing_install()
     assert result is False
+
+
+def test_grandfather_skips_a_wizard_already_in_progress(tmp_path: Path) -> None:
+    setup_svc.get_or_create_bootstrap_token()
+    try:
+        with (
+            patch("ai_almanac.server.services.setup.setup_required", return_value=True),
+            patch("ai_almanac.server.services.llm.llm_is_configured", return_value=True),
+            patch("ai_almanac.settings.write_settings_overlay") as mock_write,
+        ):
+            result = setup_svc.grandfather_existing_install()
+    finally:
+        setup_svc._token_path().unlink(missing_ok=True)
+    assert result is False
+    mock_write.assert_not_called()

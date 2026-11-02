@@ -132,13 +132,22 @@ def serve(
     url = f"http://{bind if bind != '0.0.0.0' else 'localhost'}:{port}/"
     open_url = f"{url}?token={effective_token}" if effective_token else url
 
-    # 4. First-run setup check
-    from ai_almanac.server.services.setup import get_or_create_bootstrap_token, setup_required
+    # 4. First-run setup check. Grandfather first, so an install from before the
+    # wizard is not sent to it (nor given a bootstrap token) on upgrade.
+    from ai_almanac.server.services.setup import (
+        get_or_create_bootstrap_token,
+        grandfather_existing_install,
+        setup_required,
+    )
 
+    if grandfather_existing_install():
+        reload_settings()
     setup_url: str | None = None
     if setup_required():
         bootstrap_token = get_or_create_bootstrap_token()
-        setup_url = f"http://127.0.0.1:{port}/setup?token={bootstrap_token}"
+        # Same host as the serve URL, so the access cookie set during setup
+        # applies to the app afterwards.
+        setup_url = f"{url}setup?token={bootstrap_token}"
 
     # 5. Startup print
     typer.echo(f"ai-almanac {__version__} serving at {url}")
@@ -420,7 +429,13 @@ def init(
         str,
         typer.Option(help="Model name; with --local-llm, the Hugging Face model id to serve."),
     ] = "",
-    llm_api_key: Annotated[str, typer.Option(help="API key (sealed in DB overlay).")] = "",
+    llm_api_key: Annotated[
+        str,
+        typer.Option(
+            envvar="LLM_API_KEY",
+            help="API key (sealed in DB overlay). Prefer the LLM_API_KEY env var: argv is visible in ps.",
+        ),
+    ] = "",
     dataset_mount_roots: Annotated[
         str, typer.Option(help="Comma-separated dataset mount root paths.")
     ] = "",
@@ -486,12 +501,18 @@ def init(
     # Storage
     out_dir_val = output_dir.strip() or None
     mounts_val = [r.strip() for r in dataset_mount_roots.split(",") if r.strip()]
+    # Flags given on the command line become the prompts' defaults, so an answer
+    # of Enter keeps them.
     if not yes:
         out_dir_val = (
-            typer.prompt("Job output directory (leave blank for default)", default="") or None
+            typer.prompt(
+                "Job output directory (leave blank for default)", default=out_dir_val or ""
+            )
+            or None
         )
         mounts_input = typer.prompt(
-            "Dataset mount roots (comma-separated, blank for none)", default=""
+            "Dataset mount roots (comma-separated, blank for none)",
+            default=",".join(mounts_val),
         )
         mounts_val = [r.strip() for r in mounts_input.split(",") if r.strip()]
     save_storage(out_dir_val, mounts_val if mounts_val else None)
@@ -531,7 +552,15 @@ def init(
         if not model_val and not yes:
             model_val = typer.prompt("LLM model name")
         if not key_val and not yes:
-            key_val = typer.prompt("LLM API key (blank if not required)", default="") or None
+            key_val = (
+                typer.prompt(
+                    "LLM API key (blank if not required)",
+                    default="",
+                    hide_input=True,
+                    show_default=False,
+                )
+                or None
+            )
 
         if base_url_val and model_val:
             if not skip_llm_test:

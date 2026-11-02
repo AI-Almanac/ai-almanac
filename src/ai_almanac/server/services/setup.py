@@ -42,9 +42,13 @@ def grandfather_existing_install() -> bool:
     """Mark setup complete for installs that predate the wizard.
 
     Rule: llm is configured OR DB overlay is non-empty OR config.yaml exists.
+    A bootstrap token means the wizard has already started, so its own saved
+    storage and LLM settings must not count as a pre-wizard install.
     Returns True when it wrote the completion flag (caller should re-reload).
     """
     if not setup_required():
+        return False
+    if _token_path().exists():
         return False
 
     from ai_almanac.server.services.llm import llm_is_configured
@@ -98,7 +102,8 @@ def verify_bootstrap_token(candidate: str | None) -> bool:
         return False
     if not expected:
         return False
-    return secrets.compare_digest(candidate, expected)
+    # Bytes, not str: compare_digest raises TypeError on non-ASCII str input.
+    return secrets.compare_digest(candidate.encode(), expected.encode())
 
 
 def clear_bootstrap_token() -> None:
@@ -429,27 +434,26 @@ class PrepareTask:
         """Yield a state snapshot, buffered events (seq > after), then live events."""
         yield {"type": "state", "seq": -1, "status": self.status, "envs": env_status()}
 
-        for evt in list(self._events):
-            if evt["seq"] > after:
-                yield evt
-                after = evt["seq"]
-
-        while self.status == "running":
+        # The waiter is registered before each replay, so an event pushed while
+        # this generator is suspended at a yield still wakes the next wait, and
+        # the stream ends only after a replay that saw the run finish.
+        while True:
             waiter = asyncio.Event()
             self._waiters.append(waiter)
             try:
-                await asyncio.wait_for(waiter.wait(), timeout=15.0)
-            except TimeoutError:
-                yield {"type": "keepalive"}
-                continue
+                for evt in list(self._events):
+                    if evt["seq"] > after:
+                        yield evt
+                        after = evt["seq"]
+                if self.status != "running":
+                    return
+                try:
+                    await asyncio.wait_for(waiter.wait(), timeout=15.0)
+                except TimeoutError:
+                    yield {"type": "keepalive"}
             finally:
                 with suppress(ValueError):
                     self._waiters.remove(waiter)
-
-            for evt in list(self._events):
-                if evt["seq"] > after:
-                    yield evt
-                    after = evt["seq"]
 
 
 prepare_task = PrepareTask()
