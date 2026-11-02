@@ -13,6 +13,9 @@
 	const setupState = $derived(wizard.state);
 	const gpu = $derived(setupState?.gpu as GpuInfo);
 	const platform = $derived(setupState?.platform as PlatformInfo);
+	const localLlm = $derived(
+		(setupState?.llm as { engine?: string } | undefined)?.engine === 'managed'
+	);
 
 	// Default: include forecast only when GPU detected and Linux
 	const defaultForecast = $derived(
@@ -85,6 +88,13 @@
 			</label>
 			<p class="desc">Forecast envs are large (~2 GB). Requires a Linux system.</p>
 		</div>
+
+		{#if localLlm}
+			<p class="desc">
+				Also installs the local model server (vLLM) and downloads the assistant model's weights —
+				tens of GB on first install.
+			</p>
+		{/if}
 
 		{#if startError}
 			<p class="error">{startError}</p>

@@ -10,6 +10,7 @@ import webbrowser
 from contextlib import suppress
 from typing import Annotated
 
+import click
 import typer
 
 from ai_almanac import __version__
@@ -170,18 +171,31 @@ app.add_typer(env_app, name="env")
 
 @env_app.command("prepare")
 def env_prepare() -> None:
-    """Install or update the benchmark, blending, and forecast environments."""
-    from ai_almanac.envs.manager import ensure_env
+    """Install or update the benchmark, blending, and forecast environments.
 
+    Also installs the local model server (and its weights) when the assistant
+    is set to run on this machine.
+    """
+    import subprocess
+
+    from ai_almanac.envs.manager import download_llm_model, ensure_env, llm_env_ready
+    from ai_almanac.settings import reload_settings, settings
+
+    reload_settings()
+    include_llm = settings.llm_engine == "managed"
     try:
-        benchmark_dir, blending_dir, forecast_dir = ensure_env()
-    except RuntimeError as exc:
+        benchmark_dir, blending_dir, forecast_dir = ensure_env(include_llm=include_llm)
+        if include_llm and llm_env_ready():
+            download_llm_model(settings.llm_model)
+    except (RuntimeError, subprocess.CalledProcessError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"benchmark env ready at {benchmark_dir}")
     typer.echo(f"blending env ready at {blending_dir}")
     if forecast_dir is not None:
         typer.echo(f"forecast env ready at {forecast_dir}")
+    if include_llm and llm_env_ready():
+        typer.echo(f"local model {settings.llm_model} ready")
 
 
 @env_app.command("info")
@@ -192,6 +206,143 @@ def env_info() -> None:
     typer.echo(f"env root: {env_root()}")
     for name, version in env_versions().items():
         typer.echo(f"{name:20s} {version}")
+
+
+llm_app = typer.Typer(help="Manage the local assistant model server (vLLM).")
+app.add_typer(llm_app, name="llm")
+
+
+def _local_llm_model_lines() -> list[str]:
+    from ai_almanac.envs.manager import llm_model_cached
+    from ai_almanac.settings import get_local_llm_models
+
+    lines = []
+    for i, m in enumerate(get_local_llm_models(), start=1):
+        tags = [f"{m['weights_gb']:.0f} GB"]
+        if llm_model_cached(m["id"]):
+            tags.append("downloaded")
+        if not m["verified"]:
+            tags.append("not yet tested on a Spark")
+        lines.append(f"[{i}] {m['label']} ({', '.join(tags)})\n    {m['id']}")
+    return lines
+
+
+def _prompt_local_llm_model() -> str:
+    """Pick a catalog model by number, or type any other Hugging Face id."""
+    from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, get_local_llm_models
+
+    models = get_local_llm_models()
+    typer.echo("Local model:")
+    for line in _local_llm_model_lines():
+        typer.echo(f"  {line}")
+    typer.echo(f"  [{len(models) + 1}] Other Hugging Face model")
+    default = next(
+        (str(i) for i, m in enumerate(models, start=1) if m["id"] == DEFAULT_LOCAL_LLM_MODEL), "1"
+    )
+    choice = typer.prompt(
+        "Model",
+        default=default,
+        type=click.IntRange(1, len(models) + 1),
+    )
+    if choice <= len(models):
+        return models[choice - 1]["id"]
+    typer.secho(
+        "set its tool-call parser in llm_serve_args, or the assistant's tools won't work",
+        fg=typer.colors.YELLOW,
+    )
+    return typer.prompt("Hugging Face model id")
+
+
+@llm_app.command("models")
+def llm_models() -> None:
+    """List the models the local model server has tested serve flags for."""
+    from ai_almanac.settings import reload_settings, settings
+
+    reload_settings()
+    for line in _local_llm_model_lines():
+        typer.echo(line)
+    if settings.llm_engine == "managed":
+        typer.echo(f"\ncurrent: {settings.llm_model}")
+
+
+@llm_app.command("use")
+def llm_use(
+    model_id: Annotated[str, typer.Argument(help="Hugging Face model id (see `llm models`).")],
+    download: Annotated[
+        bool,
+        typer.Option(
+            "--download/--no-download",
+            help="Fetch the weights now (default). Otherwise vLLM fetches them on first start.",
+        ),
+    ] = True,
+) -> None:
+    """Switch the assistant to a model served on this machine.
+
+    A running `serve` picks the change up on the next chat turn, restarting the
+    local model server with the new model.
+    """
+    import subprocess
+
+    from ai_almanac.envs.manager import download_llm_model, llm_env_ready
+    from ai_almanac.server.services.setup import save_llm
+    from ai_almanac.settings import local_llm_model, reload_settings, settings
+
+    reload_settings()
+    entry = local_llm_model(model_id)
+    if entry is None and not settings.llm_serve_args.strip():
+        typer.secho(
+            f"{model_id} is not in `ai-almanac llm models`; set its tool-call parser in "
+            "llm_serve_args, or the assistant's tools won't work",
+            fg=typer.colors.YELLOW,
+        )
+    elif entry is not None and settings.llm_serve_args.strip():
+        typer.secho(
+            "llm_serve_args is set and replaces this model's tested flags; clear it in "
+            "Settings to use them",
+            fg=typer.colors.YELLOW,
+        )
+    if entry is not None and not entry["verified"]:
+        typer.secho(f"{model_id} has not been tested on a DGX Spark yet", fg=typer.colors.YELLOW)
+    if download:
+        if not llm_env_ready():
+            typer.secho(
+                "the local model server is not installed — run `ai-almanac env prepare`",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        try:
+            download_llm_model(model_id)
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+    save_llm("", model_id, None, engine="managed")
+    typer.echo(f"assistant will run {model_id} locally")
+
+
+@llm_app.command("status")
+def llm_status() -> None:
+    """Show whether the local model server is off, loading, ready, or asleep."""
+    from ai_almanac.server.services import local_llm
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    typer.echo(local_llm.status())
+
+
+@llm_app.command("stop")
+def llm_stop() -> None:
+    """Stop the local model server.
+
+    `serve` leaves it asleep on shutdown so the next start can wake it instead
+    of loading from scratch; this frees the rest of its memory.
+    """
+    from ai_almanac.server.services import local_llm
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    local_llm.stop()
+    typer.echo("local model server stopped")
 
 
 @app.command()
@@ -251,8 +402,21 @@ def backup(
 @app.command()
 def init(
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompts.")] = False,
+    local_llm: Annotated[
+        bool | None,
+        typer.Option(
+            "--local-llm/--no-local-llm",
+            help=(
+                "Run the assistant's model on this machine with a bundled vLLM "
+                "(default with --yes: when an NVIDIA GPU is detected on Linux)."
+            ),
+        ),
+    ] = None,
     llm_base_url: Annotated[str, typer.Option(help="OpenAI-compatible base URL.")] = "",
-    llm_model: Annotated[str, typer.Option(help="Model name.")] = "",
+    llm_model: Annotated[
+        str,
+        typer.Option(help="Model name; with --local-llm, the Hugging Face model id to serve."),
+    ] = "",
     llm_api_key: Annotated[str, typer.Option(help="API key (sealed in DB overlay).")] = "",
     dataset_mount_roots: Annotated[
         str, typer.Option(help="Comma-separated dataset mount root paths.")
@@ -291,7 +455,7 @@ def init(
         setup_required,
         test_llm_connection,
     )
-    from ai_almanac.settings import reload_settings
+    from ai_almanac.settings import DEFAULT_LOCAL_LLM_MODEL, reload_settings
 
     reload_settings()
     ensure_layout()
@@ -335,26 +499,52 @@ def init(
     model_val = llm_model.strip()
     key_val = llm_api_key.strip() or None
 
-    if not base_url_val and not yes:
-        base_url_val = typer.prompt("LLM base URL", default="http://localhost:11434/v1")
-    if not model_val and not yes:
-        model_val = typer.prompt("LLM model name")
-    if not key_val and not yes:
-        key_val = typer.prompt("LLM API key (blank if not required)", default="") or None
+    can_run_local = gpu is not None and str(plat.get("platform", "")).startswith("linux")
+    if local_llm is None:
+        if base_url_val:
+            local_llm = False
+        elif yes:
+            local_llm = can_run_local
+        else:
+            choice = typer.prompt(
+                "Assistant model — [1] run a model on this machine, "
+                "[2] connect to an existing server",
+                default="1" if can_run_local else "2",
+                type=click.Choice(["1", "2"]),
+                show_choices=False,
+            )
+            local_llm = choice == "1"
 
-    if base_url_val and model_val:
-        if not skip_llm_test:
-            typer.echo("testing LLM connection…")
-            result = asyncio.run(test_llm_connection(base_url_val, model_val, key_val))
-            if not result.ok:
-                typer.secho(f"LLM test failed: {result.error}", fg=typer.colors.RED, err=True)
-                if yes:
-                    raise typer.Exit(code=1)
-                typer.confirm("Save anyway?", abort=True)
-        save_llm(base_url_val, model_val, key_val)
-        typer.echo("LLM settings saved")
+    if local_llm:
+        if not model_val:
+            model_val = DEFAULT_LOCAL_LLM_MODEL if yes else _prompt_local_llm_model()
+        # No connection test: the server is installed below and started by
+        # `serve`, which reports when it's ready.
+        save_llm("", model_val, None, engine="managed")
+        typer.echo(f"assistant will run {model_val} locally")
     else:
-        typer.secho("skipping LLM configuration (no URL/model provided)", fg=typer.colors.YELLOW)
+        if not base_url_val and not yes:
+            base_url_val = typer.prompt("LLM base URL", default="http://localhost:11434/v1")
+        if not model_val and not yes:
+            model_val = typer.prompt("LLM model name")
+        if not key_val and not yes:
+            key_val = typer.prompt("LLM API key (blank if not required)", default="") or None
+
+        if base_url_val and model_val:
+            if not skip_llm_test:
+                typer.echo("testing LLM connection…")
+                result = asyncio.run(test_llm_connection(base_url_val, model_val, key_val))
+                if not result.ok:
+                    typer.secho(f"LLM test failed: {result.error}", fg=typer.colors.RED, err=True)
+                    if yes:
+                        raise typer.Exit(code=1)
+                    typer.confirm("Save anyway?", abort=True)
+            save_llm(base_url_val, model_val, key_val)
+            typer.echo("LLM settings saved")
+        else:
+            typer.secho(
+                "skipping LLM configuration (no URL/model provided)", fg=typer.colors.YELLOW
+            )
 
     # Env prepare — on by default so init leaves a runnable install behind.
     if prepare_envs is None:
@@ -364,7 +554,9 @@ def init(
             prepare_envs = typer.confirm("Install benchmark environments now?", default=True)
 
     if prepare_envs:
-        from ai_almanac.envs.manager import ensure_env
+        import subprocess
+
+        from ai_almanac.envs.manager import download_llm_model, ensure_env, llm_env_ready
 
         if include_forecast is None:
             has_gpu = gpu is not None
@@ -387,23 +579,38 @@ def init(
             if isinstance(evt, EnvProgressEvent):
                 if evt.kind == "line" and evt.line:
                     typer.echo(f"  {evt.line}")
-                elif evt.kind in ("phase_started", "phase_finished", "phase_failed"):
+                elif evt.kind in (
+                    "phase_started",
+                    "phase_finished",
+                    "phase_failed",
+                    "phase_skipped",
+                ):
                     typer.echo(f"▸ [{evt.phase}] {evt.detail or evt.kind}")
 
         try:
             benchmark_dir, blending_dir, forecast_dir = ensure_env(
-                progress=_progress, include_forecast=include_forecast
+                progress=_progress, include_forecast=include_forecast, include_llm=bool(local_llm)
             )
             typer.echo(f"benchmark env ready at {benchmark_dir}")
             typer.echo(f"blending env ready at {blending_dir}")
             if forecast_dir:
                 typer.echo(f"forecast env ready at {forecast_dir}")
-        except RuntimeError as exc:
+            if local_llm and llm_env_ready():
+                typer.echo(f"downloading {model_val} (tens of GB on first run)…")
+                download_llm_model(model_val, progress=_progress)
+                typer.echo(f"local model {model_val} ready")
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
             typer.secho(str(exc), fg=typer.colors.RED, err=True)
             if yes:
                 typer.secho("continuing despite env error", fg=typer.colors.YELLOW)
             else:
                 typer.confirm("Environment install failed. Continue to finish setup?", abort=True)
+
+    elif local_llm:
+        typer.secho(
+            "the local model is not installed yet — run `ai-almanac env prepare` before serving",
+            fg=typer.colors.YELLOW,
+        )
 
     # Finish
     finish_setup()

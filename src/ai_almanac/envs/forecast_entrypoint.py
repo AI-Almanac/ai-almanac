@@ -82,6 +82,18 @@ def _score_live(
     workflow._write_live_scores(scores, output_dir)
 
 
+def _release_gpu_memory() -> None:
+    """Hand the previous model's cached CUDA blocks back before the next loads,
+    so the caching allocator doesn't hold two models' worth of memory."""
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def run_inference(plan: SeasonPlan, members: list[str], staging_dir: Path) -> None:
     """Roll each requested member across its planned issue dates (serving stored
     dates and rolling out only misses) and stage its season file as
@@ -97,6 +109,7 @@ def run_inference(plan: SeasonPlan, members: list[str], staging_dir: Path) -> No
         except Exception as exc:  # noqa: BLE001
             failures[f"{member} (season)"] = str(exc)
             traceback.print_exc()
+        _release_gpu_memory()
 
     if failures:
         raise RuntimeError(f"Forecast inference failed for {sorted(failures)}: {failures}")

@@ -3835,7 +3835,16 @@ export interface components {
         };
         /** LlmInput */
         LlmInput: {
-            /** Base Url */
+            /**
+             * Engine
+             * @default external
+             * @enum {string}
+             */
+            engine: "external" | "managed";
+            /**
+             * Base Url
+             * @default
+             */
             base_url: string;
             /** Model */
             model: string;
@@ -3859,6 +3868,21 @@ export interface components {
             models: string[];
             /** Error */
             error: string | null;
+        };
+        /** LocalLlmModelOut */
+        LocalLlmModelOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description: string;
+            /** Weights Gb */
+            weights_gb: number;
+            /** Verified */
+            verified: boolean;
+            /** Downloaded */
+            downloaded: boolean;
         };
         /** MessageIn */
         MessageIn: {
@@ -4041,6 +4065,8 @@ export interface components {
              * @default true
              */
             include_forecast: boolean;
+            /** Include Llm */
+            include_llm?: boolean | null;
         };
         /** PrepareStatus */
         PrepareStatus: {
@@ -4669,6 +4695,8 @@ export interface components {
             llm: {
                 [key: string]: unknown;
             };
+            /** Local Models */
+            local_models: components["schemas"]["LocalLlmModelOut"][];
             /** Envs */
             envs: {
                 [key: string]: unknown;

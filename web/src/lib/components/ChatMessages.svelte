@@ -170,6 +170,9 @@
 
 	{#if chat.sending && !chat.streamingTurn}
 		<div class="thinking" aria-label="Assistant is working">
+			{#if chat.assistantWaking}
+				<span class="thinking-label">Waking the assistant — this can take up to a minute…</span>
+			{/if}
 			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
 		</div>
 	{/if}
@@ -418,6 +421,11 @@
 		align-items: center;
 		gap: 6px;
 		padding: 0.4rem 0;
+	}
+	.thinking-label {
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+		font-style: italic;
 	}
 	.dot {
 		width: 6px;

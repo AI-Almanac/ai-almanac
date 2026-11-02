@@ -59,6 +59,9 @@ function jobFromToolResult(result: unknown): Job | null {
 function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string {
 	if (event.error_type === 'provider_error') return 'The chat provider failed. Please try again.';
 	if (event.error_type === 'tool_error') return 'A benchmark data lookup failed. Please try again.';
+	// The locally run model is paused for a forecast or still loading; the
+	// server's message says which.
+	if (event.error_type === 'assistant_unavailable') return event.message;
 	if (event.error_type === 'scope_mismatch') {
 		return 'This chat belongs to a different benchmark view. Start a new chat for this benchmark.';
 	}
@@ -75,6 +78,8 @@ export class ChatSessionState {
 	sessionId = $state<string | null>(null);
 	messages = $state<ChatMessage[]>([]);
 	streamingTurn = $state<ChatMessage | null>(null);
+	// Set while a locally run model reloads its weights before answering.
+	assistantWaking = $state(false);
 	jobActivity = $state<ChatJobActivity>({ events: [], active: 0 });
 	sending = $state(false);
 	error = $state<string | null>(null);
@@ -270,6 +275,7 @@ export class ChatSessionState {
 			return;
 		}
 		this.sending = true;
+		this.assistantWaking = false;
 		this.error = null;
 		this.pendingSubmission = null;
 		this.pendingApproval = null;
@@ -316,6 +322,11 @@ export class ChatSessionState {
 	};
 
 	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
+		if (event.type === 'assistant_status') {
+			this.assistantWaking = event.status === 'waking';
+			return;
+		}
+		this.assistantWaking = false;
 		if (startsTurn(event) && this.streamingTurn?.id !== event.turn_id) {
 			this.streamingTurn = emptyAssistantTurn(event.turn_id);
 		}

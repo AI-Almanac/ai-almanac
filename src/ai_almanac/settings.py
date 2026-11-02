@@ -33,6 +33,12 @@ _CONFIG_PKG = files("ai_almanac.server").joinpath("config")
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
 _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
+_LOCAL_LLM_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("local_llm_models.yaml")))
+
+
+# Model the managed local LLM serves unless one is chosen at setup. NVFP4 keeps
+# the weights at ~20 GB, leaving room for a forecast once the model sleeps.
+DEFAULT_LOCAL_LLM_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +182,24 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_history_max_messages: int = 80
     llm_tool_result_max_chars: int = 12000
+    # "managed" runs a bundled vLLM (server/services/local_llm.py) on this
+    # machine and derives llm_base_url from llm_port; llm_model is then the
+    # Hugging Face model id it serves. Personal installs only.
+    llm_engine: Literal["external", "managed"] = "external"
+    llm_port: int = 8766
+    # Fraction of GPU memory vLLM claims (weights + KV cache). On unified-memory
+    # hosts (DGX Spark) that is system RAM, so vLLM's 0.9 default would starve
+    # the rest of the machine. A catalog model's own share (a larger model needs
+    # more) applies while this is left at its default.
+    llm_gpu_memory_utilization: float = 0.45
+    # Put the managed model to sleep after this long without a chat turn; 0
+    # keeps it loaded.
+    llm_idle_sleep_minutes: float = 10
+    # Extra `vllm serve` flags. Blank uses the flags local_llm_models.yaml
+    # lists for llm_model (tool-call/reasoning parsers differ by model family);
+    # a value replaces them wholesale. --host/--port are rejected: the
+    # server's dev endpoints are unauthenticated and must stay on loopback.
+    llm_serve_args: str = ""
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
 
@@ -334,6 +358,11 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "identity_issuer_header",
         "identity_groups_header",
         "credential_encryption_key",
+        # Baked into the managed vLLM's command line at `serve` startup.
+        "llm_engine",
+        "llm_port",
+        "llm_gpu_memory_utilization",
+        "llm_serve_args",
     }
 )
 
@@ -364,6 +393,11 @@ LOCAL_ONLY_FIELDS: frozenset[str] = frozenset(
         "max_local_jobs",
         "output_dir",
         "database_url",
+        "llm_engine",
+        "llm_port",
+        "llm_gpu_memory_utilization",
+        "llm_idle_sleep_minutes",
+        "llm_serve_args",
     }
 )
 
@@ -484,6 +518,26 @@ def _apply_overlay(target: Settings, data: dict, *, env_wins: bool = True) -> No
             continue
 
 
+def _resolve_llm_engine(target: Settings) -> None:
+    """Point the chat client at the managed local LLM when it is enabled.
+
+    A shared deployment never runs one: its users' turns go through their own
+    profiles, and a vLLM beside the web server would be a second, unmanaged
+    GPU workload.
+    """
+    if target.llm_engine != "managed":
+        return
+    if target.deployment_mode != "personal":
+        target.llm_engine = "external"
+        return
+    target.llm_provider = "openai-compatible"
+    target.llm_base_url = f"http://127.0.0.1:{target.llm_port}/v1"
+    # Switching engines from the Settings page leaves the hosted-provider
+    # default in place, which vLLM would try (and fail) to fetch from the Hub.
+    if target.llm_model == type(target).model_fields["llm_model"].default:
+        target.llm_model = DEFAULT_LOCAL_LLM_MODEL
+
+
 # Deprecated boolean flag -> the audience field that replaced it.
 _LEGACY_AUDIENCE_FLAGS: dict[str, str] = {
     "enable_assistant_comparisons": "assistant_comparisons_audience",
@@ -520,6 +574,7 @@ def reload_settings() -> Settings:
     _apply_overlay(fresh, yaml_overlay)  # config.yaml seed (beats secrets.env); env beats it
     _apply_overlay(fresh, db_overlay, env_wins=False)  # admin UI edits beat env
     _apply_legacy_audience_flags(fresh, yaml_overlay, db_overlay)
+    _resolve_llm_engine(fresh)
     for name in type(fresh).model_fields:
         setattr(settings, name, getattr(fresh, name))
     return settings
@@ -603,6 +658,22 @@ def get_packaged_forecast_models() -> list[dict]:
     if _forecast_models_cache is None:
         _forecast_models_cache = yaml.safe_load(_FORECAST_MODELS_YAML.read_text())
     return _forecast_models_cache
+
+
+_local_llm_models_cache: list[dict] | None = None
+
+
+def get_local_llm_models() -> list[dict]:
+    """Models the managed local LLM offers, with the serve flags each needs."""
+    global _local_llm_models_cache
+    if _local_llm_models_cache is None:
+        _local_llm_models_cache = yaml.safe_load(_LOCAL_LLM_MODELS_YAML.read_text())["models"]
+    return _local_llm_models_cache
+
+
+def local_llm_model(model_id: str) -> dict | None:
+    """Catalog entry for a Hugging Face model id, or None for a custom model."""
+    return next((m for m in get_local_llm_models() if m["id"] == model_id), None)
 
 
 def blend_model_key(name: str) -> str:
