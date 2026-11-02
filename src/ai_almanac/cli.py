@@ -103,12 +103,18 @@ app.add_typer(env_app, name="env")
 @env_app.command("prepare")
 def env_prepare() -> None:
     """Install or update the benchmark, blending, and forecast environments."""
+    import subprocess
+
     from ai_almanac.envs.manager import ensure_env
 
     try:
         benchmark_dir, blending_dir, forecast_dir = ensure_env()
     except RuntimeError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except subprocess.CalledProcessError as exc:
+        # The failing command's output tail was already printed by the progress callback.
+        typer.secho(f"Environment setup failed: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"benchmark env ready at {benchmark_dir}")
     typer.echo(f"blending env ready at {blending_dir}")
