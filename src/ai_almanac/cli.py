@@ -131,13 +131,22 @@ def serve(
     url = f"http://{bind if bind != '0.0.0.0' else 'localhost'}:{port}/"
     open_url = f"{url}?token={effective_token}" if effective_token else url
 
-    # 4. First-run setup check
-    from ai_almanac.server.services.setup import get_or_create_bootstrap_token, setup_required
+    # 4. First-run setup check. Grandfather first, so an install from before the
+    # wizard is not sent to it (nor given a bootstrap token) on upgrade.
+    from ai_almanac.server.services.setup import (
+        get_or_create_bootstrap_token,
+        grandfather_existing_install,
+        setup_required,
+    )
 
+    if grandfather_existing_install():
+        reload_settings()
     setup_url: str | None = None
     if setup_required():
         bootstrap_token = get_or_create_bootstrap_token()
-        setup_url = f"http://127.0.0.1:{port}/setup?token={bootstrap_token}"
+        # Same host as the serve URL, so the access cookie set during setup
+        # applies to the app afterwards.
+        setup_url = f"{url}setup?token={bootstrap_token}"
 
     # 5. Startup print
     typer.echo(f"ai-almanac {__version__} serving at {url}")
