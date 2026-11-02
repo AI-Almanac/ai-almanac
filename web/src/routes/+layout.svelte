@@ -40,7 +40,7 @@
 		}
 	}
 
-	const isSetupPage = $derived(browser ? window.location.pathname.startsWith('/setup') : false);
+	const isSetupPage = $derived($page.url.pathname.startsWith('/setup'));
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>

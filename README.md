@@ -72,11 +72,11 @@ installs the workload environments — downloading pixi itself if it isn't on
 your PATH. Expect the first install to take a few minutes; `--yes` runs it
 headless.
 
-| Workflow   | Runs on                                                              |
-| ---------- | -------------------------------------------------------------------- |
-| Benchmarks | Linux or Apple Silicon macOS, CPU only                               |
-| Blends     | Linux or Apple Silicon macOS, CPU only                               |
-| Forecasts  | Linux with an NVIDIA GPU (CUDA); model weights download on first run |
+| Workflow   | Runs on                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| Benchmarks | Linux or Apple Silicon macOS, CPU only                                                                           |
+| Blends     | Linux or Apple Silicon macOS, CPU only                                                                           |
+| Forecasts  | Linux with an NVIDIA GPU, a CUDA 13 driver, and glibc 2.34+ (Ubuntu 22.04+); model weights download on first run |
 
 The forecast environments are included by default when an NVIDIA GPU is
 detected (`--include-forecast` forces them); on macOS they are skipped.
@@ -89,8 +89,8 @@ versions.
 ## Getting started
 
 1. **Add data.** Open **Data** and register an observation dataset and one or
-   more model forecast datasets. Each is a pointer to a local directory of
-   NetCDF files. AI Almanac checks the files and variable
+   more model forecast datasets. Each is a pointer to a local directory or a
+   `gs://` prefix of NetCDF files. AI Almanac checks the files and variable
    before saving and never modifies them. A fresh install has no datasets.
 2. **Run a benchmark.** Open **Benchmarks**, describe it to the assistant or
    choose **Manual configuration**, and submit.

@@ -234,4 +234,30 @@ describe('SetupWizardState', () => {
 		expect(w.prepareStatus).toBe('running');
 		fetchSpy.mockRestore();
 	});
+
+	it('shows a retried install finishing after an earlier run failed', async () => {
+		const { SetupWizardState } = await import('../src/lib/setup/wizard.svelte');
+		storeSetupToken('test-tok');
+		const w = new SetupWizardState();
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(
+				sseStream([
+					'data: {"type":"env","seq":0,"kind":"line","phase":"benchmark","line":"a"}\n\n',
+					'data: {"type":"done","seq":1,"ok":false,"error":"pixi failed","envs":{}}\n\n'
+				])
+			)
+			.mockResolvedValueOnce(
+				sseStream(['data: {"type":"done","seq":0,"ok":true,"error":null,"envs":{}}\n\n'])
+			);
+
+		w.prepareStatus = 'running';
+		await w.attachStream(-1);
+		expect(w.prepareStatus).toBe('failed');
+
+		w.prepareStatus = 'running';
+		await w.attachStream(-1);
+		expect(w.prepareStatus).toBe('done');
+		fetchSpy.mockRestore();
+	});
 });
