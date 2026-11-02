@@ -52,6 +52,10 @@ GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentia
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
 E2S_SECRET_NAME = os.environ.get("ALMANAC_MODAL_E2S_SECRET_NAME", "")
 
+# ROMP scores ensembles and the climatology reference single-threaded, which at
+# 0.25° over India runs past 2h. Billed on actual runtime, not the ceiling.
+BENCHMARK_TIMEOUT_S = 6 * 3600
+
 
 def _media_type_for_filename(filename: str) -> str:
     lower = filename.lower()
@@ -1166,7 +1170,7 @@ if ENABLE_GCS_FUNCTIONS:
         image=benchmark_image,
         cpu=(6, 12),
         memory=(16384, 32768),
-        timeout=7200,
+        timeout=BENCHMARK_TIMEOUT_S,
         secrets=[secret for secret in (gcp_secret, e2s_secret) if secret is not None],
     )
     def run_benchmark(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -1224,7 +1228,7 @@ if ENABLE_GCS_FUNCTIONS:
     image=benchmark_image,
     cpu=(6, 12),
     memory=(16384, 32768),
-    timeout=7200,
+    timeout=BENCHMARK_TIMEOUT_S,
 )
 def run_benchmark_local(
     job_id: str,
