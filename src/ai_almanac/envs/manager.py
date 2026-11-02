@@ -40,7 +40,7 @@ def _default_progress(event: EnvProgressEvent) -> None:
     elif event.kind == "line":
         print(event.line or "", end="" if (event.line or "").endswith("\n") else "\n", flush=True)
     elif event.kind == "phase_finished":
-        print(f"==> {event.phase} ready at {event.detail}")
+        print(f"==> {event.phase} ready" + (f" at {event.detail}" if event.detail else ""))
     elif event.kind == "phase_skipped":
         print(f"==> {event.phase} skipped: {event.detail}")
     elif event.kind == "phase_failed":

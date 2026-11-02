@@ -55,6 +55,10 @@ def env_root() -> Path:
     separate data dirs (separate DBs, uploads, job outputs) but share a single
     expensive pixi environment tree by setting AI_ALMANAC_ENV_ROOT to a common
     path. Defaults to data_root() so single-instance installs are unchanged.
+
+    Every instance runs the interpreters in this tree with its own privileges,
+    so a shared root must be writable only by the one account that runs
+    `ai-almanac env prepare`, and read-only to the others.
     """
     override = os.environ.get("AI_ALMANAC_ENV_ROOT")
     if override:
