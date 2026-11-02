@@ -57,13 +57,18 @@ function hasValue(value: unknown): boolean {
 	return value !== undefined && value !== null && value !== '';
 }
 
+// Number inputs write strings, so 1998 and '1998' are the same value.
+function sameValue(a: unknown, b: unknown): boolean {
+	if (typeof a === 'object' || typeof b === 'object')
+		return JSON.stringify(a) === JSON.stringify(b);
+	return String(a ?? '') === String(b ?? '');
+}
+
 function differsFromDefaults(
 	current: Record<string, unknown>,
 	defaults: Record<string, unknown>
 ): boolean {
-	return Object.keys(current).some(
-		(key) => JSON.stringify(current[key]) !== JSON.stringify(defaults[key])
-	);
+	return Object.keys(current).some((key) => !sameValue(current[key], defaults[key]));
 }
 
 /**
@@ -87,6 +92,9 @@ export class BenchmarkSetupForm {
 	forecastWindowDays = $state<number | null>(30);
 	sharedAdvancedParams = $state<Record<string, SharedParamValue>>({});
 	perModelOverrides = $state<ModelOverrides>({});
+	// Each selected model's overrides as first seeded, so changing the dataset
+	// (which moves the clamped defaults) doesn't count as a user edit.
+	private seededDefaults = $state<Record<string, Record<string, unknown>>>({});
 	submitting = $state(false);
 	syncingConfig = $state(false);
 	manualConfigDirty = $state(false);
@@ -112,7 +120,10 @@ export class BenchmarkSetupForm {
 	);
 	readonly yearsCustomised = $derived(
 		this.selectedModelIds.some((id) =>
-			differsFromDefaults(this.perModelOverrides[id] ?? {}, this.defaultModelOverride(id))
+			differsFromDefaults(
+				this.perModelOverrides[id] ?? {},
+				this.seededDefaults[id] ?? this.defaultModelOverride(id)
+			)
 		)
 	);
 	readonly canRun = $derived(
@@ -165,13 +176,10 @@ export class BenchmarkSetupForm {
 		const fetchedModels = await getModels(regionId);
 		if (token !== this.modelsRequestToken) return;
 		this.models = fetchedModels;
-		this.perModelOverrides = this.selectedModelIds.reduce(
-			(overrides, modelId) => ({
-				...overrides,
-				[modelId]: overrides[modelId] ?? this.defaultModelOverride(modelId, fetchedModels)
-			}),
-			this.perModelOverrides
-		);
+		for (const modelId of this.selectedModelIds) {
+			if (this.perModelOverrides[modelId]) continue;
+			this.seedOverride(modelId, this.defaultModelOverride(modelId, fetchedModels));
+		}
 	}
 
 	toggleModel = (id: string) => {
@@ -183,12 +191,17 @@ export class BenchmarkSetupForm {
 			return;
 		}
 		this.selectedModelIds = [...this.selectedModelIds, id];
-		this.perModelOverrides = {
-			...this.perModelOverrides,
-			[id]: this.defaultModelOverride(id)
-		};
+		this.seedOverride(id, this.defaultModelOverride(id));
 		this.markManualConfigDirty();
 	};
+
+	private seedOverride(modelId: string, defaults: Record<string, unknown>) {
+		this.seededDefaults = { ...this.seededDefaults, [modelId]: defaults };
+		this.perModelOverrides = {
+			...this.perModelOverrides,
+			[modelId]: defaults as ModelOverrides[string]
+		};
+	}
 
 	private defaultModelOverride(modelId: string, modelList = this.models) {
 		const cfg = modelList.find((model) => model.id === modelId);
@@ -239,6 +252,7 @@ export class BenchmarkSetupForm {
 		this.selectedRegionId = id;
 		this.selectedModelIds = [];
 		this.perModelOverrides = {};
+		this.seededDefaults = {};
 		this.sharedAdvancedParams = { ...this.sharedAdvancedParams, focus_area: null };
 		this.models = [];
 		void this.loadModels(id);

@@ -162,6 +162,9 @@ def serve(
         port=port,
         reload=reload,
         log_level="info",
+        # log_requests already logs every request by path. uvicorn's access log
+        # would add the query string, which carries ?token= on the first visit.
+        access_log=False,
     )
 
 

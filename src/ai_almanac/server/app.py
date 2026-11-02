@@ -404,7 +404,8 @@ async def enforce_access_token(request: Request, call_next):
     - /health is exempt (liveness probes must not require a token).
     - Accepts cookie almanac_token, Authorization: Bearer <t>, or ?token= on GETs.
     - ?token= on a GET → 303 redirect stripping the param + Set-Cookie (HttpOnly,
-      SameSite=Lax). The token never appears in logs (log_requests logs path only).
+      SameSite=Lax). The token never appears in logs: log_requests logs the path
+      only, and `ai-almanac serve` turns off uvicorn's access log.
     - All comparisons use hmac.compare_digest to prevent timing attacks.
 
     DNS-rebinding: loopback binding + SameSite=Lax is the protection boundary;
