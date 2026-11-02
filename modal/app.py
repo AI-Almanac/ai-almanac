@@ -43,14 +43,18 @@ ENABLE_GCS_FUNCTIONS = os.environ.get("ALMANAC_MODAL_ENABLE_GCS", "1").lower() n
 # Pinned by digest: Modal caches from_registry builds by the image string, so a
 # mutable tag like :latest keeps serving whatever it resolved to first. Bump this
 # (and the momp rev in src/ai_almanac/envs/benchmark.pixi.toml) when ROMP changes.
-# This digest is romp:sha-af44762, AI-Almanac/ROMP main at af44762.
+# This digest is romp:sha-b49c5f9, AI-Almanac/ROMP main at b49c5f9.
 ROMP_IMAGE_URI = os.environ.get(
     "ALMANAC_MODAL_ROMP_IMAGE_URI",
-    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:5bc9422333408d2ed28dc96e336772f2a522da15b25e7ebf6df7d186cc72df65",
+    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:bb3b4cddd2eff0c0fca96126ce41b1c2b4d95d92f19477aa8ba069fad5065514",
 )
 GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentials")
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
 E2S_SECRET_NAME = os.environ.get("ALMANAC_MODAL_E2S_SECRET_NAME", "")
+
+# ROMP scores ensembles and the climatology reference single-threaded, which at
+# 0.25° over India runs past 2h. Billed on actual runtime, not the ceiling.
+BENCHMARK_TIMEOUT_S = 6 * 3600
 
 
 def _media_type_for_filename(filename: str) -> str:
@@ -1166,7 +1170,7 @@ if ENABLE_GCS_FUNCTIONS:
         image=benchmark_image,
         cpu=(6, 12),
         memory=(16384, 32768),
-        timeout=7200,
+        timeout=BENCHMARK_TIMEOUT_S,
         secrets=[secret for secret in (gcp_secret, e2s_secret) if secret is not None],
     )
     def run_benchmark(job_id: str, config: dict, outputs_bucket: str) -> None:
@@ -1224,7 +1228,7 @@ if ENABLE_GCS_FUNCTIONS:
     image=benchmark_image,
     cpu=(6, 12),
     memory=(16384, 32768),
-    timeout=7200,
+    timeout=BENCHMARK_TIMEOUT_S,
 )
 def run_benchmark_local(
     job_id: str,
