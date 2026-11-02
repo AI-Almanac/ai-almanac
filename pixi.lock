@@ -2687,7 +2687,7 @@ packages:
 - pypi: ./
   name: ai-almanac
   version: 0.1.0a2
-  sha256: 4384e4dd5fa24b166e929f270bfafa17c423e910666fac9dd3d2621c15581229
+  sha256: 568df9fab2a24126188b983f573ee1c3909aca5861ec0d54f890b133abebef52
   requires_dist:
   - fastapi>=0.135.3
   - uvicorn[standard]>=0.44.0
@@ -2708,16 +2708,16 @@ packages:
   - openai>=2.32.0
   - httpx>=0.28.1
   - matplotlib>=3.10.9
-  - psycopg[binary]>=3.3.4,<4
   - cryptography>=48.0.1,<51
-  - google-cloud-storage>=3.12.0,<4
-  - gcsfs>=2026.5.0,<2027
-  - modal>=1.5.0,<2
-  - globus-sdk>=4.8.0,<5
   - titiler-core>=2.0.5,<3
   - certifi
-  - pyjwt>=2.14.0
   - anyio>=4.14.2
+  - modal>=1.5.0,<2 ; extra == 'cloud'
+  - google-cloud-storage>=3.12.0,<4 ; extra == 'cloud'
+  - gcsfs>=2026.5.0,<2027 ; extra == 'cloud'
+  - psycopg[binary]>=3.3.4,<4 ; extra == 'cloud'
+  - globus-sdk>=4.8.0,<5 ; extra == 'cloud'
+  - pyjwt>=2.14.0 ; extra == 'cloud'
   requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/67/cd/0d76dfc5de72bde52f55f53e925c7d152d9c7906634ec1e0cbc7e8d4ad93/aiofile-3.11.1-py3-none-any.whl
   name: aiofile

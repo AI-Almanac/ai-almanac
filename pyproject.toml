@@ -41,8 +41,26 @@ dependencies = [
     "openai>=2.32.0",
     "httpx>=0.28.1",
     "matplotlib>=3.10.9",
+    "cryptography>=48.0.1,<51",
+    "titiler-core>=2.0.5,<3",
+    "certifi",
+    # Floor for a transitive dep: anyio < 4.14.2 is vulnerable.
+    "anyio>=4.14.2",
+]
+
+[project.optional-dependencies]
+# Cloud deployment extras — modal runner, GCS storage, PostgreSQL, Globus auth.
+# Installed in Cloud Run images (the pixi prod env) and the dev pixi
+# environments. Personal installs (uv tool install ai-almanac) get the bare
+# wheel without these heavy cloud SDK deps.
+cloud = [
+    "modal>=1.5.0,<2",
+    "google-cloud-storage>=3.12.0,<4",
+    "gcsfs>=2026.5.0,<2027",
     "psycopg[binary]>=3.3.4,<4",
-    "cryptography>=48.0.1,<51", "google-cloud-storage>=3.12.0,<4", "gcsfs>=2026.5.0,<2027", "modal>=1.5.0,<2", "globus-sdk>=4.8.0,<5", "titiler-core>=2.0.5,<3", "certifi", "pyjwt>=2.14.0", "anyio>=4.14.2",
+    "globus-sdk>=4.8.0,<5",
+    # Floor for a transitive dep (via globus-sdk): PyJWT <= 2.13.0 is vulnerable.
+    "pyjwt>=2.14.0",
 ]
 
 [project.urls]
@@ -119,7 +137,7 @@ prod = { features = ["prod"], solve-group = "default" }
 
 [tool.pixi.feature.prod.pypi-dependencies]
 # A wheel install, so the bundled SPA lands in the package's static dir.
-ai-almanac = { path = ".", editable = false }
+ai-almanac = { path = ".", editable = false, extras = ["cloud"] }
 
 [tool.pixi.tasks]
 dev = { cmd = "process-compose -f process-compose.dev.yaml", description = "Run FastAPI reload and Vite HMR together" }
@@ -164,7 +182,8 @@ process-compose = ">=1.103.0,<2"
 # Editable only where devtools is used: a workspace-wide declaration would
 # override prod's wheel install and leave the image pointing at a missing src/.
 [tool.pixi.feature.devtools.pypi-dependencies]
-ai-almanac = { path = ".", editable = true }
+ai-almanac = { path = ".", editable = true, extras = ["cloud"] }
+
 
 [tool.pixi.dependencies]
 rasterio = ">=1.5.0,<2"

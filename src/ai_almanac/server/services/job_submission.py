@@ -621,6 +621,41 @@ def blend_coverage_errors(forecast_years: list[int], coverage: dict | None) -> l
     return errors
 
 
+def _year_span(years: list[int]) -> str:
+    return str(years[0]) if years[0] == years[-1] else f"{years[0]}-{years[-1]}"
+
+
+def blend_split_errors(
+    forecast_years: list[int],
+    training: list[int],
+    cv_holdout: list[int],
+    true_holdout: list[int],
+) -> list[str]:
+    """Split years with no forecast data staged for them.
+
+    The blend trains and validates only on rows with forecast data, so a
+    training/holdout year outside ``forecast_years`` contributes zero rows —
+    an all-outside split reaches the final fit with an empty training set and
+    crashes it. Trivially satisfied when ``forecast_years`` defaults to the
+    union of the splits; only an explicit ``forecast_years`` can violate it.
+    Mirrored by web/src/routes/blends/year-coverage.ts.
+    """
+    staged = set(forecast_years)
+    errors: list[str] = []
+    for label, years in (
+        ("Training", training),
+        ("CV holdout", cv_holdout),
+        ("True holdout", true_holdout),
+    ):
+        missing = sorted(set(years) - staged)
+        if missing:
+            errors.append(
+                f"{label} years {_year_span(missing)} have no forecast data — "
+                f"forecast years cover {_year_span(sorted(staged))}."
+            )
+    return errors
+
+
 class BlendMember(NamedTuple):
     """A blend member as the live-forecast checks see it."""
 
@@ -935,8 +970,12 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         *(source_missing_years(s.get("metadata")) for s in [obs_source, *model_sources])
     )
     coverage = blend_year_coverage(source_year_range(obs_source), model_years, missing)
+    splits = blend_years(body.params)
     source_errors = (
         blend_coverage_errors(forecast_years, coverage)
+        + blend_split_errors(
+            forecast_years, splits.training, splits.cv_holdout, splits.true_holdout
+        )
         + grid_mismatch_errors(
             archive_grid_step(obs_source),
             ((source["name"], archive_grid_step(source)) for source in model_sources),
