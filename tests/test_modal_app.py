@@ -92,3 +92,52 @@ def test_dim_names_that_are_not_plain_names_never_reach_romp(
 
     with pytest.raises(ValidationError):
         module._romp_env(config, *module._stage_paths(tmp_path))
+
+
+class _FakeGcsClient:
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    def list_blobs(self, bucket_name: str, prefix: str, delimiter: str):
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(name=prefix + name) for name in self._names]
+
+    def bucket(self, bucket_name: str):
+        return bucket_name
+
+
+def test_a_model_year_that_fails_to_download_stops_the_run_before_romp(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from google.cloud.storage import transfer_manager
+
+    def download_many_to_path(bucket, names, destination_directory, **kwargs):
+        return [ConnectionError("Broken pipe") if name == "2006.nc" else None for name in names]
+
+    monkeypatch.setattr(transfer_manager, "download_many_to_path", download_many_to_path)
+    module = _load_modal_app()
+    client = _FakeGcsClient(["2005.nc", "2006.nc", "2007.nc"])
+
+    with pytest.raises(RuntimeError, match=r"1 model file\(s\): 2006\.nc: Broken pipe"):
+        module._stage_gcs_years(client, "gs://bucket/models/", tmp_path, 2005, 2007)
+
+
+def test_model_years_outside_the_benchmark_range_are_not_staged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from google.cloud.storage import transfer_manager
+
+    requested: list[str] = []
+
+    def download_many_to_path(bucket, names, destination_directory, **kwargs):
+        requested.extend(names)
+        return [None for _ in names]
+
+    monkeypatch.setattr(transfer_manager, "download_many_to_path", download_many_to_path)
+    module = _load_modal_app()
+    client = _FakeGcsClient(["1999.nc", "2005.nc", "2006.nc", "notes.txt"])
+
+    staged = module._stage_gcs_years(client, "gs://bucket/models/", tmp_path, 2005, 2007)
+
+    assert (staged, requested) == (2, ["2005.nc", "2006.nc"])
