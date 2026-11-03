@@ -241,56 +241,69 @@ def _split_gcs_uri(uri: str, label: str) -> tuple[str, str]:
     return bucket_name, prefix
 
 
+# The GCS client's default retry gives up 120 s after a download starts, counting
+# time spent streaming, so a multi-GB model year sharing bandwidth with seven
+# others fails on one dropped connection near the end. Retries resume mid-file.
+STAGING_RETRY_TIMEOUT_S = 30 * 60
+
+
+def _failed_downloads(names: list[str], results: list) -> dict[str, Exception]:
+    return {
+        name: result
+        for name, result in zip(names, results, strict=True)
+        if isinstance(result, Exception)
+    }
+
+
+def _staging_failure_message(label: str, failures: dict[str, Exception]) -> str:
+    details = "; ".join(f"{name}: {error}" for name, error in failures.items())
+    return f"Could not download {len(failures)} {label} file(s): {details}"
+
+
+def _download_blobs(bucket, prefix: str, names: list[str], local_dir: Path, label: str) -> None:
+    """Download every named blob into local_dir, raising if any is missing or incomplete."""
+    from google.cloud.storage import transfer_manager
+    from google.cloud.storage.retry import DEFAULT_RETRY
+
+    results = transfer_manager.download_many_to_path(
+        bucket,
+        names,
+        str(local_dir),
+        blob_name_prefix=prefix,
+        download_kwargs={"retry": DEFAULT_RETRY.with_timeout(STAGING_RETRY_TIMEOUT_S)},
+        worker_type="thread",
+    )
+    failures = _failed_downloads(names, results)
+    if failures:
+        raise RuntimeError(_staging_failure_message(label, failures))
+
+
 def _stage_gcs_prefix(client, uri: str, local_dir: Path) -> int:
     """Download all direct children of a GCS prefix into local_dir."""
-    from google.cloud.storage import transfer_manager
-
     bucket_name, prefix = _split_gcs_uri(uri, "obs_dir")
     prefix = prefix.rstrip("/") + "/"
-    bucket = client.bucket(bucket_name)
     names = [
         blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
         if blob.name[len(prefix) :] and not blob.name[len(prefix) :].endswith("/")
     ]
     if names:
-        results = transfer_manager.download_many_to_path(
-            bucket,
-            names,
-            str(local_dir),
-            blob_name_prefix=prefix,
-            worker_type="thread",
-        )
-        for name, result in zip(names, results, strict=False):
-            if isinstance(result, Exception):
-                print(f"  obs FAILED: {name}: {result}")
+        _download_blobs(client.bucket(bucket_name), prefix, names, local_dir, "obs")
     return len(names)
 
 
 def _stage_gcs_years(client, uri: str, local_dir: Path, start_year: int, end_year: int) -> int:
     """Download {year}.nc files from a GCS prefix filtered to the given year range."""
-    from google.cloud.storage import transfer_manager
-
     bucket_name, prefix = _split_gcs_uri(uri, "model_dir")
     prefix = prefix.rstrip("/") + "/"
     year_names = {f"{y}.nc" for y in range(start_year, end_year + 1)}
-    bucket = client.bucket(bucket_name)
     names = [
         blob.name[len(prefix) :]
         for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
         if blob.name[len(prefix) :] in year_names
     ]
     if names:
-        results = transfer_manager.download_many_to_path(
-            bucket,
-            names,
-            str(local_dir),
-            blob_name_prefix=prefix,
-            worker_type="thread",
-        )
-        for name, result in zip(names, results, strict=False):
-            if isinstance(result, Exception):
-                print(f"  model FAILED: {name}: {result}")
+        _download_blobs(client.bucket(bucket_name), prefix, names, local_dir, "model")
     return len(names)
 
 
