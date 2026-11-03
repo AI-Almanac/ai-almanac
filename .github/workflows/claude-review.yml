@@ -7,6 +7,7 @@ name: claude-review
 # the develop ruleset's thread-resolution rule blocks on.
 #
 # Auth: CLAUDE_CODE_OAUTH_TOKEN (subscription seat via `claude setup-token`).
+# Comments post as github-actions[bot] via the job token (see github_token).
 # Quota guardrails: drafts and docs-only diffs skipped, superseded runs
 # cancelled, turn-capped, fork PRs skipped (no secrets on forks anyway).
 # Re-reviews cover only the commits since the last review's marker, and a
@@ -38,11 +39,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MAX_TURNS: 50
+      # Strip credentials the agent's shell does not need (PR content can
+      # prompt-inject it); GH_TOKEN stays for gh.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     permissions:
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,10 +62,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: scripts/prepare-review-inputs.sh "${{ github.event.pull_request.number }}" reviewed
 
+      # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB requires bubblewrap, which the action
+      # installs only when allowed_non_write_users is set. Ubuntu 24.04 blocks
+      # the unprivileged user namespaces bubblewrap needs unless relaxed.
+      - name: Install subprocess isolation dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
         if: steps.inputs.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The job token is scoped to the permissions above. Without it the
+          # action needs id-token: write to fetch the Claude App token, whose
+          # installation scopes exceed this read-only review job.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # use_sticky_comment is broken in prompt mode (action issue #1108);
           # the prompt instructs gh pr comment instead (one comment per run).
           prompt: |
