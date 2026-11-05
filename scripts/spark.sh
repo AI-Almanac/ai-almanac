@@ -8,9 +8,16 @@ cd "$(dirname "$0")/.."
 
 : "${ALMANAC_DATA_DIR:=${XDG_DATA_HOME:-$HOME/.local/share}/ai-almanac-spark}"
 : "${ALMANAC_PORT:=8765}"
-# The datasets live in ./datasets (git- and docker-ignored), registered under
-# the names in deploy/spark-datasets.yaml.
-: "${ALMANAC_DATASETS_DIR:=$PWD/datasets}"
+# The datasets live in ~/ai-almanac-data, registered under the names in
+# deploy/spark-datasets.yaml. A checkout that already keeps them in ./datasets
+# (git- and docker-ignored) goes on using it until ~/ai-almanac-data exists.
+if [ -z "${ALMANAC_DATASETS_DIR:-}" ]; then
+  if [ -d "$PWD/datasets" ] && [ ! -d "$HOME/ai-almanac-data" ]; then
+    ALMANAC_DATASETS_DIR=$PWD/datasets
+  else
+    ALMANAC_DATASETS_DIR=$HOME/ai-almanac-data
+  fi
+fi
 # What a fresh install's assistant runs; change it later in Settings.
 : "${ALMANAC_LLM_MODEL:=nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4}"
 export ALMANAC_DATA_DIR ALMANAC_PORT ALMANAC_DATASETS_DIR
@@ -52,7 +59,8 @@ Environment:
   ALMANAC_DATA_DIR      host directory for the database, jobs, environments, and
                         caches (default: ~/.local/share/ai-almanac-spark)
   ALMANAC_DATASETS_DIR  host directory mounted read-only at /datasets
-                        (default: ./datasets)
+                        (default: ~/ai-almanac-data, or ./datasets in a checkout
+                        that has one and no ~/ai-almanac-data)
   ALMANAC_PORT          loopback port (default: 8765)
   ALMANAC_LLM_MODEL     the local assistant model a fresh install runs
                         (default: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4)

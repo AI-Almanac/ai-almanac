@@ -1,4 +1,4 @@
-# What `scripts/spark.sh up` registers the datasets under ./datasets as, by
+# What `scripts/spark.sh up` registers the datasets under ~/ai-almanac-data as, by
 # path relative to it. Discovery infers everything else (kind, variable, file
 # pattern, years, region); this keeps the names, the live forecast model
 # links, and what an observation date marks (obs_date_marks: start or end) --

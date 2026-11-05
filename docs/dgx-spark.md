@@ -62,7 +62,7 @@ Every `up` then registers the datasets it hasn't seen yet (see below).
 | Variable | Default | Purpose |
 |---|---|---|
 | `ALMANAC_DATA_DIR` | `~/.local/share/ai-almanac-spark` | Database, jobs, environments, and download caches |
-| `ALMANAC_DATASETS_DIR` | `./datasets` | Host directory mounted read-only at `/datasets` |
+| `ALMANAC_DATASETS_DIR` | `~/ai-almanac-data` | Host directory mounted read-only at `/datasets`. A checkout that already has `./datasets` and no `~/ai-almanac-data` keeps using `./datasets` |
 | `ALMANAC_PORT` | `8765` | Loopback port |
 | `ALMANAC_LLM_MODEL` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` | The assistant model a fresh install runs |
 
@@ -74,7 +74,7 @@ be shared with a native install.
 ## Registering datasets
 
 Put each dataset in its own directory of yearly NetCDF files under the datasets
-directory, e.g. `india/obs/` and `india/models/graphcast/`. `scripts/spark.sh up`
+directory (`~/ai-almanac-data` unless `ALMANAC_DATASETS_DIR` says otherwise), e.g. `india/obs/` and `india/models/graphcast/`. `scripts/spark.sh up`
 registers each new one it finds, under the name `deploy/spark-datasets.yaml`
 gives its path (and with the live forecast model the file links it to), or a
 name inferred from the path when the file doesn't list it. To ship a dataset
