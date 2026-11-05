@@ -57,6 +57,16 @@ def run_job_workload_command(job_id: str) -> None:
     run_job_workload(job_id)
 
 
+def _python_source_dirs() -> list[str]:
+    """What --reload watches: the server's own package, never the working directory,
+    which may hold a data dir whose envs and job outputs change constantly."""
+    from pathlib import Path
+
+    import ai_almanac
+
+    return [str(Path(ai_almanac.__file__).parent)]
+
+
 @app.command()
 def serve(
     bind: Annotated[str, typer.Option(help="Host to bind to.")] = "127.0.0.1",
@@ -170,6 +180,7 @@ def serve(
         host=bind,
         port=port,
         reload=reload,
+        reload_dirs=_python_source_dirs() if reload else None,
         log_level="info",
         # log_requests already logs every request by path. uvicorn's access log
         # would add the query string, which carries ?token= on the first visit.
