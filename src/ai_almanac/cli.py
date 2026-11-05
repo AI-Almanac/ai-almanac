@@ -62,9 +62,7 @@ def _python_source_dirs() -> list[str]:
     which may hold a data dir whose envs and job outputs change constantly."""
     from pathlib import Path
 
-    import ai_almanac
-
-    return [str(Path(ai_almanac.__file__).parent)]
+    return [str(Path(__file__).resolve().parent)]
 
 
 @app.command()
