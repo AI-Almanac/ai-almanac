@@ -1,0 +1,7 @@
+# Added to compose.spark.yaml by `scripts/spark.sh update`: the container without its
+# published port. update only runs commands inside it, so it works while another
+# account on this Spark (or this one's own `up`) holds the port. The next `up` recreates
+# the container with the port.
+services:
+  almanac:
+    ports: !reset []

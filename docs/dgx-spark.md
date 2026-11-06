@@ -40,6 +40,7 @@ supports without the NVIDIA runtime's `no-cgroups` setting.
 ```bash
 scripts/spark.sh up        # build, start (setting up on first run, else updating any
                            # workload environment the image changed), print the URL to open
+scripts/spark.sh update    # the same, unattended, then stop the container
 scripts/spark.sh prepare   # reinstall the workload environments
 scripts/spark.sh url       # print the URL again
 scripts/spark.sh logs
@@ -58,6 +59,12 @@ image rebuilds, and resumes if interrupted. A data directory that is already
 set up is left as it is, so changes made in Settings stick.
 
 Every `up` then registers the datasets it hasn't seen yet (see below).
+
+`update` does what `up` does and then stops the container, so the local model
+doesn't hold GPU memory until someone starts it with `up`. The demo Sparks run
+it by themselves after each pull of this branch that brings a new commit (the
+fleet's `fleet_demos.repos` setup, as the demo account), so the image is built
+and the first-run downloads are done before anyone opens it.
 
 | Variable | Default | Purpose |
 |---|---|---|

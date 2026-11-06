@@ -44,6 +44,10 @@ usage: scripts/spark.sh <command>
             environments, model weights), else reinstall any workload
             environment the new image changed, then register any new datasets
             (and update the ones deploy/spark-datasets.yaml lists)
+  update    what `up` does (build, first-run setup or environment updates,
+            datasets), unattended, then stop the container: the fleet runs it on
+            the demo Sparks after a git pull, so the local model doesn't hold GPU
+            memory until someone starts it with `up`
   prepare   install the workload environments inside the container
   init ...  headless first-run setup (ai-almanac init --yes ...), then restart
   discover [--register]
@@ -122,8 +126,8 @@ case "$cmd" in
   *) [ "$#" -eq 0 ] || usage ;;
 esac
 
-case "$cmd" in
-  up)
+# up and update: the same, but update ends with the container stopped.
+bring_up() {
     preflight
     mkdir -p "$ALMANAC_DATA_DIR" "$ALMANAC_DATASETS_DIR"
     $compose up --build --detach --wait
@@ -148,6 +152,13 @@ case "$cmd" in
     # Sources are read per request, so registered ones appear without a restart.
     printf '\nRegistering new datasets in %s\n' "$ALMANAC_DATASETS_DIR"
     $compose exec -T almanac ai-almanac sources discover --register --names "$dataset_names"
+    if [ -n "${stop_after:-}" ]; then
+      # (No restart for new settings: the next `up` starts it with them.)
+      $compose stop almanac
+      printf '\nAI Almanac is set up and stopped (data: %s); start it with: scripts/spark.sh up\n' \
+        "$ALMANAC_DATA_DIR"
+      return
+    fi
     if [ -n "${setup_ran:-}" ]; then
       # The server reads settings at startup.
       $compose restart almanac
@@ -155,6 +166,16 @@ case "$cmd" in
     fi
     printf '\nAI Almanac is running (data: %s)\n' "$ALMANAC_DATA_DIR"
     print_urls
+}
+
+case "$cmd" in
+  up) bring_up ;;
+  update)
+    # Without the published port (compose.spark-update.yaml). (A stopped container
+    # stays stopped across reboots: restart is unless-stopped.)
+    compose="$compose -f compose.spark-update.yaml"
+    stop_after=1
+    bring_up
     ;;
   prepare) $compose exec almanac ai-almanac env prepare ;;
   discover) $compose exec almanac ai-almanac sources discover --names "$dataset_names" "$@" ;;
