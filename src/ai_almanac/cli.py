@@ -669,6 +669,84 @@ def llm_status() -> None:
     typer.echo(local_llm.status())
 
 
+@llm_app.command("warm")
+def llm_warm(
+    timeout_minutes: Annotated[
+        int, typer.Option(help="Give up (and stop it) after this long.")
+    ] = 60,
+    margin_gb: Annotated[
+        float, typer.Option(help="Memory to leave free beyond the model's share, for compiling.")
+    ] = 10,
+) -> None:
+    """Start the local model once and wait until it answers, then stop it again.
+
+    Its first start compiles and caches GPU kernels (many minutes); later starts reuse
+    them. For unattended setup (`scripts/spark.sh update`), so the first chat doesn't
+    wait for that. Skipped, successfully, when a start with these settings already
+    succeeded, when the model isn't installed or isn't run locally, or when the machine
+    hasn't the memory free (another workload is using the GPU): it's tried again next time.
+    """
+    import time
+
+    from ai_almanac.envs.manager import llm_env_ready
+    from ai_almanac.server.services import local_llm
+    from ai_almanac.settings import reload_settings
+
+    reload_settings()
+    if not local_llm.is_managed():
+        typer.echo("no local model to warm up (the assistant doesn't run one here)")
+        return
+    if not llm_env_ready():
+        typer.echo("no local model to warm up yet (its environment isn't installed)")
+        return
+    if local_llm.status() in ("ready", "sleeping"):  # (also records this start as a good one)
+        typer.echo("the local model is already running; nothing to warm up")
+        return
+    if local_llm._startup_profile(local_llm.serve_args()) is not None:
+        typer.echo("the local model is warm: a start with these settings already succeeded")
+        return
+    ours = local_llm._live_pid() is None  # (else a `serve` here is already starting it)
+    if ours:
+        free = local_llm._mem_available_gb()
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+        need = local_llm.gpu_memory_utilization() * total + margin_gb
+        if free is not None and free < need:
+            typer.echo(
+                f"skipped warming up the local model: {free:.0f} GB of memory free, it needs about "
+                f"{need:.0f} GB (is something else using the GPU?); it's tried again next time"
+            )
+            return
+        local_llm.start()
+    typer.echo("warming up the local model (a first start compiles and caches its kernels) ...")
+    deadline, said = time.monotonic() + timeout_minutes * 60, ""
+    try:
+        while True:
+            state = local_llm.status()
+            if state in ("ready", "sleeping"):
+                typer.echo("the local model is warm")
+                return
+            if local_llm._live_pid() is None:
+                typer.echo(
+                    "the local model server stopped before it answered; see llm.log in the data directory",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            if time.monotonic() > deadline:
+                typer.echo(
+                    f"the local model didn't answer within {timeout_minutes} minutes; stopped",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            stage = local_llm.startup_progress().stage
+            if stage != said:
+                typer.echo(f"  {stage.replace('_', ' ')}")
+                said = stage
+            time.sleep(10)
+    finally:
+        if ours:
+            local_llm.stop()
+
+
 @llm_app.command("stop")
 def llm_stop() -> None:
     """Stop the local model server.

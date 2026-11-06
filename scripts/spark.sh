@@ -45,7 +45,8 @@ usage: scripts/spark.sh <command>
             environment the new image changed, then register any new datasets
             (and update the ones deploy/spark-datasets.yaml lists)
   update    what `up` does (build, first-run setup or environment updates,
-            datasets), unattended, then stop the container: the fleet runs it on
+            datasets, warming up the local model the first time), unattended,
+            then stop the container: the fleet runs it on
             the demo Sparks after a git pull, so the local model doesn't hold GPU
             memory until someone starts it with `up`
   prepare   install the workload environments inside the container
@@ -153,6 +154,11 @@ bring_up() {
     printf '\nRegistering new datasets in %s\n' "$ALMANAC_DATASETS_DIR"
     $compose exec -T almanac ai-almanac sources discover --register --names "$dataset_names"
     if [ -n "${stop_after:-}" ]; then
+      # The local model's first start compiles its GPU kernels (many minutes, then cached):
+      # done here when it hasn't been yet and the memory is free, so the first chat
+      # doesn't wait. A skipped or failed warm-up doesn't fail the update.
+      $compose exec -T almanac ai-almanac llm warm ||
+        printf '\nwarning: the local model was not warmed up; its first start will take longer\n' >&2
       # (No restart for new settings: the next `up` starts it with them.)
       $compose stop almanac
       printf '\nAI Almanac is set up and stopped (data: %s); start it with: scripts/spark.sh up\n' \
