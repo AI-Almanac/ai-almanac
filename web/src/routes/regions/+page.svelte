@@ -34,7 +34,9 @@
 	const customRegions = $derived(regions.filter((region) => !region.is_builtin));
 	const builtInRegions = $derived(regions.filter((region) => region.is_builtin));
 	const formComplete = $derived(
-		displayName.trim() && [latMin, latMax, lonMin, lonMax].every((value) => value.trim() !== '')
+		// (type="number" inputs bind a number, or null when empty, not a string: no .trim() on them)
+		displayName.trim() &&
+			[latMin, latMax, lonMin, lonMax].every((value) => String(value ?? '').trim() !== '')
 	);
 
 	async function load() {
