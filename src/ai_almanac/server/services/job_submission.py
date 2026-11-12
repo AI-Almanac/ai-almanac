@@ -1718,6 +1718,29 @@ async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     return {**params, "focus_area": area.model_dump(mode="json")}
 
 
+async def _country_outline(region_def: dict | None, romp_params: dict) -> dict | None:
+    """A custom region's country, for a benchmark to score only inside it.
+
+    A built-in region has ROMP's own shapefile; a custom one is only a lat/lon box,
+    which takes in the neighbouring countries and the sea. With a country code
+    (boundary_iso) the job carries the country's outline (geoBoundaries ADM0, as
+    the area picker loads it), frozen in like picked areas' outlines, and
+    materialize_focus_mask scores only the cells inside it (and inside any picked
+    area). A job with its own nc_mask keeps it. If the outline can't be had
+    (offline, say), the box is scored as before and the run log says so.
+    """
+    if not region_def or region_def.get("romp_name") or not region_def.get("boundary_iso"):
+        return None
+    if romp_params.get("nc_mask"):
+        return None
+    iso = region_def["boundary_iso"]
+    try:
+        boundary = await boundaries.load_boundary(iso, "adm0")
+    except boundaries.BoundaryUnavailable as exc:
+        return {"iso": iso, "geometry": None, "unavailable": str(exc)}
+    return {"iso": iso, "geometry": boundary["geojson"]}
+
+
 async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if not observation_source:
@@ -1794,6 +1817,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     region_def = catalog.region(region_id)
     romp_params = apply_region_params({"region": region_id, **romp_params}, catalog)
     romp_params = await _with_unit_outlines(romp_params, region_def)
+    country_outline = await _country_outline(region_def, romp_params)
 
     source_metadata = observation_source["metadata"] if observation_source else {}
     if region_id == "custom":
@@ -1840,6 +1864,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "dataset_config": dataset_config,
         "compute_e2s_metrics": compute_e2s_metrics,
         "romp_params": romp_params,
+        **({"country_outline": country_outline} if country_outline else {}),
     }
 
     async with get_db() as conn:

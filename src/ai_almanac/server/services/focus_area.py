@@ -1,5 +1,5 @@
 """A user-chosen area of interest that limits which grid cells a job scores,
-and the region's season mask that limits them by default.
+and the region's season mask and country outline that limit them by default.
 
 Two shapes: a lat/lon box, or a set of named administrative units whose
 outlines are attached at submission (see ``boundaries.attach_unit_outlines``)
@@ -93,6 +93,11 @@ def _inside_ring(ring: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return inside
 
 
+def outline_lon(lon: np.ndarray) -> np.ndarray:
+    """Grid longitudes in the outlines' -180..180 (a 0..360 grid's 280 is -80)."""
+    return np.where(lon > 180, lon - 360, lon)
+
+
 def area_cells(area: FocusArea, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """[lat, lon]: the grid cells inside the area."""
     if isinstance(area, FocusBox):
@@ -101,7 +106,7 @@ def area_cells(area: FocusArea, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
         return inside_lat[:, None] & inside_lon[None, :]
     if not area.geometry:
         raise ValueError("Area of interest outlines were not attached at submission")
-    return cells_inside(area.geometry, lat, lon)
+    return cells_inside(area.geometry, lat, outline_lon(lon))
 
 
 def write_focus_mask(area: FocusArea, path: Path, lat: np.ndarray, lon: np.ndarray) -> Path:
@@ -175,14 +180,23 @@ def _coord(ds: xr.Dataset, prefix: str) -> np.ndarray:
 
 
 def materialize_focus_mask(config: dict, mask_dir: Path) -> dict:
-    """Turn a job's focus_area, and its region's season mask, into one nc_mask
-    file on the observation grid. A job's own nc_mask stands instead of the
-    season mask; season_mask: false turns the season mask off."""
+    """Turn a job's focus_area, its region's season mask and its country outline
+    into one nc_mask file on the observation grid. A job's own nc_mask stands
+    instead of the season mask and the outline; season_mask: false turns the
+    season mask off.
+
+    The country outline (config["country_outline"], attached at submission for a
+    custom region with a country code) keeps the scores inside the country, as a
+    built-in region's shapefile does: the region's lat/lon box alone takes in its
+    neighbours and the sea."""
     params = config.get("romp_params") or {}
     season = None
     if not params.get("nc_mask") and params.get("season_mask") is not False:
         season = season_mask(config.get("region_id"))
-    if not params.get("focus_area") and season is None:
+    country = (
+        None if params.get("nc_mask") else (config.get("country_outline") or {}).get("geometry")
+    )
+    if not params.get("focus_area") and season is None and not country:
         return config
     lat, lon = data_grid(Path(config["obs_dir"]))
     inside = np.ones((lat.size, lon.size), dtype=bool)
@@ -190,8 +204,11 @@ def materialize_focus_mask(config: dict, mask_dir: Path) -> dict:
         inside &= area_cells(parse_focus_area(params["focus_area"]), lat, lon)
     if season is not None:
         inside &= season_cells(season, lat, lon)
+    if country:
+        inside &= cells_inside(country, lat, outline_lon(lon))
     if not inside.any():
         where = " and the season mask" if season is not None else ""
+        where += " and the country" if country else ""
         raise ValueError(f"No grid cells fall inside the area of interest{where}")
     path = _write_mask(inside, mask_dir / "focus-mask.nc", lat, lon)
     return {**config, "romp_params": {**params, "nc_mask": str(path)}}

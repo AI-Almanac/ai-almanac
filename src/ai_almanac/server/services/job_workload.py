@@ -45,6 +45,19 @@ def _run_pixi(job_id: str, config: dict) -> None:
     output_dir_raw, figure_dir_raw = storage.job_output_uri(job_id)
     output_dir = Path(output_dir_raw)
     figure_dir = Path(figure_dir_raw)
+    outline = config.get("country_outline") or {}
+    if outline.get("geometry") and not (config.get("romp_params") or {}).get("nc_mask"):
+        print(
+            f"==> Scoring only inside {config.get('region_name') or outline.get('iso')} "
+            f"({outline.get('iso')}'s outline)",
+            flush=True,
+        )
+    elif outline.get("unavailable"):
+        print(
+            f"WARNING: {outline.get('iso')}'s outline couldn't be loaded ({outline['unavailable']}); "
+            "scoring the region's whole lat/lon box",
+            flush=True,
+        )
     config = materialize_focus_mask(config, output_dir.parent)
     config_path = write_romp_config(job_id, config, output_dir, figure_dir)
     env = build_job_env(config, output_dir_raw, figure_dir_raw)

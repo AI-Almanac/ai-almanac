@@ -226,3 +226,176 @@ def test_states_and_districts_can_be_picked_but_subdistricts_cannot(
     picked = parse_focus_area(area)
     assert isinstance(picked, FocusUnits)
     assert picked.level == level
+
+
+# --- A custom region's country (boundary_iso): scores only inside it ------------------------
+
+COUNTRY = {"type": "FeatureCollection", "features": [_square("Testland", 6.1, 9.9, 36.1, 41.9)]}
+
+
+def _country_job(tmp_path: Path, **params: object) -> dict:
+    _write_obs(tmp_path / "obs.nc")
+    return {
+        "obs_dir": str(tmp_path),
+        "region_id": "testland",
+        "romp_params": dict(params),
+        "country_outline": {"iso": "TST", "geometry": COUNTRY},
+    }
+
+
+def _mask(out: dict) -> xr.DataArray:
+    with xr.open_dataset(out["romp_params"]["nc_mask"]) as ds:
+        return ds["mask"].load()
+
+
+def test_a_country_region_scores_only_inside_the_country(tmp_path: Path) -> None:
+    mask = _mask(materialize_focus_mask(_country_job(tmp_path), tmp_path))
+    kept = mask.where(mask == 1, drop=True)
+    assert float(kept.lat.min()) >= 6.0 and float(kept.lat.max()) <= 10.0
+    assert float(kept.lon.min()) >= 36.0 and float(kept.lon.max()) <= 42.0
+    assert int(mask.sum()) == 15 * 23  # (every cell centre inside, none outside)
+
+
+def test_a_picked_area_is_kept_within_the_country(tmp_path: Path) -> None:
+    box = {"lat_min": 8.0, "lat_max": 14.0, "lon_min": 40.0, "lon_max": 46.0}
+    mask = _mask(materialize_focus_mask(_country_job(tmp_path, focus_area=box), tmp_path))
+    kept = mask.where(mask == 1, drop=True)
+    assert (
+        float(kept.lat.max()) <= 10.0 and float(kept.lon.max()) <= 42.0
+    )  # (the box's part in the country)
+    assert float(kept.lat.min()) >= 8.0 and float(kept.lon.min()) >= 40.0
+
+
+def test_a_jobs_own_mask_file_stands_instead_of_the_country(tmp_path: Path) -> None:
+    job = _country_job(tmp_path, nc_mask="/data/my-mask.nc")
+    assert materialize_focus_mask(job, tmp_path) == job
+    unavailable = {
+        **_country_job(tmp_path),
+        "country_outline": {"iso": "TST", "geometry": None, "unavailable": "x"},
+    }
+    assert materialize_focus_mask(unavailable, tmp_path) == unavailable  # (offline: the whole box)
+
+
+def test_outlines_match_a_0_360_grid(tmp_path: Path) -> None:
+    lat = np.arange(-18.0, -9.99, 0.25)
+    lon = np.arange(278.0, 292.01, 0.25)  # (a western country's data, 0..360)
+    xr.DataArray(
+        np.zeros((lat.size, lon.size), dtype="f4"),
+        dims=("lat", "lon"),
+        coords={"lat": lat, "lon": lon},
+        name="precip",
+    ).to_netcdf(tmp_path / "obs.nc")
+    peru = {
+        "type": "FeatureCollection",
+        "features": [_square("Peruish", -16.0, -12.0, -76.0, -72.0)],
+    }
+    job = {
+        "obs_dir": str(tmp_path),
+        "romp_params": {},
+        "country_outline": {"iso": "PER", "geometry": peru},
+    }
+    kept = _mask(materialize_focus_mask(job, tmp_path))
+    kept = kept.where(kept == 1, drop=True)
+    assert (
+        float(kept.lon.min()) >= 284.0 and float(kept.lon.max()) <= 288.0
+    )  # (-76..-72 is 284..288)
+    picked = {"level": "adm1", "units": ["Peruish"], "geometry": peru}
+    job = {"obs_dir": str(tmp_path), "romp_params": {"focus_area": picked}}
+    assert int(_mask(materialize_focus_mask(job, tmp_path)).sum()) > 0  # (picked areas too)
+
+
+async def _country_benchmark(
+    client, as_new_user, monkeypatch, region: str, outline: object
+) -> dict:
+    import json
+
+    from sqlalchemy import text
+
+    from ai_almanac.server.db import get_db
+
+    root = Path(__file__).parents[1] / "testdata" / "ethiopia"
+
+    async def fake_boundary(iso: str, level: str) -> dict:
+        if isinstance(outline, Exception):
+            raise outline
+        assert level == "adm0"
+        return {"metadata": {}, "geojson": outline}
+
+    async def fake_launch(job_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(boundaries, "load_boundary", fake_boundary)
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", fake_launch)
+    if region != "ethiopia":
+        made = await client.post(
+            "/regions",
+            json={
+                "display_name": "Testland",
+                "description": "",
+                "lat_min": 3,
+                "lat_max": 15,
+                "lon_min": 33,
+                "lon_max": 48,
+                "land_only": False,
+                "boundary_iso": "TST",
+            },
+        )
+        assert made.status_code == 201, made.text
+    ids = []
+    for kind, folder, md in (
+        ("obs", "obs", {"obs_file_pattern": "{}.nc", "obs_var": "RAINFALL"}),
+        ("model", "fuxi", {"file_pattern": "{}.nc", "model_var": "tp", "model_type": "AIWP"}),
+    ):
+        r = await client.post(
+            "/data-sources",
+            json={
+                "kind": kind,
+                "name": f"{region} {kind}",
+                "path": str(root / folder),
+                "region": region,
+                "metadata": md,
+            },
+        )
+        ids.append(r.json()["id"])
+    response = await client.post(
+        "/jobs",
+        headers=as_new_user,
+        json={"dataset_id": ids[0], "model_name": ids[1], "params": {"region": region}},
+    )
+    assert response.status_code in (200, 201), response.text
+    async with get_db() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT config_json FROM jobs WHERE id = :id"), {"id": response.json()["id"]}
+            )
+        ).scalar_one()
+    return json.loads(row)
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_of_a_country_region_carries_its_outline(
+    client, as_new_user, monkeypatch
+) -> None:
+    config = await _country_benchmark(client, as_new_user, monkeypatch, "testland", COUNTRY)
+    assert config["country_outline"] == {"iso": "TST", "geometry": COUNTRY}
+    assert config["romp_params"]["region"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_a_built_in_region_keeps_its_own_shapefile(client, as_new_user, monkeypatch) -> None:
+    config = await _country_benchmark(client, as_new_user, monkeypatch, "ethiopia", COUNTRY)
+    assert "country_outline" not in config
+
+
+@pytest.mark.asyncio
+async def test_without_the_outline_the_benchmark_still_runs_on_the_box(
+    client, as_new_user, monkeypatch
+) -> None:
+    config = await _country_benchmark(
+        client, as_new_user, monkeypatch, "testland", boundaries.BoundaryUnavailable("no network")
+    )
+    assert config["country_outline"] == {
+        "iso": "TST",
+        "geometry": None,
+        "unavailable": "no network",
+    }
