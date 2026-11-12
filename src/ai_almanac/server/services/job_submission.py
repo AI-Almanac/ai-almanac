@@ -1101,9 +1101,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     region_id = obs_source.get("region") if obs_source else None
-    blend_params = await _with_unit_outlines(
-        body.params.model_dump(exclude_none=True), (await load_catalog()).region(region_id or "")
-    )
+    region_def = (await load_catalog()).region(region_id or "")
+    blend_params = await _with_unit_outlines(body.params.model_dump(exclude_none=True), region_def)
+    country_outline = await _country_outline(region_def, {})
     # The workflow reads observations by variable name and would otherwise
     # assume IMD's "RAINFALL"; Chirps, for one, calls it total_precipitation_24hr.
     obs_metadata = (obs_source or {}).get("metadata") or {}
@@ -1127,6 +1127,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "obs_date_marks": obs_metadata.get("obs_date_marks") or "end",
         "train_day_level_blend": settings.enable_day_level_blend,
         "warnings": warnings,
+        **({"country_outline": country_outline} if country_outline else {}),
     }
 
     async with get_db() as conn:
@@ -1719,14 +1720,15 @@ async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
 
 
 async def _country_outline(region_def: dict | None, romp_params: dict) -> dict | None:
-    """A custom region's country, for a benchmark to score only inside it.
+    """A custom region's country, for a benchmark or blend to use only the cells inside it.
 
     A built-in region has ROMP's own shapefile; a custom one is only a lat/lon box,
     which takes in the neighbouring countries and the sea. With a country code
     (boundary_iso) the job carries the country's outline (geoBoundaries ADM0, as
     the area picker loads it), frozen in like picked areas' outlines, and
     materialize_focus_mask scores only the cells inside it (and inside any picked
-    area). A job with its own nc_mask keeps it. If the outline can't be had
+    area); a blend makes it its area of interest (blend_recipe). A job with its own
+    nc_mask keeps it. If the outline can't be had
     (offline, say), the box is scored as before and the run log says so.
     """
     if not region_def or region_def.get("romp_name") or not region_def.get("boundary_iso"):

@@ -156,7 +156,13 @@ def blend_config(job: dict, *, work_dir: Path, blending_root: Path | None = None
             raise ValueError(f"The {region} blend needs the blending checkout's ADM3 weights")
         weights = Path(blending_root) / ADM3_WEIGHTS
         domain["regrid"] = {"weights": str(weights)}
-    area = _area_of_interest(params.get("focus_area"), Path(work_dir), weights, domain)
+    area = _area_of_interest(
+        params.get("focus_area"),
+        Path(work_dir),
+        weights,
+        domain,
+        (job.get("country_outline") or {}).get("geometry"),
+    )
     if area:
         domain["area_of_interest"] = area
     # Read, trained, scored and forecast: only these units (within any area of interest).
@@ -350,12 +356,23 @@ def _years(value) -> list[int]:
 
 
 def _area_of_interest(
-    focus: dict | None, work_dir: Path, weights: Path | None, domain: dict
+    focus: dict | None,
+    work_dir: Path,
+    weights: Path | None,
+    domain: dict,
+    country: dict | None = None,
 ) -> dict | None:
     """The job's focus area as a BlendConfig area of interest: a box, or the
     picked units' outlines as a GeoJSON file. Units without coordinates
-    (ADM3 districts) are located by their centroids."""
-    if not focus:
+    (ADM3 districts) are located by their centroids.
+
+    A custom region's country outline (country, from the job's country_outline)
+    keeps the blend inside the country: it's the area of interest when nothing
+    is picked, and a picked box is cut to its part inside the country (the
+    config takes one outline or one box, not both). Picked units are inside it
+    already. Outlines are written in both longitude conventions, so a 0..360
+    grid's cells match them too."""
+    if not focus and not country:
         return None
     work_dir.mkdir(parents=True, exist_ok=True)
     if weights is not None:
@@ -363,13 +380,94 @@ def _area_of_interest(
             "file": str(_adm3_centroids(weights, work_dir / "unit_centroids.csv")),
             "id_col": "id",
         }
-    if focus.get("geometry"):
-        path = work_dir / "area_of_interest.geojson"
-        path.write_text(json.dumps(focus["geometry"]))
-        return {"geometry": str(path)}
+    if focus and focus.get("geometry"):
+        outline = focus["geometry"]
+    elif focus and not country:
+        return {
+            "bbox": {key: float(focus[key]) for key in ("lat_min", "lat_max", "lon_min", "lon_max")}
+        }
+    elif focus:
+        outline = clip_to_box(country, focus)
+    else:
+        outline = country
+    path = work_dir / "area_of_interest.geojson"
+    path.write_text(json.dumps(both_longitudes(outline)))
+    return {"geometry": str(path)}
+
+
+def _polygons(geometry: dict) -> list[list]:
+    """Every polygon (a list of rings) of a FeatureCollection."""
+    out = []
+    for feature in geometry.get("features") or []:
+        shape = feature.get("geometry") or {}
+        if shape.get("type") == "Polygon":
+            out.append(shape["coordinates"])
+        elif shape.get("type") == "MultiPolygon":
+            out.extend(shape["coordinates"])
+    return out
+
+
+def _collection(polygons: list[list]) -> dict:
     return {
-        "bbox": {key: float(focus[key]) for key in ("lat_min", "lat_max", "lon_min", "lon_max")}
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": p}}
+            for p in polygons
+        ],
     }
+
+
+def both_longitudes(geometry: dict) -> dict:
+    """The outlines, and each again 360 degrees east, so that cells on a 0..360
+    grid (a western country's 280, for -80) fall inside them as well."""
+    polygons = _polygons(geometry)
+    shifted = [[[[x + 360.0, y] for x, y in ring] for ring in p] for p in polygons]
+    return _collection(polygons + shifted)  # (an eastern copy past 360 matches no cell)
+
+
+def _clip_ring(ring: list, box: dict) -> list:
+    """Sutherland-Hodgman: the part of a ring inside a lat/lon box (closed)."""
+    edges = (
+        (lambda p: p[0] >= box["lon_min"], 0, box["lon_min"]),
+        (lambda p: p[0] <= box["lon_max"], 0, box["lon_max"]),
+        (lambda p: p[1] >= box["lat_min"], 1, box["lat_min"]),
+        (lambda p: p[1] <= box["lat_max"], 1, box["lat_max"]),
+    )
+    points = [list(map(float, p[:2])) for p in ring[:-1]] if ring[:1] == ring[-1:] else ring
+    for inside, axis, value in edges:
+        if not points:
+            break
+        out = []
+        for i, current in enumerate(points):
+            previous = points[i - 1]
+            if inside(current):
+                if not inside(previous):
+                    out.append(_cross(previous, current, axis, value))
+                out.append(current)
+            elif inside(previous):
+                out.append(_cross(previous, current, axis, value))
+        points = out
+    return points + points[:1] if len(points) >= 3 else []
+
+
+def _cross(a: list, b: list, axis: int, value: float) -> list:
+    t = (value - a[axis]) / (b[axis] - a[axis])
+    return [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
+
+
+def clip_to_box(geometry: dict, box: dict) -> dict:
+    """The outlines' parts inside a picked lat/lon box (its longitudes taken
+    in the outlines' -180..180)."""
+    box = {key: float(box[key]) for key in ("lat_min", "lat_max", "lon_min", "lon_max")}
+    if box["lon_min"] > 180:
+        box["lon_min"] -= 360
+        box["lon_max"] -= 360
+    polygons = []
+    for rings in _polygons(geometry):
+        outer = _clip_ring(rings[0], box)
+        if outer:
+            polygons.append([outer, *[r for r in (_clip_ring(h, box) for h in rings[1:]) if r]])
+    return _collection(polygons)
 
 
 def _adm3_centroids(weights: Path, out: Path) -> Path:

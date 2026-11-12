@@ -116,6 +116,15 @@ def _run_blend(job_id: str, config: dict) -> None:
     process_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
 
     print(f"==> Blend config: {config_path}", flush=True)
+    outline = config.get("country_outline") or {}
+    if outline.get("geometry"):
+        print(f"==> Blending only inside {outline.get('iso')}'s outline", flush=True)
+    elif outline.get("unavailable"):
+        print(
+            f"WARNING: {outline.get('iso')}'s outline couldn't be loaded ({outline['unavailable']}); "
+            "blending the region's whole lat/lon box",
+            flush=True,
+        )
     print("==> Starting model blending...", flush=True)
     process = blending_pixi_run(
         [

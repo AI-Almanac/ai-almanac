@@ -272,3 +272,93 @@ def test_the_recipe_is_a_valid_blend_config(tmp_path: Path) -> None:
     assert config.model_names == ("aifs_ensv2", "aifsv2")
     assert config.evaluation.random_forest is None
     assert with_forest.evaluation.random_forest.name == "blended_forest"
+
+
+# --- A custom region's country (country_outline) keeps the blend inside it -------------------
+
+TESTLAND = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"shapeName": "Testland"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[3.0, 4.0], [14.0, 4.0], [14.0, 13.0], [3.0, 13.0], [3.0, 4.0]]],
+            },
+        }
+    ],
+}
+
+
+def _area_rings(recipe: dict) -> list:
+    area = json.loads(Path(recipe["domain"]["area_of_interest"]["geometry"]).read_text())
+    return [f["geometry"]["coordinates"][0] for f in area["features"]]
+
+
+def test_a_country_region_blends_only_inside_the_country(tmp_path: Path) -> None:
+    job = _job(region_id="nigeria", country_outline={"iso": "TST", "geometry": TESTLAND})
+    rings = _area_rings(blend_recipe.blend_config(job, work_dir=tmp_path))
+    assert rings[0] == TESTLAND["features"][0]["geometry"]["coordinates"][0]
+    assert rings[1][0] == [363.0, 4.0]  # (and again on 0..360 grids)
+
+
+def test_a_picked_box_is_cut_to_the_country(tmp_path: Path) -> None:
+    box = {"lat_min": 10, "lat_max": 20, "lon_min": 10, "lon_max": 20}
+    job = _job(
+        region_id="nigeria",
+        blend_params={**_job()["blend_params"], "focus_area": box},
+        country_outline={"iso": "TST", "geometry": TESTLAND},
+    )
+    ring = _area_rings(blend_recipe.blend_config(job, work_dir=tmp_path))[0]
+    assert {tuple(p) for p in ring} == {(10.0, 10.0), (14.0, 10.0), (14.0, 13.0), (10.0, 13.0)}
+
+
+def test_without_a_country_a_box_stays_a_box_and_nothing_is_nothing(tmp_path: Path) -> None:
+    assert "area_of_interest" not in blend_recipe.blend_config(_job(), work_dir=tmp_path)["domain"]
+    unavailable = _job(country_outline={"iso": "TST", "geometry": None, "unavailable": "offline"})
+    assert (
+        "area_of_interest"
+        not in blend_recipe.blend_config(unavailable, work_dir=tmp_path)["domain"]
+    )
+
+
+def test_clipping_keeps_only_the_part_inside_the_box() -> None:
+    triangle = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "type": "MultiPolygon",
+                    "coordinates": [
+                        [[[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], [0.0, 0.0]]],
+                        [[[50.0, 50.0], [51.0, 50.0], [51.0, 51.0], [50.0, 50.0]]],  # (outside)
+                    ],
+                },
+            }
+        ],
+    }
+    clipped = blend_recipe.clip_to_box(
+        triangle, {"lat_min": 0, "lat_max": 5, "lon_min": 0, "lon_max": 5}
+    )
+    rings = [f["geometry"]["coordinates"][0] for f in clipped["features"]]
+    assert len(rings) == 1 and rings[0][0] == rings[0][-1]
+    assert {tuple(p) for p in rings[0]} == {(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0)}
+    west = blend_recipe.clip_to_box(  # (a box picked on a 0..360 grid)
+        TESTLAND, {"lat_min": 0, "lat_max": 90, "lon_min": 363, "lon_max": 370}
+    )
+    assert {tuple(p) for p in west["features"][0]["geometry"]["coordinates"][0]} == {
+        (3.0, 4.0),
+        (10.0, 4.0),
+        (10.0, 13.0),
+        (3.0, 13.0),
+    }
+
+
+def test_the_country_area_is_a_valid_blend_config(tmp_path: Path) -> None:
+    onset_blending = pytest.importorskip("onset_blending")
+    job = _job(region_id="nigeria", country_outline={"iso": "TST", "geometry": TESTLAND})
+    config = onset_blending.BlendConfig.from_dict(blend_recipe.blend_config(job, work_dir=tmp_path))
+    assert config.domain.area_of_interest.geometry
