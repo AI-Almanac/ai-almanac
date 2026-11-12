@@ -94,6 +94,7 @@ async def create_region(
     lon_min: float,
     lon_max: float,
     land_only: bool,
+    boundary_iso: str | None = None,
 ) -> dict:
     base_id = region_slug(display_name)
     region_id = base_id
@@ -109,13 +110,14 @@ async def create_region(
         result = await conn.execute(
             text(
                 "INSERT INTO regions "
-                "(id, display_name, description, lat_min, lat_max, lon_min, lon_max, "
+                "(id, display_name, description, boundary_iso, lat_min, lat_max, lon_min, lon_max, "
                 "land_only, shp_only, is_builtin, created_at, updated_at) "
-                "VALUES (:id, :display_name, :description, :lat_min, :lat_max, "
+                "VALUES (:id, :display_name, :description, :boundary_iso, :lat_min, :lat_max, "
                 ":lon_min, :lon_max, :land_only, FALSE, FALSE, :now, :now) RETURNING *"
             ),
             {
                 "id": region_id,
+                "boundary_iso": boundary_iso,
                 "display_name": display_name.strip(),
                 "description": description.strip(),
                 "lat_min": lat_min,
@@ -139,11 +141,13 @@ async def update_region(
     lon_min: float,
     lon_max: float,
     land_only: bool,
+    boundary_iso: str | None = None,
 ) -> dict | None:
     async with get_db() as conn:
         result = await conn.execute(
             text(
                 "UPDATE regions SET display_name = :display_name, description = :description, "
+                "boundary_iso = :boundary_iso, "
                 "lat_min = :lat_min, lat_max = :lat_max, lon_min = :lon_min, "
                 "lon_max = :lon_max, land_only = :land_only, updated_at = :now "
                 "WHERE id = :id AND is_builtin = FALSE RETURNING *"
@@ -152,6 +156,7 @@ async def update_region(
                 "id": region_id,
                 "display_name": display_name.strip(),
                 "description": description.strip(),
+                "boundary_iso": boundary_iso,
                 "lat_min": lat_min,
                 "lat_max": lat_max,
                 "lon_min": lon_min,

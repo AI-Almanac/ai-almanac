@@ -12,6 +12,7 @@
 	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import { account } from '$lib/account.svelte';
+	import { COUNTRIES, countryLabel, resolveCountry } from '$lib/countries';
 
 	$effect(() => {
 		if (account.loaded && !account.canManageData) goto('/');
@@ -30,13 +31,18 @@
 	let lonMin = $state('');
 	let lonMax = $state('');
 	let landOnly = $state(false);
+	// The country the region covers, as typed or picked ("Nigeria (NGA)"): its administrative
+	// areas then load for focus areas. Empty for a region that isn't one country.
+	let country = $state('');
+	const countryIso = $derived(resolveCountry(country));
 
 	const customRegions = $derived(regions.filter((region) => !region.is_builtin));
 	const builtInRegions = $derived(regions.filter((region) => region.is_builtin));
 	const formComplete = $derived(
 		// (type="number" inputs bind a number, or null when empty, not a string: no .trim() on them)
 		displayName.trim() &&
-			[latMin, latMax, lonMin, lonMax].every((value) => String(value ?? '').trim() !== '')
+			[latMin, latMax, lonMin, lonMax].every((value) => String(value ?? '').trim() !== '') &&
+			countryIso !== null
 	);
 
 	async function load() {
@@ -62,6 +68,7 @@
 		lonMin = '';
 		lonMax = '';
 		landOnly = false;
+		country = '';
 	}
 
 	function edit(region: Region) {
@@ -73,6 +80,7 @@
 		lonMin = String(region.lon_min ?? '');
 		lonMax = String(region.lon_max ?? '');
 		landOnly = region.land_only;
+		country = countryLabel(region.boundary_iso);
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 	}
 
@@ -84,7 +92,8 @@
 			lat_max: Number(latMax),
 			lon_min: Number(lonMin),
 			lon_max: Number(lonMax),
-			land_only: landOnly
+			land_only: landOnly,
+			boundary_iso: countryIso || null
 		};
 	}
 
@@ -116,6 +125,13 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		}
+	}
+
+	// Picking a country fills in an empty name, and shows the code next to it.
+	function countryPicked() {
+		if (!countryIso) return;
+		if (!displayName.trim()) displayName = COUNTRIES.find((c) => c.iso === countryIso)?.name ?? '';
+		country = countryLabel(countryIso);
 	}
 
 	function bounds(region: Region): string {
@@ -164,6 +180,30 @@
 							placeholder="Rainy season study area across eastern Africa"
 						/>
 					</label>
+					<div class="country-field">
+						<label>
+							<span>Country <small>optional</small></span>
+							<input
+								bind:value={country}
+								list="region-countries"
+								placeholder="e.g. Nigeria"
+								autocomplete="off"
+								aria-invalid={countryIso === null}
+								aria-describedby="region-country-hint"
+								onchange={countryPicked}
+							/>
+						</label>
+						<small id="region-country-hint" class="hint" class:invalid={countryIso === null}>
+							{countryIso === null
+								? 'Pick a country from the list, or type its three-letter code (e.g. NGA).'
+								: 'For a one-country region: its states and districts become pickable areas.'}
+						</small>
+						<datalist id="region-countries">
+							{#each COUNTRIES as c (c.iso)}
+								<option value={`${c.name} (${c.iso})`}></option>
+							{/each}
+						</datalist>
+					</div>
 				</div>
 
 				<div class="bounds-section">
@@ -230,6 +270,7 @@
 								<span>{region.source_count} source{region.source_count === 1 ? '' : 's'}</span>
 							</div>
 							{#if region.description}<p>{region.description}</p>{/if}
+							{#if region.boundary_iso}<p>Country: {countryLabel(region.boundary_iso)}</p>{/if}
 							<code>{bounds(region)}</code>
 						</div>
 						{#if account.isAdmin}
@@ -354,7 +395,7 @@
 		gap: 1rem;
 	}
 	.identity-fields {
-		grid-template-columns: minmax(12rem, 0.8fr) minmax(16rem, 1.5fr);
+		grid-template-columns: minmax(12rem, 0.8fr) minmax(14rem, 1.3fr) minmax(12rem, 0.9fr);
 	}
 	.bounds-grid {
 		grid-template-columns: repeat(4, minmax(8rem, 1fr));
@@ -379,6 +420,18 @@
 		background: var(--color-surface);
 		color: var(--color-text);
 		font: inherit;
+	}
+	.country-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+	.hint {
+		color: var(--color-text-muted);
+		font-size: 0.78rem;
+	}
+	.hint.invalid {
+		color: var(--color-danger);
 	}
 	.bounds-section {
 		display: flex;

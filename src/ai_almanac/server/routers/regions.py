@@ -1,8 +1,9 @@
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_almanac.server.auth import AdminUser, OptionalCurrentUser, require_data_management
 from ai_almanac.server.services import boundaries, region_catalog
@@ -22,6 +23,21 @@ class RegionWrite(BaseModel):
     lon_min: float = Field(ge=-180, le=180)
     lon_max: float = Field(ge=-180, le=180)
     land_only: bool = False
+    # The country's ISO 3166-1 alpha-3 code (e.g. NGA): its administrative areas then load from
+    # geoBoundaries, as the built-in regions' do. Empty for a region that isn't one country.
+    boundary_iso: str | None = Field(default=None, max_length=3)
+
+    @field_validator("boundary_iso", mode="before")
+    @classmethod
+    def normalize_boundary_iso(cls, value):
+        if value is None:
+            return None
+        value = str(value).strip().upper()
+        if not value:
+            return None
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise ValueError("country code must be three letters (ISO 3166-1 alpha-3, e.g. NGA)")
+        return value
 
     @model_validator(mode="after")
     def validate_bounds(self):

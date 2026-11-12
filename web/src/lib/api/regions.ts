@@ -42,6 +42,8 @@ export type RegionWrite = {
 	lon_min: number;
 	lon_max: number;
 	land_only: boolean;
+	// ISO 3166-1 alpha-3 (e.g. NGA): the region's administrative areas come from geoBoundaries. null: none.
+	boundary_iso: string | null;
 };
 
 export async function getRegions() {

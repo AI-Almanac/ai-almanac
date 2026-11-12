@@ -59,7 +59,8 @@ describe('regions page: create a region', () => {
 			lat_max: 14.5,
 			lon_min: 2.25,
 			lon_max: 15.25,
-			land_only: false
+			land_only: false,
+			boundary_iso: null
 		});
 	});
 
@@ -79,5 +80,93 @@ describe('regions page: create a region', () => {
 		expect((button as HTMLButtonElement).disabled).toBe(false);
 		await fill('North latitude', '');
 		expect((button as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('sends the picked country as its ISO code, and fills an empty name from it', async () => {
+		render(RegionsPage);
+		await tick();
+		const countryInput = screen.getByLabelText(/^Country/);
+		await fireEvent.input(countryInput, { target: { value: 'Nigeria (NGA)' } });
+		await fireEvent.change(countryInput);
+		await tick();
+		expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Nigeria');
+		for (const [label, value] of [
+			['South latitude', '3.75'],
+			['North latitude', '14.5'],
+			['West longitude', '2.25'],
+			['East longitude', '15.25']
+		]) {
+			await fill(label, value);
+		}
+		await fireEvent.click(screen.getByRole('button', { name: 'Create region' }));
+		await tick();
+		expect(api.createRegion).toHaveBeenCalledWith(expect.objectContaining({ boundary_iso: 'NGA' }));
+	});
+
+	it('blocks Create region while the country text is not a known country', async () => {
+		render(RegionsPage);
+		await tick();
+		await fill('Name', 'Nigeria');
+		for (const [label, value] of [
+			['South latitude', '3.75'],
+			['North latitude', '14.5'],
+			['West longitude', '2.25'],
+			['East longitude', '15.25']
+		]) {
+			await fill(label, value);
+		}
+		const button = screen.getByRole('button', { name: 'Create region' });
+		await fill('Country optional', 'Nigeriaa');
+		expect((button as HTMLButtonElement).disabled).toBe(true);
+		await fill('Country optional', 'nga');
+		expect((button as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it('shows and edits the country of an existing region', async () => {
+		api.getRegions.mockResolvedValue([
+			{
+				id: 'nigeria',
+				display_name: 'Nigeria',
+				romp_region: 'custom',
+				description: '',
+				has_data: false,
+				source_count: 0,
+				lat_min: 3.75,
+				lat_max: 14.5,
+				lon_min: 2.25,
+				lon_max: 15.25,
+				land_only: false,
+				shp_only: false,
+				is_builtin: false,
+				boundary_iso: 'NGA'
+			}
+		]);
+		api.updateRegion.mockResolvedValue({ id: 'nigeria' });
+		render(RegionsPage);
+		await vi.waitFor(() => expect(screen.getByText('Country: Nigeria (NGA)')).toBeTruthy());
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await tick();
+		expect((screen.getByLabelText(/^Country/) as HTMLInputElement).value).toBe('Nigeria (NGA)');
+		await fill('Country optional', '');
+		await fireEvent.click(screen.getByRole('button', { name: 'Save region' }));
+		await tick();
+		expect(api.updateRegion).toHaveBeenCalledWith(
+			'nigeria',
+			expect.objectContaining({ boundary_iso: null })
+		);
+	});
+});
+
+describe('country field parsing', () => {
+	it('accepts the list label, the name or the code', async () => {
+		const { resolveCountry, countryLabel } = await import('../src/lib/countries');
+		expect(resolveCountry('Nigeria (NGA)')).toBe('NGA');
+		expect(resolveCountry('  nigeria ')).toBe('NGA');
+		expect(resolveCountry('bol')).toBe('BOL');
+		expect(resolveCountry('')).toBe('');
+		expect(resolveCountry('Narnia')).toBeNull();
+		expect(resolveCountry('XXX')).toBeNull();
+		expect(countryLabel('per')).toBe('Peru (PER)');
+		expect(countryLabel(null)).toBe('');
 	});
 });

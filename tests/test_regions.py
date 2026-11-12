@@ -183,3 +183,54 @@ async def test_custom_region_bounds_are_applied_to_jobs(
         "lon_min": 38,
         "lon_max": 39,
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_region_country_code_loads_its_areas(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import boundaries
+
+    loaded: list[tuple[str, str]] = []
+
+    async def fake_load_boundary(iso: str, level: str) -> dict:
+        loaded.append((iso, level))
+        return {"metadata": {}, "geojson": {"type": "FeatureCollection", "features": []}}
+
+    monkeypatch.setattr(boundaries, "load_boundary", fake_load_boundary)
+
+    # No country: no areas to pick (as before).
+    plain = (await client.post("/regions", json=region_body("Sahel Box"))).json()
+    assert plain["boundary_iso"] is None
+    assert (await client.get(f"/regions/{plain['id']}/boundaries/adm1")).status_code == 404
+
+    # A lowercase code is stored upper-cased, and the areas come from it.
+    created = await client.post(
+        "/regions", json={**region_body("Nigeria"), "boundary_iso": " nga "}
+    )
+    assert created.status_code == 201
+    region = created.json()
+    assert region["boundary_iso"] == "NGA"
+    listed = {r["id"]: r for r in (await client.get("/regions")).json()}
+    assert listed[region["id"]]["boundary_iso"] == "NGA"
+    assert (await client.get(f"/regions/{region['id']}/boundaries/adm1")).status_code == 200
+    assert loaded == [("NGA", "adm1")]
+
+    # Editing can change it, and an empty code clears it.
+    changed = await client.put(
+        f"/regions/{region['id']}", json={**region_body("Nigeria"), "boundary_iso": "GHA"}
+    )
+    assert changed.json()["boundary_iso"] == "GHA"
+    cleared = await client.put(
+        f"/regions/{region['id']}", json={**region_body("Nigeria"), "boundary_iso": ""}
+    )
+    assert cleared.json()["boundary_iso"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["NG", "NGAA", "N1A", 12])
+async def test_custom_region_country_code_must_be_three_letters(
+    client: httpx.AsyncClient, code: object
+) -> None:
+    response = await client.post("/regions", json={**region_body(), "boundary_iso": code})
+    assert response.status_code == 422
