@@ -135,7 +135,10 @@ cpu_image = (
 )
 
 
-def _load_pipeline(path: Path = Path("/almanac/forecast_pipeline.py")):
+_BUNDLED_PIPELINE_PY = Path("/almanac/forecast_pipeline.py")
+
+
+def _load_pipeline(path: Path = _BUNDLED_PIPELINE_PY):
     """Load forecast_pipeline.py by explicit path — the container has no
     `ai_almanac` package installed, only this one file, bundled at `path`.
 
@@ -182,6 +185,22 @@ def _write_gcp_credentials_from_secret() -> None:
         f.write(sa_json)
         sa_key_path = f.name
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
+
+
+def _upload_season_bundles_to_gcs(
+    client, outputs_bucket: str, job_id: str, bundles: dict[str, bytes]
+) -> None:
+    """Publish each model's raw season NetCDF next to the blended probabilities."""
+    import tarfile
+
+    bucket = client.bucket(outputs_bucket)
+    for model_id, bundle in bundles.items():
+        with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
+            member = next(m for m in tar.getmembers() if m.name.endswith(".nc"))
+            data = tar.extractfile(member).read()
+        name = f"{job_id}/output/{_load_pipeline().season_output_name(model_id)}"
+        bucket.blob(name).upload_from_string(data, content_type="application/x-netcdf")
+        print(f"  uploaded: {name}")
 
 
 def _upload_run_log_to_gcs(client, outputs_bucket: str, job_id: str, text: str) -> None:
@@ -262,15 +281,21 @@ def _season_plan(pipeline, config: dict):
     return pipeline.SeasonPlan.parse(config.get("season_plan"))
 
 
+def _pipeline_here():
+    """forecast_pipeline as this process sees it: the checkout's copy when
+    deploying or testing from the repo, the bundled copy inside a container."""
+    return _load_pipeline(
+        FORECAST_PIPELINE_PY if FORECAST_PIPELINE_PY.is_file() else _BUNDLED_PIPELINE_PY
+    )
+
+
 # A season's missing issue dates are split into chunks, one GPU container each,
-# all spawned at once. Each container pays one model load (~1-2 min) for its
-# chunk, so a few dates keeps that small against ~12 min per 45-day date.
-DATES_PER_ROLLOUT = 4
-# Most GPU containers one rollout function (one image) runs at once, shared by
-# every forecast job running concurrently. Chunks beyond this queue until a
-# container frees up, so cold seasons submitted together can each wait on the
-# other's chunks.
-MAX_PARALLEL_ROLLOUTS = 12
+# all spawned at once. The server estimates a forecast's cost from the same
+# numbers, so they live in forecast_pipeline. Chunks beyond the parallel cap
+# queue until a container frees up, so cold seasons submitted together can
+# each wait on the other's chunks.
+DATES_PER_ROLLOUT = _pipeline_here().DATES_PER_ROLLOUT
+MAX_PARALLEL_ROLLOUTS = _pipeline_here().MAX_PARALLEL_ROLLOUTS
 
 # Each season function waits on the ones it calls, so each ceiling must outlast
 # them plus its own work, or a long cold season is killed from above.
@@ -511,6 +536,31 @@ def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -
     return bundles
 
 
+def _score_against_blend(
+    job_id: str,
+    config: dict,
+    plan,
+    bundles: dict[str, bytes],
+    outputs_bucket: str,
+    failures: dict[str, str],
+) -> None:
+    try:
+        print("==> Scoring live season against the trained blend")
+        modal.Function.from_name("almanac-blending", "score_live_forecast_bundle").remote(
+            job_id,
+            {
+                **config["blend_config_snapshot"],
+                "gcs_cache_bucket": config.get("gcs_cache_bucket"),
+            },
+            bundles,
+            plan.season,
+            outputs_bucket,
+        )
+    except Exception as exc:
+        failures["blend_scoring"] = str(exc)
+        traceback.print_exc()
+
+
 @app.function(
     image=cpu_image,
     cpu=(0.25, 1),
@@ -519,8 +569,8 @@ def _season_bundles(job_id: str, plan, config: dict, failures: dict[str, str]) -
     secrets=[gcp_secret],
 )
 def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
-    """Build every blend member's season, score it against the trained blend,
-    and publish a run.log.
+    """Build every model's season, score it against the trained blend when the
+    forecast has one, publish each model's raw season, and publish a run.log.
 
     Two phases: roll out the store's missing issue dates across parallel GPU
     containers (roll_out_missing_dates), then assemble each member's season on
@@ -547,39 +597,40 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             traceback.print_exc()
 
         failures: dict[str, str] = {}
+        pipeline = _load_pipeline()
         plan = None
         try:
-            plan = _season_plan(_load_pipeline(), config)
+            plan = _season_plan(pipeline, config)
         except ValueError as exc:
             failures["season_plan"] = str(exc)
             traceback.print_exc()
 
         # The raw short-lead map deliverable was dropped (D1): its rollout is
         # already contained in the season loop's latest issue date.
-        blend_config = config.get("blend_config_snapshot")
-        if blend_config and plan is not None:
+        if plan is not None:
             members = [run.member for run in plan.runs]
-            print(f"==> Running season-long inference for blend scoring: {members}")
+            print(f"==> Running season-long inference: {members}")
             live_forecast_bundles = _season_bundles(job_id, plan, config, failures)
 
             missing = [member for member in members if member not in live_forecast_bundles]
-            if not missing:
+            if missing:
+                print(f"==> Skipping scoring and publishing; missing season data for {missing}")
+            else:
+                scored = pipeline.scores_against_blend(config)
+                if scored:
+                    _score_against_blend(
+                        job_id, config, plan, live_forecast_bundles, outputs_bucket, failures
+                    )
                 try:
-                    print("==> Scoring live season against the trained blend")
-                    modal.Function.from_name(
-                        "almanac-blending", "score_live_forecast_bundle"
-                    ).remote(
-                        job_id,
-                        {**blend_config, "gcs_cache_bucket": config.get("gcs_cache_bucket")},
-                        live_forecast_bundles,
-                        plan.season,
-                        outputs_bucket,
+                    _upload_season_bundles_to_gcs(
+                        client, outputs_bucket, job_id, live_forecast_bundles
                     )
                 except Exception as exc:
-                    failures["blend_scoring"] = str(exc)
+                    # With a blend, the blended probabilities are the deliverable and
+                    # raw seasons a bonus; without one, the raw seasons are all of it.
+                    if not scored:
+                        failures["season_upload"] = str(exc)
                     traceback.print_exc()
-            else:
-                print(f"==> Skipping blend scoring; missing season data for {missing}")
 
         if client is not None:
             try:

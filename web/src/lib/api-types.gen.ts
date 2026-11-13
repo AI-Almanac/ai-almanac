@@ -3232,11 +3232,23 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
-        /** ForecastCreate */
+        /**
+         * ForecastCreate
+         * @description A forecast request: a trained blend to score, or model archives to run raw.
+         *
+         *     A blended forecast scores its models' live season against the blend's
+         *     trained weights. A raw forecast (``models``) only rolls each model's season
+         *     out and publishes it, with no blended probabilities.
+         */
         ForecastCreate: {
             /** Blend Id */
-            blend_id: string;
-            /** Forecast Model Ids */
+            blend_id?: string | null;
+            /** Models */
+            models?: string[] | null;
+            /**
+             * Forecast Model Ids
+             * @description Blend members to roll out; defaults to every member.
+             */
             forecast_model_ids?: string[] | null;
             /**
              * @default {
@@ -3244,6 +3256,13 @@ export interface components {
              *     }
              */
             params: components["schemas"]["ForecastParams"];
+            /**
+             * Season Year
+             * @description Season to forecast; defaults to this year's. A past year is a re-forecast.
+             */
+            season_year?: number | null;
+            /** @description Season window. A blend keeps the onset dates it was trained on and takes only this window's name and last issue date. */
+            season?: components["schemas"]["SeasonWindow"] | null;
             /** Run Id */
             run_id?: string | null;
         };
@@ -4589,6 +4608,32 @@ export interface components {
             denied_tools: string[];
             /** Model */
             model: string | null;
+        };
+        /**
+         * SeasonWindow
+         * @description A workspace's rainy season, e.g. Ethiopia's Kiremt.
+         */
+        SeasonWindow: {
+            /**
+             * Name
+             * @default Rainy season
+             */
+            name: string;
+            /**
+             * Onset Search Start
+             * @default 05-01
+             */
+            onset_search_start: string;
+            /**
+             * Reference Onset
+             * @default 06-01
+             */
+            reference_onset: string;
+            /**
+             * Last Issue Date
+             * @default 07-31
+             */
+            last_issue_date: string;
         };
         /** SessionCreate */
         SessionCreate: {

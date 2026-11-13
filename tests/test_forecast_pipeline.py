@@ -242,6 +242,39 @@ def test_season_issue_dates_matches_weekday_cadence():
     assert dates[-1] == dt.date(2020, 12, 31)
 
 
+def test_a_plan_made_after_the_season_ends_stops_at_its_last_issue_date():
+    plan = _plan(
+        {"fuxi": (FUXI, ArchiveLayout.parse({"init_days": "0,3"}))}, last_issue_month_day="07-31"
+    )
+
+    dates = plan.run("fuxi").issue_dates
+    assert dates[0] == dt.date(2020, 5, 4)
+    assert dates[-1] == dt.date(2020, 7, 30)
+
+
+def test_a_plan_made_mid_season_still_stops_at_today():
+    plan = _plan(
+        {"fuxi": (FUXI, ArchiveLayout.parse({"init_days": "0,3"}))},
+        today=dt.date(2020, 6, 2),
+        last_issue_month_day="07-31",
+    )
+
+    assert plan.run("fuxi").issue_dates[-1] == dt.date(2020, 6, 1)
+
+
+def test_a_rollout_estimate_splits_dates_the_way_the_rollout_does():
+    from ai_almanac.server.services.forecast_pipeline import estimate_rollout
+
+    deterministic = estimate_rollout(26, ensemble=False)
+    ensemble = estimate_rollout(26, ensemble=True)
+
+    assert (deterministic.containers, deterministic.gpu_minutes) == (7, 26 * 12)
+    assert deterministic.wall_minutes == 4 * 12
+    assert ensemble.containers == 26
+    assert ensemble.wall_minutes == 3 * 90
+    assert estimate_rollout(0, ensemble=False).gpu_minutes == 0
+
+
 def test_season_issue_dates_stops_at_today():
     dates = season_issue_dates("05-01", init_weekdays=[0, 3], year=2020, today=dt.date(2020, 5, 8))
 

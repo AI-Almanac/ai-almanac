@@ -159,6 +159,20 @@ async def set_is_ready(
     return {_iso(d) for d in needed_dates} <= _covered(row)
 
 
+async def missing_dates(
+    conn: AsyncConnection,
+    *,
+    model_name: str,
+    init_source: str,
+    season: str,
+    needed_dates: Iterable[date | str],
+) -> list[str]:
+    """The needed init dates the set does not cover yet, oldest first."""
+    row = await get_set(conn, model_name=model_name, init_source=init_source, season=season)
+    covered = _covered(row) if row is not None else set()
+    return sorted({_iso(d) for d in needed_dates} - covered)
+
+
 async def mark_coverage_from_config(conn: AsyncConnection, config: dict) -> None:
     """Mark every model in a completed forecast job's config as covered and its
     set complete. The async twin of job_workload._mark_trajectory_coverage, used
