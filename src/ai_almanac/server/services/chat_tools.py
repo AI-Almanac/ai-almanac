@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
@@ -19,7 +19,7 @@ from ai_almanac.server.services.romp import (
     Year,
 )
 
-from . import benchmark_domain, blend_domain
+from . import benchmark_domain, blend_domain, onset_rules
 from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
@@ -56,6 +56,17 @@ class BenchmarkAdvancedParams(BaseModel):
     ref_model: RompName | None = None
     ref_model_dir: DataPath | None = None
     focus_area: FocusArea | None = None
+    onset_rule: RompName | None = PydanticField(
+        default=None,
+        description=(
+            "The `internal_value` of an onset definition from list_onset_rules; leave unset "
+            "for the default definition. A value for tool calls, never a word for the user."
+        ),
+    )
+    onset_rule_params: dict[RompName, Any] | None = PydanticField(
+        default=None,
+        description="Overrides for the onset rule's parameters; omitted ones keep their defaults.",
+    )
     per_model_params: dict[str, PerModelRompParams] | None = None
 
 
@@ -181,37 +192,76 @@ async def list_models(region: str | None, user_id: str, scope: ChatScope) -> dic
     return _named_list_payload(payload, "models")
 
 
+def list_onset_rules() -> dict:
+    """The onset definitions a benchmark can score against. ``display_name`` and
+    ``description`` are what to say to the user, each parameter's ``label`` likewise;
+    ``internal_value`` is only the value to set as advanced_params.onset_rule. The
+    default is named by its display name alone: leaving onset_rule unset selects it."""
+    return {
+        "onset_definitions": onset_rules.assistant_listing(),
+        "default_display_name": onset_rules.display_name(None),
+        "internal_values": (
+            "Each definition's `internal_value` and its parameters' `name` are values for "
+            "tool calls only. Never write them in a reply or in notes; say the display "
+            "name and the parameter labels."
+        ),
+    }
+
+
+def with_onset_definition_names(payload: Any) -> Any:
+    """A benchmark plan with each onset rule it mentions named for the user: wherever
+    settings carry ``onset_rule``, ``onset_definition`` beside it holds the display
+    name, so a reply need not repeat the identifier. An unset rule is the default."""
+    if isinstance(payload, list):
+        return [with_onset_definition_names(item) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+    named = {key: with_onset_definition_names(value) for key, value in payload.items()}
+    rule = payload.get("onset_rule")
+    if "onset_rule" in payload and (rule is None or isinstance(rule, str)):
+        named["onset_definition"] = onset_rules.display_name(rule)
+    return named
+
+
 async def get_benchmark_config(user_id: str, scope: ChatScope, session_id: str) -> dict:
-    return await tool_payload(
-        await benchmark_domain.get_benchmark_config(user_id, scope, session_id),
-        session_id,
-        user_id,
+    return with_onset_definition_names(
+        await tool_payload(
+            await benchmark_domain.get_benchmark_config(user_id, scope, session_id),
+            session_id,
+            user_id,
+        )
     )
 
 
 async def update_benchmark_config(
     patch: dict, user_id: str, scope: ChatScope, session_id: str
 ) -> dict:
-    return await tool_payload(
-        await benchmark_domain.update_benchmark_config(patch, user_id, scope, session_id),
-        session_id,
-        user_id,
+    return with_onset_definition_names(
+        await tool_payload(
+            await benchmark_domain.update_benchmark_config(patch, user_id, scope, session_id),
+            session_id,
+            user_id,
+        )
     )
 
 
 async def validate_benchmark_config(user_id: str, scope: ChatScope, session_id: str) -> dict:
-    return await tool_payload(
-        await benchmark_domain.validate_benchmark_config(user_id, scope, session_id),
-        session_id,
-        user_id,
+    return with_onset_definition_names(
+        await tool_payload(
+            await benchmark_domain.validate_benchmark_config(user_id, scope, session_id),
+            session_id,
+            user_id,
+        )
     )
 
 
 async def propose_benchmark_submit(user_id: str, scope: ChatScope, session_id: str) -> dict:
-    return await tool_payload(
-        await benchmark_domain.propose_benchmark_submit(user_id, scope, session_id),
-        session_id,
-        user_id,
+    return with_onset_definition_names(
+        await tool_payload(
+            await benchmark_domain.propose_benchmark_submit(user_id, scope, session_id),
+            session_id,
+            user_id,
+        )
     )
 
 

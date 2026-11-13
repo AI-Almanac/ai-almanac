@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Annotated, NamedTuple
+from typing import Annotated, Any, NamedTuple, Self
 
 import sqlalchemy as sa
 from fastapi import HTTPException
@@ -53,8 +53,14 @@ from ai_almanac.server.services.forecast_pipeline import (
     plan_season,
 )
 from ai_almanac.server.services.job_manager import ACTIVE_STATUSES
+from ai_almanac.server.services.onset_rules import (
+    DEFAULT_ONSET_RULE,
+    onset_fit_errors,
+    onset_rule_errors,
+)
 from ai_almanac.server.services.registry import CatalogSnapshot, load_catalog
 from ai_almanac.server.services.romp import (
+    DEFAULT_MAX_FORECAST_DAY,
     DataPath,
     FilePattern,
     InitDays,
@@ -114,6 +120,18 @@ class RompParams(BaseModel):
     focus_area: FocusArea | None = None
     ref_model_dir: DataPath | None = None
     thresh_file: DataPath | None = None
+    onset_rule: str | None = None
+    onset_rule_params: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _known_onset_rule(self) -> Self:
+        if self.onset_rule or self.onset_rule_params:
+            errors = onset_rule_errors(
+                self.onset_rule or DEFAULT_ONSET_RULE, self.onset_rule_params or {}
+            )
+            if errors:
+                raise ValueError("; ".join(errors))
+        return self
 
 
 class ResolvedRompParams(RompParams):
@@ -1807,6 +1825,14 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     if "obs_var" not in romp_params and source_metadata.get("obs_var"):
         romp_params["obs_var"] = source_metadata["obs_var"]
     romp_params = parse_benchmark_settings(romp_params)
+    fit_errors = onset_fit_errors(
+        romp_params,
+        forecast_days=romp_params.get("max_forecast_day") or DEFAULT_MAX_FORECAST_DAY,
+        forecast_steps=model_cfg.get("forecast_steps"),
+        model_name=model_cfg["display_name"],
+    )
+    if fit_errors:
+        raise HTTPException(status_code=400, detail=" ".join(fit_errors))
     dataset_config = {
         "provider": "local",
         "source_id": body.dataset_id,

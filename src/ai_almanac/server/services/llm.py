@@ -286,6 +286,16 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
         return await chat_tools.list_models(region, ctx.deps.user_id, ctx.deps.scope)
 
     @toolset.tool
+    async def list_onset_rules(ctx: RunContext[ChatDeps]) -> dict:
+        """List the onset definitions a benchmark can use, with each parameter's default,
+        bounds and unit. `display_name`, `description` and each parameter's `label` are
+        the words to use with the user. A definition's `internal_value` and its parameters'
+        `name` are only the values to set through advanced_params.onset_rule and
+        onset_rule_params: never write them in a reply or in your notes. Leave onset_rule
+        unset for the default definition."""
+        return chat_tools.list_onset_rules()
+
+    @toolset.tool
     async def get_benchmark_config(ctx: RunContext[ChatDeps]) -> dict:
         """Read the canonical benchmark configuration attached to this chat session."""
         return await chat_tools.get_benchmark_config(

@@ -336,6 +336,13 @@ def _forecast_dims(dataset, variable: str) -> dict[str, str]:
     return _romp_safe_dims(roles)
 
 
+def _scored_lead_days(dataset, step_dim: str) -> int:
+    """How many lead days ROMP scores: every lead, less a leading lead 0, which ROMP drops."""
+    leads = dataset[step_dim].values
+    starts_at_zero = leads.size > 0 and not leads[:1].any()
+    return int(leads.size - starts_at_zero)
+
+
 def _ensemble_member_dim(dataset, remaining: list[str]) -> str | None:
     """The one dim left after the other roles, which must span several members."""
     if len(remaining) > 1:
@@ -420,6 +427,9 @@ def _finalize_inspection(
                     forecast_dims = _forecast_dims(dataset, variable)
                 except ValueError as exc:
                     layout_error = str(exc)
+            forecast_steps = (
+                _scored_lead_days(dataset, forecast_dims["step"]) if forecast_dims else None
+            )
             init_coordinate = (forecast_dims or {}).get("init_time")
             initialization_days = (
                 _initialization_days(dataset, init_coordinate) if init_coordinate else None
@@ -445,6 +455,9 @@ def _finalize_inspection(
         # ROMP renames these to its own names before scoring, so model files
         # keep whatever dim names their producer chose.
         normalized["forecast_dims"] = forecast_dims
+        # How many lead days each forecast holds; an onset definition that looks
+        # further ahead than this cannot be scored, so submission checks it.
+        normalized["forecast_steps"] = forecast_steps
         existing_source = normalized.get("init_days_source")
         configured_init_days = str(normalized.get("init_days") or "").strip()
         has_configured_days = bool(configured_init_days) and existing_source not in {

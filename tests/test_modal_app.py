@@ -43,6 +43,20 @@ def test_modal_app_matches_runner_configuration() -> None:
     assert hasattr(module, settings.modal_function_name)
 
 
+def test_romp_env_json_encodes_onset_rule_params(almanac_modules) -> None:
+    import json
+
+    module = _load_modal_app()
+    config = {
+        "model_name": "fuxi",
+        "romp_params": {"onset_rule": "two_stage", "onset_rule_params": {"stage1_mm": 15.0}},
+    }
+    env = module._romp_env(config, Path("o"), Path("m"), Path("out"), Path("fig"))
+
+    assert env["ROMP_ONSET_RULE"] == "two_stage"
+    assert json.loads(env["ROMP_ONSET_RULE_PARAMS"]) == {"stage1_mm": 15.0}
+
+
 def test_area_of_interest_reaches_romp_as_a_mask_on_the_staged_obs_grid(
     tmp_path: Path, almanac_modules
 ) -> None:
