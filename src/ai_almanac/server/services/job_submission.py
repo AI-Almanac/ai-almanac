@@ -36,6 +36,7 @@ from ai_almanac.server.services import (
     day_level_blends,
     guardrails,
     scoring_region,
+    seasons,
     trajectory_sets,
 )
 from ai_almanac.server.services import coverage as data_coverage
@@ -86,6 +87,7 @@ from ai_almanac.server.services.romp import (
     romp_safe_model_name,
 )
 from ai_almanac.server.services.runner_registry import get_job_runner
+from ai_almanac.server.services.seasons import SeasonState, SeasonWindow, resolve_season
 from ai_almanac.server.services.storage import get_storage
 from ai_almanac.server.tables import jobs, users
 from ai_almanac.settings import (
@@ -354,10 +356,11 @@ async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
     return _readable_path(source, user_id)
 
 
-# Workflow defaults the blend uses when a field is unset. Mirror
-# build_intermediates' defaults in modal/blending_app.py.
-DEFAULT_CUTOFF_MONTH_DAY = "05-01"
-DEFAULT_REF_ONSET_MONTH_DAY = "06-01"
+# Workflow defaults the blend uses when a field is unset: the platform's season
+# defaults, which mirror build_intermediates' defaults in modal/blending_app.py.
+DEFAULT_CUTOFF_MONTH_DAY = seasons.DEFAULT_ONSET_SEARCH_START
+DEFAULT_THRESHOLD_MM = 20.0
+DEFAULT_REF_ONSET_MONTH_DAY = seasons.DEFAULT_REFERENCE_ONSET
 
 
 def _month_day_error(label: str, value: str) -> str | None:
@@ -1178,7 +1181,7 @@ def plan_live_season(
     members: list[str],
     sources_by_name: Mapping[str, dict | None],
     registry: dict,
-    blend_config: dict,
+    season: SeasonState,
     params: ForecastParams,
     *,
     today: date,
@@ -1186,9 +1189,13 @@ def plan_live_season(
     """The frozen season plan a forecast job executes (see SeasonPlan).
 
     Each member runs the registry model its archive links to, laid out like that
-    archive — cadence, units, extent — so the live season has the shape the
-    blend was trained on. Issue dates start at the blend's monsoon cutoff.
+    archive — cadence, units, extent — so the live season has the shape a blend
+    over it was trained on. Issue dates run from the season window's onset
+    search start to today, capped at its last issue date. A season that has not
+    started, or has ended and was not asked for by year, is refused.
     """
+    if season.refusal:
+        raise HTTPException(status_code=409, detail=season.refusal)
     try:
         inputs = {
             name: (
@@ -1199,9 +1206,9 @@ def plan_live_season(
         }
         return plan_season(
             inputs,
-            season=today.year,
-            season_start_month_day=(blend_config.get("blend_params") or {}).get("cutoff_month_day")
-            or "05-01",
+            season=season.year,
+            season_start_month_day=season.window.onset_search_start,
+            last_issue_month_day=season.window.last_issue_date,
             init_source=params.init_source,
             today=today,
             max_issue_dates=params.max_issue_dates,
@@ -1227,11 +1234,71 @@ def forecast_generation_gpus(model_ready: dict[str, bool]) -> int:
     return 0 if all(model_ready.values()) else 1
 
 
+async def season_cache_readiness(conn, plan: SeasonPlan) -> dict[str, bool]:
+    """Whether each planned model's shared season cache already holds every
+    issue date the plan needs."""
+    season = str(plan.season)
+    return {
+        member: await trajectory_sets.set_is_ready(
+            conn,
+            model_name=member,
+            init_source=plan.init_source,
+            season=season,
+            needed_dates=dates,
+        )
+        for member, dates in plan.covered_dates().items()
+    }
+
+
 class ForecastCreate(BaseModel):
-    blend_id: str
-    forecast_model_ids: list[str] | None = None
+    """A forecast request: a trained blend to score, or model archives to run raw.
+
+    A blended forecast scores its models' live season against the blend's
+    trained weights. A raw forecast (``models``) only rolls each model's season
+    out and publishes it, with no blended probabilities.
+    """
+
+    blend_id: Annotated[str, Field(min_length=1)] | None = None
+    models: (
+        Annotated[
+            list[str],
+            Field(min_length=1, description="Model data source ids to forecast with, unblended."),
+        ]
+        | None
+    ) = None
+    forecast_model_ids: list[str] | None = Field(
+        default=None, description="Blend members to roll out; defaults to every member."
+    )
     params: ForecastParams = ForecastParams()
+    season_year: Annotated[int, Field(ge=1900, le=2200)] | None = Field(
+        default=None,
+        description="Season to forecast; defaults to this year's. A past year is a re-forecast.",
+    )
+    season: SeasonWindow | None = Field(
+        default=None,
+        description=(
+            "Season window. A blend keeps the onset dates it was trained on and takes only "
+            "this window's name and last issue date."
+        ),
+    )
     run_id: str | None = None
+
+    @model_validator(mode="after")
+    def _one_basis(self) -> Self:
+        if (self.blend_id is None) == (self.models is None):
+            raise ValueError(
+                "a forecast needs exactly one of blend_id (a trained blend) or models "
+                "(model data sources to forecast with, unblended)"
+            )
+        if self.models is not None:
+            if len(set(self.models)) != len(self.models):
+                raise ValueError("models lists the same data source twice")
+            if self.forecast_model_ids is not None:
+                raise ValueError(
+                    "forecast_model_ids picks members of a blend; list the models to run "
+                    "in models instead"
+                )
+        return self
 
 
 class ForecastOut(BaseModel):
@@ -1305,6 +1372,32 @@ class ForecastJob:
     run_id: str | None
     plan: SeasonPlan
     config: dict
+    season: SeasonState | None = None
+
+
+@dataclass(frozen=True)
+class ForecastBasis:
+    """What a forecast request runs, before its season is planned: every model
+    it needs a live season for, each model's archive, the season window, and the
+    blend it is scored against, if any."""
+
+    model_names: list[str]
+    # The models to roll out: a blend request may name a subset of its members.
+    forecast_model_ids: list[str]
+    sources_by_name: dict[str, dict | None]
+    window: SeasonWindow
+    dataset_id: str
+    region_id: str | None
+    # Job config fields naming the blend, or recording that there is none.
+    blend_fields: dict
+    # The request's subject in a refusal: "This blend" or "These models".
+    subject: str
+
+    def blockers(self) -> list[str]:
+        """Why a model keeps this forecast from running live; empty when none."""
+        return live_forecast_blockers(
+            blend_member(name, self.sources_by_name.get(name) or {}) for name in self.model_names
+        )
 
 
 # What a forecast's scores depend on: the seasons it rolls out, the blend it
@@ -1334,23 +1427,30 @@ async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> Foreca
     return await submit_forecast_job(await build_forecast_job(body, user_id), user_id)
 
 
-async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
-    """The forecast job a request asks for: its blend and members checked, its
-    season planned as of today, and its job config frozen."""
-    blend_row = await _resolve_parent_blend(body.blend_id, user_id)
+async def resolve_forecast_basis(body: ForecastCreate, user_id: str) -> ForecastBasis:
+    """The models, archives, season window and blend a forecast request names,
+    checked against what the caller can see."""
+    if body.blend_id is not None:
+        return await _blend_basis(body, body.blend_id, user_id)
+    return await _models_basis(body, body.models or [], user_id)
+
+
+async def _blend_basis(body: ForecastCreate, blend_id: str, user_id: str) -> ForecastBasis:
+    blend_row = await _resolve_parent_blend(blend_id, user_id)
     blend_config = json.loads(blend_row.get("config_json") or "{}")
     # Where the blend's training run published its artifacts. The live-scoring
     # step applies coefs_blended_model_global_final.pkl from here instead of
     # retraining the CV; blends trained before that artifact existed fall back
     # to retraining.
-    blend_config["blend_output_uri"] = get_storage().job_output_uri(body.blend_id)[0]
+    blend_config["blend_output_uri"] = get_storage().job_output_uri(blend_id)[0]
+    window = _blend_window(blend_config, body.season)
+    _score_through(blend_config, window)
 
     model_names: list[str] = blend_config.get("model_names") or []
     # Live inference runs the forecast_models.yaml model each member's archive
     # is linked to at registration, while the member name stays the key
     # everywhere: score_live_forecast_bundle joins the live model's output back
     # into the blend's formula by that name (the `diff_<model>_qx` terms).
-    registry = get_packaged_forecast_models()
     requested = set(body.forecast_model_ids) if body.forecast_model_ids else set(model_names)
     unknown = sorted(requested - set(model_names))
     if unknown:
@@ -1358,6 +1458,8 @@ async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
             status_code=400,
             detail=f"Model(s) not part of this blend: {', '.join(unknown)}",
         )
+    if not requested:
+        raise HTTPException(status_code=400, detail="Blend has no models to forecast")
     # The archived sources the blend was trained from. Deliberately not scoped
     # to the caller: running someone else's shared blend needs its members'
     # cadence, extent, and grid, or the rollout silently produces a differently
@@ -1370,26 +1472,88 @@ async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
         sources_by_name[name] = (
             await data_source_service.get_source(source_id) if source_id else None
         )
-
-    # Every member, not just the requested subset: live scoring applies the
-    # blend's whole formula, so it needs a rolled-out season for each member
-    # (score_live_forecast_bundle rejects a bundle set that is missing one).
-    # Without this, a request for only the runnable members is accepted and then
-    # fails during scoring, after the rollout has already been paid for.
-    blockers = live_forecast_blockers(
-        blend_member(name, sources_by_name.get(name) or {}) for name in model_names
+    obs_source = await data_source_service.get_source(blend_row["dataset_id"])
+    _require_readable_training_files(blend_config, obs_source, sources_by_name)
+    # The blockers cover every member, not just the requested subset: live
+    # scoring applies the blend's whole formula, so it needs a rolled-out season
+    # for each member (score_live_forecast_bundle rejects a bundle set that is
+    # missing one). Without this, a request for only the runnable members is
+    # accepted and then fails during scoring, after the rollout has been paid for.
+    return ForecastBasis(
+        model_names=model_names,
+        forecast_model_ids=sorted(requested),
+        sources_by_name=sources_by_name,
+        window=window,
+        dataset_id=blend_row["dataset_id"],
+        region_id=blend_config.get("region_id"),
+        blend_fields={
+            "blend_id": blend_id,
+            # Frozen at submission time so a later edit to the blend doesn't
+            # retroactively change a forecast job already queued.
+            "blend_config_snapshot": blend_config,
+            "blend_day_level_completed_at": _day_level_completed_at(blend_row),
+        },
+        subject="This blend",
     )
+
+
+def _blend_window(blend_config: dict, requested: SeasonWindow | None) -> SeasonWindow:
+    try:
+        return seasons.blend_season_window(blend_config.get("blend_params") or {}, requested)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This blend's season dates don't make a season to forecast: {exc}",
+        ) from exc
+
+
+def _score_through(blend_config: dict, window: SeasonWindow) -> None:
+    """Make the blend's scoring cover the same last issue date the plan rolls out
+    to. Left unset when it is already the date scoring uses, so blends and their
+    saved forecasts stay exactly as they were."""
+    params = blend_config.get("blend_params") or {}
+    if window.last_issue_date != (
+        params.get("issue_end_month_day") or seasons.DEFAULT_LAST_ISSUE_DATE
+    ):
+        blend_config["blend_params"] = {**params, "issue_end_month_day": window.last_issue_date}
+
+
+async def _models_basis(body: ForecastCreate, source_ids: list[str], user_id: str) -> ForecastBasis:
+    # The same owner-or-shared and readiness checks a blend applies to its members.
+    sources = [await _resolve_model_source(source_id, user_id) for source_id in source_ids]
+    names = [_blend_model_key(source["name"]) for source in sources]
+    if len(set(names)) != len(names):
+        raise HTTPException(status_code=400, detail="Two of these models share a name")
+    regions = {source.get("region") for source in sources}
+    return ForecastBasis(
+        model_names=names,
+        forecast_model_ids=sorted(names),
+        sources_by_name=dict(zip(names, sources, strict=True)),
+        window=body.season or SeasonWindow(),
+        dataset_id=source_ids[0],
+        region_id=regions.pop() if len(regions) == 1 else None,
+        blend_fields={
+            "blend_id": None,
+            "blend_config_snapshot": None,
+            "blend_day_level_completed_at": None,
+            "model_source_ids": list(source_ids),
+        },
+        subject="These models",
+    )
+
+
+async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
+    """The forecast job a request asks for: its blend or models checked, its
+    season resolved and planned as of today, and its job config frozen."""
+    basis = await resolve_forecast_basis(body, user_id)
+    blockers = basis.blockers()
     if blockers:
         raise HTTPException(
             status_code=400,
-            detail="This blend cannot run as a live forecast. " + " ".join(blockers),
+            detail=f"{basis.subject} cannot run as a live forecast. " + " ".join(blockers),
         )
-    obs_source = await data_source_service.get_source(blend_row["dataset_id"])
-    _require_readable_training_files(blend_config, obs_source, sources_by_name)
-    forecast_model_ids = sorted(requested)
-    if not forecast_model_ids:
-        raise HTTPException(status_code=400, detail="Blend has no models to forecast")
 
+    registry = get_packaged_forecast_models()
     known_variables = set(registry.get("variables") or [])
     variables = body.params.variables or list(registry.get("variables") or [])
     unknown_variables = sorted(set(variables) - known_variables)
@@ -1400,38 +1564,43 @@ async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
         )
     lead_hours = body.params.lead_hours or list(registry.get("default_lead_hours") or [])
 
+    today = utc_today()
+    season = resolve_season(basis.window, today, body.season_year)
     plan = plan_live_season(
-        forecast_model_ids,
-        sources_by_name,
+        basis.forecast_model_ids,
+        basis.sources_by_name,
         registry,
-        blend_config,
+        season,
         body.params,
-        today=utc_today(),
+        today=today,
     )
 
     config = {
         "job_type": "forecast",
         "modal_app": settings.modal_forecast_app_name,
         "modal_function": settings.modal_forecast_function_name,
-        "blend_id": body.blend_id,
-        # Frozen at submission time so a later edit to the blend doesn't
-        # retroactively change a forecast job already queued.
-        "blend_config_snapshot": blend_config,
-        "blend_day_level_completed_at": _day_level_completed_at(blend_row),
-        "forecast_model_ids": forecast_model_ids,
+        **basis.blend_fields,
+        "forecast_model_ids": basis.forecast_model_ids,
         # What the runners execute and the coverage markers record. The fields
         # beside it are the request as submitted, kept for display and re-runs.
         "season_plan": plan.to_dict(),
+        "season_window": basis.window.model_dump(),
+        "season_year": body.season_year,
+        "season": body.season.model_dump() if body.season else None,
         "init_source": plan.init_source,
         "max_issue_dates": body.params.max_issue_dates,
-        "region_id": blend_config.get("region_id"),
+        "region_id": basis.region_id,
         "init_time": body.params.init_time,
         "lead_hours": lead_hours,
         "variables": variables,
         "gcs_cache_bucket": settings.gcs_data_bucket,
     }
     return ForecastJob(
-        dataset_id=blend_row["dataset_id"], run_id=body.run_id, plan=plan, config=config
+        dataset_id=basis.dataset_id,
+        run_id=body.run_id,
+        plan=plan,
+        config=config,
+        season=season,
     )
 
 
@@ -1449,10 +1618,10 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
     """
     forecast_model_ids: list[str] = job.config["forecast_model_ids"]
     # Gate against the shared trajectory store. The expensive season rollout is
-    # deterministic and model-scoped, so it is generated once (admin-triggered
-    # when cold) and every later run scores against the cache for free. The
-    # coverage markers record the same plan, so a set they mark complete
-    # satisfies this gate on the next run.
+    # deterministic and model-scoped, so it is generated once (by whichever
+    # user's forecast first needs it) and every later run scores against the
+    # cache for free. The coverage markers record the same plan, so a set they
+    # mark complete satisfies this gate on the next run.
     init_source = job.plan.init_source
     season = str(job.plan.season)
     season_store_prefix = (
@@ -1460,18 +1629,8 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
         if settings.gcs_data_bucket
         else "season-forecasts"
     )
-    needed = job.plan.covered_dates()
     async with get_db() as conn:
-        model_ready = {
-            name: await trajectory_sets.set_is_ready(
-                conn,
-                model_name=name,
-                init_source=init_source,
-                season=season,
-                needed_dates=needed[name],
-            )
-            for name in forecast_model_ids
-        }
+        model_ready = await season_cache_readiness(conn, job.plan)
     gpus = forecast_generation_gpus(model_ready)
 
     job_id = str(uuid.uuid4())
@@ -1594,16 +1753,53 @@ async def refresh_forecast_for_user(
         raise HTTPException(status_code=404, detail=f"Unknown forecast: {forecast_id!r}")
 
     cfg = json.loads(row["config_json"] or "{}")
-    body = ForecastCreate(
-        blend_id=cfg.get("blend_id") or "",
-        forecast_model_ids=cfg.get("forecast_model_ids") or None,
-        params=_saved_forecast_params(cfg),
-        run_id=row["run_id"],
-    )
-    job = await build_forecast_job(body, user_id)
+    job = await build_forecast_job(_saved_forecast_request(cfg, row["run_id"]), user_id)
     if not force and row["status"] == "complete" and scores_same_inputs(job.config, cfg):
         return ForecastRefreshOut(forecast=forecast_row_to_out(dict(row), user_id), up_to_date=True)
     return ForecastRefreshOut(forecast=await submit_forecast_job(job, user_id), up_to_date=False)
+
+
+def _saved_forecast_request(cfg: dict, run_id: str | None) -> ForecastCreate:
+    """The request a stored forecast replays: the same blend or models, settings
+    and season window, on the season _replayed_season_year picks."""
+    params = _saved_forecast_params(cfg)
+    basis = (
+        {"models": cfg["model_source_ids"]}
+        if cfg.get("model_source_ids")
+        else {
+            "blend_id": cfg.get("blend_id") or None,
+            "forecast_model_ids": cfg.get("forecast_model_ids") or None,
+        }
+    )
+    try:
+        return ForecastCreate(
+            **basis,
+            params=params,
+            season_year=_replayed_season_year(cfg, utc_today()),
+            season=cfg.get("season"),
+            run_id=run_id,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=409, detail=f"This forecast can't be updated: {exc.errors()[0]['msg']}"
+        ) from exc
+
+
+def _replayed_season_year(cfg: dict, today: date) -> int | None:
+    """The season an update plans. A forecast asked for by year stays on it.
+    Otherwise an update follows the current season while one is under way, and
+    between seasons it stays on the season it planned, so updating after the
+    season ends fills in that season's last issue dates (or is up to date)
+    instead of being refused."""
+    if cfg.get("season_year") is not None:
+        return cfg["season_year"]
+    planned = cfg.get("season_plan")
+    if not isinstance(planned, dict) or planned.get("season") is None:
+        return None
+    window = SeasonWindow.model_validate(cfg.get("season_window") or {})
+    if resolve_season(window, today).phase == "in_season":
+        return None
+    return int(planned["season"])
 
 
 def _saved_forecast_params(cfg: dict) -> ForecastParams:

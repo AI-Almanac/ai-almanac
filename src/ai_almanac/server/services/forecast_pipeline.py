@@ -195,8 +195,10 @@ def season_issue_dates(
     schedule_month_days: list[str] | None = None,
     *,
     today: dt.date,
+    last_issue_month_day: str | None = None,
 ) -> list[dt.date]:
-    """Issue dates in [season_start, today] for one season/model.
+    """Issue dates in [season_start, min(today, last issue date)] for one
+    season/model. With no last issue date the season runs to Dec 31.
 
     The archives pin issue dates to fixed *calendar dates* (e.g. Apr 1, 4, 8),
     not weekdays — the weekday of a given issue date drifts year to year, so a
@@ -209,9 +211,8 @@ def season_issue_dates(
     ``init_weekdays`` (Python numbering, Monday=0..Sunday=6) is the fallback for
     sources registered before a schedule was inferred.
     """
-    month, day = (int(part) for part in season_start_month_day.split("-"))
-    start = dt.date(year, month, day)
-    end = min(today, dt.date(year, 12, 31))
+    start = _date_in(year, season_start_month_day)
+    end = min(today, _date_in(year, last_issue_month_day or "12-31"))
 
     if schedule_month_days:
         dates = []
@@ -232,6 +233,11 @@ def season_issue_dates(
             dates.append(current)
         current += dt.timedelta(days=1)
     return dates
+
+
+def _date_in(year: int, month_day: str) -> dt.date:
+    month, day = (int(part) for part in month_day.split("-"))
+    return dt.date(year, month, day)
 
 
 # ---------------------------------------------------------------------------
@@ -264,13 +270,12 @@ def _parse_month_day(raw, what: str = "init_month_days entries") -> str:
         raise PlanError(f"{what} must be MM-DD, got {raw!r}") from exc
 
 
-def _parse_season_start(raw, season: int) -> str:
-    month_day = _parse_month_day(raw, "The season start")
-    month, day = (int(part) for part in month_day.split("-"))
+def _parse_season_start(raw, season: int, what: str = "The season start") -> str:
+    month_day = _parse_month_day(raw, what)
     try:
-        dt.date(season, month, day)
+        _date_in(season, month_day)
     except ValueError as exc:
-        raise PlanError(f"The season start {raw!r} is not a date in {season}") from exc
+        raise PlanError(f"{what} {raw!r} is not a date in {season}") from exc
     return month_day
 
 
@@ -412,8 +417,8 @@ class ModelRun:
             raise PlanError(f"Member name {self.member!r} isn't a plain identifier")
         if not self.issue_dates:
             raise PlanError(
-                f"No issue dates for {self.member} this season yet. The blend scores "
-                "every member together, so each needs at least one."
+                f"No issue dates for {self.member} this season yet. Every model in a "
+                "forecast needs at least one."
             )
 
     @classmethod
@@ -517,10 +522,16 @@ def plan_season(
     season_start_month_day: str,
     init_source: str,
     today: dt.date,
+    last_issue_month_day: str | None = None,
     max_issue_dates: int | None = None,
     lead_day: int = CANONICAL_LEAD_DAY,
 ) -> SeasonPlan:
-    """Resolve each blend member's season rollout. Pure: the clock is `today`.
+    """Resolve each member's season rollout. Pure: the clock is `today`.
+
+    Issue dates run from the season start to `today`, capped at the season's
+    last issue date. The start and last issue date are a season window's
+    month-days; this module stays free of the server's models because Modal
+    containers load it alone.
 
     Every member rolls out on the union of the archives' calendar schedules.
     The blend inner-joins members on issue date, so two archives built on
@@ -535,6 +546,11 @@ def plan_season(
     if max_issue_dates is not None and max_issue_dates < 1:
         raise PlanError(f"max_issue_dates must be at least 1, got {max_issue_dates}")
     season_start = _parse_season_start(season_start_month_day, season)
+    last_issue = (
+        _parse_season_start(last_issue_month_day, season, "The last issue date")
+        if last_issue_month_day is not None
+        else None
+    )
     shared_month_days = sorted(
         {entry for _, layout in members.values() for entry in layout.init_month_days}
     )
@@ -546,6 +562,7 @@ def plan_season(
             season,
             shared_month_days or None,
             today=today,
+            last_issue_month_day=last_issue,
         )
         if max_issue_dates is not None:
             dates = dates[-max_issue_dates:]
@@ -957,6 +974,51 @@ def _predicted_init_requests(model, issue_dates: list[dt.date]) -> dict[dt.date,
         return {}
 
 
+# How a season's missing issue dates are rolled out, shared by the Modal app
+# (which runs them) and the server (which estimates their cost). Each GPU
+# container pays one model load (~1-2 min) for its chunk, so a few dates keeps
+# that small against the rollout itself.
+DATES_PER_ROLLOUT = 4
+# Most GPU containers one rollout function (one image) runs at once, shared by
+# every forecast job running concurrently.
+MAX_PARALLEL_ROLLOUTS = 12
+# Rough GPU time for one issue date rolled out to the canonical 45-day horizon.
+# An ensemble date is a rollout per member: a cold ensemble season of ~45 dates
+# runs in ~4 rounds of ~1.5 h on MAX_PARALLEL_ROLLOUTS containers.
+ROLLOUT_MINUTES_PER_ISSUE_DATE = 12
+ENSEMBLE_ROLLOUT_MINUTES_PER_ISSUE_DATE = 90
+
+
+@dataclass(frozen=True)
+class RolloutEstimate:
+    """Rough cost of rolling out one model's missing issue dates."""
+
+    issue_dates: int
+    containers: int
+    gpu_minutes: int
+    # Best case: every container starts at once. Other jobs' chunks share the
+    # MAX_PARALLEL_ROLLOUTS ceiling, so a busy queue takes longer.
+    wall_minutes: int
+
+
+def estimate_rollout(missing_dates: int, *, ensemble: bool) -> RolloutEstimate:
+    """The GPU containers and time `missing_dates` issue dates take, split the
+    way chunk_rollouts splits them."""
+    per_chunk = 1 if ensemble else DATES_PER_ROLLOUT
+    minutes_per_date = (
+        ENSEMBLE_ROLLOUT_MINUTES_PER_ISSUE_DATE if ensemble else ROLLOUT_MINUTES_PER_ISSUE_DATE
+    )
+    containers = math.ceil(missing_dates / per_chunk)
+    rounds = math.ceil(containers / MAX_PARALLEL_ROLLOUTS)
+    chunk_minutes = min(per_chunk, missing_dates) * minutes_per_date
+    return RolloutEstimate(
+        issue_dates=missing_dates,
+        containers=containers,
+        gpu_minutes=missing_dates * minutes_per_date,
+        wall_minutes=rounds * chunk_minutes,
+    )
+
+
 @dataclass(frozen=True)
 class RolloutChunk:
     """One GPU container's share of a season: some issue dates of one store
@@ -1100,6 +1162,27 @@ def bundle_files(files: list[Path]) -> bytes:
         for path in files:
             tar.add(path, arcname=path.name)
     return buffer.getvalue()
+
+
+def season_output_name(model_id: str) -> str:
+    """Filename a forecast job publishes one model's raw season rollout under."""
+    return f"{model_id}_season_forecast.nc"
+
+
+def scores_against_blend(config: dict) -> bool:
+    """Whether a forecast job scores its seasons against a trained blend. A raw
+    forecast (no blend) only rolls out and publishes each model's season."""
+    return bool(config.get("blend_config_snapshot"))
+
+
+def publish_season_files(members: list[str], staging_dir: Path, output_dir: Path) -> None:
+    """Copy each member's staged `<member>.nc` season to the job's outputs under
+    its published name."""
+    import shutil
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for member in members:
+        shutil.copy(staging_dir / f"{member}.nc", output_dir / season_output_name(member))
 
 
 # ---------------------------------------------------------------------------

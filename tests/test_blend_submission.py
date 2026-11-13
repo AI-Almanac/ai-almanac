@@ -754,7 +754,7 @@ async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
             user_id,
         )
     assert exc.value.status_code == 409
-    assert "No issue dates" in exc.value.detail
+    assert "has not started: the first issue date is 1 May 2026" in exc.value.detail
 
 
 @pytest.mark.parametrize("link", [["aifs"], "", "  "])
