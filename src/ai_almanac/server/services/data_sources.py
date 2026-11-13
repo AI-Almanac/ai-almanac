@@ -246,9 +246,9 @@ def _inspect_local_source(
     if not files:
         return "invalid", f"No files match {pattern!r}.", metadata
 
-    import xarray as xr
+    from ai_almanac.server.services import netcdf
 
-    return _finalize_inspection(kind, metadata, files, lambda: xr.open_dataset(files[0]))
+    return _finalize_inspection(kind, metadata, files, lambda: netcdf.open_dataset(files[0]))
 
 
 def _inspect_gcs_source(

@@ -12,19 +12,20 @@ Both backends expose the same method surface so routers stay backend-agnostic.
 
 from __future__ import annotations
 
-import threading
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
 from ai_almanac.paths import uploads_dir
+from ai_almanac.server.services import netcdf
+
+logger = logging.getLogger(__name__)
 
 # Probed in priority order when a chat figure's extension is unknown.
 _CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
 
-# HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
-_nc_lock = threading.Lock()
 
 # `open_nc_dataset` holds a whole file in memory, which suits job-output grids
 # (a few MB) but would take the server down on a forecast archive.
@@ -34,8 +35,11 @@ _METADATA_BLOCK_BYTES = 2 * 2**20
 
 def _ensure_small_enough_to_load(path, size: int) -> None:
     if size > _MAX_EAGER_NC_BYTES:
+        # The path holds a job id and the server's layout, and this message can reach
+        # a user, so it is logged rather than put in the error.
+        logger.warning("%s is %d bytes, too large to load whole", path, size)
         raise ValueError(
-            f"{path} is {size / 2**20:.0f} MiB, over the "
+            f"This file is {size / 2**20:.0f} MiB, over the "
             f"{_MAX_EAGER_NC_BYTES / 2**20:.0f} MiB limit for loading a NetCDF file whole."
         )
 
@@ -188,11 +192,9 @@ class LocalStorage:
         return None
 
     def open_nc_dataset(self, path):
-        import xarray as xr
 
         _ensure_small_enough_to_load(path, Path(path).stat().st_size)
-        with _nc_lock:
-            return xr.load_dataset(path)
+        return netcdf.load_dataset(path)
 
     def save_chat_figure(self, figure_id: str, data: bytes) -> None:
         ext, _ = detect_chat_figure_format(data)
@@ -466,7 +468,6 @@ class GCSStorage:
         its data, so the object is read in ranged blocks rather than whole:
         memory stays a few blocks however large the archive is.
         """
-        import xarray as xr
 
         handle = self._fs().open(
             str(path).removeprefix("gs://"),
@@ -474,23 +475,20 @@ class GCSStorage:
             block_size=_METADATA_BLOCK_BYTES,
             cache_type="blockcache",
         )
-        with handle, _nc_lock, xr.open_dataset(handle, engine="h5netcdf") as dataset:
+        with handle, netcdf.open_dataset(handle, engine="h5netcdf") as dataset:
             yield dataset
 
     def open_nc_dataset(self, path):
         import io
-
-        import xarray as xr
 
         fs = self._fs()
         key = str(path).removeprefix("gs://")
         _ensure_small_enough_to_load(path, fs.size(key))
         # One GET for the whole object, outside the lock: h5netcdf over a
         # streaming gcsfs handle turns every internal seek into a separate
-        # GCS range request, all serialized behind _nc_lock.
+        # GCS range request, all serialized behind the HDF5 lock.
         data = fs.cat_file(key)
-        with _nc_lock:
-            return xr.load_dataset(io.BytesIO(data), engine="h5netcdf")
+        return netcdf.load_dataset(io.BytesIO(data), engine="h5netcdf")
 
     def save_chat_figure(self, figure_id: str, data: bytes) -> None:
         ext, content_type = detect_chat_figure_format(data)

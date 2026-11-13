@@ -57,6 +57,11 @@ def run_job_workload_command(job_id: str) -> None:
     run_job_workload(job_id)
 
 
+# An open page's live-update stream never closes on its own, so without a limit a
+# reload waits on the old server until every browser tab on a workspace is closed.
+_RELOAD_GRACE_SECONDS = 2
+
+
 def _python_source_dirs() -> list[str]:
     """What --reload watches: the server's own packages, never the working directory,
     which may hold a data dir whose envs and job outputs change constantly."""
@@ -183,6 +188,7 @@ def serve(
         port=port,
         reload=reload,
         reload_dirs=_python_source_dirs() if reload else None,
+        timeout_graceful_shutdown=_RELOAD_GRACE_SECONDS if reload else None,
         log_level="info",
         # log_requests already logs every request by path. uvicorn's access log
         # would add the query string, which carries ?token= on the first visit.

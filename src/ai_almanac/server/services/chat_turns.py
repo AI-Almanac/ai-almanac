@@ -14,9 +14,10 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import HTTPException
 from pydantic_ai import DeferredToolResults, ToolDenied
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
@@ -26,7 +27,12 @@ from ai_almanac.server.db import get_db, lock_for_update
 from ai_almanac.server.services import job_access
 from ai_almanac.server.services.chat_artifacts import hydrate_turn_artifact_urls
 from ai_almanac.server.services.chat_job_events import platform_note, scope_job_activity
-from ai_almanac.server.services.chat_state import ChatScope, ChatTurn
+from ai_almanac.server.services.chat_state import (
+    TURN_HEARTBEAT_SECONDS,
+    ChatScope,
+    ChatTurn,
+    turn_in_flight,
+)
 from ai_almanac.server.services.chat_tools import (
     SubmitBenchmarkApproval,
     SubmitBlendApproval,
@@ -79,6 +85,46 @@ def parse_llm_event(event: str) -> dict | None:
     if not isinstance(parsed, dict):
         raise RuntimeError("LLM stream emitted a non-object event")
     return parsed
+
+
+INTERRUPTED = "The reply was interrupted before it finished."
+
+
+def with_interrupted_turns(
+    transcript: list[dict], last_active: object, now: datetime | None = None
+) -> list[dict]:
+    """The transcript as the user should see it: a turn left streaming by a relay
+    that died reads as failed, not as still replying or as a reply with nothing in it."""
+    live = turn_in_flight(transcript, last_active, now)
+    return [
+        {**turn, "status": "failed", "error": turn.get("error") or INTERRUPTED}
+        if turn.get("status") == "streaming" and not (live and i == len(transcript) - 1)
+        else turn
+        for i, turn in enumerate(transcript)
+    ]
+
+
+@asynccontextmanager
+async def _keeping_session_alive(session_id: str) -> AsyncIterator[None]:
+    """Touch the session while a turn streams, so other writers know it is live."""
+    heartbeat = asyncio.create_task(_touch_session_every(session_id, TURN_HEARTBEAT_SECONDS))
+    try:
+        yield
+    finally:
+        heartbeat.cancel()
+
+
+async def _touch_session_every(session_id: str, seconds: float) -> None:
+    while True:
+        await asyncio.sleep(seconds)
+        try:
+            async with get_db() as conn:
+                await conn.execute(
+                    text("UPDATE chat_sessions SET updated_at = :now WHERE id = :id"),
+                    {"now": _now(), "id": session_id},
+                )
+        except Exception:
+            logger.warning("Could not touch chat session %s while it streams", session_id)
 
 
 def _previous_user_turn_at(transcript: list[dict]) -> str | None:
@@ -164,6 +210,10 @@ async def validate_scope(scope: ChatScope, user: job_access.JobUser) -> ChatScop
 def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     message = str(exc).lower()
     name = exc.__class__.__name__.lower()
+    # A stalled or dropped read from the model's API, raised mid-stream by httpx
+    # with no message, whatever the turn's tools did.
+    if isinstance(exc, httpx.TimeoutException | httpx.NetworkError):
+        return "provider_error"
     if (
         "tool" in message
         or "tool" in name
@@ -362,7 +412,7 @@ async def stream_chat_turn(
                 await conn.execute(
                     text(
                         """
-                SELECT provider_state, transcript, scope
+                SELECT provider_state, transcript, scope, updated_at
                 FROM chat_sessions
                 WHERE id = :id AND user_id = :uid
             """
@@ -378,10 +428,18 @@ async def stream_chat_turn(
             yield _stream_event("error", error_type="internal_error", message="Session not found")
             return
 
+        transcript = json_list(row["transcript"])
+        # One writer per session: a second turn waits until the streaming one ends.
+        if turn_in_flight(transcript, row["updated_at"]):
+            yield _stream_event(
+                "error",
+                error_type="session_busy",
+                message="The assistant is still replying in this chat",
+            )
+            return
         provider_state = _deny_unprocessed_tool_calls(
             deserialize_model_messages(row["provider_state"])
         )
-        transcript = json_list(row["transcript"])
         stored_scope = ChatScope.model_validate(json_dict(row["scope"]))
         if requested_scope is not None:
             if requested_scope.kind != stored_scope.kind or requested_scope.key != stored_scope.key:
@@ -424,7 +482,35 @@ async def stream_chat_turn(
         )
     # --- Transaction 1 committed, lock released ---
     job_update_note = await _job_update_note(user_id, scope, _previous_user_turn_at(transcript))
+    async with _keeping_session_alive(session_id):
+        async for chunk in _relay_turn(
+            session_id,
+            user_id,
+            provider_state,
+            pending_provider_state,
+            pending_transcript,
+            assistant_turn,
+            scope,
+            latest_user_message=content,
+            platform_note=job_update_note,
+            active_ruleset=active_ruleset,
+            comparison_id=comparison_id,
+            turn_id=assistant_turn.id,
+        ):
+            yield chunk
 
+
+async def _relay_turn(
+    session_id: str,
+    user_id: str,
+    provider_state: list,
+    pending_provider_state: list[dict],
+    pending_transcript: list[dict],
+    assistant_turn: ChatTurn,
+    scope: ChatScope,
+    **stream_kwargs: object,
+) -> AsyncIterator[str]:
+    """Stream one assistant turn to the client, then persist it completed or failed."""
     # --- Stream without holding a DB connection ---
     terminal_event: str | None = None
     try:
@@ -435,17 +521,7 @@ async def stream_chat_turn(
         # and late enough to lose a race, as a comparison reading both variants'
         # logs immediately afterwards found.
         async with aclosing(
-            stream_response(
-                provider_state,
-                user_id,
-                session_id,
-                scope,
-                latest_user_message=content,
-                platform_note=job_update_note,
-                active_ruleset=active_ruleset,
-                comparison_id=comparison_id,
-                turn_id=assistant_turn.id,
-            )
+            stream_response(provider_state, user_id, session_id, scope, **stream_kwargs)
         ) as llm_events:
             async for event in llm_events:
                 data = parse_llm_event(event)
