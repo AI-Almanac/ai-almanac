@@ -388,3 +388,46 @@ def test_a_failed_local_day_level_blend_leaves_the_weekly_blend_published(
 
     assert sorted(path.name for path in output_dir.iterdir()) == ["weights.pkl"]
     assert "forest exploded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("said", "region_id", "on_sub_districts"),
+    [
+        (True, None, True),
+        (False, "ethiopia", False),
+        (None, "ethiopia", True),
+        (None, "india", False),
+        (None, None, False),
+    ],
+)
+def test_a_blend_is_on_sub_districts_when_the_server_says_so_else_by_its_old_region(
+    said: bool | None, region_id: str | None, on_sub_districts: bool
+) -> None:
+    workflow = _load_workflow()
+
+    assert workflow._should_use_adm3_domain(region_id, said) is on_sub_districts
+
+
+def test_what_the_server_said_about_sub_districts_reaches_the_blend_preparation(
+    monkeypatch,
+) -> None:
+    workflow = _load_workflow()
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        workflow, "build_intermediates_from_dirs", lambda *args, **kwargs: calls.append(kwargs)
+    )
+    resources = workflow.IntermediateResources(workers=1, file_memory_budget_bytes=1)
+
+    for said in (False, None):
+        workflow.build_blend_intermediates(
+            Path("obs"),
+            {"aifs": Path("aifs")},
+            {"training_years": "2020"},
+            region_id="ethiopia",
+            use_adm3_domain=said,
+            cache_dir=None,
+            resources=resources,
+        )
+
+    assert calls[0]["use_adm3_domain"] is False
+    assert "use_adm3_domain" not in calls[1]

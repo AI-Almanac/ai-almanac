@@ -77,7 +77,7 @@ class DataSourceOut(BaseModel):
 class DataSourceValidationOut(BaseModel):
     kind: Literal["obs", "model"]
     path: str
-    region: str
+    region: str | None
     metadata: dict
     status: Literal["ready", "invalid"]
     validation_error: str | None
@@ -119,10 +119,12 @@ def _to_out(row: dict, user) -> DataSourceOut:
     )
 
 
-async def _parse_region(region: str | None) -> str:
+async def _parse_region(region: str | None) -> str | None:
+    """The region a source is filed under, which is a label and may be left out: what a
+    source can be scored with is decided by where it has data."""
     normalized = region.strip().lower() if region else ""
     if not normalized:
-        raise HTTPException(status_code=400, detail="region is required")
+        return None
     if await region_catalog.get_region(normalized) is None:
         raise HTTPException(
             status_code=400,

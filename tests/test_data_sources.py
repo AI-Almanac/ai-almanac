@@ -141,7 +141,7 @@ async def test_local_sources_drive_benchmark_selection_and_submission(
     listed_obs = {dataset["id"]: dataset for dataset in datasets_response.json()}
     assert listed_obs[obs["id"]]["grid_step_deg"] == 0.25
 
-    models_response = await client.get("/jobs/models?region=ethiopia")
+    models_response = await client.get("/jobs/models")
     assert models_response.status_code == 200
     assert model["metadata"]["grid_step_deg"] is not None
     listed_models = {item["id"]: item for item in models_response.json()}
@@ -462,22 +462,9 @@ async def test_invalid_source_can_be_revalidated(
     assert revalidated.json()["validation_error"] is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("region", "detail"),
-    [
-        (None, "region"),
-        ("atlantis", "atlantis"),
-    ],
-)
-async def test_source_region_must_be_configured(
-    client: httpx.AsyncClient,
-    region: str | None,
-    detail: str,
-) -> None:
+async def _register_observations(client: httpx.AsyncClient, region: str | None) -> httpx.Response:
     root = Path(__file__).parents[1] / "testdata" / "ethiopia" / "obs"
-
-    response = await client.post(
+    return await client.post(
         "/data-sources",
         json={
             "kind": "obs",
@@ -491,8 +478,28 @@ async def test_source_region_must_be_configured(
         },
     )
 
+
+@pytest.mark.asyncio
+async def test_a_source_cannot_be_filed_under_a_region_that_does_not_exist(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await _register_observations(client, "atlantis")
+
     assert response.status_code == 400
-    assert detail in response.json()["detail"]
+    assert "atlantis" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_source_needs_no_region_because_it_knows_where_it_has_data(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await _register_observations(client, None)
+
+    assert response.status_code == 201, response.text
+    source = response.json()
+    assert source["region"] is None
+    bounds = source["metadata"]["spatial_bounds"]
+    assert bounds["lat_min"] < bounds["lat_max"] and bounds["lon_min"] < bounds["lon_max"]
 
 
 def test_custom_sources_must_overlap() -> None:
@@ -611,6 +618,29 @@ async def test_shared_deployment_rejects_non_admin_local_paths(
     )
     assert response.status_code == 400
     assert "gs://" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_shared_deployment_rejects_sources_in_the_platforms_own_buckets(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.settings import settings
+
+    _proxy_users(monkeypatch)
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+    monkeypatch.setattr(settings, "gcs_outputs_bucket", "almanac-job-outputs-test")
+
+    response = await client.post(
+        "/data-sources",
+        json={
+            **_obs_body("Everyone's forecasts"),
+            "path": "gs://almanac-job-outputs-test",
+            "metadata": {"obs_file_pattern": "*/output/*_season_forecast.nc", "obs_var": "tp"},
+        },
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"},
+    )
+    assert response.status_code == 400
+    assert "platform's own files" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

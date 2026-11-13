@@ -16,9 +16,10 @@
 		type Region
 	} from '$lib/api';
 	import { goto } from '$app/navigation';
-	import DataCatalogNav from '$lib/DataCatalogNav.svelte';
 	import DataCatalogPageHeader from '$lib/DataCatalogPageHeader.svelte';
 	import FilePicker from '$lib/FilePicker.svelte';
+	import { parseBounds } from '$lib/geo/bbox';
+	import { regionName } from '$lib/places';
 	import { describeSourceCoverage, formatDegrees, missingYears } from '$lib/source-coverage';
 	import { groupSources } from './source-groups';
 	import { account } from '$lib/account.svelte';
@@ -93,7 +94,7 @@
 			kind: formKind,
 			name: formName.trim(),
 			path: formPath.trim(),
-			region: formRegion,
+			region: formRegion || null,
 			metadata: formMetadata()
 		};
 	}
@@ -295,27 +296,12 @@
 		return `Live forecasts with ${model?.display_name ?? live.model_id}`;
 	}
 
-	const selectedRegion = $derived(regions.find((region) => region.id === formRegion) ?? null);
-
-	function regionName(regionId: string | null): string | null {
-		if (!regionId) return null;
-		return regions.find((region) => region.id === regionId)?.display_name ?? regionId;
-	}
-
-	function spatialBoundsMetadata(metadata: Record<string, unknown>): string | null {
-		const bounds = metadata.spatial_bounds;
-		if (!bounds || typeof bounds !== 'object') return null;
-		const values = bounds as Record<string, unknown>;
-		const latMin = Number(values.lat_min);
-		const latMax = Number(values.lat_max);
-		const lonMin = Number(values.lon_min);
-		const lonMax = Number(values.lon_max);
-		if (![latMin, latMax, lonMin, lonMax].every(Number.isFinite)) return null;
-		return `Latitude ${latMin}° to ${latMax}° · Longitude ${lonMin}° to ${lonMax}°`;
-	}
-
-	function spatialBounds(source: DataSource): string | null {
-		return spatialBoundsMetadata(source.metadata);
+	/** Where detected metadata says a source has data, in degrees. */
+	function dataExtent(metadata: Record<string, unknown>): string | null {
+		const bounds = parseBounds(metadata.spatial_bounds);
+		if (!bounds) return null;
+		const { lat_min, lat_max, lon_min, lon_max } = bounds;
+		return `Latitude ${lat_min}° to ${lat_max}° · Longitude ${lon_min}° to ${lon_max}°`;
 	}
 
 	const weekdayNames = [
@@ -355,8 +341,6 @@
 </svelte:head>
 
 <main class="wrap">
-	<DataCatalogNav />
-
 	<DataCatalogPageHeader
 		eyebrow="Catalog entries"
 		title="Data sources"
@@ -404,9 +388,9 @@
 			</div>
 			<div class="row">
 				<label class="grow">
-					<span>Region <em>(required)</em></span>
-					<select bind:value={formRegion} required>
-						<option value="" disabled>Choose the dataset coverage</option>
+					<span>Region <em>(optional)</em></span>
+					<select bind:value={formRegion}>
+						<option value="">No region</option>
 						{#if formRegion && !regions.some((region) => region.id === formRegion)}
 							<option value={formRegion}>{formRegion} (no longer configured)</option>
 						{/if}
@@ -414,15 +398,10 @@
 							<option value={region.id}>{region.display_name}</option>
 						{/each}
 					</select>
-					{#if selectedRegion}
-						<small>
-							{selectedRegion.romp_region === 'custom'
-								? selectedRegion.id === 'custom'
-									? 'Geographic bounds will be inferred from the NetCDF coordinates during validation.'
-									: 'Benchmarks use this region’s configured geographic bounds.'
-								: `Benchmarks use the built-in ${selectedRegion.romp_region} region definition.`}
-						</small>
-					{/if}
+					<small>
+						Where this source has data is detected during validation, and decides what it can be
+						scored with.
+					</small>
 				</label>
 				<label class="grow">
 					<span>File pattern</span>
@@ -517,10 +496,10 @@
 									</strong>
 								</div>
 							{/if}
-							{#if spatialBoundsMetadata(validationDraft.metadata)}
+							{#if dataExtent(validationDraft.metadata)}
 								<div class="wide">
 									<span>Detected coverage</span>
-									<strong>{spatialBoundsMetadata(validationDraft.metadata)}</strong>
+									<strong>{dataExtent(validationDraft.metadata)}</strong>
 								</div>
 							{/if}
 						</div>
@@ -576,10 +555,7 @@
 						{submitting ? 'Adding…' : 'Add data source'}
 					</button>
 				{:else}
-					<button
-						type="submit"
-						disabled={submitting || !formName.trim() || !formPath.trim() || !formRegion}
-					>
+					<button type="submit" disabled={submitting || !formName.trim() || !formPath.trim()}>
 						{submitting
 							? editingId
 								? 'Saving…'
@@ -630,10 +606,10 @@
 />
 
 {#snippet sourceGroups(list: DataSource[])}
-	{#each groupSources(list, (id) => regionName(id) ?? id) as group (group.region)}
+	{#each groupSources(list, (id) => regionName(regions, id) ?? id) as group (group.region)}
 		<details class="region-group" open>
 			<summary>
-				{group.region ? regionName(group.region) : 'No region'}
+				{group.region ? regionName(regions, group.region) : 'No region'}
 				<span class="count">({group.size})</span>
 			</summary>
 			<div class="grid-groups">
@@ -667,8 +643,8 @@
 			{#if describeSourceCoverage(src)}
 				<p class="coverage">{describeSourceCoverage(src)}</p>
 			{/if}
-			{#if spatialBounds(src)}
-				<p class="coverage">{spatialBounds(src)}</p>
+			{#if dataExtent(src.metadata)}
+				<p class="coverage">{dataExtent(src.metadata)}</p>
 			{/if}
 			{#if initializationSchedule(src)}
 				<p class="coverage">{initializationSchedule(src)}</p>

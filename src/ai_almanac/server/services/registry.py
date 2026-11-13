@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ai_almanac.server.services import data_sources, region_catalog
+from ai_almanac.server.services import coverage, data_sources, region_catalog
 
 
 def _registry_entry(source: dict) -> dict:
@@ -44,10 +44,23 @@ async def load_model_registry(
     return entries
 
 
+async def load_models_scored_with(
+    dataset_id: str, *, user_id: str | None = None, is_admin: bool = False
+) -> list[dict]:
+    """The ready model sources that have data where an observation dataset does; none
+    for a dataset the user cannot see."""
+    observation = await data_sources.get_source(dataset_id)
+    if observation is None or not data_sources.visible_to(observation, user_id):
+        return []
+    models = await load_model_registry(user_id=user_id, is_admin=is_admin)
+    return [model for model in models if coverage.scored_together(observation, model)]
+
+
 @dataclass(frozen=True)
 class CatalogSnapshot:
     regions: tuple[dict, ...]
     models: tuple[dict, ...]
+    observations: tuple[dict, ...] = ()
 
     def region(self, region_id: str | None) -> dict | None:
         if not region_id:
@@ -69,6 +82,17 @@ class CatalogSnapshot:
                 return region
         return None
 
+    def observation(self, dataset_id: str | None) -> dict | None:
+        return next((source for source in self.observations if source["id"] == dataset_id), None)
+
+    def models_for(self, dataset_id: str | None, region_id: str | None) -> list[dict]:
+        """The forecast sources that can be scored against the chosen observations.
+        Before any are chosen, the ones filed under the region."""
+        dataset = self.observation(dataset_id)
+        if dataset is None:
+            return self.models_for_region(region_id)
+        return [model for model in self.models if coverage.scored_together(dataset, model)]
+
     def models_for_region(self, region_id: str | None) -> list[dict]:
         if not region_id:
             return list(self.models)
@@ -80,4 +104,5 @@ async def load_catalog() -> CatalogSnapshot:
     return CatalogSnapshot(
         regions=tuple(await region_catalog.list_regions()),
         models=tuple(await load_model_registry()),
+        observations=tuple(await data_sources.get_obs_sources()),
     )

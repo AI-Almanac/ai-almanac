@@ -1,5 +1,5 @@
 import {
-	getModels,
+	getModelsScoredWith,
 	submitChatBenchmark,
 	updateChatBenchmarkConfig,
 	type BenchmarkRunSpec,
@@ -128,7 +128,6 @@ export class BenchmarkSetupForm {
 	);
 	readonly canRun = $derived(
 		Boolean(
-			this.selectedRegionId &&
 			this.selectedDatasetId &&
 			this.selectedModelIds.length > 0 &&
 			!(this.validation?.errors.length ?? 0)
@@ -148,8 +147,8 @@ export class BenchmarkSetupForm {
 	applySpec = (nextSpec: BenchmarkRunSpec, nextValidation?: BenchmarkValidation | null) => {
 		this.spec = nextSpec;
 		this.validation = nextValidation ?? this.validation;
-		if ((nextSpec.region_id ?? '') !== this.selectedRegionId) {
-			void this.loadModels(nextSpec.region_id ?? '');
+		if ((nextSpec.dataset_id ?? '') !== this.selectedDatasetId) {
+			void this.loadModels(nextSpec.dataset_id ?? '');
 		}
 		this.selectedRegionId = nextSpec.region_id ?? '';
 		this.selectedDatasetId = nextSpec.dataset_id ?? '';
@@ -167,15 +166,17 @@ export class BenchmarkSetupForm {
 		this.validation = null;
 	}
 
-	private async loadModels(regionId: string) {
+	/** The models offered are the ones with data where the chosen observations have it. */
+	private async loadModels(datasetId: string) {
 		const token = ++this.modelsRequestToken;
-		if (!regionId) {
+		if (!datasetId) {
 			this.models = [];
 			return;
 		}
-		const fetchedModels = await getModels(regionId);
+		const fetchedModels = await getModelsScoredWith(datasetId);
 		if (token !== this.modelsRequestToken) return;
 		this.models = fetchedModels;
+		this.dropUnavailableModels();
 		for (const modelId of this.selectedModelIds) {
 			if (this.perModelOverrides[modelId]) continue;
 			this.seedOverride(modelId, this.defaultModelOverride(modelId, fetchedModels));
@@ -248,25 +249,23 @@ export class BenchmarkSetupForm {
 		return value !== undefined ? (value as T) : fallback;
 	};
 
+	// The region is a label for where the run is scored; an area picked for one
+	// region means nothing in another.
 	setRegionId = (id: string) => {
+		if (id === this.selectedRegionId) return;
 		this.selectedRegionId = id;
-		this.selectedModelIds = [];
-		this.perModelOverrides = {};
-		this.seededDefaults = {};
 		this.sharedAdvancedParams = { ...this.sharedAdvancedParams, focus_area: null };
-		this.models = [];
-		void this.loadModels(id);
 		this.markManualConfigDirty();
 	};
 
+	// Observations decide which models are offered, and the region the run starts in.
+	// Models already picked stay picked where they still fit.
 	setDatasetId = (id: string) => {
+		if (id === this.selectedDatasetId) return;
 		this.selectedDatasetId = id;
-		const dataset = this.datasets.find((item) => item.id === id);
-		if (dataset?.region && dataset.region !== this.selectedRegionId) {
-			this.setRegionId(dataset.region);
-			return;
-		}
+		this.setRegionId(this.datasets.find((item) => item.id === id)?.region ?? '');
 		this.dropUnavailableModels();
+		void this.loadModels(id);
 		this.markManualConfigDirty();
 	};
 
@@ -397,7 +396,7 @@ export class BenchmarkSetupForm {
 					datasetId: this.selectedDatasetId,
 					modelNames: this.selectedModelIds,
 					sharedParams: {
-						region: this.selectedRegionId,
+						...(this.selectedRegionId && { region: this.selectedRegionId }),
 						event_type: this.spec?.event_type ?? 'monsoon_onset',
 						...(this.forecastWindowDays !== null && {
 							max_forecast_day: this.forecastWindowDays

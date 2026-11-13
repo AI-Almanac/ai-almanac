@@ -58,9 +58,8 @@ async def test_data_management_audience_gates_mutations_but_not_reads(
     caps = (await client.get("/auth/me", headers=headers)).json()["capabilities"]
     assert caps["can_manage_data"] is can_manage
     # Behind the gate the route is hidden; past it, other checks may still refuse.
-    for path in ("/data-sources/validate", "/regions"):
-        resp = await client.post(path, json={}, headers=headers)
-        assert (resp.status_code == 404) is not can_manage, path
+    resp = await client.post("/data-sources/validate", json={}, headers=headers)
+    assert (resp.status_code == 404) is not can_manage
     # Reads stay available so benchmarks can still list datasets and regions.
     assert (await client.get("/data-sources", headers=headers)).status_code == 200
     assert (await client.get("/regions", headers=headers)).status_code == 200

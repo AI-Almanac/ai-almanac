@@ -4,14 +4,14 @@ import type { Dataset, ModelConfig } from '../src/lib/api';
 import type { BenchmarkStore } from '../src/lib/benchmarks.svelte';
 
 const api = vi.hoisted(() => ({
-	getModels: vi.fn()
+	getModelsScoredWith: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
 	const actual = await vi.importActual<typeof import('../src/lib/api')>('../src/lib/api');
 	return {
 		...actual,
-		getModels: api.getModels
+		getModelsScoredWith: api.getModelsScoredWith
 	};
 });
 
@@ -82,11 +82,11 @@ function setupForm(): BenchmarkSetupForm {
 
 describe('BenchmarkSetupForm', () => {
 	beforeEach(() => {
-		api.getModels.mockReset();
+		api.getModelsScoredWith.mockReset();
 	});
 
-	it('switches region and loads its models when the dataset belongs elsewhere', async () => {
-		api.getModels.mockResolvedValue([modelConfig()]);
+	it('offers the models that have data where the chosen observations do', async () => {
+		api.getModelsScoredWith.mockResolvedValue([modelConfig()]);
 		const form = setupForm();
 
 		form.setDatasetId('obs-india');
@@ -94,11 +94,38 @@ describe('BenchmarkSetupForm', () => {
 
 		expect(form.selectedRegionId).toBe('india');
 		expect(form.selectedModelIds).toEqual([]);
-		expect(api.getModels).toHaveBeenCalledWith('india');
+		expect(api.getModelsScoredWith).toHaveBeenCalledWith('obs-india');
+	});
+
+	it('can run on observations filed under no region', async () => {
+		api.getModelsScoredWith.mockResolvedValue([modelConfig({ region: '' })]);
+		const form = setupForm();
+		form.datasets = [dataset({ id: 'obs-unfiled', region: null })];
+
+		form.setDatasetId('obs-unfiled');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+
+		expect(form.selectedRegionId).toBe('');
+		expect(form.canRun).toBe(true);
+	});
+
+	it('drops a picked model that has no data where newly chosen observations do', async () => {
+		api.getModelsScoredWith.mockResolvedValueOnce([modelConfig()]).mockResolvedValueOnce([]);
+		const form = setupForm();
+		form.datasets = [dataset(), dataset({ id: 'obs-elsewhere', region: null })];
+		form.setDatasetId('obs-india');
+		await vi.waitFor(() => expect(form.models).toHaveLength(1));
+		form.toggleModel('fuxi');
+
+		form.setDatasetId('obs-elsewhere');
+		await vi.waitFor(() => expect(form.models).toHaveLength(0));
+
+		expect(form.selectedModelIds).toEqual([]);
 	});
 
 	it('seeds model overrides clamped to the dataset coverage', async () => {
-		api.getModels.mockResolvedValue([modelConfig()]);
+		api.getModelsScoredWith.mockResolvedValue([modelConfig()]);
 		const form = setupForm();
 		form.setDatasetId('obs-india');
 		await vi.waitFor(() => expect(form.models).toHaveLength(1));
@@ -114,7 +141,7 @@ describe('BenchmarkSetupForm', () => {
 	});
 
 	it('offers only models on the ground truth grid and drops off-grid picks', async () => {
-		api.getModels.mockResolvedValue([
+		api.getModelsScoredWith.mockResolvedValue([
 			modelConfig({ id: 'fuxi', grid_step_deg: 2 }),
 			modelConfig({ id: 'aifs_v2', grid_step_deg: 0.25 })
 		]);
@@ -134,7 +161,7 @@ describe('BenchmarkSetupForm', () => {
 	});
 
 	it('applies a chat-produced spec to the selection state', () => {
-		api.getModels.mockResolvedValue([modelConfig()]);
+		api.getModelsScoredWith.mockResolvedValue([modelConfig()]);
 		const form = setupForm();
 
 		form.applySpec({
@@ -160,11 +187,11 @@ describe('BenchmarkSetupForm', () => {
 		expect(form.forecastWindowDays).toBe(45);
 		expect(form.sharedAdvancedParams).toEqual({ wet_threshold: 5 });
 		expect(form.perModelOverrides).toEqual({ fuxi: { init_days: '0' } });
-		expect(api.getModels).toHaveBeenCalledWith('india');
+		expect(api.getModelsScoredWith).toHaveBeenCalledWith('obs-india');
 	});
 
 	it('reports the years and onset sections as customised only once the user changes them', async () => {
-		api.getModels.mockResolvedValue([modelConfig()]);
+		api.getModelsScoredWith.mockResolvedValue([modelConfig()]);
 		const form = setupForm();
 		form.setDatasetId('obs-india');
 		await vi.waitFor(() => expect(form.models).toHaveLength(1));
@@ -182,7 +209,7 @@ describe('BenchmarkSetupForm', () => {
 	});
 
 	it('keeps the years section at its defaults across a dataset switch and a retyped default', async () => {
-		api.getModels.mockResolvedValue([modelConfig()]);
+		api.getModelsScoredWith.mockResolvedValue([modelConfig()]);
 		const form = setupForm();
 		form.datasets = [
 			dataset(),

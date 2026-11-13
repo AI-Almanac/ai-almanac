@@ -242,7 +242,7 @@ class Settings(BaseSettings):
     # in the "Features" group of routers/settings.py. A feature admins should be
     # able to keep to themselves uses an `<feature>_audience` instead.
     #
-    # Custom regions and user-registered datasets. "admins" keeps the Data page
+    # User-registered datasets. "admins" keeps the Data page
     # to admins, e.g. to curate the shared built-in datasets before every user
     # can register their own.
     data_management_audience: Audience = "everyone"

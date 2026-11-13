@@ -129,6 +129,7 @@ def build_combined_table(config: dict, workflow: ModuleType) -> Path:
         {name: _staged_dir(workflow, _forecast_files(config, name)) for name in model_names},
         config.get("blend_params") or {},
         region_id=config.get("region_id"),
+        use_adm3_domain=config.get("use_adm3_domain"),
         cache_dir=config.get("cache_dir"),
         resources=workflow.LOCAL_INTERMEDIATE_RESOURCES,
         model_layouts=config.get("model_layouts"),
