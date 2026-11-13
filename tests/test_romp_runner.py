@@ -212,6 +212,24 @@ def test_render_romp_config_names_the_model_files_dims_for_romp() -> None:
     )
 
 
+def test_render_romp_config_defaults_to_legacy_onset_rule() -> None:
+    namespace: dict = {}
+    exec(render_romp_config(_job_config(), Path("/o"), Path("/f")), {}, namespace)
+
+    assert namespace["onset_rule"] == "legacy"
+    assert namespace["onset_rule_params"] is None
+
+
+def test_render_romp_config_passes_the_chosen_onset_rule() -> None:
+    config = _job_config()
+    config["romp_params"] |= {"onset_rule": "two_stage", "onset_rule_params": {"stage1_mm": 15}}
+    namespace: dict = {}
+    exec(render_romp_config(config, Path("/o"), Path("/f")), {}, namespace)
+
+    assert namespace["onset_rule"] == "two_stage"
+    assert namespace["onset_rule_params"] == {"stage1_mm": 15}
+
+
 def test_render_romp_config_rejects_dim_names_that_are_not_plain_names() -> None:
     from pydantic import ValidationError
 
