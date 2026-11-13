@@ -736,18 +736,43 @@ def registered_by_admin(source: Mapping) -> bool:
     return source.get("owner_id") is None
 
 
+# Every environment names its uploads and job-output buckets from these (terraform/envs.tf),
+# and one environment's runners can read another's.
+_PLATFORM_BUCKET_PREFIXES = ("almanac-uploads-", "almanac-job-outputs-")
+# Folders in the shared data bucket where runs cache what they derive from users' data.
+_RUN_CACHE_FOLDERS = frozenset({"blend-intermediates", "season-forecasts"})
+
+
 def _platform_buckets() -> set[str]:
     buckets = (settings.gcs_outputs_bucket, settings.gcs_uploads_bucket)
     return {bucket.strip() for bucket in buckets if bucket.strip()}
 
 
+def _is_platform_bucket(bucket: str) -> bool:
+    return bucket in _platform_buckets() or bucket.startswith(_PLATFORM_BUCKET_PREFIXES)
+
+
+def _is_run_cache(path: GcsPath) -> bool:
+    data_bucket = settings.gcs_data_bucket.strip()
+    return (
+        bool(data_bucket)
+        and path.bucket == data_bucket
+        and (path.key.partition("/")[0] in _RUN_CACHE_FOLDERS)
+    )
+
+
 def platform_bucket_error(path: DataPath) -> str | None:
-    """Why a user's source may not point at `path`: the deployment's own buckets hold every
-    user's uploads and job outputs, which the server can read but no user may."""
-    if isinstance(path, GcsPath) and path.bucket in _platform_buckets():
+    """Why a user's source may not point at `path`: the platform's buckets and run caches
+    hold every user's uploads, job outputs and derived files, which the server can read but
+    no user may."""
+    if not isinstance(path, GcsPath):
+        return None
+    if _is_platform_bucket(path.bucket):
         return (
             f"gs://{path.bucket} holds the platform's own files; register data from another bucket"
         )
+    if _is_run_cache(path):
+        return f"{path.uri} holds the platform's run caches; register data from another folder"
     return None
 
 
@@ -794,9 +819,11 @@ def _gcs_files(path: GcsPath, glob: str, *, admin_registered: bool) -> list[str]
     buckets = {_listed_bucket(file) for file in files}
     if buckets - {path.bucket}:
         raise UnreadableFiles(f"Listing {path.uri} returned files from another bucket")
-    platform_errors = [platform_bucket_error(GcsPath(bucket=bucket, key="")) for bucket in buckets]
-    if not admin_registered and any(platform_errors):
-        raise UnreadableFiles(next(error for error in platform_errors if error))
+    if not admin_registered:
+        for file in files:
+            bucket, _, key = file.removeprefix("gs://").partition("/")
+            if error := platform_bucket_error(GcsPath(bucket=bucket, key=key)):
+                raise UnreadableFiles(error)
     return files
 
 

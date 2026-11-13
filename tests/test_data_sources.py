@@ -903,3 +903,71 @@ async def test_a_listing_with_files_from_another_bucket_is_refused(
 
     assert status == "invalid"
     assert "another bucket" in error
+
+
+@pytest.mark.parametrize(
+    "bucket", ["almanac-job-outputs-staging-ai-almanac", "almanac-uploads-staging-ai-almanac"]
+)
+@pytest.mark.asyncio
+async def test_a_users_source_in_another_environments_platform_bucket_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, bucket: str
+) -> None:
+    _proxy_users(monkeypatch)
+    _platform_buckets(monkeypatch)
+
+    response = await client.post(
+        "/data-sources", json=_obs_body("Other env", path=f"gs://{bucket}/jobs"), headers=_ALICE
+    )
+
+    assert response.status_code == 400
+    assert "platform's own files" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("folder", ["blend-intermediates", "season-forecasts"])
+@pytest.mark.asyncio
+async def test_a_users_source_in_the_data_buckets_run_cache_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, folder: str
+) -> None:
+    from ai_almanac.settings import settings
+
+    _proxy_users(monkeypatch)
+    monkeypatch.setattr(settings, "gcs_data_bucket", "almanac-data-test")
+
+    response = await client.post(
+        "/data-sources",
+        json=_obs_body("Cache", path=f"gs://almanac-data-test/{folder}/run-1"),
+        headers=_ALICE,
+    )
+
+    assert response.status_code == 400
+    assert "run caches" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_users_listing_that_reaches_the_run_cache_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import data_sources as svc
+    from ai_almanac.server.services import storage as storage_mod
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "gcs_data_bucket", "almanac-data-test")
+
+    class _CacheStorage:
+        def list_dataset_files(self, path: str, glob: str) -> list[str]:
+            return ["gs://almanac-data-test/blend-intermediates/run-1/2020.nc"]
+
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: _CacheStorage())
+
+    status, error, _ = await svc.validate_source(
+        "obs", "gs://almanac-data-test", {"obs_file_pattern": "**/{}.nc"}
+    )
+
+    assert status == "invalid"
+    assert "run caches" in error
+
+
+def test_a_local_directory_is_stored_without_reading_the_filesystem(tmp_path) -> None:
+    from ai_almanac.server.services.data_paths import LocalPath, parse_data_path
+
+    assert parse_data_path(f"{tmp_path}/obs/../chirps/") == LocalPath(tmp_path / "chirps")

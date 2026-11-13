@@ -6,6 +6,7 @@ valid bucket name, so the bucket checked here is the bucket the storage client r
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,7 +78,7 @@ def parse_data_path(raw: str) -> DataPath:
         return GcsPath.parse(text)
     if "://" in text:
         raise ValueError(f"{raw!r} must be a gs:// URL or a local directory")
-    return LocalPath(Path(text).expanduser().resolve())
+    return LocalPath(Path(os.path.normpath(os.path.abspath(os.path.expanduser(text)))))
 
 
 def parse_file_pattern(raw: str) -> str:
