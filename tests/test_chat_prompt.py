@@ -283,3 +283,14 @@ async def test_onset_definitions_reach_the_assistant_with_the_names_to_say() -> 
     assert listed["default_display_name"]
     assert all(rule["display_name"] and rule["description"] for rule in listed["onset_definitions"])
     assert "never write them" in tool.description
+
+
+@pytest.mark.asyncio
+async def test_a_comparison_variant_cannot_cancel_or_submit_a_run() -> None:
+    from ai_almanac.server.services import assistant_compare
+
+    variant = await assistant_compare.variant_ruleset(assistant_compare.VariantSpec("builtin"))
+
+    offered = set(llm.offered_tool_names(variant, "workspace"))
+    assert offered.isdisjoint({"cancel_run", "submit_benchmark", "submit_blend"})
+    assert "summarize_skill_by_area" in offered
