@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
+	import { isActiveStatus } from '$lib/run-status';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
@@ -25,10 +26,10 @@
 	import { eventTypeName } from '$lib/data/event-types';
 	import { modelDisplayName } from '$lib/model-names';
 	import { takeSetupRequest } from '$lib/setup-request';
-	import BenchmarkForm from './BenchmarkForm.svelte';
+	import BenchmarkSetup from './BenchmarkSetup.svelte';
 	import BenchmarkSidebar from './BenchmarkSidebar.svelte';
 	import { installTour } from '$lib/tour.svelte';
-	import { benchmarkResultsSteps } from './tours';
+	import { benchmarkResultsSteps } from '$lib/components/benchmark-setup/tours';
 
 	const store = new BenchmarkStore();
 
@@ -157,8 +158,7 @@
 
 	function formatRunStatus(jobs: Job[]): string {
 		if (jobs.some((job) => job.status === 'canceling')) return 'Canceling';
-		if (jobs.some((job) => ['queued', 'starting', 'running'].includes(job.status)))
-			return 'Running';
+		if (jobs.some((job) => isActiveStatus(job.status))) return 'Running';
 		if (jobs.every((job) => job.status === 'complete')) return 'Complete';
 		if (jobs.every((job) => job.status === 'canceled')) return 'Canceled';
 		if (jobs.every((job) => job.status === 'failed')) return 'Failed';
@@ -234,7 +234,7 @@
 				</button>
 			</LoginPrompt>
 		{:else if inSetupMode}
-			<BenchmarkForm
+			<BenchmarkSetup
 				{store}
 				{regions}
 				{datasets}
@@ -250,9 +250,7 @@
 			{@const group = store.selectedGroup}
 			{@const completeJobs = group.jobs.filter((j) => j.status === 'complete')}
 			{@const failedJobs = group.jobs.filter((j) => j.status === 'failed')}
-			{@const activeJobs = group.jobs.filter((j) =>
-				['queued', 'starting', 'running', 'canceling'].includes(j.status)
-			)}
+			{@const activeJobs = group.jobs.filter((j) => isActiveStatus(j.status))}
 			{@const primaryJob = group.jobs[0]}
 
 			<div
@@ -348,9 +346,7 @@
 											<span
 												class:complete={job.status === 'complete'}
 												class:failed={job.status === 'failed'}
-												class:running={['queued', 'starting', 'running', 'canceling'].includes(
-													job.status
-												)}
+												class:running={isActiveStatus(job.status)}
 											>
 												{job.status}
 											</span>

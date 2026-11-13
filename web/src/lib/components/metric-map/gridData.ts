@@ -1,10 +1,11 @@
 import type * as maplibregl from 'maplibre-gl';
 import type { JobGridResponse } from '$lib/api';
+import { robustRange } from './colourRange';
 import { DIVERGING_STOPS } from './constants';
 import { isHigherBetterMetric } from './mapUi';
 import type { GridFeature, GridFeatureCollection } from './types';
 
-export function lerpHex(a: string, b: string, t: number): string {
+function lerpHex(a: string, b: string, t: number): string {
 	const parse = (h: string) => [
 		parseInt(h.slice(1, 3), 16),
 		parseInt(h.slice(3, 5), 16),
@@ -93,10 +94,15 @@ export function buildSharedRawGeojson(
 	return buildRawGeojson({ ...data, min, max }, stops);
 }
 
+/**
+ * `robust` ends the scale where most differences are rather than at the largest,
+ * and reports whether any lie beyond it.
+ */
 export function buildDeltaGeojson(
 	data: JobGridResponse,
-	referenceData: JobGridResponse
-): { geojson: GridFeatureCollection; maxAbs: number } {
+	referenceData: JobGridResponse,
+	robust = false
+): { geojson: GridFeatureCollection; maxAbs: number; clipped: boolean } {
 	const { lats, lons, values } = data;
 	const features: GridFeature[] = [];
 	const { dlat, dlon } = gridCellBounds(data);
@@ -115,6 +121,11 @@ export function buildDeltaGeojson(
 		}
 	}
 	if (maxAbs === 0) maxAbs = 1;
+	const largest = maxAbs;
+	if (robust) {
+		const sizes = deltas.flatMap((row) => row.flatMap((d) => (d == null ? [] : [Math.abs(d)])));
+		maxAbs = robustRange(sizes)?.max || largest;
+	}
 
 	for (let i = 0; i < lats.length; i++) {
 		for (let j = 0; j < lons.length; j++) {
@@ -148,6 +159,7 @@ export function buildDeltaGeojson(
 	}
 	return {
 		geojson: { type: 'FeatureCollection', features },
-		maxAbs
+		maxAbs,
+		clipped: maxAbs < largest
 	};
 }

@@ -1,3 +1,4 @@
+import { failureMessage } from '$lib/api/core';
 import {
 	getModelsScoredWith,
 	submitChatBenchmark,
@@ -16,7 +17,16 @@ import {
 import type { BenchmarkStore } from '$lib/benchmarks.svelte';
 import { gridsMatch } from '$lib/source-coverage';
 
-type SharedParamValue = string | number | FocusAreaValue | null;
+export type SharedParamValue = string | number | FocusAreaValue | null;
+
+/** An earlier benchmark's setup, for a new one to begin from. */
+export type BenchmarkStart = {
+	/** The region it was filed under, if any. */
+	regionId?: string | null;
+	datasetId: string;
+	modelIds: string[];
+	sharedParams: Record<string, SharedParamValue>;
+};
 type ModelOverrideValue = string | boolean | number;
 type ModelOverrides = Record<string, Record<string, ModelOverrideValue>>;
 
@@ -159,6 +169,21 @@ export class BenchmarkSetupForm {
 			Object.entries(advanced).filter(([key]) => key !== 'per_model_params')
 		) as Record<string, SharedParamValue>;
 		this.perModelOverrides = (advanced.per_model_params as ModelOverrides | null) ?? {};
+	};
+
+	/**
+	 * Begin from an earlier benchmark's setup. Observations and models that are no
+	 * longer offered are left for the user to choose again.
+	 */
+	startFrom = async (start: BenchmarkStart) => {
+		const known = <T extends { id: string }>(items: T[], id: string | null | undefined) =>
+			id && items.some((item) => item.id === id) ? id : '';
+		this.selectedRegionId = known(this.regions, start.regionId);
+		this.selectedDatasetId = known(this.datasets, start.datasetId);
+		this.selectedModelIds = start.modelIds;
+		this.sharedAdvancedParams = { ...start.sharedParams };
+		await this.loadModels(this.selectedDatasetId);
+		this.dropUnavailableModels();
 	};
 
 	private markManualConfigDirty() {
@@ -371,7 +396,7 @@ export class BenchmarkSetupForm {
 			}
 			return updated;
 		} catch (e) {
-			if (showErrors) this.error = (e as Error).message ?? 'Benchmark config validation failed.';
+			if (showErrors) this.error = failureMessage(e);
 			return null;
 		} finally {
 			this.syncingConfig = false;
@@ -424,7 +449,7 @@ export class BenchmarkSetupForm {
 			this.applySpec(response.benchmark_config, response.benchmark_validation);
 			this.handleBenchmarkSubmitted(response.run_id, response.jobs, this.chatSessionId);
 		} catch (e) {
-			this.error = (e as Error).message ?? 'Benchmark submit failed.';
+			this.error = failureMessage(e);
 			this.submitting = false;
 		}
 	};

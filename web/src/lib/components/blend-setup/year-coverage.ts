@@ -88,7 +88,7 @@ export function coverageLimits(
 export const DEFAULT_MIN_TRAINING_YEARS = 10;
 
 // Share of the valid forecast years reserved as a true holdout by default.
-export const TRUE_HOLDOUT_SHARE = 0.2;
+const TRUE_HOLDOUT_SHARE = 0.2;
 
 export type YearSplit = { training: string; cv: string; trueHoldout: string };
 
@@ -98,7 +98,7 @@ function yearSpan(lo: number, hi: number): string {
 
 // How many of the most recent years to hold out: about a fifth of them, but
 // never so many that training drops below minTrainingYears.
-export function trueHoldoutCount(
+function trueHoldoutCount(
 	validYears: number,
 	minTrainingYears = DEFAULT_MIN_TRAINING_YEARS
 ): number {
@@ -127,7 +127,7 @@ export function defaultSplit(
 
 // Blends with this many members start fitting noise: the weights have more
 // freedom than a handful of training years can pin down.
-export const OVERFIT_WARNING_MEMBERS = 3;
+const OVERFIT_WARNING_MEMBERS = 3;
 
 // Advice, not a rule — callers must not block submission on this.
 export function memberCountWarning(modelCount: number): string | null {

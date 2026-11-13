@@ -23,6 +23,12 @@ export const BOUNDARY_LEVELS: Record<BoundaryLevel, BoundaryStyleDef> = {
 	}
 };
 
+/** Outlines drawn over a map's own cells on light tiles: dark, thin, with a pale halo. */
+export const LIGHT_TILE_BOUNDARY_STYLES: Record<BoundaryLevel, BoundaryStyleDef> = {
+	adm1: { ...BOUNDARY_LEVELS.adm1, strokeWidth: 1.2, haloWidth: 2.6 },
+	adm2: { ...BOUNDARY_LEVELS.adm2, strokeWidth: 0.8, haloWidth: 1.6 }
+};
+
 export const COLOR_SCALES: Record<string, string[][]> = {
 	false_alarm_rate: [
 		['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026'],

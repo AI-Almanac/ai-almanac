@@ -32,6 +32,21 @@
 	--font-body: 'Geist', ui-sans-serif, system-ui, sans-serif;
 	--font-mono: 'Geist Mono', ui-monospace, monospace;
 	--shadow-soft: 0 1rem 3rem rgba(36, 33, 29, 0.08);
+
+	/* One type scale. Caption is the floor for anything meant to be read. */
+	--text-size-caption: 0.75rem;
+	--text-size-label: 0.8125rem;
+	--text-size-body: 0.875rem;
+	--text-size-lead: 1rem;
+	--text-size-title: 1.125rem;
+
+	/* One spacing scale. A dense surface restates the larger steps instead of
+	   components choosing their own. */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
 }
 
 *,

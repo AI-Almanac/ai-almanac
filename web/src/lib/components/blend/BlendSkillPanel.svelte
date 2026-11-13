@@ -15,6 +15,8 @@
 	import SkillCurveChart from '$lib/components/SkillCurveChart.svelte';
 	import { skillAgainstReference } from '$lib/metric-portrait';
 	import { formatSkillValue, type LeadBin, type SkillCurveSeries } from '$lib/skill-series';
+	import type { AreaExportContext } from '$lib/components/metric-map/exportTitle';
+	import type { MapInitialView } from '$lib/components/metric-map/initialView';
 	import BlendSkillMap from './BlendSkillMap.svelte';
 	import {
 		LEAD_METRICS,
@@ -30,11 +32,20 @@
 
 	// revision changes when the blend's results grow (a day-level blend that
 	// trained apart finishing), so the map reloads its per-point skill.
+	// mapView and mapExport pass a host's defaults for the skill map straight through.
 	let {
 		series,
 		jobId,
-		revision = ''
-	}: { series: SkillRow[]; jobId: string; revision?: string } = $props();
+		revision = '',
+		mapView,
+		mapExport
+	}: {
+		series: SkillRow[];
+		jobId: string;
+		revision?: string;
+		mapView?: MapInitialView;
+		mapExport?: AreaExportContext;
+	} = $props();
 
 	// Diverging fill encoding exactly one quantity: skill relative to Traditional
 	// Climatology. Same hues as cellStyle in MetricPortrait.svelte, but a shallower
@@ -217,7 +228,7 @@
 		</div>
 	{/if}
 
-	<BlendSkillMap {jobId} {revision} />
+	<BlendSkillMap {jobId} {revision} initialView={mapView} exportContext={mapExport} />
 
 	<details class="glossary">
 		<summary>What do “raw”, “calibrated” and “climatology” mean?</summary>

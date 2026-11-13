@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import {
 		createForecast,
 		type Blend,
@@ -82,7 +83,7 @@
 		try {
 			await onSubmitted(await createForecast(forecastRequest(fields)));
 		} catch (err) {
-			submitError = err instanceof Error ? err.message : String(err);
+			submitError = failureMessage(err);
 		} finally {
 			submitting = false;
 		}

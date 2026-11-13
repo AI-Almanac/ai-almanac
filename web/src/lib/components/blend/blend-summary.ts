@@ -16,7 +16,7 @@ const BRIER_COLUMNS = ['brier_week1', 'brier_week2', 'brier_week3', 'brier_week4
  * The blends a job trains, in the order they lead the table and legend. Jobs
  * trained before the day-level blend existed have only the week-level one.
  */
-export const BLEND_MODELS: readonly BlendModel[] = ['blended_model', 'blended_forest'];
+const BLEND_MODELS: readonly BlendModel[] = ['blended_model', 'blended_forest'];
 export const DEFAULT_BLEND_MODEL: BlendModel = 'blended_model';
 
 const BLEND_LABELS: Record<BlendModel, string> = {

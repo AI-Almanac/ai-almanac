@@ -15,7 +15,7 @@ vi.mock('../src/lib/api', async () => {
 	};
 });
 
-import { BenchmarkSetupForm } from '../src/routes/benchmarks/setup-form.svelte';
+import { BenchmarkSetupForm } from '../src/lib/components/benchmark-setup/setup-form.svelte';
 
 function modelConfig(overrides: Partial<ModelConfig> = {}): ModelConfig {
 	return {
