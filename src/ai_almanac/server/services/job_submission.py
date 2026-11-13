@@ -1573,7 +1573,7 @@ def _require_readable_training_files(
     """A forecast may retrain from its blend's saved inputs, so they are checked the
     same way a new blend's sources are."""
     for uri, source in _training_files(blend_config, obs_source, sources_by_name):
-        # A removed source has no owner left to exempt, so its files are held to the user rule.
+        # A removed or unrecorded source has no owner left to exempt, so its files are held to the user rule.
         admin_registered = source is not None and data_source_service.registered_by_admin(source)
         if data_source_service.file_location_error(uri, admin_registered=admin_registered):
             raise HTTPException(status_code=409, detail=_unreadable_training_detail(source))
@@ -1582,8 +1582,8 @@ def _require_readable_training_files(
 def _unreadable_training_detail(source: dict | None) -> str:
     if source is None:
         return (
-            "One of the data sources this blend trained on was removed, so its training data "
-            "can no longer be read; train a new blend from the current sources."
+            "This blend has no record of the data source one of its inputs came from, so its "
+            "training data can no longer be read; train a new blend from the current sources."
         )
     return "This blend's training data can no longer be read; train the blend again."
 
