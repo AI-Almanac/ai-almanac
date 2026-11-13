@@ -35,14 +35,14 @@
 		display: flex;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		align-self: center;
 		max-width: 100%;
-		padding: 0.3rem 0.75rem;
+		padding: 0.3rem var(--space-3);
 		border: 1px solid var(--color-border);
 		border-radius: 2rem;
 		background: var(--color-surface);
-		font-size: 0.75rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 	}
 	.notice.success .icon {

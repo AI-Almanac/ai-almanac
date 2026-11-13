@@ -3,10 +3,13 @@
 	import type { ChatSession, RulesetOption } from '$lib/api';
 	import { account } from '$lib/account.svelte';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
+	import { BETA_NOTICE, transcriptText } from '$lib/chat/column';
 	import { sessionLabel } from '$lib/chat/format';
 
 	interface Props {
 		chat: ChatSessionState;
+		/** One menu button beside the composer instead of a band above the conversation. */
+		folded?: boolean;
 		rulesetOptions?: RulesetOption[];
 		comparisonMode?: boolean;
 		/** The comparison feature flag; off removes the mode toggle entirely. */
@@ -19,6 +22,7 @@
 
 	const {
 		chat,
+		folded = false,
 		rulesetOptions = [],
 		comparisonMode = false,
 		comparisonsEnabled = false,
@@ -42,10 +46,37 @@
 
 	let showSessionList = $state(false);
 	let showMenu = $state(false);
+	let showBetaNotice = $state(false);
+	let menuButton = $state<HTMLButtonElement | null>(null);
+	let betaButton = $state<HTMLButtonElement | null>(null);
+
+	/** Escape closes whichever of the folded controls is open and hands focus back to it. */
+	function closeFoldedOnEscape(e: KeyboardEvent) {
+		if (e.key !== 'Escape' || e.defaultPrevented) return;
+		if (showMenu) {
+			showMenu = false;
+			menuButton?.focus();
+		} else if (showBetaNotice) {
+			showBetaNotice = false;
+			betaButton?.focus();
+		} else return;
+		e.preventDefault();
+		e.stopPropagation();
+	}
 	let renamingSessionId = $state<string | null>(null);
 	let renamingValue = $state('');
 	let savingTitle = $state(false);
 	let copyState = $state<'idle' | 'copied'>('idle');
+
+	const currentLabel = $derived(
+		chat.currentSession ? sessionLabel(chat.currentSession) : 'AI Analysis'
+	);
+	const renamingCurrent = $derived(
+		!!chat.currentSession && renamingSessionId === chat.currentSession.id
+	);
+	const renamingSession = $derived(
+		chat.sessions.find((session) => session.id === renamingSessionId) ?? null
+	);
 
 	function handleOutsideClick(e: MouseEvent) {
 		if (showSessionList && !(e.target as Element).closest('.session-selector')) {
@@ -54,12 +85,20 @@
 		if (showMenu && !(e.target as Element).closest('.header-menu')) {
 			showMenu = false;
 		}
+		if (showBetaNotice && !(e.target as Element).closest('.beta-info')) {
+			showBetaNotice = false;
+		}
 	}
 
 	onMount(() => {
 		document.addEventListener('click', handleOutsideClick, true);
 		return () => document.removeEventListener('click', handleOutsideClick, true);
 	});
+
+	function closeMenus() {
+		showSessionList = false;
+		showMenu = false;
+	}
 
 	function beginRename(session: ChatSession, e?: MouseEvent) {
 		e?.stopPropagation();
@@ -95,12 +134,12 @@
 
 	async function selectSession(id: string) {
 		await chat.loadSession(id);
-		showSessionList = false;
+		closeMenus();
 	}
 
 	async function createSession() {
 		await chat.createNewSession();
-		showSessionList = false;
+		closeMenus();
 	}
 
 	function handleDelete(id: string, e: MouseEvent) {
@@ -110,173 +149,234 @@
 
 	async function copyChat() {
 		if (chat.messages.length === 0) return;
-		const text = chat.messages
-			.map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`)
-			.join('\n\n');
-		await navigator.clipboard.writeText(text);
+		await navigator.clipboard.writeText(transcriptText(chat.messages));
 		copyState = 'copied';
 		setTimeout(() => (copyState = 'idle'), 1500);
 	}
 </script>
 
-<div class="chat-header">
-	<span class="ai-badge">✦ AI</span>
-	<span class="beta-badge" title="The assistant is under active development and can be wrong.">
-		Beta
-	</span>
-	<div class="session-selector">
-		{#if chat.currentSession && renamingSessionId === chat.currentSession.id}
-			<div class="session-rename-bar">
-				<input
-					class="session-rename-input"
-					bind:value={renamingValue}
-					onkeydown={handleRenameKeydown}
-					placeholder={sessionLabel(chat.currentSession)}
-					maxlength="140"
-				/>
-				<button class="session-action-btn" onclick={() => void saveRename()} disabled={savingTitle}>
-					{savingTitle ? 'Saving...' : 'Save'}
-				</button>
-				<button class="session-action-btn secondary" onclick={cancelRename} disabled={savingTitle}>
-					Cancel
-				</button>
-			</div>
-		{:else}
-			<button
-				class="session-current"
-				onclick={() => {
-					showSessionList = !showSessionList;
-				}}
-				title="Switch session"
-			>
-				<span class="session-label">
-					{#if chat.currentSession}
-						{sessionLabel(chat.currentSession)}
-					{:else}
-						AI Analysis
-					{/if}
-				</span>
-				<span class="session-chevron" class:open={showSessionList}>▾</span>
-			</button>
-		{/if}
+{#snippet betaBadge()}
+	<span class="beta-badge" title={BETA_NOTICE}>Beta</span>
+{/snippet}
 
-		{#if showSessionList}
-			<div class="session-dropdown">
-				<button class="session-new-btn" onclick={createSession}> + New Chat </button>
-				{#if chat.sessions.length > 0}
-					<div class="session-divider"></div>
-					{#each chat.sessions as s}
-						<div class="session-item" class:active={s.id === chat.sessionId}>
-							<button class="session-item-btn" onclick={() => selectSession(s.id)}>
-								<span class="session-item-title">{sessionLabel(s)}</span>
-								<span class="session-item-meta"
-									>{s.message_count} msg · {new Date(s.updated_at).toLocaleDateString()}</span
-								>
-							</button>
-							<button class="session-item-rename" title="Rename" onclick={(e) => beginRename(s, e)}
-								>Rename</button
-							>
-							<button
-								class="session-item-delete"
-								title="Delete"
-								onclick={(e) => handleDelete(s.id, e)}>&times;</button
-							>
-						</div>
+{#snippet renameBar(placeholder: string)}
+	<div class="session-rename-bar">
+		<input
+			class="session-rename-input"
+			bind:value={renamingValue}
+			onkeydown={handleRenameKeydown}
+			{placeholder}
+			aria-label="Conversation name"
+			maxlength="140"
+		/>
+		<button class="session-action-btn" onclick={() => void saveRename()} disabled={savingTitle}>
+			{savingTitle ? 'Saving...' : 'Save'}
+		</button>
+		<button class="session-action-btn secondary" onclick={cancelRename} disabled={savingTitle}>
+			Cancel
+		</button>
+	</div>
+{/snippet}
+
+{#snippet sessionChoices()}
+	<button class="session-new-btn" onclick={createSession}> + New Chat </button>
+	{#if chat.sessions.length > 0}
+		<div class="session-divider"></div>
+		{#each chat.sessions as s (s.id)}
+			<div class="session-item" class:active={s.id === chat.sessionId}>
+				<button class="session-item-btn" onclick={() => selectSession(s.id)}>
+					<span class="session-item-title">{sessionLabel(s)}</span>
+					<span class="session-item-meta"
+						>{s.message_count} msg · {new Date(s.updated_at).toLocaleDateString()}</span
+					>
+				</button>
+				<button class="session-item-rename" title="Rename" onclick={(e) => beginRename(s, e)}
+					>Rename</button
+				>
+				<button class="session-item-delete" title="Delete" onclick={(e) => handleDelete(s.id, e)}
+					>&times;</button
+				>
+			</div>
+		{/each}
+	{/if}
+{/snippet}
+
+{#snippet renameAndCopy()}
+	{#if chat.currentSession && !renamingCurrent}
+		<button
+			class="copy-btn"
+			onclick={(e) => beginRename(chat.currentSession!, e)}
+			title="Rename chat"
+		>
+			Rename
+		</button>
+	{/if}
+	<button
+		class="copy-btn"
+		onclick={copyChat}
+		disabled={chat.messages.length === 0}
+		title="Copy chat to clipboard"
+	>
+		{copyState === 'copied' ? '✓ Copied' : 'Copy'}
+	</button>
+{/snippet}
+
+{#snippet comparisonOptions()}
+	<label class="menu-toggle">
+		<input type="checkbox" checked={comparisonMode} onchange={onToggleComparisonMode} />
+		<span>
+			<strong>Comparison mode</strong>
+			<small>Rate answers and compare assistant styles side by side.</small>
+		</span>
+	</label>
+	{#if comparisonMode && visibleOptions.length > 0 && chat.currentSession}
+		<div class="menu-divider"></div>
+		<label class="menu-field">
+			<span>Assistant style for this chat</span>
+			<select
+				value={chat.currentSession.ruleset_id ?? ''}
+				onchange={(e) => void chat.setSessionRuleset(e.currentTarget.value || null)}
+			>
+				<option value="">Default style</option>
+				{#each visibleOptions as option (option.id)}
+					<option value={option.id}>{optionLabel(option)}</option>
+				{/each}
+			</select>
+		</label>
+	{/if}
+	{#if comparisonMode && canCompare}
+		<div class="menu-divider"></div>
+		<span class="menu-heading">A/B compares these two styles</span>
+		{#each [0, 1] as const as index (index)}
+			<label class="menu-field">
+				<span>{index === 0 ? 'A' : 'B'}</span>
+				<select
+					value={compareArmIds[index]}
+					onchange={(e) => onCompareArmChange?.(index, e.currentTarget.value)}
+				>
+					{#each visibleOptions as option (option.id)}
+						<option value={option.id}>{optionLabel(option)}</option>
 					{/each}
+				</select>
+			</label>
+		{/each}
+		{#if compareArmIds[0] === compareArmIds[1]}
+			<span class="menu-warning">Pick two different styles to compare.</span>
+		{/if}
+	{/if}
+{/snippet}
+
+{#if folded}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="chat-menu header-menu" onkeydown={closeFoldedOnEscape}>
+		<button
+			bind:this={menuButton}
+			class="copy-btn"
+			title="Conversations and chat options"
+			aria-label="Conversation menu"
+			aria-expanded={showMenu}
+			onclick={() => {
+				showMenu = !showMenu;
+			}}
+		>
+			⋯
+		</button>
+		<!-- A tooltip is out of reach of a keyboard or a touch screen, so the badge opens the notice. -->
+		<span class="beta-info">
+			<button
+				bind:this={betaButton}
+				type="button"
+				class="beta-badge"
+				aria-expanded={showBetaNotice}
+				aria-controls="assistant-beta-notice"
+				aria-label="Beta: about the assistant"
+				onclick={() => (showBetaNotice = !showBetaNotice)}
+			>
+				Beta
+			</button>
+			{#if showBetaNotice}
+				<p id="assistant-beta-notice" class="menu-dropdown upward beta-notice" role="note">
+					{BETA_NOTICE}
+				</p>
+			{/if}
+		</span>
+		{#if showMenu}
+			<div class="menu-dropdown upward">
+				{#if renamingSession}
+					{@render renameBar(sessionLabel(renamingSession))}
+				{:else}
+					<div class="menu-current">
+						<span class="session-label">{currentLabel}</span>
+						{@render renameAndCopy()}
+					</div>
+				{/if}
+				<div class="menu-divider"></div>
+				<div class="menu-sessions">{@render sessionChoices()}</div>
+				{#if comparisonsEnabled}
+					<div class="menu-divider"></div>
+					{@render comparisonOptions()}
 				{/if}
 			</div>
 		{/if}
 	</div>
+{:else}
+	<div class="chat-header">
+		<span class="ai-badge">✦ AI</span>
+		{@render betaBadge()}
+		<div class="session-selector">
+			{#if chat.currentSession && renamingCurrent}
+				{@render renameBar(currentLabel)}
+			{:else}
+				<button
+					class="session-current"
+					onclick={() => {
+						showSessionList = !showSessionList;
+					}}
+					title="Switch session"
+				>
+					<span class="session-label">{currentLabel}</span>
+					<span class="session-chevron" class:open={showSessionList}>▾</span>
+				</button>
+			{/if}
 
-	<div class="header-actions">
-		{#if chat.currentSession && renamingSessionId !== chat.currentSession.id}
-			<button
-				class="copy-btn"
-				onclick={(e) => beginRename(chat.currentSession!, e)}
-				title="Rename chat"
-			>
-				Rename
-			</button>
-		{/if}
-		<button
-			class="copy-btn"
-			onclick={copyChat}
-			disabled={chat.messages.length === 0}
-			title="Copy chat to clipboard"
-		>
-			{copyState === 'copied' ? '✓ Copied' : 'Copy'}
-		</button>
-		<div class="header-menu">
-			<button
-				class="copy-btn"
-				title="Chat options"
-				aria-label="Chat options"
-				onclick={() => {
-					showMenu = !showMenu;
-				}}
-			>
-				⋯
-			</button>
-			{#if showMenu}
-				<div class="menu-dropdown">
-					{#if comparisonsEnabled}
-						<label class="menu-toggle">
-							<input type="checkbox" checked={comparisonMode} onchange={onToggleComparisonMode} />
-							<span>
-								<strong>Comparison mode</strong>
-								<small>Rate answers and compare assistant styles side by side.</small>
-							</span>
-						</label>
-					{:else}
-						<p class="menu-empty">No chat options are available.</p>
-					{/if}
-					{#if comparisonMode && visibleOptions.length > 0 && chat.currentSession}
-						<div class="menu-divider"></div>
-						<label class="menu-field">
-							<span>Assistant style for this chat</span>
-							<select
-								value={chat.currentSession.ruleset_id ?? ''}
-								onchange={(e) => void chat.setSessionRuleset(e.currentTarget.value || null)}
-							>
-								<option value="">Default style</option>
-								{#each visibleOptions as option (option.id)}
-									<option value={option.id}>{optionLabel(option)}</option>
-								{/each}
-							</select>
-						</label>
-					{/if}
-					{#if comparisonMode && canCompare}
-						<div class="menu-divider"></div>
-						<span class="menu-heading">A/B compares these two styles</span>
-						{#each [0, 1] as const as index (index)}
-							<label class="menu-field">
-								<span>{index === 0 ? 'A' : 'B'}</span>
-								<select
-									value={compareArmIds[index]}
-									onchange={(e) => onCompareArmChange?.(index, e.currentTarget.value)}
-								>
-									{#each visibleOptions as option (option.id)}
-										<option value={option.id}>{optionLabel(option)}</option>
-									{/each}
-								</select>
-							</label>
-						{/each}
-						{#if compareArmIds[0] === compareArmIds[1]}
-							<span class="menu-warning">Pick two different styles to compare.</span>
-						{/if}
-					{/if}
-				</div>
+			{#if showSessionList}
+				<div class="session-dropdown">{@render sessionChoices()}</div>
 			{/if}
 		</div>
+
+		<div class="header-actions">
+			{@render renameAndCopy()}
+			<div class="header-menu">
+				<button
+					class="copy-btn"
+					title="Chat options"
+					aria-label="Chat options"
+					onclick={() => {
+						showMenu = !showMenu;
+					}}
+				>
+					⋯
+				</button>
+				{#if showMenu}
+					<div class="menu-dropdown">
+						{#if comparisonsEnabled}
+							{@render comparisonOptions()}
+						{:else}
+							<p class="menu-empty">No chat options are available.</p>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</div>
 	</div>
-</div>
+{/if}
 
 <style>
 	.chat-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.75rem;
+		gap: var(--space-3);
 		padding: 0.55rem 0.85rem;
 		border-bottom: 1px solid var(--color-border);
 		background: linear-gradient(90deg, rgba(212, 147, 63, 0.06) 0%, var(--color-surface) 40%);
@@ -285,7 +385,7 @@
 	}
 
 	.ai-badge {
-		font-size: 0.6rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
@@ -297,7 +397,7 @@
 		flex-shrink: 0;
 	}
 	.beta-badge {
-		font-size: 0.6rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
@@ -312,17 +412,17 @@
 	.header-actions {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		flex-shrink: 0;
 	}
 
 	.copy-btn {
-		padding: 0.25rem 0.6rem;
+		padding: var(--space-1) 0.6rem;
 		background: none;
 		border: 1px solid var(--color-border);
 		border-radius: 4px;
 		font-family: inherit;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		font-weight: 500;
 		color: var(--color-text-muted);
 		cursor: pointer;
@@ -345,10 +445,20 @@
 	.header-menu {
 		position: relative;
 	}
+	button.beta-badge {
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.beta-notice {
+		margin: 0;
+		color: var(--color-text);
+		font-size: var(--text-size-label);
+		line-height: 1.4;
+	}
 
 	.menu-dropdown {
 		position: absolute;
-		top: calc(100% + 4px);
+		top: calc(100% + var(--space-1));
 		right: 0;
 		width: 15rem;
 		background: var(--color-surface-raised);
@@ -359,13 +469,44 @@
 		padding: 0.6rem;
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: var(--space-2);
+	}
+
+	/* Folded beside the composer at the foot of the column, so the menu opens upward. */
+	.chat-menu {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-1);
+		flex-shrink: 0;
+	}
+	.menu-dropdown.upward {
+		top: auto;
+		right: auto;
+		bottom: calc(100% + var(--space-1));
+		left: 0;
+		width: min(21rem, 80vw);
+		max-height: 60vh;
+		overflow-y: auto;
+	}
+	.menu-current {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: var(--text-size-label);
+		font-weight: 600;
+	}
+	.menu-sessions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
 	}
 
 	.menu-toggle {
 		display: flex;
 		align-items: flex-start;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		cursor: pointer;
 	}
 	.menu-toggle input {
@@ -377,10 +518,10 @@
 		gap: 0.15rem;
 	}
 	.menu-toggle strong {
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 	}
 	.menu-toggle small {
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 		line-height: 1.35;
 	}
@@ -391,19 +532,19 @@
 	}
 
 	.menu-heading {
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		color: var(--color-text-muted);
 	}
 
 	.menu-warning {
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-status-running);
 	}
 
 	.menu-empty {
 		margin: 0;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 	}
 
@@ -411,7 +552,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 	}
 	.menu-field select {
@@ -421,7 +562,7 @@
 		background: var(--color-surface);
 		color: var(--color-text);
 		font-family: inherit;
-		font-size: 0.75rem;
+		font-size: var(--text-size-caption);
 	}
 
 	.session-selector {
@@ -441,7 +582,7 @@
 		cursor: pointer;
 		color: var(--color-text);
 		font-family: inherit;
-		font-size: 0.82rem;
+		font-size: var(--text-size-label);
 		font-weight: 600;
 		max-width: 100%;
 		transition:
@@ -469,7 +610,7 @@
 		background: var(--color-surface);
 		color: var(--color-text);
 		font: inherit;
-		font-size: 0.82rem;
+		font-size: var(--text-size-label);
 	}
 
 	.session-rename-input:focus {
@@ -484,7 +625,7 @@
 		background: var(--color-accent-light);
 		color: var(--color-accent);
 		font: inherit;
-		font-size: 0.76rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		cursor: pointer;
 		transition:
@@ -521,7 +662,7 @@
 	}
 
 	.session-chevron {
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 		transition: transform 0.15s;
 		flex-shrink: 0;
@@ -532,10 +673,10 @@
 
 	.session-dropdown {
 		position: absolute;
-		top: calc(100% + 4px);
+		top: calc(100% + var(--space-1));
 		left: 0;
-		min-width: 240px;
-		max-width: 340px;
+		min-width: 15rem;
+		max-width: 21.25rem;
 		background: var(--color-surface-raised);
 		border: 1px solid var(--color-border);
 		border-radius: 7px;
@@ -557,7 +698,7 @@
 		border: none;
 		border-radius: 5px;
 		font-family: inherit;
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		font-weight: 600;
 		cursor: pointer;
 		transition: opacity 0.12s;
@@ -600,7 +741,7 @@
 	}
 
 	.session-item-title {
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		font-weight: 500;
 		color: var(--color-text);
 		overflow: hidden;
@@ -612,17 +753,17 @@
 	}
 
 	.session-item-meta {
-		font-size: 0.65rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 		font-family: var(--font-mono);
 	}
 
 	.session-item-delete {
-		padding: 0 0.5rem;
+		padding: 0 var(--space-2);
 		background: none;
 		border: none;
 		color: var(--color-text-dim);
-		font-size: 0.85rem;
+		font-size: var(--text-size-body);
 		cursor: pointer;
 		border-radius: 0 5px 5px 0;
 		transition:
@@ -636,11 +777,11 @@
 	}
 
 	.session-item-rename {
-		padding: 0 0.5rem;
+		padding: 0 var(--space-2);
 		background: none;
 		border: none;
 		color: var(--color-text-muted);
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		cursor: pointer;
 		transition:

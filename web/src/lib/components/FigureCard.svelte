@@ -143,6 +143,7 @@
 		gap: 0.3rem;
 		opacity: 0;
 		transition: opacity 0.15s;
+		pointer-events: none;
 	}
 
 	.img-wrap:hover .hover-actions {
