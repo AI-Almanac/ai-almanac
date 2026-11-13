@@ -71,7 +71,7 @@ def job_activity(statuses: Iterable[dict], since: datetime | str) -> ChatJobActi
     return ChatJobActivity(events=sorted(events, key=lambda event: event.at), active=active)
 
 
-def _prompt_safe(label: str) -> str:
+def prompt_safe(label: str) -> str:
     """Model and blend names are user-written; keep one on one short line."""
     return re.sub(r"\s+", " ", label).strip()[:_LABEL_MAX_CHARS]
 
@@ -80,10 +80,7 @@ def platform_note(events: list[ChatJobEvent]) -> str | None:
     """What the assistant is told about runs that changed since its last reply."""
     if not events:
         return None
-    lines = [
-        f'- "{_prompt_safe(event.label)}" {_STATUS_PHRASES[event.status]} (job {event.job_id})'
-        for event in events
-    ]
+    lines = [f'- "{prompt_safe(event.label)}" {_STATUS_PHRASES[event.status]}' for event in events]
     return (
         "[Platform update — written by the platform, not the user] "
         "Runs in this conversation that changed since your last reply:\n" + "\n".join(lines)

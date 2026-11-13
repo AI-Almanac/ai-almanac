@@ -104,12 +104,18 @@ async def test_reconcile_relaunches_queued_jobs(
     assert job_id in launched
 
 
+def _stale_heartbeat() -> str:
+    from datetime import timedelta
+
+    return (datetime.now(UTC) - timedelta(seconds=150)).isoformat()
+
+
 @pytest.mark.parametrize(
     ("status", "supervisor_alive", "final_status", "error"),
     [
-        ("running", False, "failed", "Job supervisor exited unexpectedly."),
-        # A live supervisor pid is not enough — a stale heartbeat means hung.
-        ("running", True, "failed", "Job supervisor exited unexpectedly."),
+        ("running", False, "failed", "SUPERVISOR_GONE"),
+        # A live supervisor pid is not enough once its heartbeat stays stale past the grace.
+        ("running", True, "failed", "SUPERVISOR_HUNG"),
         ("canceling", False, "canceled", None),
     ],
     ids=["supervisor-gone", "supervisor-hung", "canceling-supervisor-gone"],
@@ -124,13 +130,14 @@ async def test_reconcile_finalizes_jobs_whose_supervisor_is_dead(
     error: str | None,
 ) -> None:
     import os
-    from datetime import timedelta
 
     from ai_almanac.server.services import job_manager
 
+    monkeypatch.setattr(job_manager, "STALE_SUPERVISOR_GRACE_SECONDS", 0)
     if supervisor_alive:
-        stale = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
-        job_id = await _insert_job(user_id, status, worker_pid=os.getpid(), heartbeat_at=stale)
+        job_id = await _insert_job(
+            user_id, status, worker_pid=os.getpid(), heartbeat_at=_stale_heartbeat()
+        )
     else:
         job_id = await _insert_job(user_id, status, worker_pid=999_999_999)
         monkeypatch.setattr(job_manager, "_process_exists", lambda pid: False)
@@ -139,7 +146,92 @@ async def test_reconcile_finalizes_jobs_whose_supervisor_is_dead(
 
     row = await _job_row(job_id)
     assert row["status"] == final_status
-    assert row["error"] == error
+    assert row["error"] == (error and getattr(job_manager, error))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_waits_out_a_live_supervisor_that_missed_heartbeats(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the computer sleeps, every heartbeat is stale on wake until the
+    supervisor's next beat; a supervisor whose process is still there keeps its job."""
+    import os
+
+    from ai_almanac.server.services import job_manager
+
+    terminated: list[int | None] = []
+    monkeypatch.setattr(
+        job_manager, "_terminate_process_group", lambda pgid, pid: terminated.append(pgid)
+    )
+    job_id = await _insert_job(
+        user_id, "running", worker_pid=os.getpid(), heartbeat_at=_stale_heartbeat()
+    )
+
+    await job_manager.reconcile_jobs()
+    assert (await _job_row(job_id))["status"] == "running"
+
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE jobs SET heartbeat_at = :now WHERE id = :id"),
+            {"now": _now(), "id": job_id},
+        )
+    await job_manager.reconcile_jobs()
+
+    assert (await _job_row(job_id))["status"] == "running"
+    assert terminated == []
+
+
+def _sync_update(job_id: str, **values) -> None:
+    import sqlalchemy as sa
+
+    from ai_almanac.server.sync_db import sync_engine
+    from ai_almanac.server.tables import jobs
+
+    with sync_engine().begin() as conn:
+        conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
+
+
+@pytest.mark.asyncio
+async def test_supervisor_keeps_the_reason_the_reconciler_gave(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    def start_workload(job_id: str, _log_path: Path) -> subprocess.Popen:
+        _sync_update(job_id, status="failed", error=job_manager.SUPERVISOR_HUNG)
+        return subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+
+    monkeypatch.setattr(job_manager, "_start_workload", start_workload)
+    job_id = await _insert_job(user_id, "queued", config={"model_name": "first-wins"})
+
+    await asyncio.to_thread(job_manager.execute_job, job_id)
+
+    row = await _job_row(job_id)
+    assert row["status"] == "failed"
+    assert row["error"] == job_manager.SUPERVISOR_HUNG
+
+
+@pytest.mark.asyncio
+async def test_supervisor_names_a_run_the_system_killed(
+    user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_manager
+
+    def start_workload(_job_id: str, _log_path: Path) -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]
+        )
+
+    monkeypatch.setattr(job_manager, "_start_workload", start_workload)
+    job_id = await _insert_job(user_id, "queued", config={"model_name": "killed"})
+
+    await asyncio.to_thread(job_manager.execute_job, job_id)
+
+    row = await _job_row(job_id)
+    assert row["status"] == "failed"
+    assert "ran out of memory" in row["error"]
 
 
 @pytest.mark.asyncio

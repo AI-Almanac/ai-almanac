@@ -14,6 +14,8 @@ import numpy as np
 import xarray as xr
 from pydantic import BaseModel, TypeAdapter, field_validator, model_validator
 
+from ai_almanac.server.services import netcdf
+
 
 class FocusBox(BaseModel):
     lat_min: float
@@ -114,7 +116,7 @@ def write_focus_mask(area: FocusArea, path: Path, lat: np.ndarray, lon: np.ndarr
         coords={"lat": lat, "lon": lon},
         name="mask",
     )
-    mask.to_netcdf(path)
+    netcdf.write(mask, path)
     return path
 
 
@@ -123,7 +125,7 @@ def data_grid(data_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     sample = next(iter(sorted(data_dir.glob("*.nc"))), None)
     if sample is None:
         raise FileNotFoundError(f"No NetCDF files in {data_dir} to derive the mask grid")
-    with xr.open_dataset(sample) as ds:
+    with netcdf.open_dataset(sample) as ds:
         return _coord(ds, "lat"), _coord(ds, "lon")
 
 

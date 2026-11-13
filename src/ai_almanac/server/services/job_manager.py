@@ -34,6 +34,23 @@ UNKNOWN_POLL_ESCALATION = 60
 
 _unknown_poll_streaks: dict[str, int] = {}
 
+# How long a supervisor whose process is still there may go without a heartbeat
+# before it counts as hung. It is counted from when the reconciler first sees the
+# heartbeat stale, so time the computer spent asleep, when nothing heartbeats,
+# never counts against the job.
+STALE_SUPERVISOR_GRACE_SECONDS = 60
+
+SUPERVISOR_GONE = (
+    "The process running this job ended unexpectedly, for example because the "
+    "computer restarted or the process was stopped. Running it again usually works."
+)
+SUPERVISOR_HUNG = (
+    "The run stopped responding for over a minute and was stopped. "
+    "The run log shows the last thing it did."
+)
+
+_stale_since: dict[str, float] = {}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -47,6 +64,49 @@ def _process_exists(pid: int | None) -> bool:
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _stale_for(job_id: str, heartbeat_fresh: bool) -> float:
+    """Seconds of reconciler time this job's heartbeat has been stale; 0 while fresh."""
+    if heartbeat_fresh:
+        _stale_since.pop(job_id, None)
+        return 0.0
+    now = time.monotonic()
+    return now - _stale_since.setdefault(job_id, now)
+
+
+def _forget_finished(active_ids: set[str]) -> None:
+    for job_id in _stale_since.keys() - active_ids:
+        del _stale_since[job_id]
+
+
+def _supervisor_loss(row: dict) -> str | None:
+    """Why the job's supervisor counts as lost, or None while it may still be running."""
+    if not _process_exists(row.get("worker_pid")):
+        _stale_since.pop(row["id"], None)
+        return SUPERVISOR_GONE
+    if _stale_for(row["id"], heartbeat_is_fresh(row.get("heartbeat_at"))) < (
+        STALE_SUPERVISOR_GRACE_SECONDS
+    ):
+        return None
+    _stale_since.pop(row["id"], None)
+    return SUPERVISOR_HUNG
+
+
+def _failure_message(exit_code: int) -> str:
+    """What the user is told when the run's own process exits with an error."""
+    if exit_code == -signal.SIGKILL:
+        return (
+            "The run was killed by the system (SIGKILL), often because the computer "
+            "ran out of memory. The run log shows how far it got."
+        )
+    if exit_code < 0:
+        return (
+            f"The run was stopped by a {signal.Signals(-exit_code).name} signal from "
+            "outside the platform. The run log shows how far it got."
+        )
+    # The log's path is on this host; the user reaches the log from the run page.
+    return f"The run stopped with an error (exit code {exit_code}). The run log has the details."
 
 
 class LocalProcessProvisioner:
@@ -223,6 +283,7 @@ async def reconcile_jobs() -> None:
             .fetchall()
         )
 
+    _forget_finished({row["id"] for row in rows})
     for raw in rows:
         row = dict(raw)
         # Remote runners have no local supervisor; reconcile them from the
@@ -230,10 +291,9 @@ async def reconcile_jobs() -> None:
         if row.get("runner") == "modal":
             await _reconcile_modal_job(row)
             continue
+        loss = _supervisor_loss(row)
         if row["status"] == "queued":
-            if _process_exists(row.get("worker_pid")) and heartbeat_is_fresh(
-                row.get("heartbeat_at")
-            ):
+            if loss is None:
                 continue
             async with get_db() as conn:
                 await conn.execute(
@@ -243,11 +303,11 @@ async def reconcile_jobs() -> None:
                 )
             await launch_job(row["id"])
             continue
-        if _process_exists(row.get("worker_pid")) and heartbeat_is_fresh(row.get("heartbeat_at")):
+        if loss is None:
             continue
         _terminate_process_group(row.get("process_group_id"), row.get("workload_pid"))
         final_status = "canceled" if row["status"] == "canceling" else "failed"
-        error = None if final_status == "canceled" else "Job supervisor exited unexpectedly."
+        error = None if final_status == "canceled" else loss
         async with get_db() as conn:
             await conn.execute(
                 sa.update(jobs)
@@ -390,7 +450,7 @@ def execute_job(job_id: str) -> None:
         with engine.begin() as conn:
             conn.execute(
                 sa.update(jobs)
-                .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+                .where(*_still_active(job_id), jobs.c.worker_id == worker_id)
                 .values(
                     status="running",
                     workload_pid=workload.pid,
@@ -419,14 +479,12 @@ def execute_job(job_id: str) -> None:
         elif exit_code == 0:
             status, error = "complete", None
         else:
-            status = "failed"
-            # The log's path is on this host; the user reaches the log from the run page.
-            error = f"The run stopped with an error (exit code {exit_code}). The run log has the details."
+            status, error = "failed", _failure_message(exit_code)
         now = _now()
         with engine.begin() as conn:
             conn.execute(
                 sa.update(jobs)
-                .where(jobs.c.id == job_id, jobs.c.worker_id == worker_id)
+                .where(*_still_active(job_id), jobs.c.worker_id == worker_id)
                 .values(
                     status=status,
                     completed_at=now,
@@ -439,7 +497,7 @@ def execute_job(job_id: str) -> None:
         with engine.begin() as conn:
             conn.execute(
                 sa.update(jobs)
-                .where(jobs.c.id == job_id)
+                .where(*_still_active(job_id))
                 .values(
                     status="failed",
                     completed_at=_now(),
@@ -447,6 +505,12 @@ def execute_job(job_id: str) -> None:
                 )
             )
         raise
+
+
+def _still_active(job_id: str) -> tuple:
+    """Where clauses that let only the first final status stick, so a supervisor
+    finishing after the reconciler gave up on it cannot rewrite why the job ended."""
+    return (jobs.c.id == job_id, jobs.c.status.in_(ACTIVE_STATUSES))
 
 
 def _is_forecast_job(engine, job_id: str) -> bool:
