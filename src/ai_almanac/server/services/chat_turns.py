@@ -336,6 +336,42 @@ def _failed_turn(assistant_turn: ChatTurn, exc: BaseException, error: str | None
     )
 
 
+async def discard_failed_exchange(session_id: str, trigger: str) -> bool:
+    """Drop a turn started by ``trigger`` that failed, with the message that started it.
+
+    Only while it is still the conversation's last exchange, so nothing the user
+    wrote since is touched. A failed turn leaves the model's history as it was,
+    so only the transcript changes.
+    """
+    async with get_db() as conn:
+        lock_clause = await lock_for_update(conn)
+        row = (
+            await conn.execute(
+                text("SELECT transcript FROM chat_sessions WHERE id = :id" + lock_clause),
+                {"id": session_id},
+            )
+        ).fetchone()
+        transcript = json_col(row[0], []) if row else []
+        if not _ends_in_failed_exchange(transcript, trigger):
+            return False
+        await conn.execute(
+            text("UPDATE chat_sessions SET transcript = :t WHERE id = :id"),
+            {"t": json.dumps(transcript[:-2]), "id": session_id},
+        )
+    return True
+
+
+def _ends_in_failed_exchange(transcript: list[dict], trigger: str) -> bool:
+    if len(transcript) < 2:
+        return False
+    started, reply = transcript[-2], transcript[-1]
+    return (
+        started.get("role") == "user"
+        and started.get("trigger") == trigger
+        and reply.get("status") == "failed"
+    )
+
+
 def submitting_scope(session: Mapping[str, Any]) -> ChatScope:
     """The scope a session submits a run in. Refuses a comparison's scratch session.
 
@@ -358,7 +394,7 @@ async def _pinned_ruleset(ruleset_id: str | None, *, for_admin: bool) -> Ruleset
 
     A pin that has since been archived or withdrawn degrades to the active ruleset,
     in the same never-raise spirit as ``rulesets.active_ruleset()``, so every turn of
-    a conversation, approvals included, runs under the same policy.
+    a conversation, approvals and follow-ups included, runs under the same policy.
     """
     return await selectable_ruleset(ruleset_id, for_admin=for_admin) if ruleset_id else None
 
@@ -459,7 +495,7 @@ def _streaming_assistant_turn(created_at: datetime, trigger: str = "user") -> Ch
 
 
 def _begin_message_turn(
-    session: StoredSession, content: str, requested_scope: ChatScope | None
+    session: StoredSession, content: str, requested_scope: ChatScope | None, trigger: str
 ) -> PendingTurn | TurnRefused:
     """A user message and the reply to it. Writing a new message instead of answering an
     approval card declines it, so the stored step must not go on reading as submitted."""
@@ -470,7 +506,9 @@ def _begin_message_turn(
         return TurnRefused("scope_mismatch", "Session scope does not match the current view")
     waiting = {call.tool_call_id for call in unprocessed_tool_calls(session.provider_state)}
     created_at = _now()
-    user_turn = ChatTurn(id=str(uuid.uuid4()), role="user", content=content, created_at=created_at)
+    user_turn = ChatTurn(
+        id=str(uuid.uuid4()), role="user", trigger=trigger, content=content, created_at=created_at
+    )
     assistant_turn = _streaming_assistant_turn(created_at)
     return PendingTurn(
         provider_state=_deny_unprocessed_tool_calls(session.provider_state),
@@ -517,17 +555,20 @@ async def stream_chat_turn(
     for_admin: bool = False,
     active_ruleset: Ruleset | None = None,
     comparison_id: str | None = None,
+    trigger: str = "user",
 ) -> AsyncIterator[str]:
     """Persist the user turn, relay the LLM stream as SSE, persist the outcome.
 
     The turn runs under the session's pinned ruleset, as ``for_admin`` may see it.
     ``active_ruleset`` overrides that, and ``comparison_id`` tags the turn log; both
     are set by a side-by-side comparison and are None for an ordinary conversation.
+    ``trigger`` says who started the turn — ``"follow_up:<id>"`` when the platform
+    wrote ``content``.
     """
     opened = await _open_turn(
         session_id,
         user_id,
-        lambda session: _begin_message_turn(session, content, requested_scope),
+        lambda session: _begin_message_turn(session, content, requested_scope, trigger),
     )
     if isinstance(opened, TurnRefused):
         yield opened.event()
@@ -546,6 +587,7 @@ async def stream_chat_turn(
             active_ruleset=ruleset,
             comparison_id=comparison_id,
             turn_id=pending.assistant_turn.id,
+            trigger=trigger,
         ):
             yield chunk
 
@@ -587,6 +629,7 @@ async def stream_approval_turn(
             ),
             active_ruleset=await _pinned_ruleset(session.ruleset_id, for_admin=for_admin),
             turn_id=pending.assistant_turn.id,
+            trigger=pending.assistant_turn.trigger,
         ):
             yield chunk
 

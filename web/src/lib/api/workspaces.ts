@@ -11,6 +11,7 @@ export type WorkspaceDetail = components['schemas']['WorkspaceDetail'];
 export type WorkspaceJob = components['schemas']['WorkspaceJobOut'];
 export type WorkspaceArtifact =
 	components['schemas']['ai_almanac__server__routers__workspaces__ArtifactOut'];
+export type AnalysisName = components['schemas']['AnalysisOut'];
 export type ArtifactProvenance = components['schemas']['ProvenanceOut'];
 export type ProvenanceStep = components['schemas']['ProvenanceStepOut'];
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
@@ -80,6 +81,25 @@ export async function renameWorkspaceArtifact(
 	});
 }
 
+/** Name the files one chat turn made; `null` clears the name. */
+export async function renameWorkspaceAnalysis(
+	workspaceId: string,
+	turnId: string,
+	title: string | null
+): Promise<AnalysisName | null> {
+	return request<AnalysisName | null>(`/workspaces/${workspaceId}/analyses/${turnId}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ title })
+	});
+}
+
+export async function promoteSessionToWorkspace(sessionId: string): Promise<Workspace> {
+	return request<Workspace>('/workspaces/promote', {
+		method: 'POST',
+		body: JSON.stringify({ session_id: sessionId })
+	});
+}
+
 export async function fetchWorkspaceArtifact(
 	workspaceId: string,
 	artifact: { id: string }
@@ -106,8 +126,25 @@ export async function downloadWorkspaceArtifact(
 	URL.revokeObjectURL(url);
 }
 
+/** Work the assistant queued in a chat until the listed jobs finish. */
+export interface FollowUp {
+	id: string;
+	session_id: string;
+	job_ids: string[];
+	instruction: string;
+	status: 'waiting' | 'running' | 'done' | 'failed' | 'canceled';
+	created_at: string;
+}
+
+export async function cancelFollowUp(workspaceId: string, followUpId: string): Promise<void> {
+	await request<void>(`/workspaces/${workspaceId}/follow-ups/${followUpId}`, { method: 'DELETE' });
+}
+
 export type WorkspaceEvent =
-	{ type: 'jobs'; jobs: WorkspaceJob[] } | { type: 'artifacts'; artifacts: WorkspaceArtifact[] };
+	| { type: 'jobs'; jobs: WorkspaceJob[] }
+	| { type: 'artifacts'; artifacts: WorkspaceArtifact[] }
+	| { type: 'follow_ups'; follow_ups: FollowUp[] }
+	| { type: 'analyses'; analyses: AnalysisName[] };
 
 const RECONNECT_MS = { first: 1_000, max: 30_000 };
 

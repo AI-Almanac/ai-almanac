@@ -91,6 +91,26 @@ async def add_job(ctx: RunContext, job_id: str) -> dict:
     return {"linked": job_id, "status": found[0]["status"]}
 
 
+@primitive("workspace.continue_after_jobs", "1.0.0")
+async def continue_after_jobs(ctx: RunContext, job_ids: list[str], instruction: str) -> dict:
+    """Queue the rest of a multi-step request until the given workspace jobs finish.
+
+    Use this right after submitting a benchmark, blend or forecast whose results the
+    request goes on to need (e.g. "train a blend, then compare it with the old one"),
+    instead of asking the user to tell you when it is done. `instruction` is what to do
+    once they finish, written to your future self naming each run and file as the user
+    knows it, since it runs as a new turn in this chat. That turn is told each run's name
+    and final status, and finds a run's id in the workspace's run list;
+    completed jobs' outputs are already workspace artifacts by then. Tell the user what
+    is queued; they do not need to stay on the page."""
+    from .. import follow_ups
+
+    deps = ctx.deps
+    return await follow_ups.queue(
+        deps.scope.key, deps.session_id, deps.user_id, job_ids, instruction
+    )
+
+
 async def _updated_settings(ctx: RunContext, patch: WorkspaceSettings) -> dict:
     updated = await workspace_settings.update_settings(ctx.deps.scope.key, patch)
     return {

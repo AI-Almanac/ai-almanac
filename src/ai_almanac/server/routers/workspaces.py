@@ -8,12 +8,14 @@ GET  /workspaces/{id}/settings                     the workspace's defaults, e.g
 GET  /workspaces/{id}/settings/effective           the same, unset ones filled with platform defaults
 PATCH /workspaces/{id}/settings                    change named settings; null clears one
 PATCH /workspaces/{id}/artifacts/{aid}             rename a file; null restores its default name
+PATCH /workspaces/{id}/analyses/{turn_id}          rename an analysis; null clears its name
 POST /workspaces/{id}/jobs                         link a job
 GET  /workspaces/{id}/addable-jobs                 the user's runs not in the workspace yet
 GET  /workspaces/{id}/artifacts                    artifacts with breadcrumbs
 GET  /workspaces/{id}/artifacts/{aid}/download     the file
 GET  /workspaces/{id}/artifacts/{aid}/provenance   chain; ?verify=true re-hashes
 POST /workspaces/promote                           workspace from an existing session
+DELETE /workspaces/{id}/follow-ups/{fid}          cancel a queued follow-up
 """
 
 from __future__ import annotations
@@ -34,7 +36,13 @@ from starlette.background import BackgroundTask
 
 from ai_almanac.server.auth import CurrentUser, require_workspaces
 
-from ..services import ledger, workspace_settings, workspace_summary, workspaces
+from ..services import (
+    follow_ups,
+    ledger,
+    workspace_settings,
+    workspace_summary,
+    workspaces,
+)
 from ..services.run_summaries import OnsetDefinition
 from ..services.workspace_settings import WorkspaceSettings
 from ..services.workspace_summary import JobHeadline, WorkspaceSummary
@@ -112,14 +120,32 @@ class ArtifactOut(BaseModel):
     supporting: bool  # a file a result was made from, not a result itself
 
 
+class AnalysisOut(BaseModel):
+    """The name of the files one chat turn made."""
+
+    turn_id: str
+    title: str
+    named_by: Literal["assistant", "user"]
+
+
 class WorkspaceDetail(WorkspaceOut):
     settings: WorkspaceSettings
     jobs: list[WorkspaceJobOut]
     artifacts: list[ArtifactOut]
+    analyses: list[AnalysisOut]
 
 
 class RenameIn(BaseModel):
     title: str | None = Field(description="The new name; null goes back to the default")
+
+
+class FollowUpOut(BaseModel):
+    id: str
+    session_id: str
+    job_ids: list[str]
+    instruction: str
+    status: str
+    created_at: str
 
 
 class LinkJobIn(BaseModel):
@@ -234,6 +260,7 @@ async def get_workspace(workspace: OwnedWorkspace):
         settings=workspace_settings.parse_settings(workspace["settings_json"]),
         jobs=await _job_outs(workspace_id),
         artifacts=[ArtifactOut(**item) for item in await workspaces.listing(workspace_id)],
+        analyses=[AnalysisOut(**row) for row in await workspaces.list_analyses(workspace_id)],
     )
 
 
@@ -255,6 +282,17 @@ async def rename_artifact(workspace: OwnedWorkspace, artifact_id: str, body: Ren
         raise HTTPException(status_code=404, detail="File not found in this workspace")
     [item] = await workspaces.listing(workspace_id, only={artifact_id})
     return ArtifactOut(**item)
+
+
+@router.patch("/{workspace_id}/analyses/{turn_id}", response_model=AnalysisOut | None)
+async def rename_analysis(workspace: OwnedWorkspace, turn_id: str, body: RenameIn):
+    """Name an analysis; null clears the name, so it shows the question again."""
+    workspace_id = workspace["id"]
+    try:
+        named = await workspaces.name_analysis(workspace_id, turn_id, body.title, "user")
+    except workspaces.WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AnalysisOut(**named) if named else None
 
 
 @router.get("/{workspace_id}/settings", response_model=WorkspaceSettings)
@@ -315,10 +353,20 @@ async def _artifacts_event(workspace_id: str, ids: set[str]) -> str:
     return _sse("artifacts", artifacts=[ArtifactOut(**item).model_dump() for item in items])
 
 
+async def _analyses_event(workspace_id: str) -> str:
+    rows = await workspaces.list_analyses(workspace_id)
+    return _sse("analyses", analyses=[AnalysisOut(**row).model_dump() for row in rows])
+
+
+async def _follow_ups_event(workspace_id: str) -> str:
+    items = await follow_ups.list_for_workspace(workspace_id)
+    return _sse("follow_ups", follow_ups=[FollowUpOut(**item).model_dump() for item in items])
+
+
 async def _activity_events(
     workspace_id: str, since: str | None, request: Request
 ) -> AsyncIterator[str]:
-    """Job lists and new artifacts, sent only when the cheap snapshot changes.
+    """Job lists, follow-ups and new artifacts, sent only when the cheap snapshot changes.
 
     ponytail: polls the database per open stream, since job status is written
     by the supervisor/Modal outside this process; a LISTEN/NOTIFY or pub/sub
@@ -326,6 +374,7 @@ async def _activity_events(
     """
     previous = await workspaces.activity(workspace_id)
     yield await _jobs_event(workspace_id)
+    yield await _follow_ups_event(workspace_id)
     if unseen := workspaces.artifacts_since(previous, since):
         yield await _artifacts_event(workspace_id, unseen)
     deadline = time.monotonic() + EVENTS_LIFETIME_SECONDS
@@ -337,6 +386,10 @@ async def _activity_events(
             yield await _jobs_event(workspace_id)
         if changes.new_artifacts:
             yield await _artifacts_event(workspace_id, changes.new_artifacts)
+        if changes.follow_ups:
+            yield await _follow_ups_event(workspace_id)
+        if changes.analyses:
+            yield await _analyses_event(workspace_id)
         if not changes.any:
             yield ": keep-alive\n\n"
         previous = current
@@ -420,3 +473,10 @@ async def artifact_provenance(
         producers=described["producers"],
         lineage=described["lineage"],
     )
+
+
+@router.delete("/{workspace_id}/follow-ups/{follow_up_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_follow_up(workspace: OwnedWorkspace, follow_up_id: str, user: CurrentUser) -> None:
+    workspace_id = workspace["id"]
+    if not await follow_ups.cancel(workspace_id, follow_up_id, user.id):
+        raise HTTPException(status_code=404, detail="No queued follow-up to cancel")

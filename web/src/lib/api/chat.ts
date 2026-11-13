@@ -124,6 +124,8 @@ export type ChatMessage = {
 	artifacts?: ChatArtifact[];
 	guardrails?: GuardrailNotice[];
 	status?: 'streaming' | 'completed' | 'failed';
+	/** "user", or "follow_up:<id>" when the platform wrote this prompt. */
+	trigger?: string;
 	/** On an assistant turn: the workspace artifacts its tools read. */
 	source_artifacts?: ChatSourceArtifact[];
 	/** Absent on turns saved before blocks were recorded. */

@@ -39,6 +39,7 @@ OFFERED = [
     *_rows(DRAFT_TOOLS, set(), {"workspace"}),
     *_rows({"update_benchmark_config"}, {PAGE_CHAT}, set()),
     *_rows({"cancel_run"}, {"workspace", PAGE_CHAT}, {"general"}),
+    *_rows({"open_panel", "show"}, {"workspace"}, {PAGE_CHAT}),
 ]
 
 
