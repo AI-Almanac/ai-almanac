@@ -229,6 +229,7 @@ def _intermediates_cache_params(
 
 
 GCP_SECRET_NAME = "gcp-service-account"
+# Only for blends submitted before the server said `use_adm3_domain` outright.
 ADM3_DOMAIN_REGIONS = {"ethiopia"}
 
 
@@ -842,6 +843,7 @@ def _run_blend(job_id: str, config: dict, outputs_bucket: str, client) -> dict:
         forecast_dirs,
         params,
         region_id=config.get("region_id"),
+        use_adm3_domain=config.get("use_adm3_domain"),
         cache_dir=_blend_cache_dir(config),
         resources=MODAL_INTERMEDIATE_RESOURCES,
         model_layouts=config.get("model_layouts"),
@@ -2018,16 +2020,20 @@ def build_blend_intermediates(
     blend_params: dict,
     *,
     region_id: str | None,
+    use_adm3_domain: bool | None = None,
     cache_dir: str | None,
     resources: IntermediateResources,
     model_layouts: dict[str, dict] | None = None,
     climatology_test_year_min: int | None = None,
 ) -> dict:
     """A blend's intermediates, built the same way whether it is training or
-    scoring a live season, on Modal or locally."""
+    scoring a live season, on Modal or locally. ``use_adm3_domain`` is what the
+    server decided; a blend from before it decided is read off its region."""
     prep_kwargs = _intermediate_prep_kwargs(blend_params)
     if region_id:
         prep_kwargs["region_id"] = region_id
+    if use_adm3_domain is not None:
+        prep_kwargs["use_adm3_domain"] = use_adm3_domain
     return build_intermediates_from_dirs(
         obs_dir,
         forecast_dirs,
@@ -3747,6 +3753,7 @@ def score_live_forecast(
         {name: _extract_bundle(bundle) for name, bundle in forecast_bundles.items()},
         blend_params,
         region_id=blend_params.get("region_id"),
+        use_adm3_domain=blend_params.get("use_adm3_domain"),
         cache_dir=cache_dir,
         resources=resources,
         climatology_test_year_min=climatology_test_year_min,
@@ -3769,7 +3776,7 @@ def score_live_forecast(
             forest_pkl=forest_pkl,
         )
         print(f"==> Coef apply finished in {time.perf_counter() - t0:.1f}s")
-        return _with_live_centroids(scores, blend_params.get("region_id"))
+        return _with_live_centroids(scores, blend_params)
 
     train_kwargs = {}
     if blend_params.get("formula_text"):
@@ -3802,11 +3809,13 @@ def score_live_forecast(
     if live_rows.empty:
         raise RuntimeError(f"Blend scoring produced no rows for live season {live_year}")
     scores = LiveScores(weekly_csv=live_rows.to_csv(index=False).encode("utf-8"))
-    return _with_live_centroids(scores, blend_params.get("region_id"))
+    return _with_live_centroids(scores, blend_params)
 
 
-def _with_live_centroids(scores: LiveScores, region_id: str | None) -> LiveScores:
-    if not _should_use_adm3_domain(region_id, None):
+def _with_live_centroids(scores: LiveScores, blend_params: dict) -> LiveScores:
+    if not _should_use_adm3_domain(
+        blend_params.get("region_id"), blend_params.get("use_adm3_domain")
+    ):
         return scores
     return LiveScores(
         weekly_csv=_attach_adm3_centroids_to_csv(scores.weekly_csv),
@@ -3852,6 +3861,7 @@ def score_live_season(
     params = {
         **(blend_config.get("blend_params") or {}),
         "region_id": blend_config.get("region_id"),
+        "use_adm3_domain": blend_config.get("use_adm3_domain"),
     }
 
     coef_pkl = read_artifact(FINAL_COEF_FILENAME)

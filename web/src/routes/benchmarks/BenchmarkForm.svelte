@@ -6,6 +6,7 @@
 	import type { Dataset, GuardrailThresholds, Region, RompDefaults } from '$lib/api';
 	import { isFocusUnits, type BboxExtent, type FocusAreaValue } from '$lib/api/jobs';
 	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
+	import { regionCountry } from '$lib/places';
 	import AdvancedRompConfigPanel from './AdvancedRompConfigPanel.svelte';
 	import { BenchmarkSetupForm } from './setup-form.svelte';
 	import { installTour } from '$lib/tour.svelte';
@@ -104,7 +105,6 @@
 	const missingSteps = $derived(
 		[
 			!form.selectedDatasetId && 'a ground-truth dataset',
-			!form.selectedRegionId && 'a region',
 			form.selectedModelIds.length === 0 && 'at least one model'
 		].filter((step): step is string => Boolean(step))
 	);
@@ -218,7 +218,7 @@
 				<span class="label-with-help">
 					Area of interest
 					<InfoTip
-						text="Limits scoring to part of the region: draw a box, or pick administrative areas on the map. Land and country borders still apply. Leave it as the whole region to score everything."
+						text="Limits scoring to part of the data: draw a box, or pick a country or the states and districts inside one on the map. Leave it as the whole region to score everything."
 					/>
 				</span>
 				<small
@@ -229,16 +229,16 @@
 						: 'Optional: score part of the region'}</small
 				>
 			</div>
-			{#if form.selectedRegionId}
+			{#if form.selectedDatasetId}
 				<FocusAreaMap
 					value={focusArea}
 					extent={regionExtent}
-					regionId={form.selectedRegionId}
+					country={regionCountry(regions, form.selectedRegionId || null)}
 					onchange={(box) => form.setSharedParam('focus_area', box)}
 				/>
 			{:else}
 				<p class="focus-area-hint">
-					Choose a region, then draw a box here to score only part of it.
+					Choose observations, then pick a place or draw a box here to score only part of them.
 				</p>
 			{/if}
 		</div>

@@ -55,11 +55,7 @@
 					</a>
 				{/if}
 				{#if account.canManageData}
-					<a
-						href="/data-sources"
-						class:active={$page.url.pathname.startsWith('/data-sources') ||
-							$page.url.pathname.startsWith('/regions')}
-					>
+					<a href="/data-sources" class:active={$page.url.pathname.startsWith('/data-sources')}>
 						Data
 					</a>
 				{/if}

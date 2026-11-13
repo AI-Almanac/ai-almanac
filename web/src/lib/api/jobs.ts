@@ -114,9 +114,9 @@ export type JobArtifact = {
 	url: string;
 };
 
-export async function getModels(region?: string) {
-	const qs = region ? `?region=${encodeURIComponent(region)}` : '';
-	return request<ModelConfig[]>(`/jobs/models${qs}`);
+/** The models that have data where an observation dataset does. */
+export async function getModelsScoredWith(datasetId: string) {
+	return request<ModelConfig[]>(`/jobs/models?dataset_id=${encodeURIComponent(datasetId)}`);
 }
 
 export async function getJobs() {
@@ -264,13 +264,15 @@ export type BboxExtent = {
 	lon_max: number;
 };
 
-/** Named administrative units picked on the map; outlines are attached at submission. */
-/** States or regions, and the districts or zones inside them. */
-export type FocusUnitLevel = 'adm1' | 'adm2';
+/** A country, its states or regions, and the districts or zones inside those. */
+export type FocusUnitLevel = 'adm0' | 'adm1' | 'adm2';
 
+/** Named places picked on the map; outlines are attached at submission. */
 export type FocusUnits = {
 	level: FocusUnitLevel;
 	units: string[];
+	/** The country the places are in. Without it the run's region supplies the country. */
+	iso?: string | null;
 };
 
 export type FocusAreaValue = BboxExtent | FocusUnits;
