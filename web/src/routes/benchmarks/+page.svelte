@@ -7,6 +7,7 @@
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import OpenInWorkspace from '$lib/components/OpenInWorkspace.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import JobLogs from '$lib/components/JobLogs.svelte';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
@@ -45,6 +46,7 @@
 	let splitEl = $state<HTMLElement | null>(null);
 	let promptSetupFinished = $state(false);
 	let preferredChatSessionId = $state<string | null>(null);
+	let activeChatSessionId = $state<string | null>(null);
 	let initialized = $state(false);
 	const manualSetupRequested = takeSetupRequest('manual');
 	const initialPrompt = $derived($page.url.searchParams.get('q')?.trim() ?? '');
@@ -484,12 +486,14 @@
 						storageKey="benchmark-results"
 					/>
 					<aside class="workspace-aside">
+						<OpenInWorkspace sessionId={activeChatSessionId} />
 						<div class="result-chat">
 							<ChatPanel
 								jobs={group.jobs}
 								scopeKey={group.key}
 								suggestions={chatSuggestions(group.jobs)}
 								preferredSessionId={preferredChatSessionId}
+								onSessionReady={(sessionId) => (activeChatSessionId = sessionId)}
 								onComparingChange={(value) => (chatComparing = value)}
 								onJobsCreated={handleJobsCreated}
 								onBlendSubmitted={(_runId, jobs, sessionId) =>
