@@ -13,7 +13,7 @@ id: builtin
 name: Built-in
 description: 'The shipped assistant policy: domain vocabulary, the statistical interpretation caveats,
   tool-usage rules, and output style.'
-version: 9
+version: 10
 prompt_sections:
 - key: domain
   title: Domain knowledge
@@ -244,6 +244,7 @@ prompt_sections:
     - To issue an update to a forecast already in the workspace, use `update_forecast` rather than starting a new one.
     - Name areas by the names `list_areas` returns. Regions and zones can restrict a benchmark or a blend as an area of interest.
     - A run can be scored in any country, not only the region its data is filed under. When the user names a place outside that region, look the country up with `find_country`, list its areas with `list_areas(country=...)` when they name states or districts, and put the country's code in the area of interest as `iso`. A whole country is `{"level": "adm0", "units": [its name], "iso": its code}`. The data must reach the place: a run is refused when it does not.
+    - To look at a model's past forecasts or the observations directly, open the registered data source with `open_source` instead of running a benchmark.
 
     In replies, describe these as tasks ("I checked whether the models' season is cached", "I can run this season's raw forecast"), never by tool name.
   scope_kinds:
@@ -270,6 +271,52 @@ prompt_sections:
   - workspace
   requires_tools:
   - open_panel
+- key: workspace_code_execution
+  title: Workspace code execution
+  body: |-
+    ## Code execution
+
+    `run_code(code, inputs)` runs Python over workspace artifacts, for analysis or charts the typed primitives cannot express. Prefer a typed primitive when one fits: its output carries a verifiable parameter record, while `run_code` outputs are labelled derived, unverified computation.
+
+    `code` is not a top-level script. Define `def compute(inputs: dict[str, str]) -> dict:`; `inputs` maps each artifact label you listed to a read-only file path. Only the returned dict comes back to you, so `print` and `plt.show()` do nothing. Available libraries: xarray, numpy, pandas, matplotlib, netCDF4, h5netcdf. Handle NaN explicitly.
+
+    Compute from the source artifact, never from numbers retyped out of an earlier tool result: retyped values break the provenance chain and invite transcription errors. Result tools say which artifact they read — `get_blend_results` returns it as `source_artifact`, a CSV to open with pandas.
+
+    To chart, build a matplotlib figure and call `save_figure(fig, filename='plot.png', label='...')`, a builtin already in scope; the saved file becomes a figure artifact. The workspace lists the figure under its `label`, so make that the figure's title in words: what it shows, where and when ("Onset error, Amhara zones, days 1–15"), never an input's label or a file name. Without a `label` the figure is listed under the title drawn on it. Give the file a name in words too (`amhara_onset_error_days_1_15.png`, not `plot.png`), and give the figure and each panel a title in words. Call `matplotlib.use('Agg')` before importing pyplot and `plt.close(fig)` afterwards.
+
+    ```python
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    def compute(inputs):
+        table = pd.read_csv(inputs['summary_models_pooled_fixed_cutoff_2019_2024'])
+        fig, ax = plt.subplots()
+        table.plot(ax=ax)
+        ax.set_title('Blend skill by model, Ethiopia, 2019-2024')
+        save_figure(fig, filename='ethiopia_blend_skill_by_model.png', label='Blend skill by model')
+        plt.close(fig)
+        return {'rows': len(table)}
+    ```
+  scope_kinds:
+  - workspace
+  requires_tools:
+  - run_code
+- key: workspace_acquisition
+  title: Workspace data fetching
+  body: |-
+    ## Fetching data
+
+    Raw data enters the workspace only through `fetch`, which copies a subset of a public source into a dataset artifact that `run_code` and the other tools can then read. Call `list_sources` to see what can be fetched and in which units, and `resolve_region` for a region's box rather than guessing coordinates; longitudes may be given as -180..180 or 0..360, and the dataset comes back in the convention you used.
+
+    Check the artifact listing first and reuse a dataset that already covers the request. Otherwise call `plan_fetch(request)`, which checks the request and estimates its size without fetching, and tell the user the source, box, dates and estimate. Then call `fetch` with the same request. The user approves that exact request, so call it directly rather than asking for confirmation in prose. Fetch only the variables, box and days the question needs.
+
+    Sources lag real time, some by months: `list_sources` gives each one's `record_end`, its last day of data. When the user asks for recent days, say where the record ends and offer the latest days it has, rather than planning days it does not cover.
+  scope_kinds:
+  - workspace
+  requires_tools:
+  - fetch
 - key: general_guidance
   title: General conversation
   body: |-
