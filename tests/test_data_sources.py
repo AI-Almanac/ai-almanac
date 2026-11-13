@@ -733,3 +733,241 @@ async def test_model_source_rejects_a_live_forecast_model_that_cannot_extend_it(
     draft = response.json()
     assert draft["status"] == "invalid"
     assert reason in draft["validation_error"]
+
+
+_ALICE = {"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"}
+_OUTPUTS_BUCKET = "almanac-job-outputs-test"
+_UPLOADS_BUCKET = "almanac-uploads-test"
+
+
+def _platform_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "gcs_outputs_bucket", _OUTPUTS_BUCKET)
+    monkeypatch.setattr(settings, "gcs_uploads_bucket", _UPLOADS_BUCKET)
+
+
+@pytest.mark.parametrize("endpoint", ["/data-sources", "/data-sources/validate"])
+@pytest.mark.parametrize("path", ["gs://gcs://other-bucket/obs", "gs://gs://other-bucket/obs"])
+@pytest.mark.asyncio
+async def test_a_source_location_with_a_second_scheme_is_refused(
+    client: httpx.AsyncClient, endpoint: str, path: str
+) -> None:
+    response = await client.post(endpoint, json=_obs_body("Two schemes", path=path))
+
+    assert response.status_code == 422
+    assert "more than one scheme" in response.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "gs://",
+        "gs:///bucket/obs",
+        "gs://Bucket/obs",
+        "gs://bucket/../other",
+        "gs://bucket/./obs",
+        "gs://bucket/a//b",
+        "gs://bucket/obs/*",
+        "https://example.com/obs",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_source_location_without_a_plain_bucket_and_folder_is_refused(
+    client: httpx.AsyncClient, path: str
+) -> None:
+    response = await client.post("/data-sources", json=_obs_body("Odd path", path=path))
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("pattern", ["../other-source/{}.nc", "/{}.nc", "a/../../{}.nc"])
+@pytest.mark.asyncio
+async def test_a_file_pattern_outside_the_sources_folder_is_refused(
+    client: httpx.AsyncClient, pattern: str
+) -> None:
+    response = await client.post(
+        "/data-sources",
+        json={**_obs_body("Pattern"), "metadata": {"obs_file_pattern": pattern}},
+    )
+
+    assert response.status_code == 422
+    assert "relative name" in response.text
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        ("gs://bucket/ethiopia/obs", "gs://bucket/ethiopia/obs"),
+        (" gs://bucket/ethiopia/obs/ ", "gs://bucket/ethiopia/obs"),
+        ("gs://bucket", "gs://bucket"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_normal_bucket_paths_are_stored_canonically(
+    client: httpx.AsyncClient, raw: str, stored: str
+) -> None:
+    response = await client.post("/data-sources", json=_obs_body("Canonical", path=raw))
+
+    assert response.status_code == 201
+    assert response.json()["path"] == stored
+
+
+@pytest.mark.parametrize("bucket", [_OUTPUTS_BUCKET, _UPLOADS_BUCKET])
+@pytest.mark.parametrize("endpoint", ["/data-sources", "/data-sources/validate"])
+@pytest.mark.asyncio
+async def test_a_users_source_in_a_platform_bucket_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, endpoint: str, bucket: str
+) -> None:
+    _proxy_users(monkeypatch)
+    _platform_buckets(monkeypatch)
+
+    response = await client.post(
+        endpoint, json=_obs_body("Platform files", path=f"gs://{bucket}/jobs"), headers=_ALICE
+    )
+
+    assert response.status_code == 400
+    assert "platform's own files" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_user_cannot_move_a_source_into_a_platform_bucket(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _proxy_users(monkeypatch)
+    _platform_buckets(monkeypatch)
+    created = await client.post(
+        "/data-sources", json=_obs_body("Mine", path="gs://alice-bucket/obs"), headers=_ALICE
+    )
+    assert created.status_code == 201
+
+    body = _obs_body("Mine", path=f"gs://{_OUTPUTS_BUCKET}/jobs")
+    del body["kind"]
+    updated = await client.put(f"/data-sources/{created.json()['id']}", json=body, headers=_ALICE)
+
+    assert updated.status_code == 400
+    assert "platform's own files" in updated.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_revalidating_a_users_saved_source_in_a_platform_bucket_marks_it_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.db import get_db
+    from ai_almanac.server.services import data_sources as svc
+    from ai_almanac.server.services import storage as storage_mod
+
+    _platform_buckets(monkeypatch)
+    listed: list[str] = []
+
+    class _ListingStorage:
+        def list_dataset_files(self, path: str, glob: str) -> list[str]:
+            listed.append(path)
+            return [f"{path}/2020.nc"]
+
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: _ListingStorage())
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO data_sources (id, kind, name, path, region, metadata, "
+                "location_type, status, owner_id, visibility, created_at) VALUES "
+                "('saved', 'obs', 'Saved', :path, 'ethiopia', '{}', 'gcs', 'ready', "
+                "'someone', 'private', '2026-01-01')"
+            ),
+            {"path": f"gs://{_OUTPUTS_BUCKET}/jobs"},
+        )
+
+    row = await svc.revalidate_source("saved")
+
+    assert row["status"] == "invalid"
+    assert "platform's own files" in row["validation_error"]
+    assert listed == []
+
+
+@pytest.mark.asyncio
+async def test_a_listing_with_files_from_another_bucket_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import data_sources as svc
+    from ai_almanac.server.services import storage as storage_mod
+
+    class _OtherBucketStorage:
+        def list_dataset_files(self, path: str, glob: str) -> list[str]:
+            return ["gs://other-bucket/obs/2020.nc"]
+
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: _OtherBucketStorage())
+
+    status, error, _ = await svc.validate_source(
+        "obs", "gs://user-bucket/obs", {"obs_file_pattern": "{}.nc"}
+    )
+
+    assert status == "invalid"
+    assert "another bucket" in error
+
+
+@pytest.mark.parametrize(
+    "bucket", ["almanac-job-outputs-staging-ai-almanac", "almanac-uploads-staging-ai-almanac"]
+)
+@pytest.mark.asyncio
+async def test_a_users_source_in_another_environments_platform_bucket_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, bucket: str
+) -> None:
+    _proxy_users(monkeypatch)
+    _platform_buckets(monkeypatch)
+
+    response = await client.post(
+        "/data-sources", json=_obs_body("Other env", path=f"gs://{bucket}/jobs"), headers=_ALICE
+    )
+
+    assert response.status_code == 400
+    assert "platform's own files" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("folder", ["blend-intermediates", "season-forecasts"])
+@pytest.mark.asyncio
+async def test_a_users_source_in_the_data_buckets_run_cache_is_refused(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, folder: str
+) -> None:
+    from ai_almanac.settings import settings
+
+    _proxy_users(monkeypatch)
+    monkeypatch.setattr(settings, "gcs_data_bucket", "almanac-data-test")
+
+    response = await client.post(
+        "/data-sources",
+        json=_obs_body("Cache", path=f"gs://almanac-data-test/{folder}/run-1"),
+        headers=_ALICE,
+    )
+
+    assert response.status_code == 400
+    assert "run caches" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_users_listing_that_reaches_the_run_cache_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.services import data_sources as svc
+    from ai_almanac.server.services import storage as storage_mod
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "gcs_data_bucket", "almanac-data-test")
+
+    class _CacheStorage:
+        def list_dataset_files(self, path: str, glob: str) -> list[str]:
+            return ["gs://almanac-data-test/blend-intermediates/run-1/2020.nc"]
+
+    monkeypatch.setattr(storage_mod, "get_storage", lambda: _CacheStorage())
+
+    status, error, _ = await svc.validate_source(
+        "obs", "gs://almanac-data-test", {"obs_file_pattern": "**/{}.nc"}
+    )
+
+    assert status == "invalid"
+    assert "run caches" in error
+
+
+def test_a_local_directory_is_stored_without_reading_the_filesystem(tmp_path) -> None:
+    from ai_almanac.server.services.data_paths import LocalPath, parse_data_path
+
+    assert parse_data_path(f"{tmp_path}/obs/../chirps/") == LocalPath(tmp_path / "chirps")

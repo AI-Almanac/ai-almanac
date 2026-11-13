@@ -287,6 +287,22 @@ def _not_ready_detail(source: dict, user_id: str, fallback: str) -> str:
     return fallback
 
 
+def _readable_path(source: dict, user_id: str) -> str:
+    """The canonical location a run reads `source` from, checked again at submission.
+
+    Only the owner sees why a source can't be read; the reason may name its path.
+    """
+    try:
+        return data_source_service.readable_location(source).uri
+    except data_source_service.UnreadableFiles as exc:
+        detail = (
+            str(exc)
+            if source.get("owner_id") == user_id
+            else f"Data source {source['name']!r} cannot be read"
+        )
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
 async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
     """Resolve an observation source to the path a runner reads."""
     source = await data_source_service.get_source(dataset_id)
@@ -303,7 +319,7 @@ async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
             status_code=409,
             detail=_not_ready_detail(source, user_id, "Observation source is not ready"),
         )
-    return source["path"]
+    return _readable_path(source, user_id)
 
 
 # Workflow defaults the blend uses when a field is unset. Mirror
@@ -870,7 +886,7 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
                 source, user_id, f"Model source is not ready: {source['name']!r}"
             ),
         )
-    return source
+    return {**source, "path": _readable_path(source, user_id)}
 
 
 async def _record_submission(job_id: str, handle: RunnerHandle) -> None:
@@ -1290,6 +1306,8 @@ async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
             status_code=400,
             detail="This blend cannot run as a live forecast. " + " ".join(blockers),
         )
+    obs_source = await data_source_service.get_source(blend_row["dataset_id"])
+    _require_readable_training_files(blend_config, obs_source, sources_by_name)
     forecast_model_ids = sorted(requested)
     if not forecast_model_ids:
         raise HTTPException(status_code=400, detail="Blend has no models to forecast")
@@ -1538,6 +1556,38 @@ class InvalidBenchmarkSettings(ValueError):
 _FILE_SETTINGS = ("nc_mask", "thresh_file", "ref_model_dir")
 
 
+def _training_files(
+    blend_config: dict, obs_source: dict | None, sources_by_name: dict[str, dict | None]
+) -> Iterable[tuple[str, dict | None]]:
+    """Each file or folder a blend trained on, beside the source it was read from."""
+    if blend_config.get("obs_dir"):
+        yield blend_config["obs_dir"], obs_source
+    for name, uris in (blend_config.get("model_files") or {}).items():
+        for uri in uris:
+            yield uri, sources_by_name.get(name)
+
+
+def _require_readable_training_files(
+    blend_config: dict, obs_source: dict | None, sources_by_name: dict[str, dict | None]
+) -> None:
+    """A forecast may retrain from its blend's saved inputs, so they are checked the
+    same way a new blend's sources are."""
+    for uri, source in _training_files(blend_config, obs_source, sources_by_name):
+        # A removed source has no owner left to exempt, so its files are held to the user rule.
+        admin_registered = source is not None and data_source_service.registered_by_admin(source)
+        if data_source_service.file_location_error(uri, admin_registered=admin_registered):
+            raise HTTPException(status_code=409, detail=_unreadable_training_detail(source))
+
+
+def _unreadable_training_detail(source: dict | None) -> str:
+    if source is None:
+        return (
+            "One of the data sources this blend trained on was removed, so its training data "
+            "can no longer be read; train a new blend from the current sources."
+        )
+    return "This blend's training data can no longer be read; train the blend again."
+
+
 def _require_cloud_paths(paths: dict[str, str | None]) -> None:
     """Shared deployments only take gs:// URLs for job files.
 
@@ -1553,6 +1603,24 @@ def _require_cloud_paths(paths: dict[str, str | None]) -> None:
         )
 
 
+def _require_readable_job_files(paths: dict[str, str | None]) -> None:
+    """Job files a user names are read from the same places a user's sources may be.
+
+    Admins are held to it too: these settings name files directly rather than through a
+    registered source, so there is no admin-registered owner to exempt.
+    """
+    refused = [
+        name
+        for name, path in paths.items()
+        if path and data_source_service.file_location_error(path, admin_registered=False)
+    ]
+    if refused:
+        raise InvalidBenchmarkSettings(
+            f"Invalid benchmark settings: {', '.join(refused)} must be a plain "
+            "gs://<bucket>/<path> outside the platform's own buckets"
+        )
+
+
 def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> RompParams:
     try:
         parsed = model.model_validate(params)
@@ -1562,7 +1630,9 @@ def parse_romp_params(params: dict, model: type[RompParams] = RompParams) -> Rom
             for error in exc.errors()
         )
         raise InvalidBenchmarkSettings(f"Invalid benchmark settings: {problems}") from exc
-    _require_cloud_paths({name: getattr(parsed, name) for name in _FILE_SETTINGS})
+    job_files = {name: getattr(parsed, name) for name in _FILE_SETTINGS}
+    _require_cloud_paths(job_files)
+    _require_readable_job_files(job_files)
     return parsed
 
 
@@ -1634,11 +1704,11 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             detail=_not_ready_detail(model_source, user_id, "Model source is not ready"),
         )
     model_cfg = {
+        **model_source["metadata"],
         "id": model_source["id"],
         "display_name": model_source["name"],
         "region": model_source.get("region") or "",
-        "model_dir": model_source["path"],
-        **model_source["metadata"],
+        "model_dir": _readable_path(model_source, user_id),
     }
     if region and model_cfg["region"].lower() != region:
         raise HTTPException(
