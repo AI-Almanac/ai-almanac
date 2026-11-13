@@ -81,7 +81,11 @@ def test_the_scope_suffix_is_not_ruleset_editable() -> None:
 
 def test_a_scopeless_session_gets_no_suffix() -> None:
     scope = ChatScope(kind="benchmark_setup", key="setup", job_ids=[])
-    expected = rulesets.build_instructions(builtin(), scope.kind) + llm._TOPIC_BOUNDARY
+    expected = (
+        rulesets.build_instructions(builtin(), scope.kind)
+        + llm._TOPIC_BOUNDARY
+        + llm._TOOLS_CAN_CHANGE
+    )
     assert instructions(scope) == expected
 
 
@@ -139,15 +143,12 @@ def test_job_log_content_cannot_close_its_own_data_fence() -> None:
 
 
 def _all_tool_names() -> set[str]:
-    toolsets = [
-        llm._benchmark_toolset(),
-        llm._blend_toolset(),
-        llm._job_toolset(),
-        llm._metrics_toolset(),
-        llm._analysis_toolset(),
-        llm._handoff_toolset(),
+    """Every tool any scope registers, workspace primitives included (D4)."""
+    scopes = [
+        ChatScope(kind=kind, key="k", job_ids=[])
+        for kind in ("benchmark_setup", "blend_setup", "general", "workspace")
     ]
-    return {name for toolset in toolsets for name in toolset.tools}
+    return {name for scope in scopes for name in llm.offered_tool_names(builtin(), scope.kind)}
 
 
 def test_no_tool_lets_the_assistant_reach_its_own_configuration() -> None:

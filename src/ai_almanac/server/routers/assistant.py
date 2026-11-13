@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from ai_almanac.server.auth import AdminUser, CurrentUser, require_assistant_comparisons
 from ai_almanac.server.services import assistant_compare, rulesets, turn_log
 from ai_almanac.server.services.chat_state import ChatScope
+from ai_almanac.server.services.chat_turns import validate_scope
 from ai_almanac.server.services.llm import _instructions_for_ruleset
 from ai_almanac.server.services.rulesets import PromptSection, Ruleset, ToolPolicy
 from ai_almanac.settings import settings
@@ -30,7 +31,13 @@ from .chat import require_chat_available
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 # Scope kinds a preview can be rendered for; mirrors ChatScope['kind'].
-_PREVIEW_SCOPE_KINDS = ("benchmark_setup", "benchmark_run_group", "blend_setup", "job_set")
+_PREVIEW_SCOPE_KINDS = (
+    "benchmark_setup",
+    "benchmark_run_group",
+    "blend_setup",
+    "job_set",
+    "workspace",
+)
 
 
 class RulesetSummary(BaseModel):
@@ -374,6 +381,11 @@ async def preview_ruleset(ruleset_id: str, body: PreviewRequest, user: AdminUser
     )
 
 
+async def _own_scope(scope: ChatScope | None, user: CurrentUser) -> ChatScope | None:
+    """The scope a comparison may run in: one the caller could open a chat in themselves."""
+    return None if scope is None else await validate_scope(scope, user)
+
+
 @router.post("/compare", dependencies=[Depends(require_assistant_comparisons)])
 async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingResponse:
     """Answer one message under two policies at once, merged onto one SSE stream.
@@ -387,12 +399,13 @@ async def compare_rulesets(body: CompareRequest, user: AdminUser) -> StreamingRe
         assistant_compare.VariantSpec(ruleset_id=variant.ruleset_id, model=variant.model)
         for variant in body.variants
     ]
+    scope = await _own_scope(body.scope, user)
     try:
         comparison = await assistant_compare.prepare_comparison(
             user.id,
             variants,
             source_session_id=body.source_session_id,
-            scope=body.scope,
+            scope=scope,
         )
     except assistant_compare.UnknownRulesetError as exc:
         raise HTTPException(status_code=404, detail=f"Ruleset not found: {exc.args[0]}") from None
@@ -455,12 +468,13 @@ async def compare_blind(body: BlindCompareRequest, user: CurrentUser) -> Streami
             raise HTTPException(status_code=400, detail=f"Ruleset not available: {ruleset_id}")
     arms = [assistant_compare.VariantSpec(ruleset_id=rid) for rid in body.ruleset_ids]
     random.shuffle(arms)
+    scope = await _own_scope(body.scope, user)
     try:
         comparison = await assistant_compare.prepare_comparison(
             user.id,
             arms,
             source_session_id=body.source_session_id,
-            scope=body.scope,
+            scope=scope,
             blind=True,
         )
     except assistant_compare.UnknownRulesetError as exc:

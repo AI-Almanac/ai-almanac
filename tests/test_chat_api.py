@@ -392,12 +392,14 @@ def test_guardrail_event_is_built_from_the_tool_result_not_the_model() -> None:
     assert "overfitting" in payload["warnings"][0]
 
 
-def test_guardrail_event_is_omitted_when_a_config_is_clean() -> None:
+def test_a_clean_validation_still_reports_so_earlier_findings_clear() -> None:
     from ai_almanac.server.services import llm
 
-    assert (
-        llm._guardrail_event("t", "c", {"blend_validation": {"errors": [], "warnings": []}}) is None
-    )
+    event = llm._guardrail_event("t", "c", {"blend_validation": {"errors": [], "warnings": []}})
+    assert event is not None
+    payload = json.loads(event)
+    assert payload["config_kind"] == "blend"
+    assert payload["errors"] == [] and payload["warnings"] == []
     assert llm._guardrail_event("t", "c", {"regions": []}) is None
     assert llm._guardrail_event("t", "c", "not a dict") is None
 
@@ -874,9 +876,11 @@ async def test_a_ruleset_model_pin_does_not_override_a_users_own_credentials(
     built: dict = {}
     real_build_agent = llm._build_agent
 
-    def capture(scope, ruleset, model=None):
+    def capture(scope, ruleset, model=None, **kwargs):
         built["model"] = model
-        return real_build_agent(scope, ruleset, TestModel(call_tools=[], custom_output_text="ok"))
+        return real_build_agent(
+            scope, ruleset, TestModel(call_tools=[], custom_output_text="ok"), **kwargs
+        )
 
     monkeypatch.setattr(llm, "_build_agent", capture)
 
@@ -922,45 +926,178 @@ async def _seed_exposed_rulesets() -> None:
     await rulesets.set_comparison_enabled("unconstrained", True)
 
 
+async def _waiting_on_a_submission(session_id: str) -> None:
+    """A conversation whose assistant asked to submit its benchmark and is waiting."""
+    from ai_almanac.server.services.llm import serialize_model_messages
+
+    asked = ModelResponse(parts=[ToolCallPart("submit_benchmark", {}, tool_call_id="call-1")])
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET provider_state = :p WHERE id = :id"),
+            {"p": json.dumps(serialize_model_messages([asked])), "id": session_id},
+        )
+
+
 @pytest.mark.asyncio
 async def test_an_approval_resume_runs_under_the_sessions_pinned_ruleset(
     client: httpx.AsyncClient,
     as_new_user: dict[str, str],
-    user_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Approving a submission continues the conversation, so it must not
     silently switch the assistant back to the platform's active ruleset."""
-    from ai_almanac.server.services.chat_tools import SubmitBenchmarkApproval
-    from ai_almanac.server.services.chat_turns import resume_deferred_setup_tool
-
     await _seed_exposed_rulesets()
     created = await _create_session(client, as_new_user, ruleset_id="unconstrained")
+    await _waiting_on_a_submission(created["id"])
 
     seen_rulesets: list[object] = []
 
     async def fake_stream_response(*args: object, **kwargs: object) -> AsyncIterator[str]:
         seen_rulesets.append(kwargs.get("active_ruleset"))
-        yield json.dumps(
-            {
-                "type": "done",
-                "turn": {"content": "ok", "tool_calls": [], "artifacts": []},
-                "provider_state": [],
-            }
-        )
+        yield json.dumps({"type": "done", "turn": {"content": "ok"}, "provider_state": []})
 
     monkeypatch.setattr(
         "ai_almanac.server.services.chat_turns.stream_response", fake_stream_response
     )
 
-    await resume_deferred_setup_tool(
-        created["id"],
-        user_id,
-        SubmitBenchmarkApproval(tool_call_id="call-1"),
-        True,
+    await client.post(
+        f"/chat/sessions/{created['id']}/tool-approval",
+        headers=as_new_user,
+        json={"tool_call_id": "call-1", "approved": True},
     )
 
     assert [getattr(r, "id", None) for r in seen_rulesets] == ["unconstrained"]
+
+
+def _proposes_a_benchmark(monkeypatch: pytest.MonkeyPatch, configs: list[dict]) -> list[dict]:
+    """A page-chat assistant that asks to submit its draft, whose config is the last of
+    ``configs`` whenever it is read. Returns the configs that were submitted."""
+    from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+
+    from ai_almanac.server.services import chat_tools
+    from ai_almanac.server.services.benchmark_state import BenchmarkValidation
+
+    validation = BenchmarkValidation(can_run=True, status="runnable").model_dump(mode="json")
+    submitted: list[dict] = []
+
+    async def propose(user_id, scope, session_id) -> dict:
+        draft = {"benchmark_config": configs[-1], "benchmark_validation": validation}
+        return {**draft, "approval_required": True}
+
+    async def submit(user_id, scope, session_id, attribution) -> dict:
+        submitted.append(configs[-1])
+        return {
+            "benchmark_config": configs[-1],
+            "benchmark_validation": validation,
+            "run_id": "run-9",
+            "jobs": [{"id": "job-1"}],
+        }
+
+    async def stream(messages: list, info: AgentInfo):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            yield "Done."
+        else:
+            yield {0: DeltaToolCall(name="submit_benchmark", json_args="{}", tool_call_id="call-1")}
+
+    monkeypatch.setattr(chat_tools, "propose_benchmark_submit", propose)
+    monkeypatch.setattr(chat_tools, "submit_benchmark_for_session", submit)
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model", lambda: FunctionModel(stream_function=stream)
+    )
+    return submitted
+
+
+def _benchmark_config(dataset_id: str) -> dict:
+    from ai_almanac.server.services.benchmark_state import BenchmarkRunSpec
+
+    spec = BenchmarkRunSpec(
+        region_id="ethiopia",
+        dataset_id=dataset_id,
+        model_ids=["aifs"],
+        advanced_params={"onset_rule": None, "onset_definition": "Default"},
+    )
+    return spec.model_dump(mode="json")
+
+
+async def _ask_then_decide(
+    client, as_new_user, approved: bool, before_deciding=lambda: None
+) -> tuple[str, list[dict]]:
+    session = await client.post(
+        "/chat/sessions",
+        headers=as_new_user,
+        json={"title": "Setup", "scope": {"kind": "benchmark_setup", "key": "setup-1"}},
+    )
+    session_id = session.json()["id"]
+    asked = await client.post(
+        f"/chat/sessions/{session_id}/message", headers=as_new_user, json={"content": "run it"}
+    )
+    assert [e for e in _sse_events(asked.text) if e["type"] == "benchmark_approval_request"]
+    before_deciding()
+    decided = await client.post(
+        f"/chat/sessions/{session_id}/tool-approval",
+        headers=as_new_user,
+        json={"tool_call_id": "call-1", "approved": approved},
+    )
+    return session_id, _sse_events(decided.text)
+
+
+@pytest.mark.asyncio
+async def test_an_approved_page_chat_benchmark_submits_the_config_its_card_showed(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a reload, the submit step must still show the run it started."""
+    configs = [_benchmark_config("chirps")]
+    submitted = _proposes_a_benchmark(monkeypatch, configs)
+
+    session_id, events = await _ask_then_decide(client, as_new_user, approved=True)
+
+    [started] = [e for e in events if e["type"] == "benchmark_config"]
+    assert (started["run_id"], started["jobs"]) == ("run-9", [{"id": "job-1"}])
+    assert submitted == configs
+    reloaded = (await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)).json()
+    [call] = [c for turn in reloaded["transcript"] for c in turn["tool_calls"]]
+    assert call["status"] == "completed" and call["result"]["run_id"] == "run-9"
+    assert reloaded["pending_approval"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_page_chat_benchmark_whose_config_moved_after_its_card_is_not_submitted(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configs = [_benchmark_config("chirps")]
+    submitted = _proposes_a_benchmark(monkeypatch, configs)
+
+    _, events = await _ask_then_decide(
+        client,
+        as_new_user,
+        approved=True,
+        before_deciding=lambda: configs.append(_benchmark_config("era5")),
+    )
+
+    [result] = [e for e in events if e["type"] == "tool_result"]
+    assert "changed after it was approved" in result["result"]["error"]
+    assert submitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_declined_page_chat_benchmark_submits_nothing_and_the_assistant_replies(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submitted = _proposes_a_benchmark(monkeypatch, [_benchmark_config("chirps")])
+
+    session_id, events = await _ask_then_decide(client, as_new_user, approved=False)
+
+    assert events[-1]["type"] == "done" and events[-1]["turn"]["content"] == "Done."
+    assert submitted == []
+    reloaded = (await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)).json()
+    [call] = [c for turn in reloaded["transcript"] for c in turn["tool_calls"]]
+    assert call["status"] == "failed" and call["result"] == {"error": "Not approved"}
 
 
 @pytest.mark.asyncio

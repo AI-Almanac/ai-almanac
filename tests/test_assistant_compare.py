@@ -771,3 +771,72 @@ async def test_an_admin_can_blind_compare_a_preview_ruleset_a_user_cannot(
         json={"message": "hi", "ruleset_ids": ["builtin", "unconstrained"]},
     )
     assert refused.status_code == 400
+
+
+# --- a comparison runs only where its caller could open a chat ----------------
+#
+# The workspace tools read and write whatever workspace the session's scope names,
+# so a comparison must not be pointed at a workspace that is not the caller's.
+
+
+async def _someone_elses_workspace(client: httpx.AsyncClient) -> str:
+    owner = {"X-Forwarded-User": "workspace-owner"}
+    created = await client.post("/workspaces", headers=owner, json={"name": "Not yours"})
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def _workspace_scope(workspace_id: str) -> dict:
+    return {"kind": "workspace", "key": workspace_id, "title": "ws", "job_ids": []}
+
+
+@pytest.mark.asyncio
+async def test_a_blind_comparison_cannot_be_pointed_at_someone_elses_workspace(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    stub_model: None,
+    exposed_pair: None,
+) -> None:
+    workspace_id = await _someone_elses_workspace(client)
+
+    refused = await client.post(
+        "/assistant/compare/blind",
+        headers=as_new_user,
+        json={
+            "message": "list the files here",
+            "ruleset_ids": ["builtin", "unconstrained"],
+            "scope": _workspace_scope(workspace_id),
+        },
+    )
+
+    assert refused.status_code == 404, refused.text
+    async with get_db() as conn:
+        sessions = await conn.execute(
+            sa.text("SELECT COUNT(*) FROM chat_sessions WHERE scope LIKE :key"),
+            {"key": f"%{workspace_id}%"},
+        )
+        assert sessions.scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_comparison_runs_in_the_callers_own_workspace(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    stub_model: None,
+    exposed_pair: None,
+) -> None:
+    created = await client.post("/workspaces", headers=as_new_user, json={"name": "Mine"})
+    workspace_id = created.json()["id"]
+
+    res = await client.post(
+        "/assistant/compare/blind",
+        headers=as_new_user,
+        json={
+            "message": "what is here?",
+            "ruleset_ids": ["builtin", "unconstrained"],
+            "scope": _workspace_scope(workspace_id),
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    assert _sse_events(res.text)[0]["type"] == "comparison_started"

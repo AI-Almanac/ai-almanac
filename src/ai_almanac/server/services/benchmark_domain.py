@@ -16,6 +16,8 @@ from ai_almanac.server.services import (
     guardrails,
     job_submission,
     ledger,
+    read_sets,
+    skill_files,
     workspace_display,
 )
 from ai_almanac.server.services.focus_area import parse_focus_area
@@ -26,6 +28,7 @@ from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidati
 from .onset_rules import DEFAULT_ONSET_RULE, onset_fit_errors, onset_rule_errors
 from .registry import CatalogSnapshot, load_catalog, load_model_registry
 from .romp import DEFAULT_MAX_FORECAST_DAY
+from .skill_scores import is_skill_score_file
 
 logger = logging.getLogger(__name__)
 
@@ -419,10 +422,6 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
     )
 
 
-async def validation_for_config(spec: BenchmarkRunSpec) -> BenchmarkValidation:
-    return _validation_for_config(spec, await load_catalog())
-
-
 async def _load_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
     from ai_almanac.server.db import get_db
 
@@ -697,6 +696,90 @@ async def _create_benchmark_jobs(
         )
         jobs.append(job.model_dump(mode="json"))
     return run_id, jobs
+
+
+def _described_benchmark_spec(
+    spec: BenchmarkRunSpec, catalog: CatalogSnapshot, datasets: dict[str, dict]
+) -> BenchmarkRunSpec:
+    """Fill display names from the catalog, keeping unknown ids so validation names them."""
+    dataset = datasets.get(spec.dataset_id or "")
+    region = _region_by_id(catalog, spec.region_id or (dataset or {}).get("region"))
+    models = {
+        m["id"]: m for m in catalog.models_for(spec.dataset_id, region["id"] if region else None)
+    }
+    return spec.model_copy(
+        update={
+            "region_id": region["id"] if region else spec.region_id,
+            "region_name": region["display_name"] if region else None,
+            "romp_region": (region.get("romp_name") or "custom") if region else None,
+            "dataset_name": dataset["name"] if dataset else None,
+            "model_names": [
+                (models.get(model_id) or {}).get("display_name", model_id)
+                for model_id in spec.model_ids
+            ],
+            "advanced_params": _clean_advanced_params(spec.advanced_params, spec.model_ids),
+        }
+    )
+
+
+def _with_errors(validation: BenchmarkValidation, errors: list[str]) -> BenchmarkValidation:
+    if not errors:
+        return validation
+    return validation.model_copy(
+        update={"errors": [*validation.errors, *errors], "can_run": False, "status": "collecting"}
+    )
+
+
+async def check_benchmark_spec(
+    fields: dict[str, Any], user_id: str
+) -> tuple[BenchmarkRunSpec, BenchmarkValidation, CatalogSnapshot]:
+    """Resolve a complete benchmark spec, held by no session, and validate it."""
+    catalog = await load_catalog()
+    datasets = {dataset["id"]: dataset for dataset in await _dataset_candidates(user_id)}
+    spec = _finalize_benchmark_config(
+        _described_benchmark_spec(BenchmarkRunSpec.model_validate(fields), catalog, datasets)
+    )
+    unknown_dataset = (
+        [f"Unknown or unavailable observation dataset: {spec.dataset_id}"]
+        if spec.dataset_id and spec.dataset_id not in datasets
+        else []
+    )
+    return spec, _with_errors(_validation_for_config(spec, catalog), unknown_dataset), catalog
+
+
+def benchmark_spec_payload(
+    spec: BenchmarkRunSpec, validation: BenchmarkValidation, **extra: object
+) -> dict:
+    return {
+        "benchmark_spec": spec.model_dump(mode="json"),
+        "benchmark_validation": validation.model_dump(mode="json"),
+        **extra,
+    }
+
+
+async def validate_benchmark_spec(fields: dict[str, Any], user_id: str) -> dict:
+    spec, validation, _ = await check_benchmark_spec(fields, user_id)
+    return benchmark_spec_payload(spec, validation)
+
+
+async def submit_benchmark_spec(
+    fields: dict[str, Any], user_id: str, attribution: ledger.Attribution
+) -> dict:
+    """Validate a complete spec and, only when it can run, submit its jobs."""
+    from fastapi import HTTPException
+
+    spec, validation, catalog = await check_benchmark_spec(fields, user_id)
+    if not validation.can_run:
+        return benchmark_spec_payload(
+            spec, validation, error="Benchmark spec is not runnable; nothing was submitted"
+        )
+    try:
+        run_id, jobs = await _create_benchmark_jobs(spec, catalog, user_id, attribution)
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return benchmark_spec_payload(spec, validation, error=str(exc))
+    except HTTPException as exc:
+        return benchmark_spec_payload(spec, validation, error=str(exc.detail))
+    return benchmark_spec_payload(spec, validation, run_id=run_id, jobs=jobs)
 
 
 async def _exec_submit_benchmark(
@@ -1419,17 +1502,29 @@ async def rerun_job(
 
 
 async def get_job_metrics(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
-    return _domain_payload(await _exec_get_job_metrics({"job_id": job_id}, user_id, scope))
+    result = _domain_payload(await _exec_get_job_metrics({"job_id": job_id}, user_id, scope))
+    return await read_sets.with_job_sources(
+        result, scope, job_id, read_sets.is_spatial_metrics_file
+    )
 
 
 async def get_skill_scores(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
-    return _domain_payload(await _exec_get_skill_scores({"job_id": job_id}, user_id, scope))
+    result = _domain_payload(await _exec_get_skill_scores({"job_id": job_id}, user_id, scope))
+    return await read_sets.with_job_sources(result, scope, job_id, is_skill_score_file)
 
 
 async def get_spatial_summary(
     request: SpatialMetricRequest, user_id: str, scope: BenchmarkScope
 ) -> dict:
-    return _domain_payload(await _exec_get_spatial_summary(request.model_dump(), user_id, scope))
+    result = _domain_payload(await _exec_get_spatial_summary(request.model_dump(), user_id, scope))
+    return await read_sets.with_job_sources(
+        result, scope, request.job_id, _spatial_metrics_files(request.model, request.window)
+    )
+
+
+def _spatial_metrics_files(model: str, window: str) -> read_sets.FileFilter:
+    """The grid file ``find_nc_output_file`` would pick for this model and window."""
+    return read_sets.is_file_named(*skill_files.candidate_names(model, window))
 
 
 async def run_code_sandbox(
@@ -1440,7 +1535,3 @@ async def run_code_sandbox(
 
 async def run_code(request: JobCodeRequest, user_id: str, scope: BenchmarkScope) -> dict:
     return _domain_payload(await _exec_run_code(request.model_dump(), user_id, scope))
-
-
-async def get_current_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
-    return _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))

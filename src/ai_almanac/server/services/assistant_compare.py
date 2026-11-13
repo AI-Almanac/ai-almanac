@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Withheld from every comparison variant, at registration, so there is no schema
 # entry for the model to attempt.
-COMPARE_DENIED_TOOLS = ("submit_benchmark", "submit_blend")
+COMPARE_DENIED_TOOLS = ("submit_benchmark", "submit_blend", "cancel_run")
 
 
 class UnknownRulesetError(KeyError):

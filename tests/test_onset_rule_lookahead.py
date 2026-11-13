@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from ai_almanac.server.services.benchmark_domain import validate_benchmark_spec
 from ai_almanac.server.services.onset_rules import (
     onset_fit_errors,
     onset_rules,
@@ -146,6 +147,28 @@ async def test_submission_refuses_a_definition_the_models_forecasts_cannot_hold(
     assert bool(launched) is accepted
     if not accepted:
         assert f"forecasts run {FIXTURE_FORECAST_DAYS} days" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_validating_a_benchmark_reports_the_misfit_before_anything_is_submitted(
+    client: httpx.AsyncClient, user_id: str
+) -> None:
+    obs_id, model_id = await _sources(client)
+
+    result = await validate_benchmark_spec(
+        {
+            "region_id": "ethiopia",
+            "dataset_id": obs_id,
+            "model_ids": [model_id],
+            "forecast_window_days": 30,
+            "advanced_params": {"onset_rule": "two_stage"},
+        },
+        user_id,
+    )
+
+    validation = result["benchmark_validation"]
+    assert not validation["can_run"]
+    assert any("needs 59" in error for error in validation["errors"]), validation
 
 
 def test_a_definition_that_does_not_fit_the_forecast_is_named_as_the_user_knows_it() -> None:

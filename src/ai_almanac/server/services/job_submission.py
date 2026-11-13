@@ -508,6 +508,22 @@ class BlendCreate(BaseModel):
     model_ids: list[str]
     params: BlendParams
     run_id: str | None = None
+    # None follows the deployment's enable_day_level_blend; see trains_day_level_blend.
+    train_day_level_blend: bool | None = None
+
+
+def day_level_blend_error(requested: bool | None) -> str | None:
+    if requested and not settings.enable_day_level_blend:
+        return (
+            "Day-level onset probabilities are turned off on this deployment; "
+            "leave train_day_level_blend unset."
+        )
+    return None
+
+
+def trains_day_level_blend(requested: bool | None) -> bool:
+    """A blend trains day-level probabilities where the deployment allows, unless it opts out."""
+    return settings.enable_day_level_blend and requested is not False
 
 
 class BlendOut(BaseModel):
@@ -992,6 +1008,8 @@ async def create_blend_for_user(
     """Submit a blend-training job: prepare intermediates and train weights."""
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
+    if day_level_error := day_level_blend_error(body.train_day_level_blend):
+        raise HTTPException(status_code=400, detail=day_level_error)
 
     obs_dir = await _resolve_obs_dir(body.obs_dataset_id, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
@@ -1096,7 +1114,7 @@ async def create_blend_for_user(
         "use_adm3_domain": blend_units.on_sub_districts(country),
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
-        "train_day_level_blend": settings.enable_day_level_blend,
+        "train_day_level_blend": trains_day_level_blend(body.train_day_level_blend),
         "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }

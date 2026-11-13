@@ -68,15 +68,9 @@ export type BlendValidation = {
 	warnings: string[];
 };
 
-export type BlendSubmitResponse = {
-	run_id: string;
-	jobs: Blend[];
-	blend_config: BlendRunSpec;
-	blend_validation: BlendValidation;
-};
-
 export type ChatScope = {
-	kind: 'general' | 'benchmark_setup' | 'benchmark_run_group' | 'blend_setup' | 'job_set';
+	kind:
+		'general' | 'benchmark_setup' | 'benchmark_run_group' | 'blend_setup' | 'job_set' | 'workspace';
 	key: string;
 	title?: string | null;
 	job_ids: string[];
@@ -106,6 +100,8 @@ export type ChatSession = {
  */
 export type GuardrailNotice = {
 	tool_call_id?: string | null;
+	/** Which config the validation described; older notices lack it. */
+	config_kind?: 'benchmark' | 'blend' | null;
 	errors: string[];
 	warnings: string[];
 	/** Stable rule ids behind the messages, for keying UI and telemetry. */
@@ -127,12 +123,19 @@ export type ChatMessage = {
 	tool_calls?: ChatToolCall[];
 	artifacts?: ChatArtifact[];
 	guardrails?: GuardrailNotice[];
+	status?: 'streaming' | 'completed' | 'failed';
+	/** On an assistant turn: the workspace artifacts its tools read. */
+	source_artifacts?: ChatSourceArtifact[];
 	/** Absent on turns saved before blocks were recorded. */
 	blocks?: ChatTurnBlock[];
 };
 
+export type ChatSourceArtifact = { id: string; label: string };
+
 export type ChatArtifact = {
 	id: string;
+	/** The workspace item this figure became, when the chat belongs to a workspace. */
+	workspace_artifact_id?: string | null;
 	kind: 'figure';
 	url: string;
 	label?: string | null;
@@ -149,6 +152,8 @@ export type ChatToolCall = {
 	input: Record<string, unknown>;
 	result?: unknown;
 	artifacts: ChatArtifact[];
+	/** Set in the browser, never sent: the user has yet to approve or decline this call. */
+	awaiting_approval?: boolean;
 };
 
 /** A run in the chat's scope that finished, failed, or was canceled during the conversation. */
@@ -168,7 +173,15 @@ export type ChatJobActivity = {
 export type ChatSessionDetail = ChatSession & {
 	scope: ChatScope;
 	transcript: ChatMessage[];
+	/** The approval the assistant is still waiting on; absent once it is answered. */
+	pending_approval?: ChatApprovalRequest | null;
 };
+
+/** The assistant asking the user to approve a run, as streamed and as reloaded. */
+export type ChatApprovalRequest = Extract<
+	ChatEvent,
+	{ type: 'tool_approval_request' | 'benchmark_approval_request' | 'blend_approval_request' }
+>;
 
 export type ChatEvent =
 	| { type: 'text_delta'; turn_id: string; content: string }
@@ -186,6 +199,7 @@ export type ChatEvent =
 			type: 'guardrail';
 			turn_id: string;
 			tool_call_id: string;
+			config_kind?: 'benchmark' | 'blend' | null;
 			errors: string[];
 			warnings: string[];
 			finding_keys: string[];
@@ -267,36 +281,22 @@ export async function deleteChatSession(id: string): Promise<void> {
 	await request<void>(`/chat/sessions/${id}`, { method: 'DELETE' });
 }
 
-export async function submitChatBenchmark(
+/**
+ * Approve or decline a step the assistant paused on, a run's submission included. The
+ * assistant carries on from there, so its reply streams back like a message. A decline's
+ * `message` tells the assistant why.
+ */
+export function decideChatToolApproval(
 	sessionId: string,
-	approval?: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null }
-): Promise<BenchmarkSubmitResponse> {
-	return request<BenchmarkSubmitResponse>(`/chat/sessions/${sessionId}/benchmark/submit`, {
-		method: 'POST',
-		body: approval
-			? JSON.stringify({
-					approval: {
-						tool_call_id: approval.tool_call_id,
-						approved_config: approval.approved_config ?? null
-					}
-				})
-			: undefined
-	});
+	decision: { tool_call_id: string; approved: boolean; message?: string }
+): AsyncGenerator<ChatEvent> {
+	return chatTurnEvents(`/chat/sessions/${sessionId}/tool-approval`, decision);
 }
 
-export async function denyChatBenchmarkApproval(
-	sessionId: string,
-	approval: { tool_call_id: string; approved_config?: BenchmarkRunSpec | null; message?: string }
-): Promise<void> {
-	return request<void>(`/chat/sessions/${sessionId}/benchmark/approval`, {
-		method: 'POST',
-		body: JSON.stringify({
-			approval: {
-				tool_call_id: approval.tool_call_id,
-				approved_config: approval.approved_config ?? null
-			},
-			message: approval.message ?? 'The user declined to run the benchmark.'
-		})
+/** Submit the session's benchmark draft from the setup form's own control. */
+export async function submitChatBenchmark(sessionId: string): Promise<BenchmarkSubmitResponse> {
+	return request<BenchmarkSubmitResponse>(`/chat/sessions/${sessionId}/benchmark/submit`, {
+		method: 'POST'
 	});
 }
 
@@ -313,68 +313,27 @@ export async function updateChatBenchmarkConfig(
 	);
 }
 
-export async function submitChatBlend(
-	sessionId: string,
-	approval?: { tool_call_id: string; approved_config?: BlendRunSpec | null }
-): Promise<BlendSubmitResponse> {
-	return request<BlendSubmitResponse>(`/chat/sessions/${sessionId}/blend/submit`, {
-		method: 'POST',
-		body: approval
-			? JSON.stringify({
-					approval: {
-						tool_call_id: approval.tool_call_id,
-						approved_config: approval.approved_config ?? null
-					}
-				})
-			: undefined
-	});
-}
-
-export async function denyChatBlendApproval(
-	sessionId: string,
-	approval: { tool_call_id: string; approved_config?: BlendRunSpec | null; message?: string }
-): Promise<void> {
-	return request<void>(`/chat/sessions/${sessionId}/blend/approval`, {
-		method: 'POST',
-		body: JSON.stringify({
-			approval: {
-				tool_call_id: approval.tool_call_id,
-				approved_config: approval.approved_config ?? null
-			},
-			message: approval.message ?? 'The user declined to train the blend.'
-		})
-	});
-}
-
-export async function updateChatBlendConfig(
-	sessionId: string,
-	patch: Partial<BlendRunSpec>
-): Promise<{ blend_config: BlendRunSpec; blend_validation: BlendValidation }> {
-	return request<{ blend_config: BlendRunSpec; blend_validation: BlendValidation }>(
-		`/chat/sessions/${sessionId}/blend/config`,
-		{
-			method: 'PATCH',
-			body: JSON.stringify(patch)
-		}
-	);
-}
-
 /**
  * Send a message and return an async generator of ChatEvents parsed from SSE.
  */
-export async function* sendChatMessage(
+export function sendChatMessage(
 	sessionId: string,
 	content: string,
 	scope?: ChatScope
 ): AsyncGenerator<ChatEvent> {
-	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
+	return chatTurnEvents(`/chat/sessions/${sessionId}/message`, { content, scope });
+}
+
+/** POST `body` and yield the assistant turn it starts, up to its terminal event. */
+async function* chatTurnEvents(path: string, body: unknown): AsyncGenerator<ChatEvent> {
+	const res = await fetch(`${BASE_URL}${path}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', ...authHeaders() },
-		body: JSON.stringify({ content, scope })
+		body: JSON.stringify(body)
 	});
 	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Chat message failed (${res.status}): ${body}`);
+		const text = await res.text();
+		throw new Error(`Chat request failed (${res.status}): ${text}`);
 	}
 
 	for await (const event of sseEvents<ChatEvent>(res)) {

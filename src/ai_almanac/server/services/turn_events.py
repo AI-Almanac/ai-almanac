@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from pydantic import TypeAdapter
+
 from .chat_state import (
+    ApprovalRequest,
     ChatArtifact,
     ChatToolCall,
     ChatTurn,
@@ -20,6 +23,7 @@ from .chat_state import (
 )
 
 _PARAGRAPH_BREAK = "\n\n"
+_APPROVAL_REQUEST = TypeAdapter(ApprovalRequest)
 
 
 def _strings(value: object) -> list[str]:
@@ -104,8 +108,13 @@ def _on_guardrail(turn: ChatTurn, data: dict) -> None:
             errors=_strings(data.get("errors")),
             warnings=_strings(data.get("warnings")),
             finding_keys=_strings(data.get("finding_keys")),
+            config_kind=data.get("config_kind"),
         )
     )
+
+
+def _on_approval_request(turn: ChatTurn, data: dict) -> None:
+    turn.approval_requests.append(_APPROVAL_REQUEST.validate_python(data))
 
 
 _HANDLERS: dict[str, Callable[[ChatTurn, dict], None]] = {
@@ -115,6 +124,9 @@ _HANDLERS: dict[str, Callable[[ChatTurn, dict], None]] = {
     "tool_result": _on_tool_result,
     "artifact": _on_artifact,
     "guardrail": _on_guardrail,
+    "benchmark_approval_request": _on_approval_request,
+    "blend_approval_request": _on_approval_request,
+    "tool_approval_request": _on_approval_request,
 }
 
 

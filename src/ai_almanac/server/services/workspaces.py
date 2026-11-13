@@ -8,6 +8,8 @@ a new step; deleting items never touches the ledger (``services/ledger.py``).
 
 from __future__ import annotations
 
+import contextlib
+import json
 import re
 import uuid
 from collections import Counter
@@ -715,3 +717,44 @@ def activity_changes(previous: Activity, current: Activity) -> ActivityChanges:
         jobs=previous.job_statuses != current.job_statuses,
         new_artifacts=set(current.artifact_created) - set(previous.artifact_created),
     )
+
+
+# --- session promotion --------------------------------------------------------
+
+
+async def promote_session(session_id: str, user_id: str) -> dict:
+    """Create a workspace from an existing session, linking its jobs and re-scoping it."""
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    sa.text(
+                        "SELECT id, title, scope FROM chat_sessions WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if row is None:
+        raise WorkspaceError("Session not found")
+    scope = tables.json_col(row["scope"], {})
+    if scope.get("kind") == WORKSPACE_KIND:
+        return await require_workspace(scope["key"], user_id)
+    workspace = await create_workspace(user_id, row["title"] or scope.get("title") or "Workspace")
+    for job_id in scope.get("job_ids") or []:
+        with contextlib.suppress(UnreadableJob):
+            await link_job(workspace["id"], job_id)
+    new_scope = {
+        "kind": WORKSPACE_KIND,
+        "key": workspace["id"],
+        "title": workspace["name"],
+        "job_ids": [],
+    }
+    async with get_db() as conn:
+        await conn.execute(
+            sa.text("UPDATE chat_sessions SET scope = :scope, updated_at = :now WHERE id = :id"),
+            {"scope": json.dumps(new_scope), "now": _now(), "id": session_id},
+        )
+    return workspace

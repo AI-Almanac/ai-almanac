@@ -536,25 +536,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit Session Benchmark */
+        /**
+         * Submit Session Benchmark
+         * @description Submit the session's draft as the user, from the setup form's own control.
+         */
         post: operations["submit_session_benchmark_chat_sessions__session_id__benchmark_submit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/chat/sessions/{session_id}/benchmark/approval": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Deny Session Benchmark Approval */
-        post: operations["deny_session_benchmark_approval_chat_sessions__session_id__benchmark_approval_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -587,7 +573,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit Session Blend */
+        /**
+         * Submit Session Blend
+         * @description Submit the session's draft as the user, from the setup form's own control.
+         */
         post: operations["submit_session_blend_chat_sessions__session_id__blend_submit_post"];
         delete?: never;
         options?: never;
@@ -595,7 +584,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/chat/sessions/{session_id}/blend/approval": {
+    "/chat/sessions/{session_id}/tool-approval": {
         parameters: {
             query?: never;
             header?: never;
@@ -604,8 +593,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Deny Session Blend Approval */
-        post: operations["deny_session_blend_approval_chat_sessions__session_id__blend_approval_post"];
+        /**
+         * Decide Tool Approval
+         * @description Approve or decline a step the assistant paused for, a run's submission included;
+         *     streams the rest of the turn as SSE, like a message.
+         */
+        post: operations["decide_tool_approval_chat_sessions__session_id__tool_approval_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2055,6 +2048,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Session */
+        post: operations["promote_session_workspaces_promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}": {
         parameters: {
             query?: never;
@@ -2333,14 +2343,22 @@ export interface components {
         };
         /** BaseModel */
         BaseModel: Record<string, never>;
-        /** BenchmarkApprovalIn */
-        BenchmarkApprovalIn: {
-            approval: components["schemas"]["SubmitBenchmarkApproval"];
+        /**
+         * BenchmarkApprovalRequest
+         * @description The assistant asking the user to approve a benchmark run, as it is streamed.
+         */
+        BenchmarkApprovalRequest: {
             /**
-             * Message
-             * @default The user declined to run the benchmark.
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            message: string;
+            type: "benchmark_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            config: components["schemas"]["BenchmarkRunSpec"];
+            validation?: components["schemas"]["BenchmarkValidation"] | null;
         };
         /** BenchmarkConfigOut */
         BenchmarkConfigOut: {
@@ -2434,10 +2452,6 @@ export interface components {
             /** Window */
             window: string;
         };
-        /** BenchmarkSubmitIn */
-        BenchmarkSubmitIn: {
-            approval?: components["schemas"]["SubmitBenchmarkApproval"] | null;
-        };
         /** BenchmarkSubmitOut */
         BenchmarkSubmitOut: {
             /** Run Id */
@@ -2471,14 +2485,22 @@ export interface components {
             /** Finding Keys */
             finding_keys?: string[];
         };
-        /** BlendApprovalIn */
-        BlendApprovalIn: {
-            approval: components["schemas"]["SubmitBlendApproval"];
+        /**
+         * BlendApprovalRequest
+         * @description The assistant asking the user to approve training a blend, as it is streamed.
+         */
+        BlendApprovalRequest: {
             /**
-             * Message
-             * @default The user declined to train the blend.
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            message: string;
+            type: "blend_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            config: components["schemas"]["BlendRunSpec"];
+            validation?: components["schemas"]["BlendValidation"] | null;
         };
         /**
          * BlendAreaMetric
@@ -2616,6 +2638,8 @@ export interface components {
             params: components["schemas"]["BlendParams"];
             /** Run Id */
             run_id?: string | null;
+            /** Train Day Level Blend */
+            train_day_level_blend?: boolean | null;
         };
         /** BlendOut */
         BlendOut: {
@@ -2777,6 +2801,8 @@ export interface components {
              * @default
              */
             ref_onset_month_day: string;
+            /** Train Day Level Blend */
+            train_day_level_blend?: boolean | null;
             /**
              * Status
              * @default collecting
@@ -2809,10 +2835,6 @@ export interface components {
             brier_skill: number;
             /** Holdout Years */
             holdout_years: string | null;
-        };
-        /** BlendSubmitIn */
-        BlendSubmitIn: {
-            approval?: components["schemas"]["SubmitBlendApproval"] | null;
         };
         /** BlendSubmitOut */
         BlendSubmitOut: {
@@ -2982,6 +3004,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Workspace Artifact Id */
+            workspace_artifact_id?: string | null;
         };
         /** ChatJobActivity */
         ChatJobActivity: {
@@ -3053,6 +3077,11 @@ export interface components {
              */
             role: "assistant" | "user";
             /**
+             * Trigger
+             * @default user
+             */
+            trigger: string;
+            /**
              * Content
              * @default
              */
@@ -3076,8 +3105,12 @@ export interface components {
             artifacts?: components["schemas"]["ChatArtifact"][];
             /** Guardrails */
             guardrails?: components["schemas"]["GuardrailNotice"][];
+            /** Source Artifacts */
+            source_artifacts?: components["schemas"]["SourceArtifact"][];
             /** Blocks */
             blocks?: (components["schemas"]["TextBlock"] | components["schemas"]["ThinkingBlock"] | components["schemas"]["ToolBlock"])[];
+            /** Approval Requests */
+            approval_requests?: (components["schemas"]["BenchmarkApprovalRequest"] | components["schemas"]["BlendApprovalRequest"] | components["schemas"]["ToolApprovalRequest"])[];
         };
         /** CompareRequest */
         CompareRequest: {
@@ -3816,6 +3849,8 @@ export interface components {
         GuardrailNotice: {
             /** Tool Call Id */
             tool_call_id?: string | null;
+            /** Config Kind */
+            config_kind?: ("benchmark" | "blend") | null;
             /** Errors */
             errors?: string[];
             /** Warnings */
@@ -4490,6 +4525,11 @@ export interface components {
             /** Api Key */
             api_key?: string | null;
         };
+        /** PromoteIn */
+        PromoteIn: {
+            /** Session Id */
+            session_id: string;
+        };
         /**
          * PromptSection
          * @description One toggleable block of the system prompt.
@@ -5118,6 +5158,8 @@ export interface components {
             ruleset_id?: string | null;
             /** Transcript */
             transcript: components["schemas"]["ChatTurn"][];
+            /** Pending Approval */
+            pending_approval?: (components["schemas"]["BenchmarkApprovalRequest"] | components["schemas"]["BlendApprovalRequest"] | components["schemas"]["ToolApprovalRequest"]) | null;
         };
         /** SessionOut */
         SessionOut: {
@@ -5245,6 +5287,16 @@ export interface components {
             /** Brier Score Climatology */
             brier_score_climatology: number | null;
         };
+        /**
+         * SourceArtifact
+         * @description A workspace artifact a turn's tools read, as the workspace labels it.
+         */
+        SourceArtifact: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
         /** Span */
         Span: {
             /** Start */
@@ -5305,18 +5357,6 @@ export interface components {
              * @description Links to style related resources. Possible link 'rel' values are: 'style' for a URL pointing to the style description, 'styleSpec' for a URL pointing to the specification or standard used to define the style.
              */
             links?: components["schemas"]["Link"][] | null;
-        };
-        /** SubmitBenchmarkApproval */
-        SubmitBenchmarkApproval: {
-            /** Tool Call Id */
-            tool_call_id: string;
-            approved_config?: components["schemas"]["BenchmarkRunSpec"] | null;
-        };
-        /** SubmitBlendApproval */
-        SubmitBlendApproval: {
-            /** Tool Call Id */
-            tool_call_id: string;
-            approved_config?: components["schemas"]["BlendRunSpec"] | null;
         };
         /**
          * SuggestedYears
@@ -5584,6 +5624,40 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /** ToolApprovalIn */
+        ToolApprovalIn: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Approved */
+            approved: boolean;
+            /**
+             * Message
+             * @default The user declined this step.
+             */
+            message: string;
+        };
+        /**
+         * ToolApprovalRequest
+         * @description The assistant asking the user to approve a workspace step, as it is streamed.
+         *
+         *     ``metadata`` carries the step's ``params`` and the ``display`` facts its card shows.
+         */
+        ToolApprovalRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "tool_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            tool_call: components["schemas"]["ChatToolCall"];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** ToolBlock */
         ToolBlock: {
             /**
@@ -6838,11 +6912,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkSubmitIn"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -6852,39 +6922,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["BenchmarkSubmitOut"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deny_session_benchmark_approval_chat_sessions__session_id__benchmark_approval_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkApprovalIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -6941,11 +6978,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BlendSubmitIn"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -6967,7 +7000,7 @@ export interface operations {
             };
         };
     };
-    deny_session_blend_approval_chat_sessions__session_id__blend_approval_post: {
+    decide_tool_approval_chat_sessions__session_id__tool_approval_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -6978,16 +7011,18 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BlendApprovalIn"];
+                "application/json": components["schemas"]["ToolApprovalIn"];
             };
         };
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {
@@ -10208,6 +10243,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["WorkspaceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_session_workspaces_promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteIn"];
             };
         };
         responses: {
