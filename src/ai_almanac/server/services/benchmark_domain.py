@@ -18,7 +18,9 @@ from ai_almanac.server.services.forecast_models import training_summary
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
+from .onset_rules import DEFAULT_ONSET_RULE, onset_fit_errors, onset_rule_errors
 from .registry import CatalogSnapshot, load_catalog, load_model_registry
+from .romp import DEFAULT_MAX_FORECAST_DAY
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,8 @@ SHARED_ROMP_PARAM_KEYS = {
     "thresh_file",
     "ref_model",
     "ref_model_dir",
+    "onset_rule",
+    "onset_rule_params",
 }
 
 PER_MODEL_ROMP_PARAM_KEYS = {
@@ -286,6 +290,31 @@ def _model_windows(
     return windows
 
 
+def _onset_rule_errors(params: dict[str, Any]) -> list[str]:
+    rule, rule_params = params.get("onset_rule"), params.get("onset_rule_params")
+    if not rule and not rule_params:
+        return []
+    if rule_params is not None and not isinstance(rule_params, dict):
+        return ["onset_rule_params must be an object"]
+    return onset_rule_errors(rule or DEFAULT_ONSET_RULE, rule_params or {})
+
+
+def _onset_fit_errors(spec: BenchmarkRunSpec, models: list[dict]) -> list[str]:
+    """Models whose forecasts are too short for the onset definition, with the settings
+    each model's job would get."""
+    forecast_days = spec.forecast_window_days or DEFAULT_MAX_FORECAST_DAY
+    return [
+        error
+        for model in models
+        for error in onset_fit_errors(
+            _clamp_model_params(model, spec),
+            forecast_days=forecast_days,
+            forecast_steps=model.get("forecast_steps"),
+            model_name=model.get("display_name") or model["id"],
+        )
+    ]
+
+
 def _missing_year_warnings(
     windows: list[guardrails.ModelWindow], model_map: dict[str, dict]
 ) -> list[str]:
@@ -324,6 +353,12 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
     if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
         errors.append(
             "forecast_window_days must be at least 30 because the default verification window extends to day 30"
+        )
+    onset_errors = _onset_rule_errors(spec.advanced_params)
+    errors.extend(onset_errors)
+    if not onset_errors:
+        errors.extend(
+            _onset_fit_errors(spec, [model_map[m] for m in spec.model_ids if m in model_map])
         )
     per_model_params = spec.advanced_params.get("per_model_params")
     if isinstance(per_model_params, dict):

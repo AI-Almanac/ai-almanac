@@ -4433,6 +4433,12 @@ export interface components {
             ref_model_dir?: string | null;
             /** Thresh File */
             thresh_file?: string | null;
+            /** Onset Rule */
+            onset_rule?: string | null;
+            /** Onset Rule Params */
+            onset_rule_params?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RulesetDetail */
         RulesetDetail: {

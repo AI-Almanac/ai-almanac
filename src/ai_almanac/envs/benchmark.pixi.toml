@@ -33,4 +33,6 @@ seaborn = "*"
 scipy = "*"
 
 [pypi-dependencies]
-momp = { git = "https://github.com/AI-Almanac/ROMP.git", rev = "7da9e3904ab7728e6ef0b2d5fd4722e25642ee2b" }
+# ROMP main, pinned to the same commit as the Modal image in modal/app.py and the
+# analysis env (analysis.pixi.toml); bump all three together.
+momp = { git = "https://github.com/AI-Almanac/ROMP.git", rev = "7271f277b59077c17f66b5e93bed8841b1e650bc" }

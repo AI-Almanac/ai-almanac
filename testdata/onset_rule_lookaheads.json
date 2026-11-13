@@ -1,0 +1,249 @@
+{
+  "legacy": [
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 3,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 2
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 1,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 0
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 15,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 14
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 30,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 3,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 2
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 3,
+        "dry_spell": 15,
+        "dry_extent": 0
+      },
+      "lookahead": 2
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 3,
+        "dry_spell": 30,
+        "dry_extent": 0
+      },
+      "lookahead": 2
+    },
+    {
+      "params": {
+        "wet_init": 1.0,
+        "wet_spell": 3,
+        "dry_spell": 0,
+        "dry_extent": 0
+      },
+      "lookahead": 2
+    }
+  ],
+  "moron_robertson": [
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 1,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 15,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 30,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 0,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 4
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 45,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 44
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 90,
+        "dry_window": 10,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 89
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 1,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "wet_day_mm": 1.0,
+        "wet_days": 5,
+        "threshold": null,
+        "follow_days": 30,
+        "dry_window": 30,
+        "dry_min_mm": 5.0
+      },
+      "lookahead": 29
+    }
+  ],
+  "two_stage": [
+    {
+      "params": {
+        "stage1_days": 10,
+        "stage1_mm": 10.0,
+        "stage2_days": 20,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 29
+    },
+    {
+      "params": {
+        "stage1_days": 1,
+        "stage1_mm": 10.0,
+        "stage2_days": 20,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 20
+    },
+    {
+      "params": {
+        "stage1_days": 30,
+        "stage1_mm": 10.0,
+        "stage2_days": 20,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 49
+    },
+    {
+      "params": {
+        "stage1_days": 60,
+        "stage1_mm": 10.0,
+        "stage2_days": 20,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 79
+    },
+    {
+      "params": {
+        "stage1_days": 10,
+        "stage1_mm": 10.0,
+        "stage2_days": 1,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 10
+    },
+    {
+      "params": {
+        "stage1_days": 10,
+        "stage1_mm": 10.0,
+        "stage2_days": 45,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 54
+    },
+    {
+      "params": {
+        "stage1_days": 10,
+        "stage1_mm": 10.0,
+        "stage2_days": 90,
+        "stage2_mm": 20.0,
+        "inclusive": true
+      },
+      "lookahead": 99
+    }
+  ]
+}
