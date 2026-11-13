@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount } from 'svelte';
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import ChatCompare from '$lib/components/ChatCompare.svelte';
@@ -31,7 +32,7 @@
 				arms[1].ruleset_id = (list.find((r) => r.id !== active?.id) ?? active)?.id ?? '';
 			})
 			.catch((e) => {
-				error = (e as Error).message;
+				error = failureMessage(e);
 			});
 	});
 

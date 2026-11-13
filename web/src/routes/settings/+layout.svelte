@@ -9,7 +9,9 @@
 
 	// One fetch for the whole settings area: the nav needs the group list and
 	// each section page edits one of those groups.
-	const settings = new ConfigSettingsState();
+	// A saved feature setting can change what the account may use, which the nav
+	// and the guarded pages read from the account.
+	const settings = new ConfigSettingsState(() => account.refresh());
 	setContext('settings', settings);
 
 	// Only admins may read the platform config; a non-admin reaches this area for

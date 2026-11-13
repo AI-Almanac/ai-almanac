@@ -55,7 +55,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
 
-from . import chat_tools, local_llm, rulesets
+from . import chat_tools, ledger, local_llm, rulesets
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .boundaries import AreaLevel
@@ -264,6 +264,11 @@ async def trim_chat_history(messages: list[ModelMessage]) -> list[ModelMessage]:
     return trimmed
 
 
+def _approved_by_user(deps: ChatDeps) -> ledger.Attribution:
+    """The assistant acting on a step the user approved."""
+    return ledger.Attribution.by_assistant(deps.user_id, deps.session_id, approved=True, turn=None)
+
+
 def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
     toolset = FunctionToolset[ChatDeps](id="benchmark")
 
@@ -379,7 +384,7 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
                 }
 
         return await chat_tools.submit_benchmark_for_session(
-            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id, _approved_by_user(ctx.deps)
         )
 
     return toolset
@@ -453,7 +458,7 @@ def _blend_toolset() -> FunctionToolset[ChatDeps]:
                 }
 
         return await chat_tools.submit_blend_for_session(
-            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id
+            ctx.deps.user_id, ctx.deps.scope, ctx.deps.session_id, _approved_by_user(ctx.deps)
         )
 
     @toolset.tool
@@ -508,7 +513,11 @@ def _job_toolset() -> FunctionToolset[ChatDeps]:
     @toolset.tool
     async def rerun_job(ctx: RunContext[ChatDeps], request: chat_tools.RerunJobRequest) -> dict:
         """Clone and rerun an existing job, optionally overriding run options with validated values."""
-        return await chat_tools.rerun_job(request, ctx.deps.user_id, ctx.deps.scope)
+        deps = ctx.deps
+        unapproved = ledger.Attribution.by_assistant(
+            deps.user_id, deps.session_id, approved=False, turn=None
+        )
+        return await chat_tools.rerun_job(request, deps.user_id, deps.scope, unapproved)
 
     return toolset
 

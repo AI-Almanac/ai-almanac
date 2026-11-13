@@ -360,6 +360,15 @@ async def require_assistant_comparisons(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
+async def require_workspaces(
+    user: Annotated[AuthenticatedUser, Depends(require_user)],
+) -> None:
+    """Gate workspaces on their audience setting, reads included: outside the
+    audience the whole surface answers 404, as if it were not there."""
+    if not settings.workspaces_allowed(user.is_admin):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_user)]
 OptionalCurrentUser = Annotated[AuthenticatedUser | None, Depends(optional_user)]
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]

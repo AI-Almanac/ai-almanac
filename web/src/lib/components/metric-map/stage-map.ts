@@ -2,7 +2,7 @@
  * How the skill map opens on a workspace's benchmark stage, and what an exported
  * map says about the run: decided here so the map itself stays a general viewer.
  */
-import { isFocusUnits, type Job, type JobMetrics } from '$lib/api';
+import { isFocusUnits, type Job, type JobMetrics, type WorkspaceJob } from '$lib/api';
 import type { AreaExportContext } from './exportTitle';
 import type { MapInitialView } from './initialView';
 import { comparisonWindows, headlineWindow } from '$lib/metric-comparison';
@@ -34,6 +34,12 @@ export function bestModelJobId(metrics: JobMetrics[], window: string | undefined
 	);
 	if (scored.length === 0) return null;
 	return scored.reduce((best, next) => (next.error < best.error ? next : best)).jobId;
+}
+
+/** The job of the model the server's headline names as the run's best; null until it is read. */
+export function headlineModelJobId(jobs: Pick<WorkspaceJob, 'headline'>[]): string | null {
+	const headline = jobs.map((job) => job.headline).find((each) => each?.kind === 'benchmark');
+	return headline?.kind === 'benchmark' ? headline.job_id : null;
 }
 
 /**
@@ -81,6 +87,14 @@ export function shouldRepickView(
 ): boolean {
 	if (shownFor === null) return true;
 	return shownFor !== finishedModels && !changedByHand;
+}
+
+/** The areas a blend or forecast was limited to, for its exported map; null for the whole region. */
+export function areaExport(
+	job: Pick<WorkspaceJob, 'area_of_interest'> | undefined
+): AreaExportContext {
+	const areas = job?.area_of_interest;
+	return { area: areas?.length ? areaWords(areas, null) : null };
 }
 
 /** The run's areas by name, or how many when the list would crowd a title; else its region. */

@@ -34,6 +34,7 @@ async def me(user: OptionalCurrentUser) -> dict:
                 # Real flag, not False: the /forecasts page redirects away when
                 # forecasting is off, and anonymous visitors may view examples.
                 "can_use_forecasting": settings.enable_forecasting,
+                "can_use_workspaces": False,
                 "can_run_code": False,
                 "max_active_jobs": 0,
                 "max_concurrent_llm_requests": 0,
@@ -55,6 +56,7 @@ async def me(user: OptionalCurrentUser) -> dict:
             "can_browse_fs": settings.enable_fs_browser and user.is_admin,
             "can_manage_data": settings.data_management_allowed(user.is_admin),
             "can_use_forecasting": settings.enable_forecasting,
+            "can_use_workspaces": settings.workspaces_allowed(user.is_admin),
             "can_run_code": settings.enable_run_code,
             "max_active_jobs": settings.max_active_jobs_per_user,
             "max_concurrent_llm_requests": settings.max_concurrent_llm_requests_per_user,

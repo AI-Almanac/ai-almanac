@@ -19,6 +19,7 @@ from ai_almanac.server.services import (
 )
 from ai_almanac.server.services.forecast_pipeline import SeasonPlan, season_output_name
 from ai_almanac.server.services.job_submission import ForecastCreate
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.services.seasons import SeasonWindow
 from ai_almanac.server.tables import jobs
 from tests.helpers.forecasts import FakeRunner, live_model_archive
@@ -76,6 +77,7 @@ async def test_a_raw_forecast_plans_its_models_season_and_records_no_blend(
             season=SeasonWindow(name="Kiremt", last_issue_date="07-15"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
 
     config = await _saved_config(forecast.id)

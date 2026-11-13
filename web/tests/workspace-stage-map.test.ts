@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Job } from '../src/lib/api';
+import type { Job, WorkspaceJob } from '../src/lib/api';
 import { COMMON_BASEMAPS, mapCredit } from '../src/lib/basemaps';
 import { scoredBounds } from '../src/lib/components/metric-map/initialView';
 import {
+	areaExport,
 	areaWords,
 	bestModelJobId,
+	headlineModelJobId,
 	shouldRepickView,
 	stageMapView,
 	yearsWords
@@ -46,12 +48,15 @@ describe('the model the stage map opens on', () => {
 		metricsFor('job-aifs', 'aifs', { '16-30': 9.0, '1-15': 6.24 }),
 		metricsFor('job-fuxi', 'fuxi', { '16-30': 9.5, '1-15': 6.21 })
 	];
+	const headline = { kind: 'benchmark', job_id: 'job-aifs' } as WorkspaceJob['headline'];
 
 	it('is the model the run’s headline names', () => {
+		expect(headlineModelJobId([{ headline: null }, { headline }])).toBe('job-aifs');
 		expect(stageMapView(jobs, metrics, undefined, 'job-aifs').modelJobId).toBe('job-aifs');
 	});
 
 	it('is worked out by the headline’s rule until the headline is read', () => {
+		expect(headlineModelJobId([{ headline: null }])).toBeNull();
 		expect(stageMapView(jobs, metrics).modelJobId).toBe('job-fuxi');
 	});
 
@@ -139,6 +144,14 @@ describe('the area and years an exported map names', () => {
 		expect(areaWords(['A', 'B', 'C', 'D', 'E'], 'Ethiopia')).toBe('5 areas in Ethiopia');
 		expect(areaWords(null, 'Ethiopia')).toBe('Ethiopia');
 		expect(areaWords([], null)).toBe('Whole region');
+	});
+
+	it('names the areas a blend or forecast was limited to, and nothing for a whole region', () => {
+		expect(areaExport({ area_of_interest: ['West Gojjam', 'Awi'] })).toEqual({
+			area: 'West Gojjam, Awi'
+		});
+		expect(areaExport({ area_of_interest: null })).toEqual({ area: null });
+		expect(areaExport(undefined)).toEqual({ area: null });
 	});
 
 	it('gives the years scored', () => {

@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 from ai_almanac.server.services import blend_domain, rulesets
 from ai_almanac.server.services.chat_state import ChatScope
+from ai_almanac.server.services.ledger import Attribution
 
 
 def _blinded() -> rulesets.Ruleset:
@@ -183,7 +184,9 @@ async def test_a_clean_split_still_submits(client, user_id: str) -> None:
     )
     before = await _blend_job_count(user_id)
 
-    payload = await blend_domain.submit_blend_for_session(user_id, scope, session_id)
+    payload = await blend_domain.submit_blend_for_session(
+        user_id, scope, session_id, Attribution.by_user(user_id)
+    )
 
     assert not payload.get("error"), payload
     assert await _blend_job_count(user_id) == before + 1

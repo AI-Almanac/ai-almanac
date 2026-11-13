@@ -67,6 +67,10 @@ class AccountState {
 		return this.account?.capabilities.can_use_forecasting ?? false;
 	}
 
+	get canUseWorkspaces(): boolean {
+		return this.account?.capabilities.can_use_workspaces ?? false;
+	}
+
 	get label(): string {
 		const a = this.account;
 		if (!a) return '';
@@ -90,6 +94,20 @@ class AccountState {
 	async reload(): Promise<void> {
 		this.loaded = false;
 		await this.load();
+	}
+
+	/**
+	 * Re-read what the account can do, e.g. after an admin changes a feature
+	 * setting. Unlike `reload()` the account stays loaded meanwhile, so guarded
+	 * pages stay up, and a failed read keeps what was known rather than turning
+	 * the admin away from the page they are on.
+	 */
+	async refresh(): Promise<void> {
+		try {
+			this.account = await getAccount();
+		} catch {
+			return;
+		}
 	}
 }
 

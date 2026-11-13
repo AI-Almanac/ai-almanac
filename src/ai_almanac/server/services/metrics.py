@@ -1,16 +1,24 @@
 """Spatial metrics aggregation from ROMP and Earth2Studio output NetCDF files.
 
-All functions here are synchronous and intended to be called via
-asyncio.to_thread() from the async route handlers in routers/jobs.py.
+The aggregation functions are synchronous and run via asyncio.to_thread(); the async
+shell at the bottom keeps a job's whole-grid metrics cached on its row.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from functools import lru_cache
 
+import sqlalchemy as sa
 from pydantic import BaseModel
 
+from ai_almanac.server import tables
+from ai_almanac.server.db import get_db
+
 from .storage import StorageBackend
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Response schemas
@@ -353,3 +361,38 @@ def compute_job_cell(
         metrics=metrics,
         mae_series=mae_series,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cached whole-grid metrics (async shell)
+# ---------------------------------------------------------------------------
+
+
+def cached_job_metrics(value: object) -> JobMetrics | None:
+    """A job row's ``metrics_cache`` as metrics; None when unset or unreadable."""
+    if not value:
+        return None
+    try:
+        if isinstance(value, (str, bytes, bytearray)):
+            return JobMetrics.model_validate_json(value)
+        return JobMetrics.model_validate(value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring invalid persisted metrics cache")
+        return None
+
+
+async def job_metrics(job_id: str, cache: object = None) -> JobMetrics:
+    """A finished job's whole-grid metrics: ``cache`` (its row's ``metrics_cache``) when
+    it holds them, else computed now and cached so the next read is free."""
+    from .storage import get_storage
+
+    if cached := cached_job_metrics(cache):
+        return cached
+    computed = await asyncio.to_thread(compute_job_metrics, job_id, get_storage())
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(tables.jobs)
+            .where(tables.jobs.c.id == job_id)
+            .values(metrics_cache=computed.model_dump(mode="json"))
+        )
+    return computed

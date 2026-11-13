@@ -9,6 +9,7 @@ import sqlalchemy as sa
 from ai_almanac.server.services import job_submission
 from ai_almanac.server.services.execution import RunnerHandle
 from ai_almanac.server.services.job_submission import BlendCreate, BlendParams
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.tables import jobs
 from tests.helpers.records import link_forecast_model, seed_source
 
@@ -43,12 +44,14 @@ async def forecast_a_linked_blend(user_id: str, monkeypatch, today: date) -> tup
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
     forecast = await job_submission.create_forecast_for_user(
         job_submission.ForecastCreate(blend_id=blend.id),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         await conn.execute(

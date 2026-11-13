@@ -68,6 +68,7 @@ from ..services.chat_turns import (
     validate_scope,
     with_interrupted_turns,
 )
+from ..services.ledger import Attribution
 from ..services.llm import llm_is_configured
 from ..services.llm_profiles import chat_available_for_user
 from ..services.rulesets import selectable_ruleset
@@ -311,6 +312,7 @@ async def create_session(body: SessionCreate, user: CurrentUser):
     await require_chat_available(user.id)
     if body.ruleset_id is not None:
         await _require_selectable_ruleset(body.ruleset_id, for_admin=user.is_admin)
+    await validate_scope(body.scope, user)
 
     session_id = str(uuid.uuid4())
     now = _now()
@@ -481,7 +483,9 @@ async def submit_session_benchmark(
 
     row = await get_session_provider_scope(session_id, user.id)
     scope = ChatScope.model_validate(json_dict(row["scope"]))
-    payload = await submit_benchmark_for_session(user.id, scope, session_id)
+    payload = await submit_benchmark_for_session(
+        user.id, scope, session_id, Attribution.by_user(user.id)
+    )
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
     if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):
@@ -561,7 +565,9 @@ async def submit_session_blend(
 
     row = await get_session_provider_scope(session_id, user.id)
     scope = ChatScope.model_validate(json_dict(row["scope"]))
-    payload = await submit_blend_for_session(user.id, scope, session_id)
+    payload = await submit_blend_for_session(
+        user.id, scope, session_id, Attribution.by_user(user.id)
+    )
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
     if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):

@@ -21,6 +21,7 @@ from ai_almanac.server.services.job_submission import (
     blend_row_to_out,
     create_blend_for_user,
 )
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.tables import jobs
 
 router = APIRouter(prefix="/blends", tags=["blends"])
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/blends", tags=["blends"])
 
 @router.post("", response_model=BlendOut, status_code=status.HTTP_201_CREATED)
 async def create_blend(body: BlendCreate, user: CurrentUser):
-    return await create_blend_for_user(body, user.id)
+    return await create_blend_for_user(body, user.id, attribution=Attribution.by_user(user.id))
 
 
 @router.get("", response_model=list[BlendOut])
