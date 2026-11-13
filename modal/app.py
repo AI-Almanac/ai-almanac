@@ -19,11 +19,14 @@ For GCS-free dev deployment, set:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -221,6 +224,7 @@ benchmark_image = (
     .add_local_file(E2S_METRICS_RUNNER, "/almanac/e2s_metrics_runner.py")
     .add_local_file(FOCUS_AREA_MODULE, "/almanac/focus_area.py")
     .add_local_file(ROMP_SETTINGS_MODULE, "/almanac/almanac_romp.py")
+    .add_local_python_source("ai_almanac_tools")
 )
 
 
@@ -513,47 +517,6 @@ def _fetch_e2s_obs(dataset_config: dict, romp_params: dict, local_obs: Path) -> 
     _write_romp_daily_obs_files(by_year, obs_var, local_obs)
 
 
-def _coord_slice(values, bounds: list[float] | tuple[float, float]):
-    low, high = min(bounds), max(bounds)
-    if len(values) >= 2 and float(values[0]) > float(values[-1]):
-        return slice(high, low)
-    return slice(low, high)
-
-
-def _select_lat_lon_bounds(da, lat_bounds, lon_bounds):
-    selectors = {}
-    if lat_bounds:
-        selectors["lat"] = _coord_slice(da["lat"].values, lat_bounds)
-    if lon_bounds:
-        selectors["lon"] = _coord_slice(da["lon"].values, lon_bounds)
-    if not selectors:
-        return da
-    return da.sel(selectors)
-
-
-def _era5_arco_variable(ds, configured_name: str) -> str:
-    aliases = {
-        "tp": ["tp", "total_precipitation"],
-        "total_precipitation": ["total_precipitation", "tp"],
-    }
-    for name in aliases.get(configured_name, [configured_name]):
-        if name in ds.data_vars:
-            return name
-    available = ", ".join(sorted(ds.data_vars))
-    raise KeyError(
-        f"ARCO ERA5 variable {configured_name!r} is not available. Available variables: {available}"
-    )
-
-
-def _rename_canonical_coords(da):
-    rename = {
-        name: canonical
-        for name in set(da.dims).union(da.coords)
-        if (canonical := _canonical_dim_name(str(name))) != name
-    }
-    return da.rename(rename)
-
-
 def _write_romp_daily_obs_files(by_year: dict[int, list], obs_var: str, local_obs: Path) -> None:
     import numpy as np
     import pandas as pd
@@ -579,68 +542,19 @@ def _write_romp_daily_obs_file(year: int, da, obs_var: str, local_obs: Path) -> 
     _write_romp_daily_obs_files({year: [da]}, obs_var, local_obs)
 
 
-def _configure_zarr_for_low_memory() -> None:
-    os.environ.setdefault("ZARR_ASYNC_CONCURRENCY", "1")
+@contextmanager
+def _tool_logs_to_stdout():
+    """Send ai_almanac_tools progress logs to stdout, which the run log tees."""
+    tools_logger = logging.getLogger("ai_almanac_tools")
+    handler = logging.StreamHandler(sys.stdout)
+    previous_level = tools_logger.level
+    tools_logger.addHandler(handler)
+    tools_logger.setLevel(logging.INFO)
     try:
-        import zarr
-
-        zarr.config.set({"async.concurrency": 1})
-    except Exception as exc:
-        _log(f"  zarr low-memory config not applied: {exc}")
-
-
-def _load_arco_daily_precip_day(
-    source,
-    day: datetime,
-    unit_cvt: float,
-    lat_bounds,
-    lon_bounds,
-):
-    import gc
-
-    import pandas as pd
-
-    day_end = day + timedelta(hours=23)
-    hourly = source.sel(time=slice(day, day_end))
-    hourly = _select_lat_lon_bounds(hourly, lat_bounds, lon_bounds)
-    hourly = hourly.transpose("time", "lat", "lon").sortby(["lat", "lon"])
-    daily = (hourly.astype("float32").sum(dim="time") * unit_cvt).astype("float32").load()
-    daily = daily.expand_dims(time=[pd.Timestamp(day)])
-    del hourly
-    gc.collect()
-    return daily
-
-
-def _write_arco_month_file(
-    source,
-    year: int,
-    month: int,
-    days: list[str],
-    unit_cvt: float,
-    lat_bounds,
-    lon_bounds,
-    obs_var: str,
-    local_obs: Path,
-) -> Path:
-    import gc
-
-    import xarray as xr
-
-    daily_parts = []
-    for day_label in days:
-        day = datetime(year, month, int(day_label))
-        _log(f"    loading ARCO day {day.date()}")
-        daily_parts.append(
-            _load_arco_daily_precip_day(source, day, unit_cvt, lat_bounds, lon_bounds)
-        )
-
-    month_daily = xr.concat(daily_parts, dim="time").sortby("time")
-    month_path = local_obs / f".era5_arco_{year}_{month:02d}.nc"
-    month_daily.to_dataset(name=obs_var).to_netcdf(month_path)
-    _log(f"    wrote temporary {month_path.name}: {_size_summary(month_daily)}")
-    del daily_parts, month_daily
-    gc.collect()
-    return month_path
+        yield
+    finally:
+        tools_logger.removeHandler(handler)
+        tools_logger.setLevel(previous_level)
 
 
 def _fetch_era5_daily_precip_from_arco(
@@ -651,16 +565,14 @@ def _fetch_era5_daily_precip_from_arco(
     import gc
 
     import xarray as xr
+    from ai_almanac_tools.bbox import BBox
+    from ai_almanac_tools.sources import era5_arco
 
-    source_url = dataset_config.get(
-        "arco_url",
-        "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
-    )
-    precip_var = dataset_config.get("precip_var", "total_precipitation")
+    source_url = dataset_config.get("arco_url", era5_arco.URL)
+    precip_var = dataset_config.get("precip_var", era5_arco.PRECIP_VARIABLE)
     obs_var = romp_params.get("obs_var", "RAINFALL")
-    unit_cvt = float(dataset_config.get("unit_cvt", 1000.0))
-    lat_bounds = dataset_config.get("lat_bounds")
-    lon_bounds = dataset_config.get("lon_bounds")
+    unit_cvt = float(dataset_config.get("unit_cvt", era5_arco.METRES_TO_MM))
+    bbox = BBox.parse(dataset_config.get("lat_bounds"), dataset_config.get("lon_bounds"))
     ranges = _required_obs_date_ranges(romp_params, dataset_config)
 
     first_start = min(start for start, _ in ranges)
@@ -672,50 +584,30 @@ def _fetch_era5_daily_precip_from_arco(
         f"windows={len(ranges)}, days={requested_days})"
     )
 
-    _configure_zarr_for_low_memory()
+    # Checked up front so a recent season past the store fails before hours of earlier fetches.
+    era5_arco.require_coverage(
+        era5_arco.open_hourly(source_url, precip_var), first_start.date(), last_end.date()
+    )
 
     for index, (start, end) in enumerate(ranges, start=1):
         _log(f"  ARCO window {index}/{len(ranges)}: processing {start.date()} to {end.date()}")
 
         # Open a fresh store for each window so the Zarr chunk cache is bounded to
-        # one season's worth of reads and is fully released when we close the store.
+        # one season's worth of reads and is released before the next window.
         _log(f"  opening ARCO Zarr store: {source_url}")
-        ds = xr.open_zarr(source_url, chunks=None, storage_options={"token": "anon"})
-        _log(f"  opened ARCO store: variables={len(ds.data_vars)}, {_size_summary(ds)}")
-        valid_start = ds.attrs.get("valid_time_start")
-        valid_stop = ds.attrs.get("valid_time_stop")
-        if valid_start and valid_stop:
-            ds = ds.sel(time=slice(valid_start, valid_stop))
-        data_var = _era5_arco_variable(ds, precip_var)
-        source = _rename_canonical_coords(ds[data_var])
-        _log(f"  prepared ARCO source variable: {_size_summary(source)}")
-
-        month_paths: dict[int, list[Path]] = {}
-        for year, month, days in _monthly_date_ranges(start, end):
-            month_start = datetime(year, month, int(days[0]))
-            month_end = datetime(year, month, int(days[-1]))
-            _log(
-                f"  ARCO window {index}/{len(ranges)} month {year}-{month:02d}: "
-                f"selecting {month_start.date()} to {month_end.date()}, "
-                f"lat={lat_bounds or 'all'} lon={lon_bounds or 'all'}"
+        hourly = era5_arco.open_hourly(source_url, precip_var)
+        _log(f"  prepared ARCO source variable: {_size_summary(hourly)}")
+        with _tool_logs_to_stdout():
+            month_paths = era5_arco.write_daily_months(
+                hourly,
+                start.date(),
+                end.date(),
+                local_obs,
+                bbox=bbox,
+                scale=unit_cvt,
+                name=obs_var,
             )
-            month_path = _write_arco_month_file(
-                source=source,
-                year=year,
-                month=month,
-                days=days,
-                unit_cvt=unit_cvt,
-                lat_bounds=lat_bounds,
-                lon_bounds=lon_bounds,
-                obs_var=obs_var,
-                local_obs=local_obs,
-            )
-            month_paths.setdefault(year, []).append(month_path)
-            gc.collect()
-
-        # Close the store before merging month files; the merge reads only from disk.
-        ds.close()
-        del source, ds
+        del hourly
         gc.collect()
 
         for year, paths in sorted(month_paths.items()):

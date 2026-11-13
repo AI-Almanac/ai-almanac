@@ -19,6 +19,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml pixi.lock README.md ./
 COPY src ./src
+COPY packages ./packages
 COPY modal ./modal
 COPY --from=frontend /build/web/build ./web/build
 # The final stage replays the env's activation scripts as static ENV, so any

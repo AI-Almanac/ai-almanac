@@ -10,6 +10,7 @@ first use via `ai-almanac env prepare`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from collections import deque
@@ -23,11 +24,13 @@ from ai_almanac.envs.pixi_bootstrap import (
 from ai_almanac.envs.progress import EnvProgressEvent, ProgressCallback
 from ai_almanac.locking import file_lock
 from ai_almanac.paths import (
+    analysis_env_dir,
     benchmark_env_dir,
     blending_env_dir,
     env_root,
     forecast_env_dir,
     llm_env_dir,
+    sandbox_env_dir,
 )
 
 BLENDING_REPO_URL = "https://github.com/hholb/onset_blending-adm3.git"
@@ -38,6 +41,17 @@ BLENDING_SOURCE_MARKER = Path("python/prepare_data/nc_utils.py")
 
 _FORECAST_PLATFORMS = ("linux-64", "linux-aarch64")
 FORECAST_ENVIRONMENTS = ("base", "aifs2", "aifs2ens")
+
+# srt sandboxes with sandbox-exec on macOS and bubblewrap on Linux; nothing else.
+_SANDBOX_PLATFORMS = ("osx-arm64", "osx-64", "linux-64", "linux-aarch64")
+
+
+def _preparing_envs():
+    """Hold the env root's lock, so one instance prepares environments at a time."""
+    return file_lock(
+        env_root() / ".prepare.lock",
+        message="another instance is preparing environments in this env root; waiting…",
+    )
 
 
 def _default_progress(event: EnvProgressEvent) -> None:
@@ -100,6 +114,11 @@ def _blending_pixi_spec() -> Path:
     return Path(str(spec))
 
 
+def _sandbox_pixi_spec() -> Path:
+    spec = files("ai_almanac.envs").joinpath("sandbox.pixi.toml")
+    return Path(str(spec))
+
+
 def _forecast_pixi_spec() -> Path:
     spec = files("ai_almanac.envs").joinpath("forecast.pixi.toml")
     return Path(str(spec))
@@ -110,17 +129,52 @@ def _llm_pixi_spec() -> Path:
     return Path(str(spec))
 
 
+def analysis_pixi_spec() -> Path:
+    """The packaged manifest both code sandboxes build their environment from."""
+    return Path(str(files("ai_almanac.envs").joinpath("analysis.pixi.toml")))
+
+
+def analysis_pixi_lock() -> Path:
+    return Path(str(files("ai_almanac.envs").joinpath("analysis.pixi.lock")))
+
+
+def analysis_python() -> Path:
+    """The interpreter local sandboxed code runs with. Unix layout, like the sandbox env."""
+    return analysis_env_dir() / ".pixi" / "envs" / "default" / "bin" / "python"
+
+
+def analysis_env_digest() -> str:
+    """Identifies the installed analysis environment: the hash of the lockfile it was built from."""
+    return "sha256:" + hashlib.sha256((analysis_env_dir() / "pixi.lock").read_bytes()).hexdigest()
+
+
+def analysis_env_unavailable_reason() -> str | None:
+    """Why the installed analysis environment cannot be used, or None when it matches the package."""
+    installed_lock = analysis_env_dir() / "pixi.lock"
+    if not analysis_python().exists() or not installed_lock.exists():
+        return "the analysis environment is not installed; run `ai-almanac env prepare`"
+    if installed_lock.read_bytes() != analysis_pixi_lock().read_bytes():
+        return "the analysis environment is out of date; run `ai-almanac env prepare`"
+    return None
+
+
 def _install(
     spec: Path,
     env_dir: Path,
     phase: str,
     progress: ProgressCallback,
     environments: tuple[str, ...] | None = None,
+    lock: Path | None = None,
 ) -> None:
+    """Install `spec` into `env_dir`; with `lock`, exactly as locked (pixi fails on drift)."""
     pixi = _ensure_pixi(progress)
     env_dir.mkdir(parents=True, exist_ok=True)
     target_spec = env_dir / "pixi.toml"
     target_spec.write_text(spec.read_text())
+    locked = []
+    if lock is not None:
+        (env_dir / "pixi.lock").write_bytes(lock.read_bytes())
+        locked = ["--locked"]
     if environments:
         for env in environments:
             # pixi runs pypi build hooks without activating the env, so
@@ -135,7 +189,7 @@ def _install(
                 "PATH": f"{prefix / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
             }
             _run_streaming(
-                [pixi, "install", "--manifest-path", str(target_spec), "-e", env],
+                [pixi, "install", "--manifest-path", str(target_spec), "-e", env, *locked],
                 phase=f"forecast:{env}",
                 progress=progress,
                 cwd=env_dir,
@@ -143,7 +197,7 @@ def _install(
             )
     else:
         _run_streaming(
-            [pixi, "install", "--manifest-path", str(target_spec)],
+            [pixi, "install", "--manifest-path", str(target_spec), *locked],
             phase=phase,
             progress=progress,
             cwd=env_dir,
@@ -153,10 +207,7 @@ def _install(
 def ensure_blending_env(progress: ProgressCallback | None = None) -> Path:
     """Install the blend dependencies and materialize its pinned source tree."""
     progress = progress or _default_progress
-    with file_lock(
-        env_root() / ".prepare.lock",
-        message="another instance is preparing environments in this env root; waiting…",
-    ):
+    with _preparing_envs():
         return _ensure_blending_env(progress)
 
 
@@ -226,10 +277,7 @@ def ensure_forecast_env(progress: ProgressCallback | None = None) -> Path | None
     Skipped (not an error) on platforms forecast.pixi.toml doesn't support.
     """
     progress = progress or _default_progress
-    with file_lock(
-        env_root() / ".prepare.lock",
-        message="another instance is preparing environments in this env root; waiting…",
-    ):
+    with _preparing_envs():
         return _ensure_forecast_env(progress)
 
 
@@ -258,13 +306,82 @@ def _ensure_forecast_env(progress: ProgressCallback) -> Path | None:
     return env_dir
 
 
+def ensure_sandbox_env(progress: ProgressCallback | None = None) -> Path | None:
+    """Install sandbox-runtime (`srt`) and the tools it needs for local code execution.
+
+    pixi provides Node, ripgrep and (on Linux) bubblewrap and socat; `npm ci` then
+    installs srt exactly as pinned in the packaged lockfile. Skipped on platforms srt
+    cannot sandbox, where workspace code execution stays unavailable."""
+    progress = progress or _default_progress
+    with _preparing_envs():
+        return _ensure_sandbox_env(progress)
+
+
+def _skip_where_srt_cannot_sandbox(phase: str, progress: ProgressCallback) -> bool:
+    current = _current_pixi_platform()
+    if current in _SANDBOX_PLATFORMS:
+        return False
+    progress(
+        EnvProgressEvent(
+            kind="phase_skipped",
+            phase=phase,
+            detail=f"srt cannot sandbox code on {current}.",
+        )
+    )
+    return True
+
+
+def _ensure_sandbox_env(progress: ProgressCallback) -> Path | None:
+    if _skip_where_srt_cannot_sandbox("sandbox", progress):
+        return None
+    env_dir = sandbox_env_dir()
+    _install(_sandbox_pixi_spec(), env_dir, "sandbox", progress)
+    npm_spec = files("ai_almanac.envs").joinpath("sandbox")
+    for name in ("package.json", "package-lock.json"):
+        (env_dir / name).write_text(npm_spec.joinpath(name).read_text())
+    _run_streaming(
+        [
+            _ensure_pixi(progress),
+            "run",
+            "--manifest-path",
+            str(env_dir / "pixi.toml"),
+            "--",
+            "npm",
+            "ci",
+            "--prefix",
+            str(env_dir),
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+        ],
+        phase="sandbox-runtime",
+        progress=progress,
+        cwd=env_dir,
+    )
+    return env_dir
+
+
+def ensure_analysis_env(progress: ProgressCallback | None = None) -> Path | None:
+    """Install the pinned analysis environment that local sandboxed code runs in.
+
+    Skipped where srt cannot sandbox, since nothing local would run in it."""
+    progress = progress or _default_progress
+    with _preparing_envs():
+        return _ensure_analysis_env(progress)
+
+
+def _ensure_analysis_env(progress: ProgressCallback) -> Path | None:
+    if _skip_where_srt_cannot_sandbox("analysis", progress):
+        return None
+    env_dir = analysis_env_dir()
+    _install(analysis_pixi_spec(), env_dir, "analysis", progress, lock=analysis_pixi_lock())
+    return env_dir
+
+
 def ensure_llm_env(progress: ProgressCallback | None = None) -> Path | None:
     """Install the bundled vLLM server env. Skipped where vLLM has no build."""
     progress = progress or _default_progress
-    with file_lock(
-        env_root() / ".prepare.lock",
-        message="another instance is preparing environments in this env root; waiting…",
-    ):
+    with _preparing_envs():
         return _ensure_llm_env(progress)
 
 
@@ -366,10 +483,7 @@ def ensure_env(
     weights are fetched separately by download_llm_model.
     """
     progress = progress or _default_progress
-    with file_lock(
-        env_root() / ".prepare.lock",
-        message="another instance is preparing environments in this env root; waiting…",
-    ):
+    with _preparing_envs():
         _ensure_pixi(progress)
         env_dir = benchmark_env_dir()
         _install(_pixi_spec(), env_dir, "benchmark", progress)
@@ -420,7 +534,8 @@ def run_blending(cmd: list[str], env: dict[str, str] | None = None) -> subproces
 def run_forecast(
     cmd: list[str], env: dict[str, str] | None = None, environment: str = "base"
 ) -> subprocess.Popen:
-    """Spawn a process inside one forecast model-group environment."""
+    """Spawn a process inside one forecast model-group environment (see
+    FORECAST_ENVIRONMENTS). `environment` is the model's `env` field."""
     pixi = _ensure_pixi()
     env_dir = forecast_env_dir()
     full_cmd = [

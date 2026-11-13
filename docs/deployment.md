@@ -439,6 +439,7 @@ and `VITE_GLOBUS_REDIRECT_URL` (default `<origin>/callback`).
 | `DATASET_MOUNT_ROOTS`   | shared | —                                | Comma-separated allow-list for local data-source paths; required in shared with local storage |
 | `ENABLE_FS_BROWSER`     | both   | `true`                           | Forced `false` in shared                               |
 | `ENABLE_RUN_CODE`       | both   | `true`                           | Forced `false` in shared                               |
+| `CODE_SANDBOX`          | both   | `off`                            | Where workspace code runs: `off` \| `srt` \| `modal`; `srt` fails startup if it cannot sandbox; `modal` creates Sandboxes in `MODAL_ENVIRONMENT` |
 | `DATA_MANAGEMENT_AUDIENCE` | both | `everyone`                      | Who can create custom regions and register datasets: `off` \| `admins` \| `everyone` |
 | `ENABLE_FORECASTING`    | both   | `true`                           | Live AI weather forecasts; also toggled from the Settings page |
 | `RUNNER_MODE`           | both   | `pixi`                           | `pixi` \| `stub`                                       |
