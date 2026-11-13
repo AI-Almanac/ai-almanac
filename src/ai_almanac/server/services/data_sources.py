@@ -13,6 +13,7 @@ import json
 import math
 import re
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -20,7 +21,16 @@ from typing import Literal
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services.data_paths import (
+    DataPath,
+    GcsPath,
+    LocalPath,
+    parse_data_path,
+    parse_file_pattern,
+    parse_pattern_metadata,
+)
 from ai_almanac.server.services.forecast_models import live_forecast_compatibility
+from ai_almanac.settings import settings
 
 Kind = Literal["obs", "model"]
 Status = Literal["ready", "invalid"]
@@ -215,11 +225,13 @@ def _normalized_metadata(kind: Kind, metadata: dict, files: list[Path]) -> dict:
 
 def _source_file_pattern(kind: Kind, metadata: dict) -> str:
     pattern_key = "obs_file_pattern" if kind == "obs" else "file_pattern"
-    return str(metadata.get(pattern_key) or "{}.nc").strip()
+    return parse_file_pattern(str(metadata.get(pattern_key) or "{}.nc"))
 
 
-def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
-    directory = Path(path)
+def _inspect_local_source(
+    kind: Kind, path: LocalPath, metadata: dict
+) -> tuple[Status, str | None, dict]:
+    directory = path.directory
     if not directory.exists():
         return "invalid", "Directory does not exist.", metadata
     if not directory.is_dir():
@@ -239,22 +251,26 @@ def _inspect_local_source(kind: Kind, path: str, metadata: dict) -> tuple[Status
     return _finalize_inspection(kind, metadata, files, lambda: xr.open_dataset(files[0]))
 
 
-def _inspect_gcs_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+def _inspect_gcs_source(
+    kind: Kind, path: GcsPath, metadata: dict, *, admin_registered: bool
+) -> tuple[Status, str | None, dict]:
     from ai_almanac.server.services.storage import get_storage
 
     storage = get_storage()
     pattern = _source_file_pattern(kind, metadata)
     try:
-        identifiers = storage.list_dataset_files(path, _file_glob(pattern))
+        identifiers = _gcs_files(path, _file_glob(pattern), admin_registered=admin_registered)
+    except UnreadableFiles as exc:
+        return "invalid", str(exc), metadata
     except Exception as exc:
         return (
             "invalid",
-            f"Cannot read {path}: {type(exc).__name__}: {exc}. "
+            f"Cannot read {path.uri}: {type(exc).__name__}: {exc}. "
             "Check that the path exists and is readable by the service account.",
             metadata,
         )
     if not identifiers:
-        return "invalid", f"No files match {pattern!r} under {path}.", metadata
+        return "invalid", f"No files match {pattern!r} under {path.uri}.", metadata
 
     files = [Path(identifier) for identifier in identifiers]
     return _finalize_inspection(
@@ -508,13 +524,25 @@ def _forecast_model_link_error(metadata: dict) -> str | None:
     return None if verdict.status == "ready" else verdict.detail
 
 
-async def validate_source(kind: Kind, path: str, metadata: dict) -> tuple[Status, str | None, dict]:
+async def validate_source(
+    kind: Kind, path: str, metadata: dict, *, admin_registered: bool = False
+) -> tuple[Status, str | None, dict]:
+    try:
+        location = parse_data_path(path)
+        parse_pattern_metadata(metadata or {})
+    except ValueError as exc:
+        return "invalid", str(exc), metadata
+    if error := location_error(location, admin_registered=admin_registered):
+        return "invalid", error, metadata
     # Remote-provider sources (e.g. era5_arco) have no file tree to inspect;
     # their metadata (arco_url, variable, bounds) is the contract.
     if (metadata or {}).get("provider") not in (None, "local"):
         return "ready", None, dict(metadata)
-    inspect = _inspect_gcs_source if str(path).startswith("gs://") else _inspect_local_source
-    return await asyncio.to_thread(inspect, kind, path, metadata)
+    if isinstance(location, GcsPath):
+        return await asyncio.to_thread(
+            _inspect_gcs_source, kind, location, metadata, admin_registered=admin_registered
+        )
+    return await asyncio.to_thread(_inspect_local_source, kind, location, metadata)
 
 
 async def list_sources(
@@ -553,7 +581,7 @@ async def create_source(
     normalized_region = region.strip().lower() if region else None
     source_id = str(uuid.uuid4())
     status, validation_error, normalized_metadata = await validate_source(
-        kind, path, metadata or {}
+        kind, path, metadata or {}, admin_registered=owner_id is None
     )
     now = _now()
     async with get_db() as conn:
@@ -601,7 +629,7 @@ async def update_source(
         existing = (
             (
                 await conn.execute(
-                    text("SELECT kind FROM data_sources WHERE id = :id"),
+                    text("SELECT kind, owner_id FROM data_sources WHERE id = :id"),
                     {"id": source_id},
                 )
             )
@@ -612,7 +640,9 @@ async def update_source(
         return None
 
     kind: Kind = existing["kind"]
-    status, validation_error, normalized_metadata = await validate_source(kind, path, metadata)
+    status, validation_error, normalized_metadata = await validate_source(
+        kind, path, metadata, admin_registered=registered_by_admin(existing)
+    )
     async with get_db() as conn:
         result = await conn.execute(
             text(
@@ -695,3 +725,80 @@ async def get_model_sources(
     if region:
         sources = [s for s in sources if (s.get("region") or "").lower() == region.lower()]
     return sources
+
+
+class UnreadableFiles(ValueError):
+    """A source's files are somewhere its owner may not read from."""
+
+
+def registered_by_admin(source: Mapping) -> bool:
+    """Admin-registered sources are the deployment's built-ins and have no owner."""
+    return source.get("owner_id") is None
+
+
+def _platform_buckets() -> set[str]:
+    buckets = (settings.gcs_outputs_bucket, settings.gcs_uploads_bucket)
+    return {bucket.strip() for bucket in buckets if bucket.strip()}
+
+
+def platform_bucket_error(path: DataPath) -> str | None:
+    """Why a user's source may not point at `path`: the deployment's own buckets hold every
+    user's uploads and job outputs, which the server can read but no user may."""
+    if isinstance(path, GcsPath) and path.bucket in _platform_buckets():
+        return (
+            f"gs://{path.bucket} holds the platform's own files; register data from another bucket"
+        )
+    return None
+
+
+def location_error(path: DataPath, *, admin_registered: bool) -> str | None:
+    """Why a source may not read from `path`; None when it may."""
+    if admin_registered:
+        return None
+    if settings.deployment_mode == "shared" and not isinstance(path, GcsPath):
+        return "user datasets must be gs:// URLs"
+    return platform_bucket_error(path)
+
+
+def readable_location(source: Mapping) -> DataPath:
+    """Where a run may read `source`'s files, parsed again from the saved row.
+
+    Raises UnreadableFiles, naming the source, when the saved path or file pattern does
+    not parse or the source's owner may not read from that location.
+    """
+    try:
+        path = parse_data_path(str(source.get("path") or ""))
+        parse_pattern_metadata(source.get("metadata") or {})
+    except ValueError as exc:
+        raise UnreadableFiles(f"Data source {source['name']!r} cannot be read: {exc}") from exc
+    if error := location_error(path, admin_registered=registered_by_admin(source)):
+        raise UnreadableFiles(f"Data source {source['name']!r} cannot be read: {error}")
+    return path
+
+
+def file_location_error(uri: str, *, admin_registered: bool) -> str | None:
+    """Why a run may not read the file or folder at `uri`; None when it may."""
+    try:
+        path = parse_data_path(uri)
+    except ValueError as exc:
+        return str(exc)
+    return location_error(path, admin_registered=admin_registered)
+
+
+def _gcs_files(path: GcsPath, glob: str, *, admin_registered: bool) -> list[str]:
+    """The objects under `path` matching `glob`, refused if any lie outside `path`'s bucket
+    or, for a user's source, in a platform bucket."""
+    from ai_almanac.server.services.storage import get_storage
+
+    files = get_storage().list_dataset_files(path.uri, glob)
+    buckets = {_listed_bucket(file) for file in files}
+    if buckets - {path.bucket}:
+        raise UnreadableFiles(f"Listing {path.uri} returned files from another bucket")
+    platform_errors = [platform_bucket_error(GcsPath(bucket=bucket, key="")) for bucket in buckets]
+    if not admin_registered and any(platform_errors):
+        raise UnreadableFiles(next(error for error in platform_errors if error))
+    return files
+
+
+def _listed_bucket(uri: str) -> str:
+    return uri.removeprefix("gs://").partition("/")[0]
