@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
@@ -15,6 +16,7 @@
 		cancelJob,
 		deleteJob,
 		fetchResultBlob,
+		getRegions,
 		type Blend,
 		type BlendCreate,
 		type DayLevelSettings,
@@ -23,7 +25,8 @@
 		type DataSource,
 		type Job,
 		type JobArtifact,
-		type JobStatus
+		type JobStatus,
+		type Region
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
@@ -40,7 +43,13 @@
 		memberCountWarning,
 		yearSpecError
 	} from './year-coverage';
-	import { describeSourceCoverage, gridStep, gridsMatch } from '$lib/source-coverage';
+	import { regionCountry } from '$lib/places';
+	import {
+		describeSourceCoverage,
+		gridStep,
+		gridsMatch,
+		scoredTogether
+	} from '$lib/source-coverage';
 	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
 	import {
 		DAY_LEVEL_DEFAULTS,
@@ -181,14 +190,24 @@
 		obsDatasetId = id;
 	}
 
-	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
+	let regions = $state<Region[]>([]);
 
-	// Only offer models on the chosen observations' region and grid,
-	// mirroring the benchmark setup flow.
+	// Only the country to pick places in by default; without it the user picks one.
+	onMount(() => {
+		getRegions()
+			.then((listed) => (regions = listed))
+			.catch(() => {});
+	});
+
+	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
+	const country = $derived(regionCountry(regions, selectedObs?.region ?? null));
+
+	// Only offer models that have data where the chosen observations do, on the
+	// same grid.
 	const availableModels = $derived(
 		selectedObs
 			? modelSources.filter(
-					(s) => s.region === selectedObs.region && gridsMatch(gridStep(selectedObs), gridStep(s))
+					(s) => scoredTogether(selectedObs, s) && gridsMatch(gridStep(selectedObs), gridStep(s))
 				)
 			: []
 	);
@@ -829,13 +848,9 @@
 					<div class="field">
 						{@render fieldLabel(
 							'Area of interest',
-							'Draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
+							'Pick a place or draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
 						)}
-						<FocusAreaMap
-							value={focusArea}
-							regionId={selectedObs?.region ?? null}
-							onchange={(box) => (focusArea = box)}
-						/>
+						<FocusAreaMap value={focusArea} {country} onchange={(box) => (focusArea = box)} />
 					</div>
 					<details class="advanced">
 						<summary>Advanced</summary>

@@ -842,3 +842,8 @@ def _gcs_files(path: GcsPath, glob: str, *, admin_registered: bool) -> list[str]
 
 def _listed_bucket(uri: str) -> str:
     return uri.removeprefix("gs://").partition("/")[0]
+
+
+def visible_to(source: Mapping, user_id: str) -> bool:
+    """Whether a user may read a source: built-in, their own, or shared (as job submission rules)."""
+    return source.get("owner_id") in (None, user_id) or source.get("visibility") == "shared"

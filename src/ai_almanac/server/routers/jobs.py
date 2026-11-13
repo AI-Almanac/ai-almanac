@@ -43,7 +43,11 @@ from ai_almanac.server.services.job_submission import (
     create_job_for_user,
     row_to_job_out,
 )
-from ai_almanac.server.services.registry import load_catalog, load_model_registry
+from ai_almanac.server.services.registry import (
+    load_catalog,
+    load_model_registry,
+    load_models_scored_with,
+)
 from ai_almanac.server.tables import job_artifacts, jobs, user_hidden_jobs
 from ai_almanac.settings import settings
 
@@ -107,8 +111,12 @@ def _parse_metrics_cache(value: object) -> JobMetrics | None:
 
 
 @router.get("/models")
-async def list_models(user: CurrentUser, region: str | None = None):
-    return await load_model_registry(region, user_id=user.id, is_admin=user.is_admin)
+async def list_models(user: CurrentUser, dataset_id: str | None = None):
+    """Model sources: the ones that can be scored against an observation dataset when
+    one is named, else all of them."""
+    if dataset_id:
+        return await load_models_scored_with(dataset_id, user_id=user.id, is_admin=user.is_admin)
+    return await load_model_registry(user_id=user.id, is_admin=user.is_admin)
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)

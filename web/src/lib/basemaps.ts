@@ -60,6 +60,27 @@ export const BASEMAP_STYLES = [
 
 export type BasemapStyleId = (typeof BASEMAP_STYLES)[number]['id'];
 
+export type BasemapChoice = { id: BasemapStyleId; label: string };
+
+/** The few a reader chooses between, named by what they look like rather than who makes them. */
+export const COMMON_BASEMAPS: BasemapChoice[] = [
+	{ id: 'carto-light', label: 'Light' },
+	{ id: 'carto-light-no-labels', label: 'Light, no place names' },
+	{ id: 'carto-dark', label: 'Dark' }
+];
+
+/** The credit a picture of the map must carry. */
+function basemapCredit(id: BasemapStyleId): string {
+	return id.startsWith('carto')
+		? 'Basemap © CARTO, © OpenStreetMap contributors'
+		: 'Basemap © OpenMapTiles, © OpenStreetMap contributors';
+}
+
+/** The credits a picture of the map must carry: its basemap's, and the outlines' when shown. */
+export function mapCredit(id: BasemapStyleId, showsBoundaries: boolean): string {
+	return showsBoundaries ? `${basemapCredit(id)} · Boundaries: geoBoundaries` : basemapCredit(id);
+}
+
 // Dark styles want a lightened land + white dot outlines; light styles the
 // opposite. One predicate keeps that decision in a single place.
 export function isDarkBasemap(id: BasemapStyleId): boolean {

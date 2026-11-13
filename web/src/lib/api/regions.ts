@@ -34,36 +34,8 @@ export type RegionBoundaryResponse = {
 	geojson: unknown;
 };
 
-export type RegionWrite = {
-	display_name: string;
-	description: string;
-	lat_min: number;
-	lat_max: number;
-	lon_min: number;
-	lon_max: number;
-	land_only: boolean;
-};
-
 export async function getRegions() {
 	return request<Region[]>('/regions');
-}
-
-export async function createRegion(body: RegionWrite) {
-	return request<Region>('/regions', {
-		method: 'POST',
-		body: JSON.stringify(body)
-	});
-}
-
-export async function updateRegion(id: string, body: RegionWrite) {
-	return request<Region>(`/regions/${encodeURIComponent(id)}`, {
-		method: 'PUT',
-		body: JSON.stringify(body)
-	});
-}
-
-export async function deleteRegion(id: string): Promise<void> {
-	await request<void>(`/regions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function getRegionBoundary(region: string, level: BoundaryLevel) {
