@@ -2,33 +2,31 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from ai_almanac.server.auth import CurrentUser, require_data_management
 from ai_almanac.server.services import data_sources as svc
 from ai_almanac.server.services import region_catalog
+from ai_almanac.server.services.data_paths import DataPath, DataPathField, parse_pattern_metadata
 from ai_almanac.server.services.forecast_models import (
     LiveForecastStatus,
     live_forecast_compatibility,
 )
-from ai_almanac.settings import settings
 
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
-def _normalized_path(raw: str) -> str:
-    raw = raw.strip()
-    return raw if raw.startswith("gs://") else str(Path(raw).expanduser().resolve())
+SourceMetadata = Annotated[dict, AfterValidator(parse_pattern_metadata)]
 
 
-def _check_path_allowed(user, path: str) -> None:
-    """Non-admin sources in shared deployments must live in cloud storage."""
-    if not user.is_admin and settings.deployment_mode == "shared" and not path.startswith("gs://"):
-        raise HTTPException(status_code=400, detail="user datasets must be gs:// URLs")
+def _check_path_allowed(path: DataPath, *, admin_registered: bool) -> None:
+    """A user's sources must live in cloud storage on shared deployments, and never in
+    the platform's own buckets."""
+    if error := svc.location_error(path, admin_registered=admin_registered):
+        raise HTTPException(status_code=400, detail=error)
 
 
 async def _owned_source_or_404(source_id: str, user) -> dict:
@@ -41,16 +39,16 @@ async def _owned_source_or_404(source_id: str, user) -> dict:
 class DataSourceIn(BaseModel):
     kind: Literal["obs", "model"]
     name: str = Field(min_length=1)
-    path: str = Field(min_length=1)
+    path: DataPathField
     region: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    metadata: SourceMetadata = Field(default_factory=dict)
 
 
 class DataSourceUpdate(BaseModel):
     name: str = Field(min_length=1)
-    path: str = Field(min_length=1)
+    path: DataPathField
     region: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    metadata: SourceMetadata = Field(default_factory=dict)
 
 
 class LiveForecastOut(BaseModel):
@@ -145,17 +143,17 @@ async def list_data_sources(user: CurrentUser, kind: Literal["obs", "model"] | N
     dependencies=[Depends(require_data_management)],
 )
 async def validate_data_source(body: DataSourceIn, user: CurrentUser):
-    normalized_path = _normalized_path(body.path)
-    _check_path_allowed(user, normalized_path)
+    _check_path_allowed(body.path, admin_registered=user.is_admin)
     region = await _parse_region(body.region)
     status, validation_error, metadata = await svc.validate_source(
         body.kind,
-        normalized_path,
+        body.path.uri,
         body.metadata,
+        admin_registered=user.is_admin,
     )
     return DataSourceValidationOut(
         kind=body.kind,
-        path=normalized_path,
+        path=body.path.uri,
         region=region,
         metadata=metadata,
         status=status,
@@ -170,13 +168,12 @@ async def validate_data_source(body: DataSourceIn, user: CurrentUser):
     dependencies=[Depends(require_data_management)],
 )
 async def create_data_source(body: DataSourceIn, user: CurrentUser):
-    normalized = _normalized_path(body.path)
-    _check_path_allowed(user, normalized)
+    _check_path_allowed(body.path, admin_registered=user.is_admin)
     region = await _parse_region(body.region)
     row = await svc.create_source(
         kind=body.kind,
         name=body.name,
-        path=normalized,
+        path=body.path.uri,
         region=region,
         metadata=body.metadata,
         owner_id=None if user.is_admin else user.id,
@@ -191,14 +188,13 @@ async def create_data_source(body: DataSourceIn, user: CurrentUser):
     dependencies=[Depends(require_data_management)],
 )
 async def update_data_source(source_id: str, body: DataSourceUpdate, user: CurrentUser):
-    await _owned_source_or_404(source_id, user)
-    normalized = _normalized_path(body.path)
-    _check_path_allowed(user, normalized)
+    source = await _owned_source_or_404(source_id, user)
+    _check_path_allowed(body.path, admin_registered=svc.registered_by_admin(source))
     region = await _parse_region(body.region)
     row = await svc.update_source(
         source_id,
         name=body.name.strip(),
-        path=normalized,
+        path=body.path.uri,
         region=region,
         metadata=body.metadata,
     )

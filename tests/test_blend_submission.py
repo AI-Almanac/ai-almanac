@@ -962,3 +962,180 @@ async def test_forcing_an_update_of_an_up_to_date_forecast_starts_a_run(
     assert response.json()["up_to_date"] is False
     assert response.json()["forecast"]["id"] != forecast_id
     assert await _forecast_job_count() == 2
+
+
+_OUTPUTS_BUCKET = "almanac-job-outputs-test"
+
+
+def _platform_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_almanac.settings import settings
+
+    monkeypatch.setattr(settings, "gcs_outputs_bucket", _OUTPUTS_BUCKET)
+
+
+async def _owned_by(user_id: str, *source_ids: str) -> None:
+    from ai_almanac.server.db import get_db
+
+    async with get_db() as conn:
+        for source_id in source_ids:
+            await conn.execute(
+                text(
+                    "UPDATE data_sources SET owner_id = :owner, visibility = 'private' WHERE id = :id"
+                ),
+                {"owner": user_id, "id": source_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_will_not_read_a_saved_source_outside_its_bucket(
+    client, user_id: str, as_new_user: dict[str, str]
+) -> None:
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", grid_step=0.25)
+    model_id = await _seed_source("model", "GraphCast", "gs://gcs://data/models/gc", grid_step=0.25)
+
+    response = await client.post(
+        "/jobs",
+        headers=as_new_user,
+        json={"dataset_id": obs_id, "model_name": model_id, "params": {"region": "india"}},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Data source 'GraphCast' cannot be read"
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_reads_its_model_from_the_sources_own_location(
+    client, user_id: str, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _no_launch(job_id: str) -> None:
+        pass
+
+    monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", _no_launch)
+    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", (2019, 2024), 0.25)
+    model_id = await _seed_source(
+        "model",
+        "GraphCast",
+        "gs://data/models/gc/",
+        (2019, 2024),
+        0.25,
+        extra_metadata={"model_dir": "gs://other-bucket/models"},
+    )
+
+    response = await client.post(
+        "/jobs",
+        headers=as_new_user,
+        json={"dataset_id": obs_id, "model_name": model_id, "params": {"region": "india"}},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["model_dir"] == "gs://data/models/gc"
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_will_not_read_a_users_saved_source_in_a_platform_bucket(
+    client, user_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    _platform_bucket(monkeypatch)
+    obs_id = await _seed_source("obs", "My obs", f"gs://{_OUTPUTS_BUCKET}/some-job")
+    await _owned_by(user_id, obs_id)
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission._resolve_obs_dir(obs_id, user_id)
+
+    assert exc.value.status_code == 409
+    assert "'My obs'" in exc.value.detail
+    assert "platform's own files" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_will_not_read_a_saved_file_pattern_outside_its_folder(
+    client, user_id: str
+) -> None:
+    from fastapi import HTTPException
+
+    model_id = await _seed_source(
+        "model", "GenCast", "gs://data/models/gencast", extra_metadata={"file_pattern": "../{}.nc"}
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission._resolve_model_source(model_id, user_id)
+
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_a_blend_will_not_read_a_users_saved_model_source_in_a_platform_bucket(
+    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    _platform_bucket(monkeypatch)
+    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await _seed_source("model", "My model", f"gs://{_OUTPUTS_BUCKET}/some-job")
+    await _owned_by(user_id, model_id)
+
+    with pytest.raises(HTTPException) as exc:
+        await create_blend_for_user(
+            BlendCreate(
+                name="blend",
+                obs_dataset_id=obs_id,
+                model_ids=[model_id],
+                params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+            ),
+            user_id,
+        )
+
+    assert exc.value.status_code == 409
+    assert "platform's own files" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_a_forecast_will_not_reread_a_blends_saved_training_files_in_a_platform_bucket(
+    client, user_id: str, _stub_runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    from ai_almanac.server.db import get_db
+
+    _platform_bucket(monkeypatch)
+    monkeypatch.setattr(job_submission, "utc_today", lambda: JUNE_15)
+    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs2", grid_step=0.25)
+    await _link_forecast_model(aifs_id, "aifs2")
+    await _owned_by(user_id, obs_id, aifs_id)
+    blend = await create_blend_for_user(
+        BlendCreate(
+            name="india",
+            obs_dataset_id=obs_id,
+            model_ids=[aifs_id],
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == blend.id))).mappings().one()
+        config = {**json.loads(row["config_json"]), "obs_dir": f"gs://{_OUTPUTS_BUCKET}/some-job"}
+        await conn.execute(
+            sa.update(jobs)
+            .where(jobs.c.id == blend.id)
+            .values(status="complete", config_json=json.dumps(config))
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await job_submission.create_forecast_for_user(
+            job_submission.ForecastCreate(blend_id=blend.id), user_id
+        )
+
+    assert exc.value.status_code == 409
+    assert "train the blend again" in exc.value.detail
+
+
+def test_a_benchmark_setting_naming_a_file_in_a_platform_bucket_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _platform_bucket(monkeypatch)
+
+    with pytest.raises(job_submission.InvalidBenchmarkSettings, match="nc_mask"):
+        job_submission.parse_romp_params({"nc_mask": f"gs://{_OUTPUTS_BUCKET}/job/mask.nc"})
