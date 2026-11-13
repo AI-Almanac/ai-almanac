@@ -643,6 +643,69 @@ async def test_shared_deployment_rejects_sources_in_the_platforms_own_buckets(
     assert "platform's own files" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("endpoint", ["/data-sources", "/data-sources/validate"])
+@pytest.mark.parametrize("scheme", ["gcs://", "gs://"])
+@pytest.mark.asyncio
+async def test_a_users_source_location_with_a_second_scheme_is_refused_on_shared_deployments(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, endpoint: str, scheme: str
+) -> None:
+    from ai_almanac.settings import settings
+
+    _proxy_users(monkeypatch)
+    monkeypatch.setattr(settings, "deployment_mode", "shared")
+
+    response = await client.post(
+        endpoint,
+        json={
+            **_obs_body("Two schemes"),
+            "path": f"gs://{scheme}other-bucket/obs",
+            "metadata": {"obs_file_pattern": "**/*.nc", "obs_var": "tp"},
+        },
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-Issuer": "test-idp"},
+    )
+
+    assert response.status_code == 422
+    assert "more than one scheme" in response.text
+
+
+@pytest.mark.parametrize("pattern", ["../other-source/{}.nc", "/{}.nc"])
+@pytest.mark.asyncio
+async def test_a_file_pattern_cannot_leave_the_sources_folder(
+    client: httpx.AsyncClient, pattern: str
+) -> None:
+    response = await client.post(
+        "/data-sources",
+        json={**_obs_body("Escaping obs"), "metadata": {"obs_file_pattern": pattern}},
+    )
+
+    assert response.status_code == 422
+    assert "relative name" in response.text
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        ("gs://bucket/ethiopia/obs", "gs://bucket/ethiopia/obs"),
+        (" gs://bucket/ethiopia/obs/ ", "gs://bucket/ethiopia/obs"),
+    ],
+)
+def test_gcs_paths_are_stored_in_one_form(raw: str, stored: str) -> None:
+    from ai_almanac.server.services.data_paths import parse_data_path
+
+    assert parse_data_path(raw).uri == stored
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["gs://", "gs:///bucket/obs", "gs://Bucket/obs", "gs://bucket/../other", "gs://bucket/a//b"],
+)
+def test_gcs_paths_without_a_plain_bucket_and_folder_are_refused(raw: str) -> None:
+    from ai_almanac.server.services.data_paths import parse_data_path
+
+    with pytest.raises(ValueError):
+        parse_data_path(raw)
+
+
 @pytest.mark.asyncio
 async def test_gs_path_survives_registration_unmangled(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
