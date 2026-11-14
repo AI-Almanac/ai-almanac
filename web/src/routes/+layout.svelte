@@ -54,5 +54,5 @@
 	{@render children()}
 {/if}
 {#if !isSetupPage}
-	<Footer />
+	<Footer inWorkspace={$page.url.pathname.startsWith('/workspace/')} />
 {/if}

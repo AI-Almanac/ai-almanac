@@ -23,6 +23,7 @@
 		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import OpenInWorkspace from '$lib/components/OpenInWorkspace.svelte';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
 	import RunSidebar, { type RunSection } from '$lib/components/RunSidebar.svelte';
@@ -122,6 +123,7 @@
 	// ChatPanel scopes on job ids; the blend is itself a job, so hand it through so
 	// the assistant can call get_blend_results on it.
 	const detailChatJobs = $derived(selected ? [{ id: selected.id } as Job] : []);
+	let detailChatSessionId = $state<string | null>(null);
 
 	// The enforced minimum, so the prefilled split is one the server accepts.
 	let minTrainingYears = $state(DEFAULT_MIN_TRAINING_YEARS);
@@ -524,12 +526,14 @@
 				{#if chatAvailable && detailChat}
 					<SplitResizer container={splitEl} comparing={chatComparing} storageKey="blend-detail" />
 					<aside class="workspace-aside">
+						<OpenInWorkspace sessionId={detailChatSessionId} />
 						<div class="result-chat" data-tour="blend-chat">
 							<ChatPanel
 								jobs={detailChatJobs}
 								scopeKind={detailChat.scopeKind}
 								scopeKey={detailChat.scopeKey}
 								preferredSessionId={detailChat.sessionId}
+								onSessionReady={(sessionId) => (detailChatSessionId = sessionId)}
 								title={selected.name || 'Blend'}
 								emptyMessage="Ask about this blend or its training results."
 								placeholder="Ask about this blend…"

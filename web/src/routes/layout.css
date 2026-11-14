@@ -40,13 +40,23 @@
 	--text-size-lead: 1rem;
 	--text-size-title: 1.125rem;
 
-	/* One spacing scale. A dense surface restates the larger steps instead of
-	   components choosing their own. */
+	/* One spacing scale. A dense surface restates the larger steps, as the
+	   workspace does below, instead of components choosing their own. */
 	--space-1: 0.25rem;
 	--space-2: 0.5rem;
 	--space-3: 0.75rem;
 	--space-4: 1rem;
 	--space-5: 1.5rem;
+
+	/* The bar that opens a workspace's assistant on a narrow screen; what scrolls
+	   beneath it, the footer included, ends this far above the bottom. */
+	--assistant-bar-height: 3rem;
+}
+
+.workspace-dense {
+	--space-3: 0.625rem;
+	--space-4: 0.75rem;
+	--space-5: 1rem;
 }
 
 *,

@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { feedbackEnabled } from '$lib/api';
 
+	interface Props {
+		/** A workspace fills the screen with its zones, so the footer only follows them once they stack. */
+		inWorkspace?: boolean;
+	}
+
+	let { inWorkspace = false }: Props = $props();
+
 	const canFeedback = feedbackEnabled();
 
 	function openFeedback() {
@@ -8,7 +15,7 @@
 	}
 </script>
 
-<footer class="mt-auto px-7 pt-0 pb-6">
+<footer class="mt-auto px-7 pt-0 pb-6" class:in-workspace={inWorkspace}>
 	<div class="footer-rule mb-5 flex items-center justify-center gap-3">
 		<span
 			class="block h-px w-16 bg-gradient-to-r from-transparent via-[var(--color-border)] to-transparent"
@@ -69,6 +76,19 @@
 </footer>
 
 <style>
+	/* Matches the width below which the workspace's zones stack. */
+	@media (min-width: 1050.02px) {
+		.in-workspace {
+			display: none;
+		}
+	}
+	@media (max-width: 1050px) {
+		/* Clear of the assistant's bar along the bottom of the screen. */
+		.in-workspace {
+			padding-bottom: calc(var(--assistant-bar-height, 0rem) + var(--space-5));
+		}
+	}
+
 	.brand-text {
 		font-family: var(--font-display);
 		font-size: 0.95rem;

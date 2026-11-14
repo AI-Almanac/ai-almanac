@@ -17,6 +17,7 @@ describe('assistant panel width', () => {
 			container: PAGE,
 			expected: 520
 		},
+		{ case: 'rounds to a whole pixel', width: 520.4, container: PAGE, expected: 520 },
 		{
 			case: 'refuses to shrink below a readable width',
 			width: 10,
