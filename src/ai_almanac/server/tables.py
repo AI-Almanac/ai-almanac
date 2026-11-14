@@ -190,6 +190,17 @@ workspace_items = sa.Table(
     sa.Column("added_by", sa.Text()),
 )
 
+# The short name of the files one chat turn made (migration 0031).
+workspace_analyses = sa.Table(
+    "workspace_analyses",
+    metadata,
+    sa.Column("workspace_id", sa.Text(), primary_key=True),
+    sa.Column("turn_id", sa.Text(), primary_key=True),
+    sa.Column("title", sa.Text(), nullable=False),
+    sa.Column("named_by", sa.Text(), nullable=False),  # assistant | user
+    sa.Column("updated_at", sa.Text(), nullable=False),
+)
+
 provenance_steps = sa.Table(
     "provenance_steps",
     metadata,
@@ -246,4 +257,19 @@ approvals = sa.Table(
     sa.Column("created_at", sa.Text(), nullable=False),
     sa.Column("kind", sa.Text(), nullable=False),
     sa.Column("payload_hash", sa.Text(), nullable=False),
+)
+
+follow_ups = sa.Table(
+    "follow_ups",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("workspace_id", sa.Text(), nullable=False),
+    sa.Column("session_id", sa.Text(), nullable=False),
+    sa.Column("user_id", sa.Text(), nullable=False),
+    sa.Column("job_ids", sa.JSON(), nullable=False),
+    sa.Column("instruction", sa.Text(), nullable=False),
+    sa.Column("status", sa.Text(), nullable=False),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("started_at", sa.Text()),
+    sa.Column("completed_at", sa.Text()),
 )

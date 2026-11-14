@@ -75,9 +75,13 @@ class TurnRecord:
     requests: int | None = None
     failure_category: str | None = None
     comparison_id: str | None = None
+    # "user", or "follow_up:<id>" when the platform started the turn (D-R17).
+    trigger: str = "user"
     text: str = ""
     tool_calls: list[str] = field(default_factory=list)
     guardrail_keys: list[str] = field(default_factory=list)
+    # The workspace artifacts the turn's tools read, in first-read order (D-R8).
+    read_artifact_ids: list[str] = field(default_factory=list)
     # Read by the flags, not stored: the names the answer must not show the user.
     offered_tools: list[str] = field(default_factory=list)
 
@@ -155,6 +159,8 @@ async def record_turn(record: TurnRecord) -> None:
         "guardrail_keys": json.dumps(record.guardrail_keys),
         "flags": json.dumps(compute_flags(record)),
         "comparison_id": record.comparison_id,
+        "trigger": record.trigger,
+        "read_artifact_ids": json.dumps(record.read_artifact_ids),
     }
     try:
         async with get_db() as conn:
@@ -164,11 +170,11 @@ async def record_turn(record: TurnRecord) -> None:
                     "(id, session_id, user_id, turn_id, created_at, ruleset_id, "
                     " ruleset_version, model_name, scope_kind, latency_ms, input_tokens, "
                     " output_tokens, requests, failure_category, tool_calls, guardrail_keys, "
-                    " flags, comparison_id) "
+                    " flags, comparison_id, trigger, read_artifact_ids) "
                     "VALUES (:id, :session_id, :user_id, :turn_id, :created_at, :ruleset_id, "
                     " :ruleset_version, :model_name, :scope_kind, :latency_ms, :input_tokens, "
                     " :output_tokens, :requests, :failure_category, :tool_calls, :guardrail_keys, "
-                    " :flags, :comparison_id)"
+                    " :flags, :comparison_id, :trigger, :read_artifact_ids)"
                 ),
                 payload,
             )

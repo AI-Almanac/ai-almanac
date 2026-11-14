@@ -264,11 +264,13 @@ async def _run_background_step(name: str, step) -> None:
 async def _reconcile_jobs() -> None:
     from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.day_level_blends import reconcile_day_level_blends
+    from ai_almanac.server.services.follow_ups import start_ready
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
     await _run_background_step("job_reconciliation", reconcile_jobs)
     await _run_background_step("day_level_reconciliation", reconcile_day_level_blends)
     await _run_background_step("artifact_publication", publish_pending)
+    await _run_background_step("follow_ups", start_ready)
 
 
 async def _local_llm_idle_sleep() -> None:

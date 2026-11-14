@@ -58,6 +58,7 @@ from ai_almanac.settings import settings
 from . import (
     approval_gate,
     chat_tools,
+    interface_actions,
     ledger,
     local_llm,
     primitives,
@@ -775,6 +776,7 @@ def _workspace_toolsets() -> list[FunctionToolset[ChatDeps]]:
     return [
         _run_control_toolset(),
         *(primitives.toolset(section) for section in _PRIMITIVE_SECTIONS),
+        interface_actions.interface_toolset(),
     ]
 
 
@@ -955,6 +957,36 @@ def _approval_request(tool_call_id: str, tool_name: str, args: object, metadata:
     }
 
 
+# Workspace tools whose result is a run the user is now waiting on.
+_RUN_SUBMITTING_TOOLS = frozenset(
+    {"submit_benchmark", "submit_blend", "rerun_job", "run_forecast", "update_forecast"}
+)
+
+
+def _submitted_job_ids(tool_name: str, result: dict) -> list[str]:
+    """The jobs a submitting tool's result says it started; none when it refused."""
+    if tool_name not in _RUN_SUBMITTING_TOOLS or result.get("error"):
+        return []
+    jobs = [*(result.get("jobs") or []), result.get("job")]
+    return [job["id"] for job in jobs if isinstance(job, dict) and isinstance(job.get("id"), str)]
+
+
+async def _report_when_finished(deps: ChatDeps, tool_name: str, result: dict) -> None:
+    """Queue the report on a run this turn submitted, so the user is told how it went."""
+    from . import follow_ups
+
+    job_ids = _submitted_job_ids(tool_name, result)
+    if not job_ids:
+        return
+    try:
+        await follow_ups.report_when_finished(
+            deps.scope.key, deps.session_id, deps.user_id, job_ids
+        )
+    except Exception:
+        # The run is already submitted; losing its report must not fail the turn.
+        logger.warning("Could not queue the report on a submitted run", exc_info=True)
+
+
 async def _acquire_llm_slot(user_id: str) -> Semaphore:
     now = time.monotonic()
     async with _llm_limit_lock:
@@ -983,6 +1015,7 @@ async def stream_response(
     active_ruleset: Ruleset | None = None,
     comparison_id: str | None = None,
     turn_id: str | None = None,
+    trigger: str = "user",
 ) -> AsyncIterator[str]:
     if local_llm.is_managed():
         # Raises AssistantUnavailable while a forecast holds the GPU. A wake
@@ -1001,6 +1034,7 @@ async def stream_response(
         user_id=user_id,
         scope_kind=session_scope.kind,
         comparison_id=comparison_id,
+        trigger=trigger,
     )
     try:
         async for event in _stream_response_unlimited(
@@ -1055,6 +1089,8 @@ async def _add_to_read_set(
             continue
         seen.add(source["id"])
         turn.source_artifacts.append(SourceArtifact.model_validate(source))
+        if record is not None:
+            record.read_artifact_ids.append(source["id"])
 
 
 async def _workspace_instructions(deps: ChatDeps) -> str:
@@ -1068,7 +1104,9 @@ async def _workspace_instructions(deps: ChatDeps) -> str:
     settings_block = workspace_settings.prompt_block(
         await workspace_settings.get_settings(deps.workspace_id)
     )
-    return settings_block + workspaces.prompt_listing(await workspaces.listing(deps.workspace_id))
+    return settings_block + workspaces.prompt_listing(
+        await workspaces.listing(deps.workspace_id), await workspaces.recently_read(deps.session_id)
+    )
 
 
 async def _stream_response_unlimited(
@@ -1212,6 +1250,9 @@ async def _stream_response_unlimited(
                 await _add_to_read_set(
                     turn, record, session_scope.key, parsed_result.get("source_artifacts")
                 )
+                await _report_when_finished(
+                    deps, getattr(result_part, "tool_name", ""), parsed_result
+                )
             guardrail_event = _guardrail_event(turn.id, tool_call_id, parsed_result)
             if guardrail_event is not None:
                 # Recorded on the turn by the reducer as well as streamed. The
@@ -1257,6 +1298,16 @@ async def _stream_response_unlimited(
     _strip_sandbox_images(turn)
     if record is not None:
         record.text = turn.content
+    # Before `done`: the client closes the stream on it, so nothing after that yield runs.
+    if session_scope.kind == "workspace":
+        from . import analysis_names
+
+        # Results the assistant titled name their analysis; the model is only asked
+        # when it left them untitled, and only where that call is switched on.
+        naming_model = (model or _build_model()) if settings.name_workspace_analyses else None
+        analysis_names.name_turn_later(
+            session_scope.key, turn.id, latest_user_message, naming_model
+        )
     yield json.dumps(
         {
             "type": "done",

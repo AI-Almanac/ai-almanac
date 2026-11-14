@@ -14,9 +14,10 @@ import re
 import uuid
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import sqlalchemy as sa
 
@@ -223,6 +224,54 @@ async def rename_artifact(workspace_id: str, artifact_id: str, title: str | None
             .values(title=parse_title(title) if title is not None else None)
         )
     return result.rowcount > 0
+
+
+NamedBy = Literal["assistant", "user"]
+
+
+async def list_analyses(workspace_id: str) -> list[dict]:
+    analyses = tables.workspace_analyses
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(analyses.c.turn_id, analyses.c.title, analyses.c.named_by).where(
+                analyses.c.workspace_id == workspace_id
+            )
+        )
+        return _rows(result)
+
+
+async def name_analysis(
+    workspace_id: str, turn_id: str, title: str | None, named_by: NamedBy
+) -> dict | None:
+    """Name the files a turn made. The assistant names only analyses nobody has named,
+    so it never undoes a user's rename; None clears the name. Returns the analysis."""
+    analyses = tables.workspace_analyses
+    key = (analyses.c.workspace_id == workspace_id) & (analyses.c.turn_id == turn_id)
+    async with get_db() as conn:
+        current = (await conn.execute(sa.select(analyses.c.named_by).where(key))).scalar()
+        if named_by == "assistant" and current is not None:
+            return None
+        await conn.execute(analyses.delete().where(key))
+        if title is None:
+            return None
+        row = {
+            "workspace_id": workspace_id,
+            "turn_id": turn_id,
+            "title": parse_title(title),
+            "named_by": named_by,
+            "updated_at": _now(),
+        }
+        await conn.execute(analyses.insert().values(**row))
+    return {key: row[key] for key in ("turn_id", "title", "named_by")}
+
+
+async def turn_file_titles(workspace_id: str, turn_id: str) -> list[str]:
+    """Names of the results (not supporting files) a turn added to the workspace."""
+    return [
+        item["title"]
+        for item in await listing(workspace_id)
+        if item["turn_id"] == turn_id and not item["supporting"]
+    ]
 
 
 def _item_columns() -> list:
@@ -636,6 +685,7 @@ def listing_item(
 
 
 DIGEST_RECENT_ITEMS = 20
+DIGEST_RECENT_TURNS = 3
 
 
 def prompt_listing(items: list[dict], referenced: set[str] | None = None) -> str:
@@ -663,6 +713,19 @@ def prompt_listing(items: list[dict], referenced: set[str] | None = None) -> str
     return "\n".join(lines)
 
 
+async def recently_read(session_id: str, turns: int = DIGEST_RECENT_TURNS) -> set[str]:
+    """Artifact ids the session's last few turns read (their read sets)."""
+    async with get_db() as conn:
+        rows = await conn.execute(
+            sa.text(
+                "SELECT read_artifact_ids FROM assistant_turn_logs WHERE session_id = :sid "
+                "ORDER BY created_at DESC LIMIT :n"
+            ),
+            {"sid": session_id, "n": turns},
+        )
+        return {aid for (ids,) in rows.fetchall() for aid in tables.json_col(ids, [])}
+
+
 # --- live activity ------------------------------------------------------------
 
 
@@ -672,11 +735,19 @@ class Activity:
 
     job_statuses: dict[str, str]
     artifact_created: dict[str, str]
+    follow_up_statuses: dict[str, str] = field(default_factory=dict)
+    analysis_titles: dict[str, str] = field(default_factory=dict)
 
 
 async def activity(workspace_id: str) -> Activity:
-    jobs, items = tables.jobs, tables.workspace_items
+    jobs, items, follow_ups = tables.jobs, tables.workspace_items, tables.follow_ups
     async with get_db() as conn:
+        follow_up_rows = await conn.execute(
+            sa.select(follow_ups.c.id, follow_ups.c.status).where(
+                follow_ups.c.workspace_id == workspace_id
+            )
+        )
+        follow_up_statuses = dict(follow_up_rows.fetchall())
         job_statuses = await conn.execute(
             sa.select(jobs.c.id, jobs.c.status).where(in_workspace(workspace_id))
         )
@@ -685,7 +756,17 @@ async def activity(workspace_id: str) -> Activity:
                 items.c.workspace_id == workspace_id, items.c.item_kind == ARTIFACT_ITEM
             )
         )
-        return Activity(dict(job_statuses.fetchall()), dict(artifact_rows.fetchall()))
+        analysis_rows = await conn.execute(
+            sa.select(tables.workspace_analyses.c.turn_id, tables.workspace_analyses.c.title).where(
+                tables.workspace_analyses.c.workspace_id == workspace_id
+            )
+        )
+        return Activity(
+            dict(job_statuses.fetchall()),
+            dict(artifact_rows.fetchall()),
+            follow_up_statuses,
+            dict(analysis_rows.fetchall()),
+        )
 
 
 def artifacts_since(current: Activity, since: str | None) -> set[str]:
@@ -706,16 +787,20 @@ class ActivityChanges:
 
     jobs: bool
     new_artifacts: set[str]
+    follow_ups: bool
+    analyses: bool
 
     @property
     def any(self) -> bool:
-        return self.jobs or bool(self.new_artifacts)
+        return self.jobs or bool(self.new_artifacts) or self.follow_ups or self.analyses
 
 
 def activity_changes(previous: Activity, current: Activity) -> ActivityChanges:
     return ActivityChanges(
         jobs=previous.job_statuses != current.job_statuses,
         new_artifacts=set(current.artifact_created) - set(previous.artifact_created),
+        follow_ups=previous.follow_up_statuses != current.follow_up_statuses,
+        analyses=previous.analysis_titles != current.analysis_titles,
     )
 
 

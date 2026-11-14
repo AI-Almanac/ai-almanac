@@ -26,14 +26,16 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import Lock
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, HTTPException, Request, status
 from starlette.datastructures import Headers
 
 from ai_almanac.server.db import get_db, get_or_create_user
+from ai_almanac.server.tables import json_col
 from ai_almanac.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,17 @@ def _is_admin(subject: str, email: str | None, groups: set[str]) -> bool:
     if groups & _split_csv(settings.admin_groups):
         return True
     return bool(email and email.lower() in {e.lower() for e in _split_csv(settings.admin_emails)})
+
+
+def stored_user_is_admin(user: Mapping[str, Any]) -> bool:
+    """Whether a ``users`` row is an admin's, as of what their last sign-in recorded.
+
+    For work done on a user's behalf outside any request, such as a follow-up turn.
+    A personal install's operator is always admin, as ``_resolve_identity`` decides.
+    """
+    if settings.auth_mode not in ("proxy", "globus"):
+        return True
+    return _is_admin(user["subject"], user["email"], set(json_col(user["groups"], [])))
 
 
 class _TTLCache[T]:

@@ -2119,6 +2119,26 @@ export interface paths {
         patch: operations["rename_artifact_workspaces__workspace_id__artifacts__artifact_id__patch"];
         trace?: never;
     };
+    "/workspaces/{workspace_id}/analyses/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename Analysis
+         * @description Name an analysis; null clears the name, so it shows the question again.
+         */
+        patch: operations["rename_analysis_workspaces__workspace_id__analyses__turn_id__patch"];
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/settings": {
         parameters: {
             query?: never;
@@ -2265,6 +2285,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/follow-ups/{follow_up_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel Follow Up */
+        delete: operations["cancel_follow_up_workspaces__workspace_id__follow_ups__follow_up_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2303,6 +2340,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AnalysisOut
+         * @description The name of the files one chat turn made.
+         */
+        AnalysisOut: {
+            /** Turn Id */
+            turn_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Named By
+             * @enum {string}
+             */
+            named_by: "assistant" | "user";
+        };
         /**
          * BandStatistics
          * @description Band statistics
@@ -5778,6 +5830,8 @@ export interface components {
             jobs: components["schemas"]["WorkspaceJobOut"][];
             /** Artifacts */
             artifacts: components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
+            /** Analyses */
+            analyses: components["schemas"]["AnalysisOut"][];
         };
         /** WorkspaceIn */
         WorkspaceIn: {
@@ -10397,6 +10451,42 @@ export interface operations {
             };
         };
     };
+    rename_analysis_workspaces__workspace_id__analyses__turn_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                turn_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_workspaces__workspace_id__settings_get: {
         parameters: {
             query?: never;
@@ -10679,6 +10769,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProvenanceOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_follow_up_workspaces__workspace_id__follow_ups__follow_up_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                follow_up_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
