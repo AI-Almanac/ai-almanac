@@ -79,3 +79,27 @@ async def test_unsharing_keeps_the_run_in_its_owners_workspace(client) -> None:
     detail = (await client.get(f"/workspaces/{workspace['id']}", headers=owner)).json()
     assert [job["id"] for job in detail["jobs"]] == [job_id]
     assert {artifact["job_id"] for artifact in detail["artifacts"]} == {job_id}
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_promoted_to_a_workspace_brings_only_runs_still_shared(
+    client,
+) -> None:
+    owner, owner_id = await _signed_in(client)
+    reader, reader_id = await _signed_in(client)
+    theirs = insert_job(owner_id, BENCHMARK_CONFIG, visibility="shared")
+    mine = insert_job(reader_id, BENCHMARK_CONFIG)
+    scope = {"kind": "benchmark_run_group", "key": "run-1", "job_ids": [theirs, mine]}
+    session = await client.post(
+        "/chat/sessions", headers=reader, json={"title": "Their run", "scope": scope}
+    )
+    assert session.status_code == 201, session.text
+    await client.post(f"/jobs/{theirs}/unshare", headers=owner)
+
+    promoted = await client.post(
+        "/workspaces/promote", headers=reader, json={"session_id": session.json()["id"]}
+    )
+
+    assert promoted.status_code == 201, promoted.text
+    detail = (await client.get(f"/workspaces/{promoted.json()['id']}", headers=reader)).json()
+    assert [job["id"] for job in detail["jobs"]] == [mine]

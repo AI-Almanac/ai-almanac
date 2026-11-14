@@ -232,3 +232,21 @@ async def test_models_are_listed_for_observations_by_where_both_have_data(
 
     assert [model["id"] for model in for_observations.json()] == [model_id]
     assert for_unknown.json() == []
+
+
+@pytest.mark.asyncio
+async def test_a_benchmark_is_not_held_up_for_want_of_a_region(
+    client, as_new_user: dict[str, str], user_id: str
+) -> None:
+    from ai_almanac.server.services import benchmark_domain
+
+    obs_id, model_id = await _unfiled_sources(client)
+
+    spec, validation, _ = await benchmark_domain.check_benchmark_spec(
+        {"dataset_id": obs_id, "model_ids": [model_id]}, user_id
+    )
+
+    assert spec.region_id is None
+    assert validation.missing_fields == []
+    assert not [error for error in validation.errors if "region" in error.lower()]
+    assert not [error for error in validation.errors if "no data where" in error]

@@ -16,16 +16,16 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
-from pydantic_ai import ToolDenied
 from sqlalchemy import text
 
 from ai_almanac.server.auth import CurrentUser
 from ai_almanac.server.db import get_db
+from ai_almanac.server.tables import json_col
 from ai_almanac.settings import settings
 
 from ..services.benchmark_domain import (
@@ -51,25 +51,21 @@ from ..services.chat_artifacts import (
 )
 from ..services.chat_job_events import ChatJobActivity, scope_job_activity
 from ..services.chat_state import (
+    ApprovalRequest,
     ChatScope,
     ChatTurn,
 )
-from ..services.chat_tools import (
-    SubmitBenchmarkApproval,
-    SubmitBlendApproval,
-)
 from ..services.chat_turns import (
-    get_session_provider_scope,
-    json_dict,
-    json_list,
-    resume_deferred_setup_tool,
-    save_provider_state,
+    pending_approval,
+    stream_approval_turn,
     stream_chat_turn,
+    submitting_scope,
     validate_scope,
     with_interrupted_turns,
+    workspace_scope_hidden,
 )
 from ..services.ledger import Attribution
-from ..services.llm import llm_is_configured
+from ..services.llm import deserialize_model_messages, llm_is_configured
 from ..services.llm_profiles import chat_available_for_user
 from ..services.rulesets import selectable_ruleset
 from ..services.storage import get_storage, guess_chat_figure_media_type
@@ -126,6 +122,9 @@ class SessionOut(BaseModel):
 
 class SessionDetail(SessionOut):
     transcript: list[ChatTurn]
+    # The approval the assistant is still waiting on, in the shape it was streamed,
+    # so a client that reloads can show the card again. Absent once it is answered.
+    pending_approval: ApprovalRequest | None = None
 
 
 class MessageIn(BaseModel):
@@ -162,15 +161,6 @@ class BenchmarkConfigPatchIn(BaseModel):
     advanced_params: dict | None = None
 
 
-class BenchmarkSubmitIn(BaseModel):
-    approval: SubmitBenchmarkApproval | None = None
-
-
-class BenchmarkApprovalIn(BaseModel):
-    approval: SubmitBenchmarkApproval
-    message: str = "The user declined to run the benchmark."
-
-
 class BenchmarkConfigOut(BaseModel):
     benchmark_config: BenchmarkRunSpec
     benchmark_validation: BenchmarkValidation
@@ -199,18 +189,15 @@ class BlendConfigPatchIn(BaseModel):
     ref_onset_month_day: str | None = None
 
 
-class BlendSubmitIn(BaseModel):
-    approval: SubmitBlendApproval | None = None
-
-
-class BlendApprovalIn(BaseModel):
-    approval: SubmitBlendApproval
-    message: str = "The user declined to train the blend."
-
-
 class BlendConfigOut(BaseModel):
     blend_config: BlendRunSpec
     blend_validation: BlendValidation
+
+
+class ToolApprovalIn(BaseModel):
+    tool_call_id: str
+    approved: bool
+    message: str = "The user declined this step."
 
 
 # ---------------------------------------------------------------------------
@@ -223,60 +210,34 @@ def _now() -> datetime:
 
 
 def _benchmark_config(value: object) -> BenchmarkRunSpec | None:
-    parsed = json_dict(value)
+    parsed = json_col(value, {})
     return BenchmarkRunSpec.model_validate(parsed) if parsed else None
 
 
 def _benchmark_validation(value: object) -> BenchmarkValidation | None:
-    parsed = json_dict(value)
+    parsed = json_col(value, {})
     return BenchmarkValidation.model_validate(parsed) if parsed else None
 
 
-def _benchmark_submit_out(payload: dict) -> BenchmarkSubmitOut:
-    # ``submit`` returns benchmark_config/benchmark_validation; the resumed
-    # approval path returns the generic config/validation keys.
-    return BenchmarkSubmitOut(
-        run_id=payload["run_id"],
-        jobs=payload["jobs"],
-        benchmark_config=BenchmarkRunSpec.model_validate(
-            payload.get("benchmark_config") or payload["config"]
-        ),
-        benchmark_validation=BenchmarkValidation.model_validate(
-            payload.get("benchmark_validation") or payload["validation"]
-        ),
-    )
-
-
-def _blend_submit_out(payload: dict) -> BlendSubmitOut:
-    return BlendSubmitOut(
-        run_id=payload["run_id"],
-        jobs=payload["jobs"],
-        blend_config=BlendRunSpec.model_validate(payload.get("blend_config") or payload["config"]),
-        blend_validation=BlendValidation.model_validate(
-            payload.get("blend_validation") or payload["validation"]
-        ),
-    )
-
-
 def _blend_config(value: object) -> BlendRunSpec | None:
-    parsed = json_dict(value)
+    parsed = json_col(value, {})
     return BlendRunSpec.model_validate(parsed) if parsed else None
 
 
 def _blend_validation(value: object) -> BlendValidation | None:
-    parsed = json_dict(value)
+    parsed = json_col(value, {})
     return BlendValidation.model_validate(parsed) if parsed else None
 
 
 def _session_out(row) -> SessionOut:
-    transcript = json_list(row["transcript"])
+    transcript = json_col(row["transcript"], [])
     return SessionOut(
         id=row["id"],
         title=row["title"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         message_count=len(transcript),
-        scope=ChatScope.model_validate(json_dict(row["scope"])),
+        scope=_scope(row),
         benchmark_config=_benchmark_config(row.get("benchmark_config")),
         benchmark_validation=_benchmark_validation(row.get("benchmark_validation")),
         blend_config=_blend_config(row.get("blend_config")),
@@ -287,14 +248,50 @@ def _session_out(row) -> SessionOut:
 
 
 def _session_detail(row, user_id: str) -> SessionDetail:
-    transcript = with_interrupted_turns(json_list(row["transcript"]), row["updated_at"])
+    stored_transcript = json_col(row["transcript"], [])
+    transcript = with_interrupted_turns(stored_transcript, row["updated_at"])
     return SessionDetail(
         **_session_out(row).model_dump(),
         transcript=[
             hydrate_turn_artifact_urls(ChatTurn.model_validate(turn), user_id)
             for turn in transcript
         ],
+        pending_approval=pending_approval(
+            stored_transcript,
+            deserialize_model_messages(row["provider_state"]),
+            row["updated_at"],
+        ),
     )
+
+
+def _scope(session: Any) -> ChatScope:
+    return ChatScope.model_validate(json_col(session["scope"], {}))
+
+
+def _hidden_from(session: Any, user: CurrentUser) -> bool:
+    return workspace_scope_hidden(json_col(session["scope"], {}).get("kind"), user)
+
+
+async def owned_session(session_id: str, user: CurrentUser) -> dict:
+    """The caller's own chat session. A workspace conversation does not exist for anyone
+    outside the workspaces audience, so it is as not found as someone else's."""
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"),
+                    {"id": session_id, "uid": user.id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row or _hidden_from(row, user):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return dict(row)
+
+
+OwnedSession = Annotated[dict, Depends(owned_session)]
 
 
 # ---------------------------------------------------------------------------
@@ -378,57 +375,25 @@ async def list_sessions(
             .fetchall()
         )
 
-    return [_session_out(row) for row in rows]
+    return [_session_out(row) for row in rows if not _hidden_from(row, user)]
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
-async def get_session(session_id: str, user: CurrentUser):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-                    {"id": session_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return _session_detail(row, user.id)
+async def get_session(session: OwnedSession, user: CurrentUser):
+    return _session_detail(session, user.id)
 
 
 @router.get("/sessions/{session_id}/job-events", response_model=ChatJobActivity)
-async def get_session_job_events(session_id: str, user: CurrentUser) -> ChatJobActivity:
+async def get_session_job_events(session: OwnedSession, user: CurrentUser) -> ChatJobActivity:
     """Runs in the session's scope that finished since the conversation began."""
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT scope, created_at FROM chat_sessions"
-                        " WHERE id = :id AND user_id = :uid"
-                    ),
-                    {"id": session_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
-    return await scope_job_activity(user.id, scope, row["created_at"])
+    return await scope_job_activity(user.id, _scope(session), session["created_at"])
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionOut)
-async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser):
+async def update_session(session: OwnedSession, body: SessionUpdate, user: CurrentUser):
     updates = body.model_dump(exclude_unset=True)
     assignments = ["updated_at = :now"]
-    params: dict[str, object] = {"id": session_id, "uid": user.id, "now": _now()}
+    params: dict[str, object] = {"id": session["id"], "now": _now()}
 
     if "title" in updates:
         title = updates["title"].strip() if isinstance(updates["title"], str) else None
@@ -447,91 +412,39 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
                     text(f"""
                 UPDATE chat_sessions
                 SET {", ".join(assignments)}
-                WHERE id = :id AND user_id = :uid
+                WHERE id = :id
                 RETURNING *
             """),
                     params,
                 )
             )
             .mappings()
-            .fetchone()
+            .one()
         )
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
     return _session_out(row)
 
 
 @router.post("/sessions/{session_id}/benchmark/submit", response_model=BenchmarkSubmitOut)
-async def submit_session_benchmark(
-    session_id: str, user: CurrentUser, body: BenchmarkSubmitIn | None = None
-):
-    if body and body.approval:
-        final_provider_state, payload = await resume_deferred_setup_tool(
-            session_id,
-            user.id,
-            body.approval,
-            True,
-            for_admin=user.is_admin,
-        )
-        if payload is None:
-            raise HTTPException(status_code=400, detail="Benchmark approval did not submit a run")
-
-        await save_provider_state(session_id, user.id, final_provider_state)
-        return _benchmark_submit_out(payload)
-
-    row = await get_session_provider_scope(session_id, user.id)
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+async def submit_session_benchmark(session: OwnedSession, user: CurrentUser):
+    """Submit the session's draft as the user, from the setup form's own control."""
+    session_id = session["id"]
     payload = await submit_benchmark_for_session(
-        user.id, scope, session_id, Attribution.by_user(user.id)
+        user.id, submitting_scope(session), session_id, Attribution.by_user(user.id)
     )
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
     if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):
         raise HTTPException(status_code=400, detail="Benchmark config is not runnable")
-
-    return _benchmark_submit_out(payload)
-
-
-@router.post("/sessions/{session_id}/benchmark/approval", status_code=status.HTTP_204_NO_CONTENT)
-async def deny_session_benchmark_approval(
-    session_id: str, body: BenchmarkApprovalIn, user: CurrentUser
-):
-    final_provider_state, _ = await resume_deferred_setup_tool(
-        session_id,
-        user.id,
-        body.approval,
-        ToolDenied(body.message),
-        for_admin=user.is_admin,
-    )
-    await save_provider_state(session_id, user.id, final_provider_state)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return BenchmarkSubmitOut.model_validate(payload)
 
 
 @router.patch("/sessions/{session_id}/benchmark/config", response_model=BenchmarkConfigOut)
 async def update_session_benchmark_config(
-    session_id: str, body: BenchmarkConfigPatchIn, user: CurrentUser
+    session: OwnedSession, body: BenchmarkConfigPatchIn, user: CurrentUser
 ):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-                    {"id": session_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
     try:
         payload = await update_benchmark_config(
-            body.model_dump(exclude_unset=True), user.id, scope, session_id
+            body.model_dump(exclude_unset=True), user.id, _scope(session), session["id"]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -546,69 +459,44 @@ async def update_session_benchmark_config(
 
 
 @router.post("/sessions/{session_id}/blend/submit", response_model=BlendSubmitOut)
-async def submit_session_blend(
-    session_id: str, user: CurrentUser, body: BlendSubmitIn | None = None
-):
-    if body and body.approval:
-        final_provider_state, payload = await resume_deferred_setup_tool(
-            session_id,
-            user.id,
-            body.approval,
-            True,
-            config_event="blend_config",
-            for_admin=user.is_admin,
-        )
-        if payload is None:
-            raise HTTPException(status_code=400, detail="Blend approval did not submit a run")
-        await save_provider_state(session_id, user.id, final_provider_state)
-        return _blend_submit_out(payload)
-
-    row = await get_session_provider_scope(session_id, user.id)
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+async def submit_session_blend(session: OwnedSession, user: CurrentUser):
+    """Submit the session's draft as the user, from the setup form's own control."""
+    session_id = session["id"]
     payload = await submit_blend_for_session(
-        user.id, scope, session_id, Attribution.by_user(user.id)
+        user.id, submitting_scope(session), session_id, Attribution.by_user(user.id)
     )
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
     if not isinstance(payload.get("run_id"), str) or not isinstance(payload.get("jobs"), list):
         raise HTTPException(status_code=400, detail="Blend config is not runnable")
-    return _blend_submit_out(payload)
+    return BlendSubmitOut.model_validate(payload)
 
 
-@router.post("/sessions/{session_id}/blend/approval", status_code=status.HTTP_204_NO_CONTENT)
-async def deny_session_blend_approval(session_id: str, body: BlendApprovalIn, user: CurrentUser):
-    final_provider_state, _ = await resume_deferred_setup_tool(
-        session_id,
-        user.id,
-        body.approval,
-        ToolDenied(body.message),
-        config_event="blend_config",
-        for_admin=user.is_admin,
+@router.post("/sessions/{session_id}/tool-approval")
+async def decide_tool_approval(session: OwnedSession, body: ToolApprovalIn, user: CurrentUser):
+    """Approve or decline a step the assistant paused for, a run's submission included;
+    streams the rest of the turn as SSE, like a message."""
+    return StreamingResponse(
+        stream_approval_turn(
+            session["id"],
+            user.id,
+            body.tool_call_id,
+            body.approved,
+            message=body.message,
+            for_admin=user.is_admin,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    await save_provider_state(session_id, user.id, final_provider_state)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/sessions/{session_id}/blend/config", response_model=BlendConfigOut)
-async def update_session_blend_config(session_id: str, body: BlendConfigPatchIn, user: CurrentUser):
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text("SELECT scope FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-                    {"id": session_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+async def update_session_blend_config(
+    session: OwnedSession, body: BlendConfigPatchIn, user: CurrentUser
+):
     try:
         payload = await update_blend_config(
-            body.model_dump(exclude_unset=True), user.id, scope, session_id
+            body.model_dump(exclude_unset=True), user.id, _scope(session), session["id"]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -621,41 +509,12 @@ async def update_session_blend_config(session_id: str, body: BlendConfigPatchIn,
 
 
 @router.post("/sessions/{session_id}/message")
-async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
+async def send_message(session: OwnedSession, body: MessageIn, user: CurrentUser):
     await require_chat_available(user.id)
-
-    requested_scope = None
-    if body.scope is not None:
-        requested_scope = await validate_scope(body.scope, user)
-
-    async with get_db() as conn:
-        row = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT id, ruleset_id FROM chat_sessions WHERE id = :id AND user_id = :uid"
-                    ),
-                    {"id": session_id, "uid": user.id},
-                )
-            )
-            .mappings()
-            .fetchone()
-        )
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # A pinned ruleset that has since been archived or deleted degrades to the
-    # active one — same never-raise spirit as rulesets.active_ruleset().
-    session_ruleset = (
-        await selectable_ruleset(row["ruleset_id"], for_admin=user.is_admin)
-        if row["ruleset_id"]
-        else None
-    )
-
+    requested_scope = await validate_scope(body.scope, user) if body.scope is not None else None
     return StreamingResponse(
         stream_chat_turn(
-            session_id, user.id, body.content, requested_scope, active_ruleset=session_ruleset
+            session["id"], user.id, body.content, requested_scope, for_admin=user.is_admin
         ),
         media_type="text/event-stream",
         headers={
@@ -743,26 +602,17 @@ async def get_chat_figure_public(figure_id: str, exp: int, sig: str):
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_session(session_id: str, user: CurrentUser):
+async def delete_session(session: OwnedSession):
     async with get_db() as conn:
-        rows = (
-            (
-                await conn.execute(
-                    text("""
-                SELECT chat_sessions.id, chat_artifacts.storage_key
-                FROM chat_sessions
-                LEFT JOIN chat_artifacts ON chat_artifacts.session_id = chat_sessions.id
-                WHERE chat_sessions.id = :id AND chat_sessions.user_id = :uid
-            """),
-                    {"id": session_id, "uid": user.id},
-                )
+        storage_keys = (
+            await conn.execute(
+                text(
+                    "SELECT storage_key FROM chat_artifacts"
+                    " WHERE session_id = :id AND storage_key IS NOT NULL"
+                ),
+                {"id": session["id"]},
             )
-            .mappings()
-            .fetchall()
-        )
-        if not rows:
-            raise HTTPException(status_code=404, detail="Session not found")
-        storage_keys = [row["storage_key"] for row in rows if row.get("storage_key")]
-        for storage_key in storage_keys:
+        ).scalars()
+        for storage_key in storage_keys.all():
             await delete_chat_figure_artifact(storage_key)
-        await conn.execute(text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id})
+        await conn.execute(text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session["id"]})

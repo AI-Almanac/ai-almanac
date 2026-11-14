@@ -13,6 +13,7 @@ GET  /workspaces/{id}/addable-jobs                 the user's runs not in the wo
 GET  /workspaces/{id}/artifacts                    artifacts with breadcrumbs
 GET  /workspaces/{id}/artifacts/{aid}/download     the file
 GET  /workspaces/{id}/artifacts/{aid}/provenance   chain; ?verify=true re-hashes
+POST /workspaces/promote                           workspace from an existing session
 """
 
 from __future__ import annotations
@@ -128,6 +129,10 @@ class LinkJobIn(BaseModel):
     origin: Literal["added", "started"] = "added"
 
 
+class PromoteIn(BaseModel):
+    session_id: str
+
+
 class ProvenanceStepOut(BaseModel):
     id: str
     created_at: str
@@ -211,6 +216,14 @@ async def create_workspace(body: WorkspaceIn, user: CurrentUser):
 @router.get("", response_model=list[WorkspaceOut])
 async def list_workspaces(user: CurrentUser):
     return [_out(row) for row in await workspaces.list_workspaces(user.id)]
+
+
+@router.post("/promote", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)
+async def promote_session(body: PromoteIn, user: CurrentUser):
+    try:
+        return _out(await workspaces.promote_session(body.session_id, user.id))
+    except workspaces.WorkspaceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceDetail)

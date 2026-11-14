@@ -78,6 +78,33 @@ def test_settings_written_by_a_newer_release_still_open() -> None:
     assert workspace_settings.parse_settings(raw).season == SeasonWindow(name="Kiremt")
 
 
+async def test_the_assistant_is_told_the_workspace_season_each_turn(
+    client, as_new_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    seen: list[str] = []
+
+    async def stream(messages: list, info: AgentInfo):
+        seen.append(info.instructions or "")
+        yield "Noted."
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model", lambda: FunctionModel(stream_function=stream)
+    )
+    workspace, session = await workspace_with_session(client, as_new_user)
+    await _patch(client, as_new_user, workspace["id"], {"season": KIREMT})
+
+    await client.post(
+        f"/chat/sessions/{session['id']}/message", headers=as_new_user, json={"content": "hi"}
+    )
+
+    assert (
+        "- Season: Kiremt — onset searched from 1 May, reference onset 1 June, last issue date 31 July."
+        in seen[-1]
+    )
+
+
 def test_with_nothing_set_the_assistant_is_told_the_platform_defaults() -> None:
     block = workspace_settings.prompt_block(workspace_settings.WorkspaceSettings())
 

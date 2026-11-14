@@ -20,6 +20,7 @@ from ai_almanac.server.services import (
     guardrails,
     job_submission,
     ledger,
+    read_sets,
 )
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
@@ -253,6 +254,8 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
             spec.ref_onset_month_day.strip() or None,
         )
     )
+    if day_level_error := job_submission.day_level_blend_error(spec.train_day_level_blend):
+        errors.append(day_level_error)
 
     # The same predicates the submission chokepoint enforces
     # (``job_submission.create_blend_for_user``), surfaced here so the assistant
@@ -348,10 +351,6 @@ def blend_payload(spec: BlendRunSpec, validation: BlendValidation, **extra: obje
         "blend_validation": validation.model_dump(mode="json"),
         **extra,
     }
-
-
-async def validation_for_config(spec: BlendRunSpec, user_id: str) -> BlendValidation:
-    return await _validation_for_config(spec, user_id)
 
 
 # --------------------------------------------------------------------------
@@ -478,7 +477,62 @@ def _blend_create_body(spec: BlendRunSpec, run_id: str) -> job_submission.BlendC
             ref_onset_month_day=opt(spec.ref_onset_month_day),
         ),
         run_id=run_id,
+        train_day_level_blend=spec.train_day_level_blend,
     )
+
+
+async def _with_source_names(spec: BlendRunSpec, user_id: str) -> BlendRunSpec:
+    """Name the observations and models a spec picks by id, as update_blend_config does."""
+    obs_candidates = {c["id"]: c for c in await _ready_obs_candidates(user_id)}
+    obs = obs_candidates.get(spec.obs_dataset_id) if spec.obs_dataset_id else None
+    models = {
+        c["id"]: c for c in await _ready_model_candidates(obs["id"] if obs else None, user_id)
+    }
+    return spec.model_copy(
+        update={
+            "obs_dataset_name": obs["name"] if obs else None,
+            "region_id": obs.get("region") if obs else None,
+            "model_names": [models[mid]["name"] for mid in spec.model_ids if mid in models],
+        }
+    )
+
+
+async def check_blend_spec(fields: dict, user_id: str) -> tuple[BlendRunSpec, BlendValidation]:
+    """Validate a complete blend spec held by no session."""
+    named = await _with_source_names(BlendRunSpec.model_validate(fields), user_id)
+    spec = _finalize_blend_config(named)
+    return spec, await _validation_for_config(spec, user_id)
+
+
+def blend_spec_payload(spec: BlendRunSpec, validation: BlendValidation, **extra: object) -> dict:
+    return {
+        "blend_spec": spec.model_dump(mode="json"),
+        "blend_validation": validation.model_dump(mode="json"),
+        **extra,
+    }
+
+
+async def validate_blend_spec(fields: dict, user_id: str) -> dict:
+    return blend_spec_payload(*await check_blend_spec(fields, user_id))
+
+
+async def submit_blend_spec(fields: dict, user_id: str, attribution: ledger.Attribution) -> dict:
+    """Validate a complete spec and, only when it can run, submit the blend."""
+    from fastapi import HTTPException
+
+    spec, validation = await check_blend_spec(fields, user_id)
+    if not validation.can_run:
+        return blend_spec_payload(
+            spec, validation, error="Blend spec is not runnable; nothing was submitted"
+        )
+    run_id = str(uuid.uuid4())
+    try:
+        blend = await job_submission.create_blend_for_user(
+            _blend_create_body(spec, run_id), user_id, attribution=attribution
+        )
+    except HTTPException as exc:
+        return blend_spec_payload(spec, validation, error=str(exc.detail))
+    return blend_spec_payload(spec, validation, run_id=run_id, jobs=[blend.model_dump(mode="json")])
 
 
 async def submit_blend_for_session(
@@ -521,10 +575,6 @@ async def submit_blend_for_session(
             },
         )
     return blend_payload(submitted, submitted_validation, run_id=run_id, jobs=[job])
-
-
-async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpec:
-    return _finalize_blend_config(await _load_blend_config(session_id, user_id))
 
 
 # --------------------------------------------------------------------------
@@ -660,7 +710,8 @@ async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) ->
         {"filename": a["filename"], "kind": a["kind"], "size_bytes": a["size_bytes"]}
         for a in artifacts
     ]
-    if blend_summaries.find(artifacts, "pooled") is None:
+    summary = blend_summaries.find(artifacts, "pooled")
+    if summary is None:
         return {
             "job_id": job_id,
             "skill": [],
@@ -671,12 +722,18 @@ async def get_blend_results(job_id: str, user_id: str, scope: BenchmarkScope) ->
     text = await blend_summaries.read_summary(job_id, artifacts, "pooled")
     if not text:
         return {"error": f"Could not read the summary file for blend {job_id}"}
-    return {
+    result = {
         "job_id": job_id,
         "skill": _parse_pooled_summary(text),
         "spatial": await _cell_coverage(job_id, artifacts),
         "artifacts": artifact_list,
     }
+    result = await read_sets.with_job_sources(
+        result, scope, job_id, read_sets.is_file_named(summary["filename"])
+    )
+    if "source_artifacts" in result:
+        result["source_artifact"] = next(iter(result["source_artifacts"]), None)
+    return result
 
 
 async def _cell_coverage(job_id: str, artifacts: list[dict]) -> list[dict]:

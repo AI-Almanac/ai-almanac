@@ -109,3 +109,59 @@ async def test_workspaces_audience_hides_workspaces_from_everyone_outside_it(
     assert ((await client.get("/workspaces", headers=headers)).status_code == 404) is not can_use
     created = await client.post("/workspaces", json={"name": "Season review"}, headers=headers)
     assert (created.status_code == 404) is not can_use
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_conversation_is_gone_once_its_owner_leaves_the_audience(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "workspaces_audience", "everyone")
+    headers = _caller_headers(monkeypatch, "user")
+    workspace = (
+        await client.post("/workspaces", json={"name": "Season review"}, headers=headers)
+    ).json()
+    scope = {"kind": "workspace", "key": workspace["id"], "title": "Season review"}
+    session = await client.post("/chat/sessions", json={"scope": scope}, headers=headers)
+    assert session.status_code == 201
+
+    monkeypatch.setattr(settings, "workspaces_audience", "admins")
+
+    again = await client.post("/chat/sessions", json={"scope": scope}, headers=headers)
+    assert again.status_code == 404
+    message = await client.post(
+        f"/chat/sessions/{session.json()['id']}/message",
+        json={"content": "What changed since last week?"},
+        headers=headers,
+    )
+    assert message.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_every_way_into_a_workspace_conversation_closes_once_its_owner_leaves_the_audience(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "workspaces_audience", "everyone")
+    headers = _caller_headers(monkeypatch, "user")
+    workspace = (
+        await client.post("/workspaces", json={"name": "Season review"}, headers=headers)
+    ).json()
+    scope = {"kind": "workspace", "key": workspace["id"], "title": "Season review"}
+    session_id = (
+        await client.post("/chat/sessions", json={"scope": scope}, headers=headers)
+    ).json()["id"]
+    url = f"/chat/sessions/{session_id}"
+
+    monkeypatch.setattr(settings, "workspaces_audience", "admins")
+
+    listed = await client.get("/chat/sessions", headers=headers)
+    assert session_id not in {item["id"] for item in listed.json()}
+    attempts = {
+        "read": await client.get(url, headers=headers),
+        "job events": await client.get(f"{url}/job-events", headers=headers),
+        "rename": await client.patch(url, json={"title": "Renamed"}, headers=headers),
+        "approve a step": await client.post(
+            f"{url}/tool-approval", json={"tool_call_id": "c-1", "approved": True}, headers=headers
+        ),
+        "delete": await client.delete(url, headers=headers),
+    }
+    assert {name: r.status_code for name, r in attempts.items()} == dict.fromkeys(attempts, 404)

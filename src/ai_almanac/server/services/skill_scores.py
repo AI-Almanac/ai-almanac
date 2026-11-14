@@ -49,6 +49,11 @@ _SKILL_FILE_RE = re.compile(
     r"(?P<window>\d+[-,]\d+)\.csv$"
 )
 
+
+def is_skill_score_file(filename: str) -> bool:
+    return _SKILL_FILE_RE.match(filename) is not None
+
+
 # "Days 1-5" -> (1, 5). ROMP's get_target_bins filters out the "Before day N" /
 # "After day N" tail bins before writing, so only this form should appear.
 _BIN_LABEL_RE = re.compile(r"^Days\s+(?P<start>\d+)\s*-\s*(?P<end>\d+)$")

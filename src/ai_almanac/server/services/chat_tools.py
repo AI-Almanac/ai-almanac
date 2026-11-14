@@ -22,8 +22,7 @@ from ai_almanac.server.services.romp import (
 )
 
 from . import benchmark_domain, blend_domain, boundaries, ledger, onset_rules, region_catalog
-from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
-from .blend_state import BlendRunSpec
+from .benchmark_state import BenchmarkEventType
 from .chat_artifacts import create_chat_figure_artifact
 from .chat_state import ChatScope
 
@@ -88,11 +87,6 @@ JobCodeRequest = benchmark_domain.JobCodeRequest
 RerunJobRequest = benchmark_domain.RerunJobRequest
 
 
-class SubmitBenchmarkApproval(BaseModel):
-    tool_call_id: str
-    approved_config: BenchmarkRunSpec | None = None
-
-
 class BlendConfigPatch(BaseModel):
     intent: str | None = None
     name: str | None = None
@@ -119,11 +113,6 @@ class BlendConfigPatch(BaseModel):
         description="MM-DD reference (climatological) onset date the onset-before-"
         "reference probability is scored against. Optional; workflow default is 06-01.",
     )
-
-
-class SubmitBlendApproval(BaseModel):
-    tool_call_id: str
-    approved_config: BlendRunSpec | None = None
 
 
 async def tool_payload(raw_result: object, session_id: str, user_id: str) -> dict:
@@ -161,6 +150,7 @@ async def tool_payload(raw_result: object, session_id: str, user_id: str) -> dic
                     "media_type": artifact.media_type,
                     "filename": artifact.filename,
                     "created_at": artifact.created_at.isoformat(),
+                    "workspace_artifact_id": artifact_meta.get("workspace_artifact_id"),
                 }
             )
 
@@ -458,12 +448,6 @@ async def run_code(
     )
 
 
-async def get_current_benchmark_config(session_id: str, user_id: str) -> BenchmarkRunSpec:
-    return await benchmark_domain.get_current_benchmark_config(session_id, user_id)
-
-
-benchmark_payload = benchmark_domain.benchmark_payload
-validation_for_config = benchmark_domain.validation_for_config
 is_tool_available = benchmark_domain.is_tool_available
 
 
@@ -519,15 +503,7 @@ async def submit_blend_for_session(
     )
 
 
-async def get_current_blend_config(session_id: str, user_id: str) -> BlendRunSpec:
-    return await blend_domain.get_current_blend_config(session_id, user_id)
-
-
 async def get_blend_results(job_id: str, user_id: str, scope: ChatScope) -> dict:
     return await tool_payload(
         await blend_domain.get_blend_results(job_id, user_id, scope), "", user_id
     )
-
-
-blend_payload = blend_domain.blend_payload
-blend_validation_for_config = blend_domain.validation_for_config

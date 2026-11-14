@@ -1,3 +1,4 @@
+import { failureMessage } from '$lib/api/core';
 import {
 	createChatSession,
 	getChatSessions,
@@ -6,15 +7,13 @@ import {
 	deleteChatSession,
 	getChatJobActivity,
 	sendChatMessage,
-	submitChatBenchmark,
-	denyChatBenchmarkApproval,
-	submitChatBlend,
-	denyChatBlendApproval,
+	decideChatToolApproval,
 	type BenchmarkRunSpec,
 	type BenchmarkValidation,
 	type Blend,
 	type BlendRunSpec,
 	type BlendValidation,
+	type ChatApprovalRequest,
 	type ChatEvent,
 	type ChatJobActivity,
 	type ChatMessage,
@@ -32,6 +31,12 @@ export interface ChatSessionCallbacks {
 	onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
 	onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
 }
+
+/** What the assistant is told when the user declines its card, by what the card proposed. */
+const DECLINED = {
+	benchmark: 'The user wants to revise the benchmark before running it.',
+	blend: 'The user wants to revise the blend before training it.'
+};
 
 function scopeToken(scope: ChatScope): string {
 	const jobIds = [...scope.job_ids].sort().join(',');
@@ -183,6 +188,8 @@ export class ChatSessionState {
 			if (detail.blend_config) {
 				this.callbacks.onBlendConfig?.(detail.blend_config, detail.blend_validation ?? null);
 			}
+			this.pendingApproval = null;
+			if (detail.pending_approval) this.askForApproval(detail.pending_approval);
 			this.sessions = this.sessions.map((session) =>
 				session.id === id ? { ...session, scope: detail.scope } : session
 			);
@@ -216,6 +223,7 @@ export class ChatSessionState {
 			this.sessionId = session.id;
 			this.callbacks.onSessionReady?.(session.id);
 			this.messages = [];
+			this.pendingApproval = null;
 			this.jobActivity = { events: [], active: 0 };
 			this.loadedScopeToken = scopeToken(scope);
 			return session.id;
@@ -300,7 +308,7 @@ export class ChatSessionState {
 				this.applyStreamEvent(event, activeSessionId, scope);
 			}
 		} catch (e) {
-			const message = (e as Error).message ?? 'An error occurred.';
+			const message = failureMessage(e);
 			this.streamingTurn = null;
 			await this.loadSession(activeSessionId);
 			this.error = message;
@@ -324,7 +332,33 @@ export class ChatSessionState {
 		}
 	};
 
-	private applyStreamEvent(event: ChatEvent, activeSessionId: string, scope: ChatScope) {
+	/** Show the card for a run the assistant wants to start, live or on a reloaded conversation. */
+	private askForApproval(request: ChatApprovalRequest) {
+		if (request.type === 'benchmark_approval_request') {
+			this.callbacks.onBenchmarkConfig?.(request.config, request.validation ?? null);
+			this.pendingApproval = {
+				kind: 'benchmark',
+				toolCallId: request.tool_call_id,
+				config: request.config,
+				validation: request.validation ?? null
+			};
+		} else if (request.type === 'blend_approval_request') {
+			this.callbacks.onBlendConfig?.(request.config, request.validation ?? null);
+			this.pendingApproval = {
+				kind: 'blend',
+				toolCallId: request.tool_call_id,
+				config: request.config,
+				validation: request.validation ?? null
+			};
+		}
+	}
+
+	private applyStreamEvent(
+		event: ChatEvent,
+		activeSessionId: string,
+		scope: ChatScope,
+		addedTurns = 2
+	) {
 		if (event.type === 'assistant_status') {
 			this.assistantWaking = event.status === 'waking';
 			return;
@@ -343,27 +377,16 @@ export class ChatSessionState {
 
 		if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));
-		} else if (event.type === 'benchmark_approval_request') {
-			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
-			this.pendingApproval = {
-				kind: 'benchmark',
-				toolCallId: event.tool_call_id,
-				config: event.config,
-				validation: event.validation ?? null
-			};
+		} else if (
+			event.type === 'benchmark_approval_request' ||
+			event.type === 'blend_approval_request'
+		) {
+			this.askForApproval(event);
 		} else if (event.type === 'benchmark_config') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
 			if (event.run_id && event.jobs?.length) {
 				this.pendingSubmission = { kind: 'benchmark', runId: event.run_id, jobs: event.jobs };
 			}
-		} else if (event.type === 'blend_approval_request') {
-			this.callbacks.onBlendConfig?.(event.config, event.validation ?? null);
-			this.pendingApproval = {
-				kind: 'blend',
-				toolCallId: event.tool_call_id,
-				config: event.config,
-				validation: event.validation ?? null
-			};
 		} else if (event.type === 'blend_config') {
 			this.callbacks.onBlendConfig?.(event.config, event.validation ?? null);
 			if (event.run_id && event.jobs?.length) {
@@ -393,7 +416,7 @@ export class ChatSessionState {
 					s.id === activeSessionId
 						? {
 								...s,
-								message_count: s.message_count + 2,
+								message_count: s.message_count + addedTurns,
 								updated_at: new Date().toISOString(),
 								scope
 							}
@@ -403,56 +426,45 @@ export class ChatSessionState {
 		}
 	}
 
-	approveSubmit = async () => {
-		if (!this.sessionId || !this.pendingApproval) return;
-		const approval = this.pendingApproval;
-		this.pendingApproval = null;
-		try {
-			if (approval.kind === 'benchmark') {
-				const response = await submitChatBenchmark(this.sessionId, {
-					tool_call_id: approval.toolCallId,
-					approved_config: approval.config
-				});
-				this.callbacks.onBenchmarkConfig?.(
-					response.benchmark_config,
-					response.benchmark_validation
-				);
-				this.callbacks.onBenchmarkSubmitted?.(response.run_id, response.jobs, this.sessionId);
-				void this.refreshJobActivity();
-			} else {
-				const response = await submitChatBlend(this.sessionId, {
-					tool_call_id: approval.toolCallId,
-					approved_config: approval.config
-				});
-				this.callbacks.onBlendConfig?.(response.blend_config, response.blend_validation);
-				this.callbacks.onBlendSubmitted?.(response.run_id, response.jobs, this.sessionId);
-				void this.refreshJobActivity();
-			}
-		} catch (e) {
-			this.error = (e as Error).message ?? 'Submit failed.';
-		}
-	};
+	approveSubmit = () => this.answerApproval(true);
+	declineSubmit = () => this.answerApproval(false);
 
-	declineSubmit = async () => {
+	/** Answer the card on show; the assistant carries on from the decision as a turn of its own. */
+	private async answerApproval(approved: boolean) {
 		if (!this.sessionId || !this.pendingApproval) return;
 		const approval = this.pendingApproval;
 		this.pendingApproval = null;
 		try {
-			if (approval.kind === 'benchmark') {
-				await denyChatBenchmarkApproval(this.sessionId, {
-					tool_call_id: approval.toolCallId,
-					approved_config: approval.config,
-					message: 'The user wants to revise the benchmark before running it.'
-				});
-			} else {
-				await denyChatBlendApproval(this.sessionId, {
-					tool_call_id: approval.toolCallId,
-					approved_config: approval.config,
-					message: 'The user wants to revise the blend before training it.'
-				});
+			const message = approved ? undefined : DECLINED[approval.kind];
+			await this.decideStep(approval.toolCallId, approved, message);
+		} catch (e) {
+			this.error = failureMessage(e);
+		}
+	}
+
+	/** Decide a paused step, then stream the assistant carrying on from it as its own turn. */
+	private async decideStep(toolCallId: string, approved: boolean, message?: string) {
+		const sessionId = this.sessionId!;
+		const scope = this.getScope();
+		this.sending = true;
+		this.sendLocked = true;
+		try {
+			for await (const event of decideChatToolApproval(sessionId, {
+				tool_call_id: toolCallId,
+				approved,
+				message
+			})) {
+				this.applyStreamEvent(event, sessionId, scope, 1);
 			}
 		} catch (e) {
-			this.error = (e as Error).message ?? 'Approval update failed.';
+			this.streamingTurn = null;
+			await this.loadSession(sessionId);
+			throw e;
+		} finally {
+			this.sending = false;
+			this.sendLocked = false;
+			// An approved step can start a run.
+			void this.refreshJobActivity();
 		}
-	};
+	}
 }
