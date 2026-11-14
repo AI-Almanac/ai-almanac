@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
@@ -33,8 +34,14 @@
 	import { ONSET_ESTIMATE_CAVEAT } from '$lib/onset-outlook';
 	import CellInspector from './CellInspector.svelte';
 	import MapTooltip from './MapTooltip.svelte';
-	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
-	import { formatLatLon } from '$lib/geo';
+	import {
+		BASEMAP_STYLES,
+		COMMON_BASEMAPS,
+		isDarkBasemap,
+		mapCredit,
+		type BasemapStyleId
+	} from '$lib/basemaps';
+	import { formatLatLon } from '$lib/geo/coordinates';
 	import { latestIssueDate, formatIssueDate } from '$lib/forecast-freshness';
 	import {
 		buildAdm3ForecastGeoJson,
@@ -42,18 +49,36 @@
 		type ForecastFeatureCollection
 	} from './blend-map/adm3';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
-	import { BOUNDARY_LEVELS } from '$lib/components/metric-map/constants';
+	import {
+		BOUNDARY_LEVELS,
+		LIGHT_TILE_BOUNDARY_STYLES
+	} from '$lib/components/metric-map/constants';
 	import type { BoundaryLevel, BoundaryStyleDef } from '$lib/components/metric-map/types';
+	import type { MapImageText } from '$lib/components/metric-map/exportImage';
+	import MapExportButton from '$lib/components/metric-map/MapExportButton.svelte';
+	import type { AreaExportContext } from '$lib/components/metric-map/exportTitle';
+	import { forecastLegend, forecastMapTitle } from '$lib/components/metric-map/forecastExport';
+	import type { MapInitialView } from '$lib/components/metric-map/initialView';
 
-	type Props = { jobId: string; regionId?: string | null };
-	let { jobId, regionId = null }: Props = $props();
+	type Props = {
+		jobId: string;
+		regionId?: string | null;
+		/** How the map opens; read once. Left out, the map opens as it always has. */
+		initialView?: MapInitialView;
+		/** Offers "Export map", and names the areas the forecast was limited to. */
+		exportContext?: AreaExportContext;
+	};
+	let { jobId, regionId = null, initialView, exportContext }: Props = $props();
+
+	const opening: MapInitialView = untrack(() => initialView) ?? {};
+	const basemapChoices = opening.shortBasemapList ? COMMON_BASEMAPS : BASEMAP_STYLES;
 
 	let mapHost = $state<HTMLDivElement | null>(null);
 	let map: maplibregl.Map | null = null;
 	let mapReady = $state(false);
 
-	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
-	let appliedBasemap: BasemapStyleId = 'carto-dark';
+	let selectedBasemap = $state<BasemapStyleId>(opening.basemap ?? 'carto-dark');
+	let appliedBasemap: BasemapStyleId = opening.basemap ?? 'carto-dark';
 	let fullscreen = $state(false);
 	const isDark = $derived(isDarkBasemap(selectedBasemap));
 
@@ -173,9 +198,13 @@
 	const boundaries = new BoundaryLayers(
 		() => map,
 		() => regionId ?? undefined,
-		FORECAST_BOUNDARY_STYLES
+		// A host that opens the map on light tiles gets outlines that read on them.
+		opening.basemap && !isDarkBasemap(opening.basemap)
+			? LIGHT_TILE_BOUNDARY_STYLES
+			: FORECAST_BOUNDARY_STYLES
 	);
 	const boundaryLevels = Object.keys(BOUNDARY_LEVELS) as BoundaryLevel[];
+	if (opening.boundaries) boundaries.visibleLevels = new Set(opening.boundaries);
 
 	const EMPTY_PROBS: number[] = [];
 
@@ -336,6 +365,13 @@
 				'line-width': ['interpolate', ['linear'], ['zoom'], 3, 0.45, 7, 1.2]
 			}
 		});
+		// Outlines shown from the start are drawn once the cells are, so they sit on top.
+		if (opening.boundaries?.length) {
+			untrack(() => {
+				boundaries.clearFromMap();
+				boundaries.reloadVisible();
+			});
+		}
 		if (fit) fitToData(d);
 	}
 
@@ -371,7 +407,7 @@
 				fitToData(data);
 			}
 		} catch (e) {
-			boundaryError = e instanceof Error ? e.message : 'Failed to load ADM3 boundaries';
+			boundaryError = failureMessage(e);
 			adm3Boundaries = null;
 			if (mapReady && data) initLayer(data, { fit: false });
 		}
@@ -464,6 +500,10 @@
 	}
 
 	const dataThrough = $derived(data ? latestIssueDate(data.issue_dates) : null);
+	function newestIssueDate(dates: string[]): string {
+		return dates.reduce((newest, date) => (date > newest ? date : newest), dates[0] ?? '');
+	}
+
 	const dateIndex = $derived(data ? data.issue_dates.indexOf(selectedDate) : -1);
 	const dateCount = $derived(data?.issue_dates.length ?? 0);
 
@@ -494,7 +534,7 @@
 			const payload = await getBlendForecast(jobId, v);
 			payloads = { ...payloads, [key]: payload };
 		} catch (e) {
-			const message = e instanceof Error ? e.message : 'Failed to load blend forecast';
+			const message = failureMessage(e);
 			viewErrors = { ...viewErrors, [key]: message };
 			// Selecting this view again retries it.
 			requestedViews.delete(key);
@@ -507,9 +547,11 @@
 		untrack(() => void loadView(v));
 	});
 
-	// Views share issue dates, but keep the selection valid if one ever differs.
+	// A forecaster wants the newest issue first; views share issue dates, but the
+	// selection is kept valid if one ever differs.
 	$effect(() => {
-		if (data && !data.issue_dates.includes(selectedDate)) selectedDate = data.issue_dates[0] ?? '';
+		if (data && !data.issue_dates.includes(selectedDate))
+			selectedDate = newestIssueDate(data.issue_dates);
 	});
 
 	let adm3Requested = false;
@@ -581,6 +623,36 @@
 		return `Chance ${onset} begins ${binPhrase(selectedBin)}.`;
 	});
 
+	function exportTitle() {
+		const expected = `Most likely ${view.resolution === 'daily' ? 'day' : 'week'} of ${onsetName.toLowerCase()}`;
+		return forecastMapTitle({
+			what: colorMode === 'expected' ? expected : caption,
+			issued: formatIssueDate(selectedDate),
+			area: exportContext?.area ?? data?.region_name,
+			blend:
+				availableViews.length > 1
+					? view.model === 'daily_model'
+						? 'Day-level blend'
+						: 'Week-level blend'
+					: null
+		});
+	}
+
+	function exportText(issued: string): MapImageText {
+		return {
+			...exportTitle(),
+			legend: forecastLegend({
+				colorMode,
+				daily: view.resolution === 'daily',
+				reversed,
+				bins,
+				scaleMax,
+				soonest: binDateLabel(bins, issued, 0)
+			}),
+			credit: mapCredit(selectedBasemap, boundaries.visibleLayers.length > 0)
+		};
+	}
+
 	// "in Week 2 (Jun 9–Jun 15)", "on Jun 12", or "after Jun 29" for the shown forecast.
 	function binPhrase(idx: number): string {
 		if (!selectedDate) {
@@ -638,7 +710,10 @@
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-		map.on('load', () => {
+		// A host's view is ready once the style is in, which is all the cells need:
+		// `load` also waits for every basemap tile, and inside a workspace run view it
+		// has been seen never to fire. The Forecasts page keeps waiting for `load`.
+		map.once(initialView ? 'style.load' : 'load', () => {
 			mapReady = true;
 			liftBasemap();
 			if (data) initLayer(data);
@@ -796,11 +871,21 @@
 		<div class="rail-group">
 			<span class="rail-label" id="basemap-label">Base map</span>
 			<select class="rail-select" aria-labelledby="basemap-label" bind:value={selectedBasemap}>
-				{#each BASEMAP_STYLES as style (style.id)}
+				{#each basemapChoices as style (style.id)}
 					<option value={style.id}>{style.label}</option>
 				{/each}
 			</select>
 		</div>
+
+		{#if exportContext}
+			<div class="rail-group">
+				<MapExportButton
+					map={() => map}
+					text={() => exportText(selectedDate ?? '')}
+					disabled={!data || !selectedDate}
+				/>
+			</div>
+		{/if}
 
 		{#if regionId}
 			<div class="rail-group">
@@ -812,7 +897,7 @@
 							disabled={boundaries.loading.has(level)}
 							onclick={() => boundaries.toggle(level)}
 						>
-							{BOUNDARY_LEVELS[level].label}
+							{opening.boundaryLabels?.[level] ?? BOUNDARY_LEVELS[level].label}
 						</button>
 					{/each}
 				</div>

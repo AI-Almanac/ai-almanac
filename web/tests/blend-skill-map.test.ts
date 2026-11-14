@@ -12,7 +12,7 @@ import {
 	rampPosition,
 	shareBeatingBaseline,
 	skillBounds
-} from '../src/routes/blends/blend-skill-map';
+} from '../src/lib/components/blend/blend-skill-map';
 
 function grid(overrides: Partial<BlendCellGrid> = {}): BlendCellGrid {
 	return {

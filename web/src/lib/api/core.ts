@@ -39,6 +39,39 @@ export function usesBearerAuth(
 
 export const USE_BEARER_AUTH = usesBearerAuth(runtimeConfig, import.meta.env.VITE_GLOBUS_CLIENT_ID);
 
+/** A request the server refused, carrying its explanation for showing to the user. */
+export class ApiError extends Error {
+	readonly status: number;
+	readonly detail: string;
+
+	constructor(status: number, detail: string, message: string) {
+		super(message);
+		this.status = status;
+		this.detail = detail;
+	}
+}
+
+/** FastAPI explains a refusal in `detail`; anything else is shown as sent. */
+function refusalDetail(body: string): string {
+	try {
+		const detail = JSON.parse(body)?.detail;
+		return typeof detail === 'string' ? detail : body;
+	} catch {
+		return body;
+	}
+}
+
+/** What to tell the user about a failed call: the server's explanation when it gave one. */
+export function failureMessage(e: unknown): string {
+	if (e instanceof ApiError) return e.detail;
+	return e instanceof Error ? e.message : String(e);
+}
+
+/** A settled call's value, or the fallback when it failed: for choices a form can do without. */
+export function settled<T>(result: PromiseSettledResult<T>, fallback: T): T {
+	return result.status === 'fulfilled' ? result.value : fallback;
+}
+
 export async function request<T>(path: string, init: RequestInit = {}, retry = false): Promise<T> {
 	// No stored token means the user never signed in (or signed out): send the
 	// request anonymously — public endpoints answer with example data, private
@@ -96,7 +129,11 @@ export async function request<T>(path: string, init: RequestInit = {}, retry = f
 			body,
 			requestId: res.headers.get('x-request-id') ?? undefined
 		});
-		throw new Error(`${method} ${path} failed (${res.status}): ${body}`);
+		throw new ApiError(
+			res.status,
+			refusalDetail(body),
+			`${method} ${path} failed (${res.status}): ${body}`
+		);
 	}
 	if (res.status === 204 || res.headers.get('content-length') === '0') {
 		return undefined as T;

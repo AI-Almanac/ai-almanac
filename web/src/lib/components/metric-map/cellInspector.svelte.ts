@@ -1,3 +1,4 @@
+import { failureMessage } from '$lib/api/core';
 import type { Job, JobCellResponse } from '$lib/api';
 import { getCachedJobCell } from '$lib/benchmarks.svelte';
 
@@ -37,7 +38,7 @@ export class CellInspector {
 			this.results = results;
 		} catch (e) {
 			if (requestId !== this.requestId) return;
-			this.error = e instanceof Error ? e.message : 'Failed to load cell metrics';
+			this.error = failureMessage(e);
 		} finally {
 			if (requestId !== this.requestId) return;
 			this.loading = false;

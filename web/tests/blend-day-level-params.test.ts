@@ -5,7 +5,7 @@ import {
 	dayLevelParamsBody,
 	dayLevelParamsError,
 	dayLevelRunNote
-} from '../src/routes/blends/day-level-params';
+} from '../src/lib/components/blend-setup/day-level-params';
 
 const blank = { yearsPerFold: '', trees: '', maxDepth: '', minSamplesLeaf: '', maxSamples: '' };
 

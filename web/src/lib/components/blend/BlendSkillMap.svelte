@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	/**
 	 * Where the blend beats climatology, per grid point or administrative area.
 	 *
@@ -11,7 +12,19 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
-	import { BASEMAP_STYLES, isDarkBasemap, type BasemapStyleId } from '$lib/basemaps';
+	import {
+		BASEMAP_STYLES,
+		COMMON_BASEMAPS,
+		isDarkBasemap,
+		mapCredit,
+		type BasemapStyleId
+	} from '$lib/basemaps';
+	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
+	import { LIGHT_TILE_BOUNDARY_STYLES } from '$lib/components/metric-map/constants';
+	import type { MapImageText } from '$lib/components/metric-map/exportImage';
+	import MapExportButton from '$lib/components/metric-map/MapExportButton.svelte';
+	import { titledMap, type AreaExportContext } from '$lib/components/metric-map/exportTitle';
+	import type { MapInitialView } from '$lib/components/metric-map/initialView';
 	import {
 		getBlendCellMetrics,
 		type BlendCellMetrics,
@@ -36,8 +49,18 @@
 	import { DEFAULT_BLEND_MODEL, blendLabel } from './blend-summary';
 
 	// revision changes when the job's results grow, which reloads the map in place.
-	type Props = { jobId: string; revision?: string };
-	let { jobId, revision = '' }: Props = $props();
+	type Props = {
+		jobId: string;
+		revision?: string;
+		/** How the map opens; read once. Left out, the map opens as it always has. */
+		initialView?: MapInitialView;
+		/** Offers "Export map", and names the areas the blend was limited to. */
+		exportContext?: AreaExportContext;
+	};
+	let { jobId, revision = '', initialView, exportContext }: Props = $props();
+
+	const opening: MapInitialView = untrack(() => initialView) ?? {};
+	const basemapChoices = opening.shortBasemapList ? COMMON_BASEMAPS : BASEMAP_STYLES;
 
 	const SOURCE = 'blend-skill';
 	const FILL_LAYER = 'blend-skill-fill';
@@ -53,7 +76,7 @@
 
 	// Dark, as the benchmark and forecast maps are: the diverging scale's midpoint is
 	// near-white, which reads as neutral against dark but disappears against light.
-	let basemap = $state<BasemapStyleId>('carto-dark');
+	let basemap = $state<BasemapStyleId>(opening.basemap ?? 'carto-dark');
 	let metrics = $state<BlendCellMetrics | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -103,13 +126,28 @@
 	const byArea = $derived(grid != null && isAreaMetric(grid));
 	const unitWord = $derived(byArea ? 'areas' : 'points');
 
+	const outlines = new BoundaryLayers(
+		() => map,
+		() => metrics?.region_id ?? undefined,
+		LIGHT_TILE_BOUNDARY_STYLES
+	);
+	if (opening.boundaries) outlines.visibleLevels = new Set(opening.boundaries);
+
 	function basemapUrl(): string {
 		return (BASEMAP_STYLES.find((s) => s.id === basemap) ?? BASEMAP_STYLES[0]).url;
 	}
 
+	// The scale's midpoint is near-white, so on a host's light tiles a neutral cell
+	// is told from the land by a firmer edge that holds at every zoom.
+	const edgedForLightTiles = $derived(Boolean(opening.basemap) && !isDarkBasemap(basemap));
 	const outlineColor = $derived(
-		isDarkBasemap(basemap) ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)'
+		edgedForLightTiles
+			? 'rgba(45,55,65,0.5)'
+			: isDarkBasemap(basemap)
+				? 'rgba(255,255,255,0.25)'
+				: 'rgba(0,0,0,0.2)'
 	);
+	const outlineWidth = $derived(edgedForLightTiles ? [4, 0.4, 8, 0.9] : [4, 0, 8, 0.6]);
 
 	function renderCells(fit: boolean) {
 		if (!map || !mapReady || !grid || !metrics) return;
@@ -138,7 +176,7 @@
 				paint: {
 					'line-color': outlineColor,
 					// Cell borders would swamp the fills when zoomed out.
-					'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0, 8, 0.6]
+					'line-width': ['interpolate', ['linear'], ['zoom'], ...outlineWidth]
 				}
 			});
 			// Fill and line layers ignore points, so unmatched areas need their own layer.
@@ -154,6 +192,11 @@
 					'circle-stroke-color': outlineColor,
 					'circle-stroke-width': 1
 				}
+			});
+			// The cells were just added, so outlines shown from the start go on top of them.
+			untrack(() => {
+				outlines.clearFromMap();
+				outlines.reloadVisible();
 			});
 		}
 		if (fit) {
@@ -196,7 +239,7 @@
 			})
 			.catch((e) => {
 				if (!cancelled) {
-					error = e instanceof Error ? e.message : 'Could not load per-point skill.';
+					error = failureMessage(e);
 				}
 			})
 			.finally(() => {
@@ -342,6 +385,23 @@
 	});
 
 	const legendStops = [0, 0.25, 0.5, 0.75, 1].map((t) => interpolateStops(SKILL_STOPS, t));
+
+	// Only exported once both have loaded; the button is disabled until then.
+	function exportText(shown: SkillLayer | null, loaded: BlendCellMetrics | null): MapImageText {
+		const blend = blendLabel(loaded?.blend_model ?? DEFAULT_BLEND_MODEL);
+		return {
+			...titledMap(`${shown?.label ?? ''} against Traditional Climatology — ${blend}`, [
+				exportContext?.area
+			]),
+			legend: {
+				stops: legendStops,
+				low: `−${formatSkillValue(extent)} (worse)`,
+				high: `+${formatSkillValue(extent)} (better)`,
+				note: (shown?.clipped ?? 0) > 0 ? 'Points beyond the scale take its end colour' : ''
+			},
+			credit: mapCredit(basemap, outlines.visibleLayers.length > 0)
+		};
+	}
 </script>
 
 <section
@@ -412,14 +472,23 @@
 			</span>
 		</div>
 
-		<label class="basemap">
-			Basemap
-			<select bind:value={basemap}>
-				{#each BASEMAP_STYLES as style (style.id)}
-					<option value={style.id}>{style.label}</option>
-				{/each}
-			</select>
-		</label>
+		<div class="map-options">
+			<label class="basemap">
+				Basemap
+				<select bind:value={basemap}>
+					{#each basemapChoices as style (style.id)}
+						<option value={style.id}>{style.label}</option>
+					{/each}
+				</select>
+			</label>
+			{#if exportContext}
+				<MapExportButton
+					map={() => map}
+					text={() => exportText(grid, metrics)}
+					disabled={!mapReady || !grid || !metrics}
+				/>
+			{/if}
+		</div>
 
 		<p class="caption">
 			{#if share && share.total > 0}
@@ -445,6 +514,9 @@
 				{centredAreas === 1 ? 'area has' : 'areas have'} no matching outline and {centredAreas === 1
 					? 'is'
 					: 'are'} drawn as a dot at {centredAreas === 1 ? 'its' : 'their'} centre.
+			{/if}
+			{#if outlines.visibleLayers.length > 0}
+				Boundaries: geoBoundaries.
 			{/if}
 		</p>
 	{/if}
@@ -474,7 +546,7 @@
 
 	.map-topline h3 {
 		margin: 0;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		font-weight: 800;
 		color: var(--color-text);
 	}
@@ -515,7 +587,7 @@
 		background: rgba(20, 26, 30, 0.92);
 		color: #f4f4f4;
 		font-family: var(--font-mono);
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		pointer-events: none;
 		white-space: nowrap;
 	}
@@ -533,7 +605,7 @@
 		background: var(--color-surface);
 		border: 1px solid var(--color-danger-border);
 		color: var(--color-text);
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		line-height: 1.45;
 	}
 
@@ -543,7 +615,7 @@
 		align-items: center;
 		gap: 0.45rem;
 		color: var(--color-text-muted);
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 	}
 
 	.ramp {
@@ -563,7 +635,15 @@
 		align-items: center;
 		gap: 0.4rem;
 		color: var(--color-text-muted);
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
+	}
+
+	.map-options {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.4rem 1rem;
 	}
 
 	.basemap select {
@@ -572,20 +652,20 @@
 		background: var(--color-surface);
 		color: var(--color-text);
 		font-family: var(--font-body);
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		padding: 0.15rem 0.3rem;
 	}
 
 	.caption {
 		margin: 0;
 		color: var(--color-text-muted);
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		line-height: 1.45;
 	}
 
 	.muted {
 		margin: 0;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 	}
 </style>

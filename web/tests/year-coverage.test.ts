@@ -8,7 +8,7 @@ import {
 	memberCountWarning,
 	parseYearSpec,
 	yearSpecError
-} from '../src/routes/blends/year-coverage';
+} from '../src/lib/components/blend-setup/year-coverage';
 
 function source(start: number, end: number): DataSource {
 	return { metadata: { start_year: start, end_year: end } } as unknown as DataSource;

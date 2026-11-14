@@ -1,7 +1,7 @@
 <script lang="ts">
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import PerModelConfig from './PerModelConfig.svelte';
-	import type { FocusAreaValue } from '$lib/api/jobs';
+	import { regionName } from '$lib/places';
 	import type { BenchmarkSetupForm } from './setup-form.svelte';
 
 	interface Props {
@@ -21,32 +21,8 @@
 			?.scrollIntoView({ block: 'start' });
 	});
 
-	const regions = $derived(form.regions);
-	const datasets = $derived(form.datasets);
-	const dataLoaded = $derived(form.dataLoaded);
-	const models = $derived(form.availableModels);
-	const selectedRegionId = $derived(form.selectedRegionId);
-	const selectedDatasetId = $derived(form.selectedDatasetId);
-	const selectedModelIds = $derived(form.selectedModelIds);
-	const forecastWindowDays = $derived(form.forecastWindowDays);
-	const selectedRegion = $derived(form.selectedRegion);
-	const selectedDataset = $derived(form.selectedDataset);
-	const selectedModels = $derived(form.selectedModels);
-	const sharedAdvancedParams = $derived(form.sharedAdvancedParams);
-	const parameterDefaults = $derived(form.parameterDefaults);
-
-	const setRegionId = (id: string) => form.setRegionId(id);
-	const setForecastWindowDays = (days: number | null) => form.setForecastWindowDays(days);
-	const toggleModel = (id: string) => form.toggleModel(id);
-	const setSharedParam = (key: string, value: string | number | FocusAreaValue | null) =>
-		form.setSharedParam(key, value);
-	const getOverride = <T,>(modelId: string, key: string, fallback: T): T =>
-		form.getOverride(modelId, key, fallback);
-	const setOverride = (modelId: string, key: string, value: string | boolean | number) =>
-		form.setOverride(modelId, key, value);
-
 	function isSelected(modelId: string) {
-		return selectedModelIds.includes(modelId);
+		return form.selectedModelIds.includes(modelId);
 	}
 
 	function closeOnEscape(event: KeyboardEvent) {
@@ -55,13 +31,9 @@
 
 	function handleDatasetChange(id: string) {
 		form.setDatasetId(id);
-		const dataset = datasets.find((item) => item.id === id);
-		if (dataset?.obs_file_pattern) setSharedParam('obs_file_pattern', dataset.obs_file_pattern);
-	}
-
-	function regionName(regionId: string | null | undefined): string | null {
-		if (!regionId) return null;
-		return regions.find((region) => region.id === regionId)?.display_name ?? regionId;
+		const dataset = form.datasets.find((item) => item.id === id);
+		if (dataset?.obs_file_pattern)
+			form.setSharedParam('obs_file_pattern', dataset.obs_file_pattern);
 	}
 
 	function defaultValue(value: string | number | null | undefined, fallback = 'None') {
@@ -82,7 +54,7 @@
 					<p class="eyebrow">Benchmark setup</p>
 					<h2 id="advanced-title">Benchmark settings</h2>
 					<p class="panel-subtitle">
-						{selectedRegion?.display_name ?? 'No region'} · {selectedDataset?.name ??
+						{form.selectedRegion?.display_name ?? 'No region'} · {form.selectedDataset?.name ??
 							'No ground truth'}
 					</p>
 				</div>
@@ -122,22 +94,22 @@
 									<label>
 										<span>Ground truth</span>
 										<select
-											value={selectedDatasetId}
-											disabled={!dataLoaded || datasets.length === 0}
+											value={form.selectedDatasetId}
+											disabled={!form.dataLoaded || form.datasets.length === 0}
 											onchange={(e) => handleDatasetChange((e.target as HTMLSelectElement).value)}
 										>
-											{#if datasets.length === 0}
+											{#if form.datasets.length === 0}
 												<option value=""
-													>{dataLoaded
+													>{form.dataLoaded
 														? 'No observation datasets available'
 														: 'Loading datasets...'}</option
 												>
 											{:else}
 												<option value="">Choose an observation dataset</option>
-												{#each datasets as dataset}
+												{#each form.datasets as dataset}
 													<option value={dataset.id}>
-														{dataset.name}{#if regionName(dataset.region)}
-															· {regionName(dataset.region)}{/if}
+														{dataset.name}{#if regionName(form.regions, dataset.region)}
+															· {regionName(form.regions, dataset.region)}{/if}
 													</option>
 												{/each}
 											{/if}
@@ -151,32 +123,32 @@
 									<label>
 										<span>Benchmark coverage</span>
 										<select
-											value={selectedRegionId}
-											disabled={!selectedDatasetId}
-											onchange={(e) => setRegionId((e.target as HTMLSelectElement).value)}
+											value={form.selectedRegionId}
+											disabled={!form.selectedDatasetId}
+											onchange={(e) => form.setRegionId((e.target as HTMLSelectElement).value)}
 										>
 											<option value="">
-												{selectedDatasetId
-													? 'Choose benchmark coverage'
+												{form.selectedDatasetId
+													? 'Wherever the data is'
 													: 'Select ground truth first'}
 											</option>
-											{#each regions as region}
+											{#each form.regions as region}
 												<option value={region.id}>{region.display_name}</option>
 											{/each}
 										</select>
 										<small>
-											Defaults from the selected dataset. Change it when using broader observations
-											for a custom region.
+											Defaults from the selected dataset. Change it when the observations cover more
+											than one region.
 										</small>
 									</label>
 
 									<label>
 										<span>Forecast window</span>
 										<select
-											value={forecastWindowDays ?? ''}
+											value={form.forecastWindowDays ?? ''}
 											onchange={(e) => {
 												const value = (e.target as HTMLSelectElement).value;
-												setForecastWindowDays(value ? Number(value) : null);
+												form.setForecastWindowDays(value ? Number(value) : null);
 											}}
 										>
 											<option value={30}>Days 1-30</option>
@@ -199,18 +171,16 @@
 							<div class="section-heading">
 								<div>
 									<h3>Which models to test <span class="section-badge required">Required</span></h3>
-									<p>Only models with forecasts covering the selected region appear here.</p>
+									<p>Only models with data where the chosen observations have it appear here.</p>
 								</div>
-								<strong>{selectedModelIds.length} selected</strong>
+								<strong>{form.selectedModelIds.length} selected</strong>
 							</div>
 
-							{#if !selectedRegionId}
+							{#if !form.selectedDatasetId}
+								<p class="empty">Select ground truth to see available models.</p>
+							{:else if form.availableModels.length === 0}
 								<p class="empty">
-									Select ground truth and benchmark coverage to see available models.
-								</p>
-							{:else if models.length === 0}
-								<p class="empty">
-									No models are available for the selected ground truth's region and grid.
+									No models have data where the selected ground truth does, on the same grid.
 								</p>
 							{:else}
 								<div class="model-table">
@@ -220,13 +190,13 @@
 										<span>Type</span>
 										<span>Coverage</span>
 									</div>
-									{#each models as model}
+									{#each form.availableModels as model}
 										<label class="model-row" class:selected={isSelected(model.id)}>
 											<span>
 												<input
 													type="checkbox"
 													checked={isSelected(model.id)}
-													onchange={() => toggleModel(model.id)}
+													onchange={() => form.toggleModel(model.id)}
 												/>
 											</span>
 											<span>
@@ -278,25 +248,27 @@
 											</p>
 										</div>
 										<strong>
-											{selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
+											{form.selectedModels.length} model{form.selectedModels.length === 1
+												? ''
+												: 's'}
 											<span class="chevron" aria-hidden="true"></span>
 										</strong>
 									</div>
 								</summary>
 
 								<div class="details-body">
-									{#if selectedModels.length === 0}
+									{#if form.selectedModels.length === 0}
 										<p class="empty">
 											Select at least one model before editing model-specific settings.
 										</p>
 									{:else}
 										<div class="model-config-list">
-											{#each selectedModelIds as modelId}
+											{#each form.selectedModelIds as modelId}
 												<PerModelConfig
 													{modelId}
-													cfg={models.find((model) => model.id === modelId)}
-													{getOverride}
-													{setOverride}
+													cfg={form.availableModels.find((model) => model.id === modelId)}
+													getOverride={form.getOverride}
+													setOverride={form.setOverride}
 													guardrails={form.guardrails}
 												/>
 											{/each}
@@ -346,12 +318,17 @@
 											<input
 												type="number"
 												step="any"
-												placeholder={defaultValue(parameterDefaults?.wet_threshold)}
-												value={sharedAdvancedParams.wet_threshold ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.wet_threshold)}
+												value={form.sharedAdvancedParams.wet_threshold ?? ''}
 												oninput={(e) =>
-													setSharedParam('wet_threshold', (e.target as HTMLInputElement).value)}
+													form.setSharedParam(
+														'wet_threshold',
+														(e.target as HTMLInputElement).value
+													)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.wet_threshold)} mm</small>
+											<small
+												>Default: {defaultValue(form.parameterDefaults?.wet_threshold)} mm</small
+											>
 										</label>
 										<label>
 											<span class="label-with-help">
@@ -363,12 +340,12 @@
 											<input
 												type="number"
 												step="any"
-												placeholder={defaultValue(parameterDefaults?.wet_init)}
-												value={sharedAdvancedParams.wet_init ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.wet_init)}
+												value={form.sharedAdvancedParams.wet_init ?? ''}
 												oninput={(e) =>
-													setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('wet_init', (e.target as HTMLInputElement).value)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.wet_init)} mm</small>
+											<small>Default: {defaultValue(form.parameterDefaults?.wet_init)} mm</small>
 										</label>
 										<label>
 											<span class="label-with-help">
@@ -379,12 +356,12 @@
 											</span>
 											<input
 												type="number"
-												placeholder={defaultValue(parameterDefaults?.wet_spell)}
-												value={sharedAdvancedParams.wet_spell ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.wet_spell)}
+												value={form.sharedAdvancedParams.wet_spell ?? ''}
 												oninput={(e) =>
-													setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('wet_spell', (e.target as HTMLInputElement).value)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.wet_spell)} days</small>
+											<small>Default: {defaultValue(form.parameterDefaults?.wet_spell)} days</small>
 										</label>
 										<label>
 											<span class="label-with-help">
@@ -395,12 +372,12 @@
 											</span>
 											<input
 												type="number"
-												placeholder={defaultValue(parameterDefaults?.dry_spell)}
-												value={sharedAdvancedParams.dry_spell ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.dry_spell)}
+												value={form.sharedAdvancedParams.dry_spell ?? ''}
 												oninput={(e) =>
-													setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('dry_spell', (e.target as HTMLInputElement).value)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.dry_spell)} days</small>
+											<small>Default: {defaultValue(form.parameterDefaults?.dry_spell)} days</small>
 										</label>
 										<label>
 											<span class="label-with-help">
@@ -411,12 +388,13 @@
 											</span>
 											<input
 												type="number"
-												placeholder={defaultValue(parameterDefaults?.dry_extent)}
-												value={sharedAdvancedParams.dry_extent ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.dry_extent)}
+												value={form.sharedAdvancedParams.dry_extent ?? ''}
 												oninput={(e) =>
-													setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('dry_extent', (e.target as HTMLInputElement).value)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.dry_extent)} days</small>
+											<small>Default: {defaultValue(form.parameterDefaults?.dry_extent)} days</small
+											>
 										</label>
 									</fieldset>
 
@@ -430,12 +408,14 @@
 												/>
 											</span>
 											<input
-												placeholder={defaultValue(parameterDefaults?.nc_mask, 'No mask')}
-												value={sharedAdvancedParams.nc_mask ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.nc_mask, 'No mask')}
+												value={form.sharedAdvancedParams.nc_mask ?? ''}
 												oninput={(e) =>
-													setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('nc_mask', (e.target as HTMLInputElement).value)}
 											/>
-											<small>Default: {defaultValue(parameterDefaults?.nc_mask, 'No mask')}</small>
+											<small
+												>Default: {defaultValue(form.parameterDefaults?.nc_mask, 'No mask')}</small
+											>
 										</label>
 										<label>
 											<span class="label-with-help">
@@ -446,16 +426,16 @@
 											</span>
 											<input
 												placeholder={defaultValue(
-													parameterDefaults?.thresh_file,
+													form.parameterDefaults?.thresh_file,
 													'Dataset default'
 												)}
-												value={sharedAdvancedParams.thresh_file ?? ''}
+												value={form.sharedAdvancedParams.thresh_file ?? ''}
 												oninput={(e) =>
-													setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('thresh_file', (e.target as HTMLInputElement).value)}
 											/>
 											<small
 												>Default: {defaultValue(
-													parameterDefaults?.thresh_file,
+													form.parameterDefaults?.thresh_file,
 													'Dataset default'
 												)}</small
 											>
@@ -468,13 +448,16 @@
 												/>
 											</span>
 											<input
-												value={sharedAdvancedParams.ref_model ?? ''}
-												placeholder={defaultValue(parameterDefaults?.ref_model, 'climatology')}
+												value={form.sharedAdvancedParams.ref_model ?? ''}
+												placeholder={defaultValue(form.parameterDefaults?.ref_model, 'climatology')}
 												oninput={(e) =>
-													setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
+													form.setSharedParam('ref_model', (e.target as HTMLInputElement).value)}
 											/>
 											<small
-												>Default: {defaultValue(parameterDefaults?.ref_model, 'climatology')}</small
+												>Default: {defaultValue(
+													form.parameterDefaults?.ref_model,
+													'climatology'
+												)}</small
 											>
 										</label>
 										<label>
@@ -486,16 +469,19 @@
 											</span>
 											<input
 												placeholder={defaultValue(
-													parameterDefaults?.ref_model_dir,
+													form.parameterDefaults?.ref_model_dir,
 													'Ground truth path'
 												)}
-												value={sharedAdvancedParams.ref_model_dir ?? ''}
+												value={form.sharedAdvancedParams.ref_model_dir ?? ''}
 												oninput={(e) =>
-													setSharedParam('ref_model_dir', (e.target as HTMLInputElement).value)}
+													form.setSharedParam(
+														'ref_model_dir',
+														(e.target as HTMLInputElement).value
+													)}
 											/>
 											<small
 												>Default: {defaultValue(
-													parameterDefaults?.ref_model_dir,
+													form.parameterDefaults?.ref_model_dir,
 													'Ground truth path'
 												)}</small
 											>

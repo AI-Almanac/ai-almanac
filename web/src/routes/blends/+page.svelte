@@ -1,73 +1,39 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import InfoTip from '$lib/components/InfoTip.svelte';
+	import { badgeLabel, badgeTone, isActiveStatus, runTime, sidebarStatus } from '$lib/run-status';
+	import { downloadJobArtifact } from '$lib/api/jobs';
+	import { failureMessage } from '$lib/api/core';
 	import { pollWhileActive } from '$lib/poll';
 	import { page } from '$app/stores';
 	import { account } from '$lib/account.svelte';
 	import LoginPrompt from '$lib/LoginPrompt.svelte';
 	import {
 		listBlends,
-		createBlend,
 		listDataSources,
 		getCapabilities,
 		getGuardrailThresholds,
 		getJobArtifacts,
-		getBlendSummary,
 		cancelJob,
 		deleteJob,
-		fetchResultBlob,
-		getRegions,
 		type Blend,
-		type BlendCreate,
-		type DayLevelSettings,
 		type BlendRunSpec,
 		type ChatScope,
 		type DataSource,
 		type Job,
 		type JobArtifact,
-		type JobStatus,
-		type Region
+		type JobStatus
 	} from '$lib/api';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
-	import FocusAreaMap from '$lib/components/FocusAreaMap.svelte';
-	import type { FocusAreaValue } from '$lib/api/jobs';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import SplitResizer from '$lib/components/SplitResizer.svelte';
-	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
-	import {
-		MIN_ONSET_YEARS,
-		DEFAULT_MIN_TRAINING_YEARS,
-		computeCoverage,
-		coverageLimits,
-		defaultSplit,
-		memberCountWarning,
-		yearSpecError
-	} from './year-coverage';
-	import { regionCountry } from '$lib/places';
-	import {
-		describeSourceCoverage,
-		gridStep,
-		gridsMatch,
-		scoredTogether
-	} from '$lib/source-coverage';
-	import { ONSET_DEFAULTS, onsetParamsBody, onsetParamsError } from './onset-params';
-	import {
-		DAY_LEVEL_DEFAULTS,
-		dayLevelFits,
-		dayLevelParamsBody,
-		dayLevelParamsError,
-		dayLevelRunNote
-	} from './day-level-params';
-	import { parseYearSpec } from './year-coverage';
-	import { parsePooledSummary, type SkillRow } from './blend-summary';
-	import BlendSkillPanel from './BlendSkillPanel.svelte';
+	import RunSidebar, { type RunSection } from '$lib/components/RunSidebar.svelte';
+	import BlendForm from '$lib/components/blend-setup/BlendForm.svelte';
+	import { DEFAULT_MIN_TRAINING_YEARS } from '$lib/components/blend-setup/year-coverage';
+	import BlendResults from '$lib/components/blend/BlendResults.svelte';
 	import BlendOutputs from './BlendOutputs.svelte';
 	import { awaitingArtifacts, blendInProgress, blendStateChanged, dayLevelNote } from './day-level';
 	import { installTour } from '$lib/tour.svelte';
 	import { takeSetupRequest } from '$lib/setup-request';
 	import { blendResultsSteps, blendSetupSteps } from './tours';
-
-	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
 	let blends = $state<Blend[]>([]);
 	let obsSources = $state<DataSource[]>([]);
@@ -81,11 +47,6 @@
 	let chatAvailable = $state(false);
 	// Whether new blends train the day-level blend, so its settings are offered.
 	let dayLevelAvailable = $state(false);
-	let yearsPerFold = $state('');
-	let forestTrees = $state('');
-	let forestMaxDepth = $state('');
-	let forestMinSamplesLeaf = $state('');
-	let forestMaxSamples = $state('');
 	// A comparison needs a wider assistant column than the normal rail.
 	let chatComparing = $state(false);
 	let splitEl = $state<HTMLElement | null>(null);
@@ -134,7 +95,6 @@
 	let artifacts = $state<JobArtifact[]>([]);
 	// The blend `artifacts` belongs to; plain, so reading it tracks nothing.
 	let artifactsFor: string | null = null;
-	let skill = $state<SkillRow[]>([]);
 
 	const selected = $derived(blends.find((b) => b.id === selectedId) ?? null);
 	installTour(
@@ -143,7 +103,7 @@
 		() => !creating && selected?.status === 'complete'
 	);
 	installTour('blend-setup', blendSetupSteps, () => creating);
-	const hasActive = $derived(blends.some((b) => ACTIVE_STATUSES.includes(b.status)));
+	const hasActive = $derived(blends.some((b) => isActiveStatus(b.status)));
 
 	// The chat panel beside a selected blend. A session carried over from the
 	// benchmark flow keeps its original scope for continuity; any other blend gets
@@ -163,147 +123,9 @@
 	// the assistant can call get_blend_results on it.
 	const detailChatJobs = $derived(selected ? [{ id: selected.id } as Job] : []);
 
-	// --- Form state ---
-	let name = $state('');
-	let obsDatasetId = $state('');
-	let modelIds = $state<string[]>([]);
-	let trainingYears = $state('');
-	let cvHoldoutYears = $state('');
-	let forecastYears = $state('');
-	let trueHoldoutYears = $state('');
 	// The enforced minimum, so the prefilled split is one the server accepts.
 	let minTrainingYears = $state(DEFAULT_MIN_TRAINING_YEARS);
-	let formulaText = $state('');
-	let focusArea = $state<FocusAreaValue | null>(null);
-	// Onset definition overrides; blank means the workflow default.
-	let thresholdMm = $state('');
-	let cutoffMonthDay = $state('');
-	let refOnsetMonthDay = $state('');
-	let yearsDirty = $state(false);
-	let submitting = $state(false);
-	let submitError = $state<string | null>(null);
-
-	// An area drawn for one region means nothing in another.
-	function selectObs(id: string) {
-		const region = obsSources.find((s) => s.id === id)?.region;
-		if (region !== selectedObs?.region) focusArea = null;
-		obsDatasetId = id;
-	}
-
-	let regions = $state<Region[]>([]);
-
-	// Only the country to pick places in by default; without it the user picks one.
-	onMount(() => {
-		getRegions()
-			.then((listed) => (regions = listed))
-			.catch(() => {});
-	});
-
-	const selectedObs = $derived(obsSources.find((s) => s.id === obsDatasetId) ?? null);
-	const country = $derived(regionCountry(regions, selectedObs?.region ?? null));
-
-	// Only offer models that have data where the chosen observations do, on the
-	// same grid.
-	const availableModels = $derived(
-		selectedObs
-			? modelSources.filter(
-					(s) => scoredTogether(selectedObs, s) && gridsMatch(gridStep(selectedObs), gridStep(s))
-				)
-			: []
-	);
-
-	// Drop any selected model that no longer matches the chosen observations.
-	$effect(() => {
-		const ids = new Set(availableModels.map((s) => s.id));
-		if (modelIds.some((id) => !ids.has(id))) {
-			modelIds = modelIds.filter((id) => ids.has(id));
-		}
-	});
-
-	const coverage = $derived(
-		computeCoverage(
-			selectedObs ?? undefined,
-			modelSources.filter((s) => modelIds.includes(s.id))
-		)
-	);
-	const insufficientData = $derived(coverage != null && coverage.earliestForecast > coverage.end);
-	const limits = $derived(
-		coverage
-			? coverageLimits(
-					selectedObs ?? undefined,
-					modelSources.filter((s) => modelIds.includes(s.id)),
-					coverage
-				)
-			: { start: [], end: [] }
-	);
-	const limitingIds = $derived(new Set([...limits.start, ...limits.end].map((s) => s.id)));
-	const limitsSummary = $derived(
-		[
-			limits.start.length ? `start set by ${limits.start.map((s) => s.name).join(', ')}` : '',
-			limits.end.length ? `end set by ${limits.end.map((s) => s.name).join(', ')}` : ''
-		]
-			.filter(Boolean)
-			.join('; ')
-	);
-
-	const yearError = $derived(
-		yearSpecError(coverage, trainingYears, cvHoldoutYears, forecastYears, trueHoldoutYears)
-	);
-
-	// Prefill a working training/holdout split once obs + models are chosen, until
-	// the user edits the year fields themselves.
-	$effect(() => {
-		if (!coverage || yearsDirty) return;
-		const split = defaultSplit(coverage, minTrainingYears);
-		if (!split) return;
-		trainingYears = split.training;
-		cvHoldoutYears = split.cv;
-		trueHoldoutYears = split.trueHoldout;
-	});
-
-	const onsetInput = $derived({ thresholdMm, cutoffMonthDay, refOnsetMonthDay });
-	const onsetError = $derived(onsetParamsError(onsetInput));
-
-	const dayLevelInput = $derived({
-		yearsPerFold,
-		trees: forestTrees,
-		maxDepth: forestMaxDepth,
-		minSamplesLeaf: forestMinSamplesLeaf,
-		maxSamples: forestMaxSamples
-	});
-	const dayLevelError = $derived(dayLevelAvailable ? dayLevelParamsError(dayLevelInput) : null);
-	// What the chosen day-level cross-validation costs. Advisory only.
-	const dayLevelNoteText = $derived.by(() => {
-		const cvYears = parseYearSpec(cvHoldoutYears.trim());
-		if (!dayLevelAvailable || !cvYears?.length || dayLevelError) return null;
-		const folds = Number(yearsPerFold.trim() || DAY_LEVEL_DEFAULTS.years_per_fold);
-		const trueHoldouts = parseYearSpec(trueHoldoutYears.trim())?.length ?? 0;
-		return dayLevelRunNote(dayLevelFits(cvYears.length, trueHoldouts, folds), folds);
-	});
-
-	// Advisory only — never feeds formValid.
-	const modelCountWarning = $derived(memberCountWarning(modelIds.length));
-
-	// Live scoring needs a rolled-out season for every member, so one historical-only
-	// member makes the whole blend historical-only. Said here, before training is paid
-	// for, rather than only as a rejection at forecast time.
-	const liveForecastBlockers = $derived(
-		availableModels
-			.filter((s) => modelIds.includes(s.id) && s.live_forecast?.status !== 'ready')
-			.map((s) => `${s.name}: ${s.live_forecast?.detail ?? 'No live forecast model is available.'}`)
-	);
-
-	const formValid = $derived(
-		name.trim() !== '' &&
-			obsDatasetId !== '' &&
-			modelIds.length > 0 &&
-			trainingYears.trim() !== '' &&
-			cvHoldoutYears.trim() !== '' &&
-			!yearError &&
-			!onsetError &&
-			!dayLevelError &&
-			!insufficientData
-	);
+	let draftSetup = $state.raw<BlendRunSpec | null>(null);
 
 	async function load() {
 		const [b, obs, models, caps, thresholds] = await Promise.allSettled([
@@ -326,22 +148,10 @@
 		loaded = true;
 	}
 
-	// Mirror an LLM-produced blend config into the manual form so the two stay in
-	// sync — the user can hand off to chat and keep editing fields directly.
+	// The assistant's blend setup, kept here so it fills the form whether or not the
+	// form is on screen when it arrives.
 	function applyBlendConfig(config: BlendRunSpec) {
-		name = config.name ?? '';
-		obsDatasetId = config.obs_dataset_id ?? '';
-		modelIds = config.model_ids ?? [];
-		trainingYears = config.training_years ?? '';
-		cvHoldoutYears = config.cv_holdout_years ?? '';
-		forecastYears = config.forecast_years ?? '';
-		trueHoldoutYears = config.true_holdout_years ?? '';
-		formulaText = config.formula_text ?? '';
-		focusArea = config.focus_area ?? null;
-		thresholdMm = config.threshold_mm != null ? String(config.threshold_mm) : '';
-		cutoffMonthDay = config.cutoff_month_day ?? '';
-		refOnsetMonthDay = config.ref_onset_month_day ?? '';
-		if (config.training_years || config.cv_holdout_years) yearsDirty = true;
+		draftSetup = config;
 	}
 
 	function handleBlendSubmitted(_runId: string, jobs: Blend[], sessionId: string | null) {
@@ -362,7 +172,7 @@
 			const updated = await cancelJob(id);
 			patchBlendStatus(id, updated.status);
 		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'Cancel failed';
+			actionError = failureMessage(err);
 		}
 	}
 
@@ -387,16 +197,8 @@
 				continuedBlendId = null;
 			}
 		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'Delete failed';
+			actionError = failureMessage(err);
 		}
-	}
-
-	function sidebarStatus(status: string): RunStatus {
-		if (status === 'complete') return 'complete';
-		if (status === 'failed') return 'failed';
-		if (status === 'canceled') return 'canceled';
-		if (ACTIVE_STATUSES.includes(status)) return 'running';
-		return 'mixed';
 	}
 
 	function isExample(b: (typeof blends)[number]): boolean {
@@ -418,10 +220,10 @@
 		return {
 			id: b.id,
 			title: b.name || 'Untitled blend',
-			meta: `${b.model_names.length} model${b.model_names.length === 1 ? '' : 's'} · ${formatDate(b.created_at)}`,
+			meta: `${b.model_names.length} model${b.model_names.length === 1 ? '' : 's'} · ${runTime(b.created_at)}`,
 			count: b.model_names.length,
 			status: sidebarStatus(b.status),
-			canDelete: !ACTIVE_STATUSES.includes(b.status),
+			canDelete: !isActiveStatus(b.status),
 			// Deleting a non-owned example only hides it from this account.
 			deleteTitle: isExample(b) ? 'Remove example' : undefined
 		};
@@ -458,12 +260,7 @@
 	// 3s poll is as live as the data gets. Returning the stop fn lets $effect
 	// tear the timer down on unmount.
 	// A complete blend keeps being polled while its day-level blend trains.
-	$effect(() =>
-		pollWhileActive(
-			() => blends.some((b) => blendInProgress(b, ACTIVE_STATUSES)),
-			syncBlendStatuses
-		)
-	);
+	$effect(() => pollWhileActive(() => blends.some((b) => blendInProgress(b)), syncBlendStatuses));
 
 	async function syncBlendStatuses() {
 		let fresh: Blend[];
@@ -522,35 +319,18 @@
 		};
 	});
 
-	// Parse the small pooled per-model summary into the skill chart series. The
-	// CSV is read by the backend (never fetched from the bucket by the browser);
-	// keyed on artifacts so it re-runs once publication indexes the summary.
-	$effect(() => {
-		const job = selected;
-		const hasSummary = artifacts.some((a) => a.filename.startsWith('summary_models_pooled'));
-		if (job?.status !== 'complete' || !hasSummary) {
-			skill = [];
-			return;
-		}
-		let cancelled = false;
-		void (async () => {
-			try {
-				const text = await getBlendSummary(job.id);
-				if (!cancelled) skill = parsePooledSummary(text);
-			} catch {
-				if (!cancelled) skill = [];
-			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-	});
+	const summaryReady = $derived(
+		artifacts.some((a) => a.filename.startsWith('summary_models_pooled'))
+	);
+	// Changes once a day-level blend that trained apart has published its files,
+	// so the skill summary and map reload with its results.
+	const resultsRevision = $derived(
+		selected && !awaitingArtifacts(selected, artifacts) ? (selected.day_level_status ?? '') : ''
+	);
 
 	function startNew() {
 		creating = true;
 		selectedId = null;
-		submitError = null;
-		yearsDirty = false;
 	}
 
 	function selectBlend(id: string) {
@@ -558,94 +338,15 @@
 		creating = false;
 	}
 
-	function toggleModel(id: string) {
-		modelIds = modelIds.includes(id) ? modelIds.filter((m) => m !== id) : [...modelIds, id];
-	}
-
-	function dayLevelBody(): { day_level?: DayLevelSettings } {
-		const settings = dayLevelAvailable ? dayLevelParamsBody(dayLevelInput) : undefined;
-		return settings ? { day_level: settings } : {};
-	}
-
-	async function submit() {
-		if (!formValid || submitting) return;
-		submitting = true;
-		submitError = null;
-		const body: BlendCreate = {
-			name: name.trim(),
-			obs_dataset_id: obsDatasetId,
-			model_ids: modelIds,
-			params: {
-				training_years: trainingYears.trim(),
-				cv_holdout_years: cvHoldoutYears.trim(),
-				...(forecastYears.trim() ? { forecast_years: forecastYears.trim() } : {}),
-				...(trueHoldoutYears.trim() ? { true_holdout_years: trueHoldoutYears.trim() } : {}),
-				...(formulaText.trim() ? { formula_text: formulaText.trim() } : {}),
-				...(focusArea ? { focus_area: focusArea } : {}),
-				...onsetParamsBody(onsetInput),
-				...dayLevelBody()
-			}
-		};
-		try {
-			const blend = await createBlend(body);
-			blends = [blend, ...blends];
-			creating = false;
-			selectedId = blend.id;
-			name = obsDatasetId = trainingYears = cvHoldoutYears = '';
-			forecastYears = trueHoldoutYears = formulaText = '';
-			yearsPerFold = forestTrees = forestMaxDepth = forestMinSamplesLeaf = forestMaxSamples = '';
-			focusArea = null;
-			modelIds = [];
-			yearsDirty = false;
-		} catch (err) {
-			submitError = err instanceof Error ? err.message : 'Submission failed';
-		} finally {
-			submitting = false;
-		}
-	}
-
-	async function downloadArtifact(artifact: JobArtifact) {
-		const objectUrl = await fetchResultBlob(artifact.url);
-		const a = document.createElement('a');
-		a.href = objectUrl;
-		a.download = artifact.filename;
-		a.click();
-	}
-
-	function statusLabel(status: string): string {
-		if (status === 'canceling') return 'Canceling';
-		if (ACTIVE_STATUSES.includes(status)) return 'Running';
-		return status.charAt(0).toUpperCase() + status.slice(1);
-	}
-
-	function statusClass(status: string): string {
-		if (status === 'complete') return 'complete';
-		if (status === 'failed') return 'failed';
-		if (ACTIVE_STATUSES.includes(status)) return 'running';
-		return '';
-	}
-
-	function formatDate(value?: string | null): string {
-		if (!value) return '—';
-		const d = new Date(value);
-		if (Number.isNaN(d.getTime())) return value;
-		return new Intl.DateTimeFormat(undefined, {
-			month: 'short',
-			day: 'numeric',
-			hour: 'numeric',
-			minute: '2-digit'
-		}).format(d);
+	function showNewBlend(blend: Blend) {
+		blends = [blend, ...blends];
+		creating = false;
+		selectedId = blend.id;
+		draftSetup = null;
 	}
 </script>
 
 <svelte:head><title>Blends · AI Almanac</title></svelte:head>
-
-{#snippet fieldLabel(text: string, tip: string)}
-	<span class="label-with-help">
-		{text}
-		<InfoTip text={tip} />
-	</span>
-{/snippet}
 
 <div class="workspace-page" class:is-setup={creating}>
 	{#if !creating}
@@ -692,332 +393,24 @@
 						/>
 					</div>
 				{/if}
-				<section class="card form">
-					<h1>Train a blend</h1>
-					<p class="muted">
-						Combine multiple forecast models into a single blended forecast. Training learns the
-						weights and saves them as a downloadable artifact.
-					</p>
-
-					<label class="field">
-						{@render fieldLabel(
-							'Blend name',
-							'A label to identify this blend in your list. Does not affect training.'
-						)}
-						<input type="text" bind:value={name} placeholder="e.g. India monsoon blend" />
-					</label>
-
-					<label class="field" data-tour="blend-obs">
-						{@render fieldLabel(
-							'Observations',
-							'Ground-truth rainfall used both to score the forecasts and to build the onset climatology baseline. Earlier coverage allows earlier forecast years.'
-						)}
-						<select value={obsDatasetId} onchange={(e) => selectObs(e.currentTarget.value)}>
-							<option value="" disabled>Select an observation source…</option>
-							{#each obsSources as source (source.id)}
-								<option value={source.id}
-									>{source.name}{source.region ? ` (${source.region})` : ''}</option
-								>
-							{/each}
-						</select>
-					</label>
-
-					<fieldset class="field" data-tour="blend-models">
-						<legend class="label-with-help">
-							Forecast models
-							<InfoTip
-								text="Select two or more forecast models to combine. Training learns how much weight each model gets in the blend."
-							/>
-						</legend>
-						{#if !selectedObs}
-							<p class="muted">Select an observation source first to see matching models.</p>
-						{:else if availableModels.length === 0}
+				<section class="card setup-form">
+					<BlendForm
+						{obsSources}
+						{modelSources}
+						{dayLevelAvailable}
+						{minTrainingYears}
+						startFrom={draftSetup}
+						onSubmitted={showNewBlend}
+						onCancel={() => (creating = false)}
+					>
+						{#snippet heading()}
+							<h1>Train a blend</h1>
 							<p class="muted">
-								No ready forecast models match these observations' region and grid. Add some under
-								Data first.
+								Combine multiple forecast models into a single blended forecast. Training learns the
+								weights and saves them as a downloadable artifact.
 							</p>
-						{:else}
-							<div class="model-grid">
-								{#each availableModels as source (source.id)}
-									<label class="checkbox">
-										<input
-											type="checkbox"
-											checked={modelIds.includes(source.id)}
-											onchange={() => toggleModel(source.id)}
-										/>
-										<span class="model-label">
-											<span>{source.name}{source.region ? ` (${source.region})` : ''}</span>
-											{#if describeSourceCoverage(source)}
-												<small class="model-coverage" class:limits={limitingIds.has(source.id)}
-													>{describeSourceCoverage(source)}</small
-												>
-											{/if}
-										</span>
-										{#if source.live_forecast?.status === 'ready'}
-											<span
-												class="forecast-badge"
-												title="This model can also generate live forecasts.">Live forecast</span
-											>
-										{:else if source.live_forecast?.status === 'grid_mismatch'}
-											<span class="forecast-badge blocked" title={source.live_forecast.detail}
-												>Past seasons only</span
-											>
-										{/if}
-									</label>
-								{/each}
-							</div>
-							<p class="muted forecast-legend">
-								<span class="forecast-badge">Live forecast</span> models can be extended into the current
-								season. Any model can be blended and benchmarked — those without the badge cover past
-								seasons only.
-							</p>
-						{/if}
-					</fieldset>
-
-					{#if modelCountWarning}
-						<p class="caution">{modelCountWarning}</p>
-					{/if}
-
-					{#if liveForecastBlockers.length > 0}
-						<p class="caution">
-							Past seasons only: this blend can be trained and scored on past seasons, but not run
-							as a live forecast for the current season.
-							{liveForecastBlockers.join(' ')}
-						</p>
-					{/if}
-
-					{#if coverage}
-						<p class="muted coverage-hint">
-							Shared data: {coverage.start}–{coverage.end}{limitsSummary
-								? ` (${limitsSummary})`
-								: ''}. Forecast years start at {coverage.earliestForecast}: the climatology baseline
-							is fitted only on observed years before the first forecast year. Grid cells with fewer
-							than {MIN_ONSET_YEARS} onsets in those years are left out.
-						</p>
-					{/if}
-
-					<div class="field-row" data-tour="blend-years">
-						<label class="field">
-							{@render fieldLabel(
-								'Training years',
-								`Years used to fit the blending weights, e.g. "2008:2010". The climatology baseline is fitted only on observed years before the first forecast year, so it never sees these years. Grid cells with fewer than ${MIN_ONSET_YEARS} onsets in those years are left out.`
-							)}
-							<input
-								type="text"
-								bind:value={trainingYears}
-								oninput={() => (yearsDirty = true)}
-								placeholder="2015:2020"
-							/>
-						</label>
-						<label class="field">
-							{@render fieldLabel(
-								'Cross-validation years',
-								'Cross-validation checks the blend on years it did not learn from: each year listed here is left out of training, the weights are fitted on the remaining years, and the left-out year is scored. Defaults to the training years, so every training year gets a turn being left out.'
-							)}
-							<input
-								type="text"
-								bind:value={cvHoldoutYears}
-								oninput={() => (yearsDirty = true)}
-								placeholder="2015:2020"
-							/>
-						</label>
-						<label class="field">
-							{@render fieldLabel(
-								'True holdout years',
-								`Years kept out of training and cross-validation entirely, so their scores show how the blend does on seasons it has never seen — the closest stand-in for a new season. Defaults to the most recent fifth of the shared years, as long as at least ${minTrainingYears} training years remain. Leave empty to train on every year.`
-							)}
-							<input
-								type="text"
-								bind:value={trueHoldoutYears}
-								oninput={() => (yearsDirty = true)}
-								placeholder="optional"
-							/>
-						</label>
-					</div>
-
-					{#if insufficientData}
-						<p class="error">
-							The climatology baseline needs at least {MIN_ONSET_YEARS} observed years before the first
-							forecast year, and these sources don't leave that many before any year they share. Pick
-							an observation source with earlier coverage.
-						</p>
-					{:else if yearError}
-						<p class="error">{yearError}</p>
-					{/if}
-
-					<div class="field">
-						{@render fieldLabel(
-							'Area of interest',
-							'Pick a place or draw a box to train and score the blend only on cells inside it. Leave empty to use the whole region.'
-						)}
-						<FocusAreaMap value={focusArea} {country} onchange={(box) => (focusArea = box)} />
-					</div>
-					<details class="advanced">
-						<summary>Advanced</summary>
-						<div class="field-row">
-							<label class="field">
-								{@render fieldLabel(
-									'Forecast years',
-									'Years to stage and score, if different from training + holdout. Defaults to the union of training and holdout years.'
-								)}
-								<input
-									type="text"
-									bind:value={forecastYears}
-									placeholder="defaults to training + holdout"
-								/>
-							</label>
-						</div>
-						<label class="field">
-							{@render fieldLabel(
-								'Formula',
-								'Advanced override for the statistical formula combining the models. Leave blank to use the default blend formula.'
-							)}
-							<input
-								type="text"
-								bind:value={formulaText}
-								placeholder="optional — model formula override"
-							/>
-						</label>
-
-						<p class="muted advanced-group">
-							Onset definition — leave blank to use the defaults ({ONSET_DEFAULTS.threshold_mm} mm,
-							{ONSET_DEFAULTS.cutoff_month_day}, {ONSET_DEFAULTS.ref_onset_month_day}). Changing
-							these redefines what counts as onset for both the observations and every model.
-						</p>
-						<div class="field-row" data-tour="blend-onset">
-							<label class="field">
-								{@render fieldLabel(
-									'Onset rainfall threshold (mm)',
-									`Total rainfall over 3 consecutive days that marks the start of the season. Default ${ONSET_DEFAULTS.threshold_mm} mm.`
-								)}
-								<input
-									type="text"
-									inputmode="decimal"
-									bind:value={thresholdMm}
-									placeholder={String(ONSET_DEFAULTS.threshold_mm)}
-								/>
-							</label>
-							<label class="field">
-								{@render fieldLabel(
-									'Onset search start (MM-DD)',
-									`Calendar date from which onset is searched each season; also the first forecast issue date. Default ${ONSET_DEFAULTS.cutoff_month_day}.`
-								)}
-								<input
-									type="text"
-									bind:value={cutoffMonthDay}
-									placeholder={ONSET_DEFAULTS.cutoff_month_day}
-								/>
-							</label>
-							<label class="field">
-								{@render fieldLabel(
-									'Reference onset date (MM-DD)',
-									`Climatological onset date the "onset before reference" probability is scored against. Default ${ONSET_DEFAULTS.ref_onset_month_day}.`
-								)}
-								<input
-									type="text"
-									bind:value={refOnsetMonthDay}
-									placeholder={ONSET_DEFAULTS.ref_onset_month_day}
-								/>
-							</label>
-						</div>
-						{#if onsetError}
-							<p class="error">{onsetError}</p>
-						{/if}
-
-						{#if dayLevelAvailable}
-							<p class="muted advanced-group">
-								Day-level blend — leave blank to use the defaults (one year out per fold,
-								{DAY_LEVEL_DEFAULTS.trees} trees, no depth limit, {DAY_LEVEL_DEFAULTS.min_samples_leaf}
-								rows per leaf, every row per tree).
-							</p>
-							<div class="field-row">
-								<label class="field">
-									{@render fieldLabel(
-										'Years held out per fold',
-										'CV holdout years held out together in each day-level fold, in contiguous blocks. 1 leaves one year out at a time, as the week-level blend does; more years per fold means fewer forests to fit.'
-									)}
-									<input
-										type="text"
-										inputmode="numeric"
-										bind:value={yearsPerFold}
-										placeholder={String(DAY_LEVEL_DEFAULTS.years_per_fold)}
-									/>
-								</label>
-								<label class="field">
-									{@render fieldLabel(
-										'Trees',
-										'Trees in each day-level forest. Fewer trees train faster.'
-									)}
-									<input
-										type="text"
-										inputmode="numeric"
-										bind:value={forestTrees}
-										placeholder={String(DAY_LEVEL_DEFAULTS.trees)}
-									/>
-								</label>
-							</div>
-							<div class="field-row">
-								<label class="field">
-									{@render fieldLabel(
-										'Deepest tree',
-										'Most levels a tree may grow. Leave blank for no limit; a limit trains faster.'
-									)}
-									<input
-										type="text"
-										inputmode="numeric"
-										bind:value={forestMaxDepth}
-										placeholder="no limit"
-									/>
-								</label>
-								<label class="field">
-									{@render fieldLabel(
-										'Fewest rows per leaf',
-										'A tree stops splitting where a leaf would hold fewer rows than this.'
-									)}
-									<input
-										type="text"
-										inputmode="numeric"
-										bind:value={forestMinSamplesLeaf}
-										placeholder={String(DAY_LEVEL_DEFAULTS.min_samples_leaf)}
-									/>
-								</label>
-								<label class="field">
-									{@render fieldLabel(
-										'Share of rows per tree',
-										'Share of the training rows each tree draws, from more than 0 up to 1. Smaller shares train faster.'
-									)}
-									<input
-										type="text"
-										inputmode="decimal"
-										bind:value={forestMaxSamples}
-										placeholder={String(DAY_LEVEL_DEFAULTS.max_samples)}
-									/>
-								</label>
-							</div>
-							{#if dayLevelError}
-								<p class="error">{dayLevelError}</p>
-							{:else if dayLevelNoteText}
-								<p class="caution">{dayLevelNoteText}</p>
-							{/if}
-						{/if}
-					</details>
-
-					{#if submitError}
-						<p class="error">{submitError}</p>
-					{/if}
-
-					<div class="form-actions">
-						<button type="button" class="ghost" onclick={() => (creating = false)}>Cancel</button>
-						<button
-							type="button"
-							class="primary"
-							data-tour="blend-train"
-							disabled={!formValid || submitting}
-							onclick={submit}
-						>
-							{submitting ? 'Submitting…' : 'Train blend'}
-						</button>
-					</div>
+						{/snippet}
+					</BlendForm>
 				</section>
 			</div>
 		{:else if selected}
@@ -1041,10 +434,10 @@
 									<span>{selected.region_id}</span>
 								{/if}
 								<span class="dot" aria-hidden="true">·</span>
-								<span>Submitted {formatDate(selected.created_at)}</span>
+								<span>Submitted {runTime(selected.created_at)}</span>
 								{#if selected.completed_at}
 									<span class="dot" aria-hidden="true">·</span>
-									<span>Completed {formatDate(selected.completed_at)}</span>
+									<span>Completed {runTime(selected.completed_at)}</span>
 								{/if}
 							</p>
 						</div>
@@ -1055,10 +448,10 @@
 								isExample={selected.visibility === 'example'}
 								onChanged={load}
 							/>
-							<span class="status-badge {statusClass(selected.status)}"
-								>{statusLabel(selected.status)}</span
+							<span class="status-badge {badgeTone(selected.status)}"
+								>{badgeLabel(selected.status)}</span
 							>
-							{#if ACTIVE_STATUSES.includes(selected.status)}
+							{#if isActiveStatus(selected.status)}
 								<button
 									type="button"
 									class="ghost"
@@ -1075,7 +468,7 @@
 						<p class="error">{actionError}</p>
 					{/if}
 
-					{#if ACTIVE_STATUSES.includes(selected.status)}
+					{#if isActiveStatus(selected.status)}
 						<div class="running-state">
 							<div class="spinner"></div>
 							<div>
@@ -1111,16 +504,7 @@
 								</div>
 							</div>
 						{/if}
-						{#if skill.length > 0}
-							<div class="skill">
-								<h2>Forecast skill</h2>
-								<BlendSkillPanel
-									series={skill}
-									jobId={selected.id}
-									revision={selected.day_level_status ?? ''}
-								/>
-							</div>
-						{/if}
+						<BlendResults jobId={selected.id} {summaryReady} revision={resultsRevision} />
 
 						<div class="artifacts" data-tour="blend-outputs">
 							<h2>Results files</h2>
@@ -1131,7 +515,7 @@
 									jobId={selected.id}
 									{artifacts}
 									trueHoldoutYears={selected.true_holdout_years ?? []}
-									ondownload={downloadArtifact}
+									ondownload={downloadJobArtifact}
 								/>
 							{/if}
 						</div>
@@ -1222,11 +606,11 @@
 		flex: 1 1 66%;
 	}
 
-	.setup-layout.with-chat.is-comparing .form {
+	.setup-layout.with-chat.is-comparing .setup-form {
 		flex: 1 1 34%;
 	}
 
-	.setup-layout.with-chat .form {
+	.setup-layout.with-chat .setup-form {
 		flex: 1 1 50%;
 		min-width: 0;
 		align-self: flex-start;
@@ -1297,165 +681,19 @@
 		font-size: 0.9rem;
 	}
 
-	.form {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-
-	.field > span,
-	.field legend {
-		font-size: 0.8rem;
-		font-weight: 700;
-		color: var(--color-text);
-	}
-
-	.label-with-help {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-	}
-
-	.field input,
-	.field select {
-		padding: 0.55rem 0.65rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		background: var(--color-bg);
-		color: var(--color-text);
-		font: inherit;
-	}
-
-	fieldset.field {
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		padding: 0.75rem;
-	}
-
-	.model-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
-		gap: 0.4rem;
-	}
-
-	.checkbox {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		font-size: 0.9rem;
-		color: var(--color-text);
-	}
-
-	.model-label {
-		display: flex;
-		flex-direction: column;
-	}
-
-	.model-coverage {
-		font-size: 0.8em;
-		color: var(--color-text-muted);
-	}
-
-	.model-coverage.limits {
-		color: var(--color-status-running);
-		font-weight: 600;
-	}
-
-	.forecast-badge {
-		font-size: 0.62rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		padding: 0.05rem 0.35rem;
-		border-radius: 0.2rem;
-		background: rgba(52, 211, 153, 0.15);
-		color: var(--color-status-complete);
-		white-space: nowrap;
-	}
-
-	.forecast-badge.blocked {
-		background: rgba(251, 191, 36, 0.18);
-		color: var(--color-status-warning, #b45309);
-	}
-
-	.forecast-legend {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin-top: 0.5rem;
-	}
-
-	.field-row {
-		display: flex;
-		gap: 1rem;
-		flex-wrap: wrap;
-	}
-
-	.field-row .field {
-		flex: 1;
-		min-width: 12rem;
-	}
-
-	.advanced summary {
-		cursor: pointer;
-		font-weight: 700;
-		font-size: 0.85rem;
-		color: var(--color-text);
-	}
-
-	.advanced[open] {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.advanced-group {
-		margin: 0.5rem 0 -0.5rem;
-		padding-top: 0.75rem;
-		border-top: 1px solid var(--color-border-subtle);
-	}
-
-	.form-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.6rem;
-	}
-
-	button.primary,
 	button.ghost {
 		border-radius: 0.4rem;
 		padding: 0.55rem 0.9rem;
 		font-weight: 750;
 		cursor: pointer;
 		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		color: var(--color-text);
 	}
 
 	button.ghost:disabled {
 		opacity: 0.55;
 		cursor: not-allowed;
-	}
-
-	button.primary {
-		background: var(--color-accent);
-		border-color: var(--color-accent);
-		color: white;
-	}
-
-	button.primary:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
-
-	button.ghost {
-		background: var(--color-surface);
-		color: var(--color-text);
 	}
 
 	.detail {
@@ -1594,16 +832,6 @@
 	.error,
 	.error-block {
 		color: var(--color-danger);
-		font-size: 0.85rem;
-	}
-
-	.caution {
-		color: var(--color-status-running);
-		background: var(--color-status-running-bg);
-		border: 1px solid var(--color-status-running);
-		border-radius: 0.45rem;
-		padding: 0.6rem 0.75rem;
-		margin: 0;
 		font-size: 0.85rem;
 	}
 
