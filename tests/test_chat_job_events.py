@@ -54,10 +54,11 @@ def test_the_assistant_hears_one_line_per_changed_run() -> None:
     note = platform_note(activity.events)
 
     assert note is not None
-    fuxi_line = next(line for line in note.splitlines() if "j-1" in line)
-    aifs_line = next(line for line in note.splitlines() if "j-2" in line)
-    assert "FuXi" in fuxi_line and "failed" in fuxi_line
-    assert "AIFS" in aifs_line and "failed" not in aifs_line
+    fuxi_line = next(line for line in note.splitlines() if "FuXi" in line)
+    aifs_line = next(line for line in note.splitlines() if "AIFS" in line)
+    assert "failed" in fuxi_line
+    assert "failed" not in aifs_line
+    assert "j-1" not in note and "j-2" not in note, "runs are named, never given by id"
     assert platform_note([]) is None
 
 
@@ -66,7 +67,7 @@ def test_a_run_name_cannot_break_out_of_its_line() -> None:
     note = platform_note(job_activity([_job("j", "failed", START, label=hostile)], START).events)
     assert note is not None
     assert not any(line.lstrip().startswith("#") for line in note.splitlines())
-    assert len([line for line in note.splitlines() if "(job j)" in line]) == 1
+    assert len([line for line in note.splitlines() if "failed" in line]) == 1
 
 
 def test_the_reported_states_are_the_job_runner_terminal_states() -> None:
@@ -187,5 +188,6 @@ async def test_the_next_turn_tells_the_assistant_what_finished_since_the_last_on
     await send("And now?")
 
     assert notes[0] is None
-    assert notes[1] is not None and job_id in notes[1] and "failed" in notes[1]
+    assert notes[1] is not None and '"A run" failed' in notes[1]
+    assert job_id not in notes[1]
     assert notes[2] is None

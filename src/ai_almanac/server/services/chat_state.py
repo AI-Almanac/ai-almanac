@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
@@ -91,3 +91,26 @@ def utc_now() -> datetime:
 
 def new_turn_id() -> str:
     return str(uuid4())
+
+
+# ponytail: a turn streaming longer than this is assumed dead (e.g. the server
+# restarted mid-turn); a heartbeat on the streaming turn would make this exact.
+# While a turn streams, its relay touches the session this often, so a turn
+# whose server died stops counting as live soon after, on any instance.
+TURN_HEARTBEAT_SECONDS = 30
+STALE_TURN_AFTER = timedelta(minutes=2)
+
+
+def turn_in_flight(
+    transcript: list[dict], last_active: object, now: datetime | None = None
+) -> bool:
+    """Another turn is streaming on this session and its relay is still alive
+    (P8: one writer per session). ``last_active`` is the session's updated_at."""
+    if not transcript or transcript[-1].get("status") != "streaming":
+        return False
+    return (now or utc_now()) - _as_datetime(last_active) < STALE_TURN_AFTER
+
+
+def _as_datetime(value: object) -> datetime:
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
