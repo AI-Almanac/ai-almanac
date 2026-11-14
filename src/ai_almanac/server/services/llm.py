@@ -58,6 +58,7 @@ from ai_almanac.settings import settings
 from . import chat_tools, local_llm, rulesets
 from .benchmark_state import BenchmarkRunSpec
 from .blend_state import BlendRunSpec
+from .boundaries import AreaLevel
 from .chat_state import (
     ChatArtifact,
     ChatScope,
@@ -284,6 +285,34 @@ def _benchmark_toolset() -> FunctionToolset[ChatDeps]:
         pretrained and fine-tuned on, with the source they were published in, or
         null when they are unknown."""
         return await chat_tools.list_models(region, ctx.deps.user_id, ctx.deps.scope)
+
+    @toolset.tool
+    async def list_areas(
+        ctx: RunContext[ChatDeps],
+        level: AreaLevel,
+        region_id: str | None = None,
+        within: str | None = None,
+        country: str | None = None,
+    ) -> dict:
+        """Name the administrative areas of a region (`region_id` from list_regions) or of
+        any country (`country`, its three-letter code from find_country): adm1 states or
+        regions, adm2 districts or zones, adm3 subdistricts or woredas. adm2 and adm3 areas
+        carry the parent area that holds them; pass `within` with a parent's name to list
+        only its areas, e.g. the zones in Amhara or the woredas in East Gojjam.
+
+        adm1 and adm2 names can be an area of interest for benchmarks and blends. The
+        result's `country` is the code to put in that area's `iso`, which is what lets a
+        run be scored in a country other than the one its data is filed under. adm3
+        names are for naming places only: grid cells are coarser than many woredas, so a
+        benchmark or blend cannot be limited to them."""
+        return await chat_tools.list_areas(region_id, level, within, country)
+
+    @toolset.tool
+    async def find_country(ctx: RunContext[ChatDeps], name: str) -> dict:
+        """Find a country by name or three-letter code. Its `iso` is the code to pass to
+        list_areas as `country` and to put in an area of interest as `iso`. A whole
+        country is the area `{"level": "adm0", "units": [its name], "iso": its code}`."""
+        return await chat_tools.find_country(name)
 
     @toolset.tool
     async def list_onset_rules(ctx: RunContext[ChatDeps]) -> dict:

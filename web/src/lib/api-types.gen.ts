@@ -1015,7 +1015,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Models */
+        /**
+         * List Models
+         * @description Model sources: the ones that can be scored against an observation dataset when
+         *     one is named, else all of them.
+         */
         get: operations["list_models_jobs_models_get"];
         put?: never;
         post?: never;
@@ -1515,6 +1519,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/places/countries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Countries */
+        get: operations["list_countries_places_countries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/places/{iso}/boundaries/{level}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Boundary
+         * @description Simplified outlines of a country (adm0) or of the units inside it, fetched and
+         *     cached here because a browser cannot read them from their host directly.
+         */
+        get: operations["get_boundary_places__iso__boundaries__level__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/regions": {
         parameters: {
             query?: never;
@@ -1528,27 +1570,8 @@ export interface paths {
          */
         get: operations["list_regions_regions_get"];
         put?: never;
-        /** Create Region */
-        post: operations["create_region_regions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/regions/{region_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Region */
-        put: operations["update_region_regions__region_id__put"];
         post?: never;
-        /** Delete Region */
-        delete: operations["delete_region_regions__region_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2833,6 +2856,13 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** CountryOut */
+        CountryOut: {
+            /** Iso */
+            iso: string;
+            /** Name */
+            name: string;
+        };
         /** DataSourceIn */
         DataSourceIn: {
             /**
@@ -2918,7 +2948,7 @@ export interface components {
             /** Path */
             path: string;
             /** Region */
-            region: string;
+            region: string | null;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -3192,9 +3222,11 @@ export interface components {
              * Level
              * @enum {string}
              */
-            level: "adm1" | "adm2";
+            level: "adm0" | "adm1" | "adm2";
             /** Units */
             units: string[];
+            /** Iso */
+            iso?: string | null;
             /** Geometry */
             geometry?: {
                 [key: string]: unknown;
@@ -4317,29 +4349,6 @@ export interface components {
             label: string;
             /** Path */
             path: string;
-        };
-        /** RegionWrite */
-        RegionWrite: {
-            /** Display Name */
-            display_name: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /** Lat Min */
-            lat_min: number;
-            /** Lat Max */
-            lat_max: number;
-            /** Lon Min */
-            lon_min: number;
-            /** Lon Max */
-            lon_max: number;
-            /**
-             * Land Only
-             * @default false
-             */
-            land_only: boolean;
         };
         /** ResultFile */
         ResultFile: {
@@ -7040,7 +7049,7 @@ export interface operations {
     list_models_jobs_models_get: {
         parameters: {
             query?: {
-                region?: string | null;
+                dataset_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7997,6 +8006,60 @@ export interface operations {
             };
         };
     };
+    list_countries_places_countries_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CountryOut"][];
+                };
+            };
+        };
+    };
+    get_boundary_places__iso__boundaries__level__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                iso: string;
+                level: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_regions_regions_get: {
         parameters: {
             query?: never;
@@ -8015,107 +8078,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
-                };
-            };
-        };
-    };
-    create_region_regions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegionWrite"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_region_regions__region_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                region_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegionWrite"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_region_regions__region_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                region_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

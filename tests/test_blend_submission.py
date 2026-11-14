@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio
@@ -24,55 +24,13 @@ from ai_almanac.server.services.job_submission import (
     create_blend_for_user,
 )
 from ai_almanac.server.tables import jobs
-
-
-class _FakeRunner:
-    name = "modal"
-
-    async def submit(self, request):  # noqa: ANN001 - test double
-        return RunnerHandle(runner="modal", external_id="fc-test")
-
-
-async def _seed_source(
-    kind: str,
-    name: str,
-    path: str,
-    years: tuple[int, int] | None = None,
-    grid_step: float | None = None,
-    extra_metadata: dict | None = None,
-) -> str:
-    from ai_almanac.server.db import get_db
-
-    source_id = str(uuid.uuid4())
-    now = datetime.now(UTC).isoformat()
-    metadata = {"start_year": years[0], "end_year": years[1]} if years else {}
-    if grid_step is not None:
-        metadata["grid_step_deg"] = grid_step
-    metadata.update(extra_metadata or {})
-    async with get_db() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO data_sources "
-                "(id, kind, name, path, region, metadata, location_type, status, "
-                "validation_error, created_at, updated_at) "
-                "VALUES (:id, :kind, :name, :path, 'india', :metadata, 'gcs', 'ready', "
-                "NULL, :now, :now)"
-            ),
-            {
-                "id": source_id,
-                "kind": kind,
-                "name": name,
-                "path": path,
-                "metadata": json.dumps(metadata),
-                "now": now,
-            },
-        )
-    return source_id
+from tests.helpers.forecasts import FakeRunner, forecast_a_linked_blend
+from tests.helpers.records import link_forecast_model, seed_source
 
 
 @pytest_asyncio.fixture
 async def _stub_runner(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(job_submission, "get_job_runner", lambda: _FakeRunner())
+    monkeypatch.setattr(job_submission, "get_job_runner", lambda: FakeRunner())
 
 
 @pytest.mark.asyncio
@@ -84,9 +42,9 @@ async def test_create_blend_persists_blend_routing_config(
     from ai_almanac.settings import settings
 
     monkeypatch.setattr(settings, "enable_day_level_blend", day_level)
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    gencast_id = await _seed_source("model", "GenCast", "gs://data/models/gencast")
-    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    gencast_id = await seed_source("model", "GenCast", "gs://data/models/gencast")
+    aifs_id = await seed_source("model", "AIFS", "gs://data/models/aifs")
 
     out = await create_blend_for_user(
         BlendCreate(
@@ -127,14 +85,14 @@ async def test_blend_config_carries_each_models_registered_dims_and_units(
     from ai_almanac.server.db import get_db
 
     dims = {"init_time": "time", "step": "prediction_timedelta_daily", "lat": "lat", "lon": "lon"}
-    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd")
-    aifs_id = await _seed_source(
+    obs_id = await seed_source("obs", "IMD", "gs://data/obs/imd")
+    aifs_id = await seed_source(
         "model",
         "AIFS v2",
         "gs://data/models/aifs",
         extra_metadata={"forecast_dims": dims, "unit_cvt": 1000.0},
     )
-    legacy_id = await _seed_source("model", "FuXi", "gs://data/models/fuxi")
+    legacy_id = await seed_source("model", "FuXi", "gs://data/models/fuxi")
 
     out = await create_blend_for_user(
         BlendCreate(
@@ -157,8 +115,8 @@ async def test_blend_config_carries_each_models_registered_dims_and_units(
 async def test_post_blends_rejects_a_start_date_dim_blending_cannot_decode(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
-    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", years=(2000, 2024))
-    model_id = await _seed_source(
+    obs_id = await seed_source("obs", "IMD", "gs://data/obs/imd", years=(2000, 2024))
+    model_id = await seed_source(
         "model",
         "Renamed",
         "gs://data/models/renamed",
@@ -188,8 +146,8 @@ async def test_post_blends_rejects_thin_climatology_coverage(
     """The API must apply the same coverage rule as the UI and the chat path:
     the onset climatology needs MIN_ONSET_YEARS of observations before the
     first forecast year."""
-    obs_id = await _seed_source("obs", "ERA5 thin", "gs://data/obs/thin", years=(2010, 2024))
-    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+    obs_id = await seed_source("obs", "ERA5 thin", "gs://data/obs/thin", years=(2010, 2024))
+    model_id = await seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
 
     response = await client.post(
         "/blends",
@@ -232,10 +190,10 @@ def test_grid_mismatch_names_each_model_off_the_observation_grid(
 async def test_post_blends_rejects_models_on_another_grid(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
-    obs_id = await _seed_source(
+    obs_id = await seed_source(
         "obs", "IMD 0.25", "gs://data/obs/imd", years=(1990, 2024), grid_step=0.25
     )
-    model_id = await _seed_source(
+    model_id = await seed_source(
         "model", "GraphCast", "gs://data/models/gc", years=(1990, 2024), grid_step=2.0
     )
 
@@ -258,8 +216,8 @@ async def test_post_blends_rejects_models_on_another_grid(
 async def test_post_jobs_rejects_a_model_on_another_grid(
     client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
-    obs_id = await _seed_source("obs", "IMD 0.25", "gs://data/obs/imd", grid_step=0.25)
-    model_id = await _seed_source("model", "GraphCast", "gs://data/models/gc", grid_step=2.0)
+    obs_id = await seed_source("obs", "IMD 0.25", "gs://data/obs/imd", grid_step=0.25)
+    model_id = await seed_source("model", "GraphCast", "gs://data/models/gc", grid_step=2.0)
 
     response = await client.post(
         "/jobs",
@@ -275,8 +233,8 @@ async def test_post_jobs_rejects_a_model_on_another_grid(
 async def test_post_blends_accepts_sufficient_coverage(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner
 ) -> None:
-    obs_id = await _seed_source("obs", "ERA5 deep", "gs://data/obs/deep", years=(2010, 2024))
-    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
+    obs_id = await seed_source("obs", "ERA5 deep", "gs://data/obs/deep", years=(2010, 2024))
+    model_id = await seed_source("model", "AIFS", "gs://data/models/aifs", years=(2010, 2024))
 
     response = await client.post(
         "/blends",
@@ -310,8 +268,8 @@ async def test_post_blends_rejects_splits_outside_explicit_forecast_years(
     even when the sources carry no year metadata (coverage unenforceable).
     Otherwise the run reaches the final fit with zero training rows and dies
     on an opaque numpy error."""
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    model_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await seed_source("model", "AIFS", "gs://data/models/aifs")
 
     response = await client.post(
         "/blends",
@@ -338,9 +296,9 @@ async def test_create_blend_warns_when_a_member_cannot_forecast_live(
 ) -> None:
     from ai_almanac.server.db import get_db
 
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
-    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await seed_source("model", "AIFS", "gs://data/models/aifs")
 
     out = await create_blend_for_user(
         BlendCreate(
@@ -373,9 +331,9 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
 
     from ai_almanac.server.db import get_db
 
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    ngcm_id = await _seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
-    aifs_id = await _seed_source(
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    ngcm_id = await seed_source("model", "NeuralGCM", "gs://data/models/ngcm")
+    aifs_id = await seed_source(
         "model", "AIFS", "gs://data/models/aifs", extra_metadata={"forecast_model_id": "aifs"}
     )
 
@@ -405,7 +363,7 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
 async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub_runner) -> None:
     from fastapi import HTTPException
 
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
 
     with pytest.raises(HTTPException) as exc:
         await create_blend_for_user(
@@ -450,8 +408,8 @@ async def test_create_blend_hides_another_users_private_obs_source(
 
     from ai_almanac.server.db import get_db
 
-    obs_id = await _seed_source("obs", "Someone else's ERA5", "gs://data/obs/india", (1990, 2024))
-    gencast_id = await _seed_source("model", "GenCast", "gs://data/models/gencast", (2000, 2024))
+    obs_id = await seed_source("obs", "Someone else's ERA5", "gs://data/obs/india", (1990, 2024))
+    gencast_id = await seed_source("model", "GenCast", "gs://data/models/gencast", (2000, 2024))
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -493,7 +451,7 @@ async def test_not_ready_shared_source_does_not_disclose_its_path(
 
     from ai_almanac.server.db import get_db
 
-    obs_id = await _seed_source("obs", "Shared ERA5", "gs://private-bucket/obs/india")
+    obs_id = await seed_source("obs", "Shared ERA5", "gs://private-bucket/obs/india")
     async with get_db() as conn:
         await conn.execute(
             text(
@@ -573,20 +531,6 @@ def test_blend_params_rejects_bad_onset_definition(overrides: dict, fragment: st
         job_submission.BlendParams(training_years="2019:2024", cv_holdout_years="2024", **overrides)
 
 
-async def _link_forecast_model(source_id: str, forecast_model_id: str) -> None:
-    from ai_almanac.server.services import data_sources
-
-    source = await data_sources.get_source(source_id)
-    metadata = {**source["metadata"], "forecast_model_id": forecast_model_id}
-    from ai_almanac.server.db import get_db
-
-    async with get_db() as conn:
-        await conn.execute(
-            text("UPDATE data_sources SET metadata = :metadata WHERE id = :id"),
-            {"metadata": json.dumps(metadata), "id": source_id},
-        )
-
-
 @pytest.mark.asyncio
 async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch
@@ -600,11 +544,11 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
 
     monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 6, 15))
 
-    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
-    aifs_id = await _seed_source(
+    obs_id = await seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await seed_source(
         "model", "AIFS v2 India 0.25", "gs://data/models/aifs2", grid_step=0.25
     )
-    graphcast_id = await _seed_source(
+    graphcast_id = await seed_source(
         "model", "GraphCast India 0.25", "gs://data/models/graphcast", grid_step=0.25
     )
     blend = await create_blend_for_user(
@@ -620,15 +564,16 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
         await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
     assert blend.forecast_models == {}
 
-    await _link_forecast_model(aifs_id, "aifs2")
-    await _link_forecast_model(graphcast_id, "graphcast_operational")
+    await link_forecast_model(aifs_id, "aifs2")
+    await link_forecast_model(graphcast_id, "graphcast_operational")
 
     listed = (await client.get("/blends", headers=as_new_user)).json()
     linked = {"aifs_v2_india_0_25": "aifs2", "graphcast_india_0_25": "graphcast_operational"}
     assert next(b for b in listed if b["id"] == blend.id)["forecast_models"] == linked
 
     forecast = await job_submission.create_forecast_for_user(
-        job_submission.ForecastCreate(blend_id=blend.id), user_id
+        job_submission.ForecastCreate(blend_id=blend.id),
+        user_id,
     )
     async with get_db() as conn:
         row = (
@@ -643,42 +588,6 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
 
 
 JUNE_15 = date(2026, 6, 15)
-
-
-async def _forecast_a_linked_blend(user_id: str, monkeypatch, today: date) -> tuple[str, str]:
-    """A completed forecast, planned on `today`, of a trained blend whose members
-    are linked to live models: (blend id, forecast id)."""
-    from ai_almanac.server.db import get_db
-
-    monkeypatch.setattr(job_submission, "utc_today", lambda: today)
-    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
-    aifs_id = await _seed_source(
-        "model", "AIFS v2 India 0.25", "gs://data/models/aifs2", grid_step=0.25
-    )
-    graphcast_id = await _seed_source(
-        "model", "GraphCast India 0.25", "gs://data/models/graphcast", grid_step=0.25
-    )
-    await _link_forecast_model(aifs_id, "aifs2")
-    await _link_forecast_model(graphcast_id, "graphcast_operational")
-    blend = await create_blend_for_user(
-        BlendCreate(
-            name="india",
-            obs_dataset_id=obs_id,
-            model_ids=[aifs_id, graphcast_id],
-            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
-        ),
-        user_id,
-    )
-    async with get_db() as conn:
-        await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
-    forecast = await job_submission.create_forecast_for_user(
-        job_submission.ForecastCreate(blend_id=blend.id), user_id
-    )
-    async with get_db() as conn:
-        await conn.execute(
-            sa.update(jobs).where(jobs.c.id == forecast.id).values(status="complete")
-        )
-    return blend.id, forecast.id
 
 
 async def _forecast_job_count() -> int:
@@ -718,7 +627,7 @@ async def _the_forecast_predates_forest_tracking(
 async def test_updating_a_forecast_with_nothing_new_returns_it_without_starting_a_run(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch, history
 ) -> None:
-    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    blend_id, forecast_id = await forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
     await history(monkeypatch, blend_id, forecast_id)
 
     response = await client.post(f"/forecasts/{forecast_id}/refresh", headers=as_new_user)
@@ -771,7 +680,7 @@ async def _the_forecast_failed(monkeypatch, blend_id: str, forecast_id: str) -> 
 async def test_updating_a_forecast_starts_a_run_once_something_it_scores_changed(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch, change
 ) -> None:
-    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    blend_id, forecast_id = await forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
     await change(monkeypatch, blend_id, forecast_id)
 
     response = await client.post(f"/forecasts/{forecast_id}/refresh", headers=as_new_user)
@@ -788,7 +697,7 @@ async def test_updating_someone_elses_shared_forecast_with_nothing_new_returns_t
 ) -> None:
     from ai_almanac.server.db import get_db
 
-    blend_id, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    blend_id, forecast_id = await forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
     async with get_db() as conn:
         await conn.execute(
             sa.update(jobs)
@@ -819,8 +728,8 @@ async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
     from ai_almanac.server.db import get_db
 
     monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 1, 15))
-    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
-    aifs_id = await _seed_source(
+    obs_id = await seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await seed_source(
         "model",
         "AIFS v2 India 0.25",
         "gs://data/models/aifs2",
@@ -841,7 +750,8 @@ async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
 
     with pytest.raises(HTTPException) as exc:
         await job_submission.create_forecast_for_user(
-            job_submission.ForecastCreate(blend_id=blend.id), user_id
+            job_submission.ForecastCreate(blend_id=blend.id),
+            user_id,
         )
     assert exc.value.status_code == 409
     assert "No issue dates" in exc.value.detail
@@ -894,8 +804,8 @@ async def _submit_blend_interrupted_by(
 
     runner = _RunnerInterruptedMidSubmit(interruption)
     monkeypatch.setattr(job_submission, "get_job_runner", lambda: runner)
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    model_id = await _seed_source("model", "GenCast", "gs://data/models/gencast")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await seed_source("model", "GenCast", "gs://data/models/gencast")
     out = await create_blend_for_user(
         BlendCreate(
             name="raced blend",
@@ -952,7 +862,7 @@ async def test_cancel_mid_submit_survives_the_submit_and_keeps_the_handle(
 async def test_forcing_an_update_of_an_up_to_date_forecast_starts_a_run(
     client, user_id: str, as_new_user: dict[str, str], _stub_runner, monkeypatch
 ) -> None:
-    _, forecast_id = await _forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
+    _, forecast_id = await forecast_a_linked_blend(user_id, monkeypatch, JUNE_15)
 
     response = await client.post(
         f"/forecasts/{forecast_id}/refresh", params={"force": "true"}, headers=as_new_user
@@ -962,6 +872,41 @@ async def test_forcing_an_update_of_an_up_to_date_forecast_starts_a_run(
     assert response.json()["up_to_date"] is False
     assert response.json()["forecast"]["id"] != forecast_id
     assert await _forecast_job_count() == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filed_under", "on_sub_districts"), [("ethiopia", True), ("india", False), (None, False)]
+)
+async def test_a_blend_job_says_outright_whether_it_is_trained_on_sub_districts(
+    client, user_id: str, _stub_runner, filed_under: str | None, on_sub_districts: bool
+) -> None:
+    from ai_almanac.server.db import get_db
+
+    obs_id = await seed_source("obs", "Observations", "gs://data/obs/somewhere")
+    model_ids = [
+        await seed_source("model", "GenCast", "gs://data/models/gencast"),
+        await seed_source("model", "AIFS", "gs://data/models/aifs"),
+    ]
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE data_sources SET region = :region WHERE id IN (:obs, :first, :second)"),
+            {"region": filed_under, "obs": obs_id, "first": model_ids[0], "second": model_ids[1]},
+        )
+
+    out = await create_blend_for_user(
+        BlendCreate(
+            name="unit choice",
+            obs_dataset_id=obs_id,
+            model_ids=model_ids,
+            params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
+        ),
+        user_id,
+    )
+
+    async with get_db() as conn:
+        row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().fetchone()
+    assert json.loads(row["config_json"])["use_adm3_domain"] is on_sub_districts
 
 
 _OUTPUTS_BUCKET = "almanac-job-outputs-test"
@@ -990,8 +935,8 @@ async def _owned_by(user_id: str, *source_ids: str) -> None:
 async def test_a_benchmark_will_not_read_a_saved_source_outside_its_bucket(
     client, user_id: str, as_new_user: dict[str, str]
 ) -> None:
-    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", grid_step=0.25)
-    model_id = await _seed_source("model", "GraphCast", "gs://gcs://data/models/gc", grid_step=0.25)
+    obs_id = await seed_source("obs", "IMD", "gs://data/obs/imd", grid_step=0.25)
+    model_id = await seed_source("model", "GraphCast", "gs://gcs://data/models/gc", grid_step=0.25)
 
     response = await client.post(
         "/jobs",
@@ -1011,8 +956,8 @@ async def test_a_benchmark_reads_its_model_from_the_sources_own_location(
         pass
 
     monkeypatch.setattr("ai_almanac.server.services.local_runner.launch_job", _no_launch)
-    obs_id = await _seed_source("obs", "IMD", "gs://data/obs/imd", (2019, 2024), 0.25)
-    model_id = await _seed_source(
+    obs_id = await seed_source("obs", "IMD", "gs://data/obs/imd", (2019, 2024), 0.25)
+    model_id = await seed_source(
         "model",
         "GraphCast",
         "gs://data/models/gc/",
@@ -1038,7 +983,7 @@ async def test_a_benchmark_will_not_read_a_users_saved_source_in_a_platform_buck
     from fastapi import HTTPException
 
     _platform_bucket(monkeypatch)
-    obs_id = await _seed_source("obs", "My obs", f"gs://{_OUTPUTS_BUCKET}/some-job")
+    obs_id = await seed_source("obs", "My obs", f"gs://{_OUTPUTS_BUCKET}/some-job")
     await _owned_by(user_id, obs_id)
 
     with pytest.raises(HTTPException) as exc:
@@ -1055,7 +1000,7 @@ async def test_a_benchmark_will_not_read_a_saved_file_pattern_outside_its_folder
 ) -> None:
     from fastapi import HTTPException
 
-    model_id = await _seed_source(
+    model_id = await seed_source(
         "model", "GenCast", "gs://data/models/gencast", extra_metadata={"file_pattern": "../{}.nc"}
     )
 
@@ -1072,8 +1017,8 @@ async def test_a_blend_will_not_read_a_users_saved_model_source_in_a_platform_bu
     from fastapi import HTTPException
 
     _platform_bucket(monkeypatch)
-    obs_id = await _seed_source("obs", "ERA5 India", "gs://data/obs/india")
-    model_id = await _seed_source("model", "My model", f"gs://{_OUTPUTS_BUCKET}/some-job")
+    obs_id = await seed_source("obs", "ERA5 India", "gs://data/obs/india")
+    model_id = await seed_source("model", "My model", f"gs://{_OUTPUTS_BUCKET}/some-job")
     await _owned_by(user_id, model_id)
 
     with pytest.raises(HTTPException) as exc:
@@ -1101,9 +1046,9 @@ async def test_a_forecast_will_not_reread_a_blends_saved_training_files_in_a_pla
 
     _platform_bucket(monkeypatch)
     monkeypatch.setattr(job_submission, "utc_today", lambda: JUNE_15)
-    obs_id = await _seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
-    aifs_id = await _seed_source("model", "AIFS", "gs://data/models/aifs2", grid_step=0.25)
-    await _link_forecast_model(aifs_id, "aifs2")
+    obs_id = await seed_source("obs", "IMD India", "gs://data/obs/india", grid_step=0.25)
+    aifs_id = await seed_source("model", "AIFS", "gs://data/models/aifs2", grid_step=0.25)
+    await link_forecast_model(aifs_id, "aifs2")
     await _owned_by(user_id, obs_id, aifs_id)
     blend = await create_blend_for_user(
         BlendCreate(
@@ -1125,7 +1070,8 @@ async def test_a_forecast_will_not_reread_a_blends_saved_training_files_in_a_pla
 
     with pytest.raises(HTTPException) as exc:
         await job_submission.create_forecast_for_user(
-            job_submission.ForecastCreate(blend_id=blend.id), user_id
+            job_submission.ForecastCreate(blend_id=blend.id),
+            user_id,
         )
 
     assert exc.value.status_code == 409

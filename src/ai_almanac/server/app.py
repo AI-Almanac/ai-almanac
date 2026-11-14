@@ -37,6 +37,7 @@ from ai_almanac.server.routers import (
     fs,
     jobs,
     llm_profiles,
+    places,
     regions,
     tiles,
 )
@@ -380,7 +381,7 @@ app.add_middleware(
 )
 
 # Several SvelteKit pages share a name with an API router (/blends, /forecasts,
-# /regions, /data-sources, /settings), so a hard refresh on one of those pages
+# /data-sources, /settings), so a hard refresh on one of those pages
 # is a real GET to this process and would otherwise be dispatched straight to
 # the API route, rendering its raw JSON instead of the SPA. A browser
 # top-level navigation is distinguishable from the SPA's own same-origin
@@ -543,6 +544,7 @@ app.include_router(forecasts.router)
 app.include_router(fs.router)
 app.include_router(jobs.router)
 app.include_router(llm_profiles.router)
+app.include_router(places.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
 app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])

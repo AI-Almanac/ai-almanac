@@ -30,7 +30,15 @@ from pydantic import (
 )
 
 from ai_almanac.server.db import get_db, lock_for_update
-from ai_almanac.server.services import boundaries, day_level_blends, guardrails, trajectory_sets
+from ai_almanac.server.services import (
+    blend_units,
+    boundaries,
+    day_level_blends,
+    guardrails,
+    scoring_region,
+    trajectory_sets,
+)
+from ai_almanac.server.services import coverage as data_coverage
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.events import audit, usage
 from ai_almanac.server.services.execution import (
@@ -38,7 +46,12 @@ from ai_almanac.server.services.execution import (
     ResourceRequest,
     RunnerHandle,
 )
-from ai_almanac.server.services.focus_area import FocusArea, parse_focus_area
+from ai_almanac.server.services.focus_area import (
+    FocusArea,
+    area_label,
+    country_of,
+    parse_focus_area,
+)
 from ai_almanac.server.services.forecast_models import (
     archive_grid_step,
     linked_forecast_model_id,
@@ -171,9 +184,10 @@ class JobOut(BaseModel):
 
 
 def job_region_metadata(cfg: dict, catalog: CatalogSnapshot) -> dict[str, str | None]:
-    if cfg.get("region_id") and cfg.get("region_name"):
+    # A run scored by place has a name and no catalogue region.
+    if cfg.get("region_name"):
         return {
-            "region_id": cfg["region_id"],
+            "region_id": cfg.get("region_id"),
             "region_name": cfg["region_name"],
             "romp_region": cfg.get("romp_region") or (cfg.get("romp_params") or {}).get("region"),
         }
@@ -330,7 +344,7 @@ async def _resolve_obs_dir(dataset_id: str, user_id: str) -> str | None:
         raise HTTPException(status_code=400, detail="Selected source is not observations")
     # Same owner-or-shared rule _resolve_model_source applies: a source id is not
     # a capability, and the errors below disclose the source's name and coverage.
-    if source.get("owner_id") not in (None, user_id) and source.get("visibility") != "shared":
+    if not data_source_service.visible_to(source, user_id):
         raise HTTPException(status_code=404, detail="Dataset not found")
     if source.get("status") != "ready":
         raise HTTPException(
@@ -930,7 +944,7 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
     source = await data_source_service.get_source(model_id)
     if not source or source["kind"] != "model":
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_id!r}")
-    if source.get("owner_id") not in (None, user_id) and source.get("visibility") != "shared":
+    if not data_source_service.visible_to(source, user_id):
         raise HTTPException(status_code=404, detail=f"Model not found: {model_id!r}")
     if source.get("status") != "ready":
         raise HTTPException(
@@ -1010,6 +1024,11 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         + blend_split_errors(
             forecast_years, splits.training, splits.cv_holdout, splits.true_holdout
         )
+        + [
+            unpaired
+            for source in model_sources
+            if (unpaired := data_coverage.mismatch(obs_source, source))
+        ]
         + grid_mismatch_errors(
             archive_grid_step(obs_source),
             ((source["name"], archive_grid_step(source)) for source in model_sources),
@@ -1041,9 +1060,9 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
     job_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
     region_id = obs_source.get("region") if obs_source else None
-    blend_params = await _with_unit_outlines(
-        body.params.model_dump(exclude_none=True), (await load_catalog()).region(region_id or "")
-    )
+    region_def = (await load_catalog()).region(region_id or "")
+    blend_params = await _with_unit_outlines(body.params.model_dump(exclude_none=True), region_def)
+    country = country_of(_focus_area(blend_params), region_def)
     config = {
         "job_type": "blend",
         "modal_app": settings.modal_blending_app_name,
@@ -1056,6 +1075,8 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "model_source_ids": list(body.model_ids),
         "forecast_years": forecast_years,
         "region_id": region_id,
+        # Said outright so the blend does not have to read it off the region label.
+        "use_adm3_domain": blend_units.on_sub_districts(country),
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
         "train_day_level_blend": settings.enable_day_level_blend,
@@ -1708,6 +1729,10 @@ def parse_benchmark_settings(params: dict) -> dict:
     }
 
 
+def _focus_area(params: dict) -> FocusArea | None:
+    return parse_focus_area(params["focus_area"]) if params.get("focus_area") else None
+
+
 async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     """Picked administrative units need their outlines frozen into the job."""
     if not params.get("focus_area"):
@@ -1732,10 +1757,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if not observation_source:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    if (
-        observation_source.get("owner_id") not in (None, user_id)
-        and observation_source.get("visibility") != "shared"
-    ):
+    if not data_source_service.visible_to(observation_source, user_id):
         raise HTTPException(status_code=404, detail="Dataset not found")
     if observation_source["kind"] != "obs":
         raise HTTPException(status_code=400, detail="Selected source is not observations")
@@ -1747,13 +1769,10 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
             ),
         )
 
-    region = (body.params.region or "").lower()
     model_source = await data_source_service.get_source(body.model_name)
     if not model_source or model_source["kind"] != "model":
         raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
-    if model_source.get("owner_id") not in (None, user_id) and (
-        model_source.get("visibility") != "shared"
-    ):
+    if not data_source_service.visible_to(model_source, user_id):
         raise HTTPException(status_code=404, detail=f"Unknown model: {body.model_name!r}")
     if model_source.get("status") != "ready":
         raise HTTPException(
@@ -1767,11 +1786,9 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "region": model_source.get("region") or "",
         "model_dir": _readable_path(model_source, user_id),
     }
-    if region and model_cfg["region"].lower() != region:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model is not configured for region {region!r}",
-        )
+    unpaired = data_coverage.mismatch(observation_source, model_source)
+    if unpaired:
+        raise HTTPException(status_code=400, detail=unpaired)
     grid_errors = grid_mismatch_errors(
         archive_grid_step(observation_source),
         [(model_source["name"], archive_grid_step(model_source))],
@@ -1798,20 +1815,41 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
 
-    # Pull the app region id from params, or fall back to the model's configured region.
+    # The region asked for, else the one the observations or the model are filed under.
     catalog = await load_catalog()
-    region_id = romp_params.get("region") or model_cfg.get("region", "")
+    region_id = (
+        romp_params.get("region") or observation_source.get("region") or model_cfg.get("region", "")
+    )
     region_def = catalog.region(region_id)
-    romp_params = apply_region_params({"region": region_id, **romp_params}, catalog)
     romp_params = await _with_unit_outlines(romp_params, region_def)
 
     source_metadata = observation_source["metadata"] if observation_source else {}
-    if region_id == "custom":
-        romp_params = apply_inferred_custom_bounds(
-            romp_params,
-            source_metadata,
-            model_source["metadata"],
-        )
+    place = scoring_region.place_of(_focus_area(romp_params))
+    if place:
+        try:
+            romp_params = scoring_region.scored_by_place(
+                romp_params,
+                place,
+                source_metadata.get("spatial_bounds"),
+                model_source["metadata"].get("spatial_bounds"),
+            )
+        except scoring_region.PlaceNotScorable as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        region_def = catalog.region_by_romp_name(romp_params["region"])
+    else:
+        if region_def and not data_coverage.reaches(region_def, observation_source, model_source):
+            raise HTTPException(
+                status_code=400,
+                detail=f"The selected data does not reach {region_def['display_name']}.",
+            )
+        # A run with no region is scored where its two data sources overlap.
+        romp_params = apply_region_params({"region": region_id or "custom", **romp_params}, catalog)
+        if region_id in ("", "custom"):
+            romp_params = apply_inferred_custom_bounds(
+                romp_params,
+                source_metadata,
+                model_source["metadata"],
+            )
     try:
         romp_params = skip_missing_years(
             romp_params,
@@ -1853,8 +1891,12 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
         "model_dir": model_cfg["model_dir"],
         "model_config": model_cfg,
         "region_id": region_def["id"] if region_def else None,
-        "region_name": region_def["display_name"] if region_def else None,
-        "romp_region": region_def.get("romp_name") or "custom" if region_def else region_id,
+        "region_name": (
+            region_def["display_name"] if region_def else (area_label(place) if place else None)
+        ),
+        "romp_region": (
+            (region_def.get("romp_name") or "custom") if region_def else romp_params.get("region")
+        ),
         "dataset_config": dataset_config,
         "compute_e2s_metrics": compute_e2s_metrics,
         "romp_params": romp_params,

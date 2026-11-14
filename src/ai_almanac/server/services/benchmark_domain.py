@@ -203,9 +203,9 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
 
 
 def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
+    # A region is not asked for: a run is scored where its data is, or in the place
+    # it names.
     missing = []
-    if not spec.region_id:
-        missing.append("region")
     if not spec.dataset_id:
         missing.append("ground_truth_dataset")
     if not spec.model_ids:
@@ -342,12 +342,17 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
     region = _region_by_id(catalog, spec.region_id)
     if spec.region_id and not region:
         errors.append(f"Unknown region_id: {spec.region_id}")
-    models = catalog.models_for_region(spec.region_id)
+    models = catalog.models_for(spec.dataset_id, spec.region_id)
     model_map = {model["id"]: model for model in models}
     valid_model_ids = {model["id"] for model in models}
     bad_models = [model_id for model_id in spec.model_ids if model_id not in valid_model_ids]
     if bad_models:
-        errors.append(f"Models are not available for {spec.region_id}: {', '.join(bad_models)}")
+        unavailable = (
+            "Models have no data where the selected observations do"
+            if catalog.observation(spec.dataset_id)
+            else f"Models are not available for {spec.region_id}"
+        )
+        errors.append(f"{unavailable}: {', '.join(bad_models)}")
     if spec.forecast_window_days is not None and spec.forecast_window_days <= 0:
         errors.append("forecast_window_days must be positive")
     if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
@@ -556,7 +561,9 @@ async def _exec_update_benchmark_config(
     )
     models = [
         model
-        for model in catalog.models_for_region(region["id"] if region else None)
+        for model in catalog.models_for(
+            dataset["id"] if dataset else None, region["id"] if region else None
+        )
         if model["id"] in {mid for mid in model_ids if isinstance(mid, str)}
     ]
     advanced_params = dict(spec.advanced_params)
@@ -650,7 +657,7 @@ async def _exec_submit_benchmark(
 
     models = [
         model
-        for model in catalog.models_for_region(spec.region_id)
+        for model in catalog.models_for(spec.dataset_id, spec.region_id)
         if model["id"] in set(spec.model_ids)
     ]
     run_id = str(uuid.uuid4())

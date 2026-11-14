@@ -205,7 +205,6 @@ _RANDO = {"X-Forwarded-User": "rando"}
         ("proxy", "GET", "/settings", _RANDO, 403),
         ("proxy", "GET", "/fs/quick-paths", _RANDO, 403),
         ("proxy", "GET", "/regions", _RANDO, 200),
-        ("proxy", "DELETE", "/regions/anything", _RANDO, 403),
         # Unowned sources are a uniform 404 so other users' sources aren't
         # discoverable; ownership CRUD lives in test_data_sources.py.
         ("proxy", "DELETE", "/data-sources/anything", _RANDO, 404),
@@ -216,7 +215,6 @@ _RANDO = {"X-Forwarded-User": "rando"}
         "settings-non-admin",
         "fs-non-admin",
         "regions-list-non-admin",
-        "region-delete-non-admin",
         "data-source-delete-non-admin",
     ],
 )

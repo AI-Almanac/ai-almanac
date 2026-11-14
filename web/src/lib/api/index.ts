@@ -11,6 +11,7 @@ export * from './config';
 export * from './llm';
 export * from './account';
 export * from './regions';
+export * from './places';
 export * from './datasets';
 export * from './feedback';
 export * from './jobs';
