@@ -111,6 +111,8 @@ def _group_forecast_models_by_env(config: dict) -> dict[str, list[str]]:
 
 
 def _run_forecast(job_id: str, config: dict) -> None:
+    from ai_almanac.server.services import forecast_pipeline
+
     storage = get_storage()
     if not storage.is_local:
         raise RuntimeError("Local forecast execution requires local storage")
@@ -160,8 +162,28 @@ def _run_forecast(job_id: str, config: dict) -> None:
         )
         _stream_process(process)
 
-    # Scoring runs once, in the blending env — it only needs blending's stack,
-    # which conflicts with earth2studio's pins and so can't live in a forecast env.
+    if forecast_pipeline.scores_against_blend(config):
+        _score_in_blending_env(entrypoint, config_path, staging_dir, output_dir, process_env)
+    else:
+        print("==> No blend to score against; publishing each model's season", flush=True)
+        forecast_pipeline.publish_season_files(
+            [member for members in groups.values() for member in members], staging_dir, output_dir
+        )
+    # The rollout populated the shared trajectory store; record coverage so
+    # later runs score against it GPU-free. Bookkeeping only — never fail an
+    # otherwise-successful forecast over it.
+    try:
+        _mark_trajectory_coverage(config)
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: failed to record trajectory coverage: {exc}", flush=True)
+
+
+def _score_in_blending_env(
+    entrypoint: Path, config_path: Path, staging_dir: Path, output_dir: Path, process_env: dict
+) -> None:
+    """Score the staged seasons against the trained blend and publish them. Runs
+    once, in the blending env: it only needs blending's stack, which conflicts
+    with earth2studio's pins and so can't live in a forecast env."""
     print("==> Scoring against trained blend...", flush=True)
     score_env = process_env.copy()
     score_env["ALMANAC_BLENDING_ROOT"] = str(blending_env_dir() / "onset-blending")
@@ -181,13 +203,6 @@ def _run_forecast(job_id: str, config: dict) -> None:
         env=score_env,
     )
     _stream_process(process)
-    # The rollout populated the shared trajectory store; record coverage so
-    # later runs score against it GPU-free. Bookkeeping only — never fail an
-    # otherwise-successful forecast over it.
-    try:
-        _mark_trajectory_coverage(config)
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARNING: failed to record trajectory coverage: {exc}", flush=True)
 
 
 def _mark_trajectory_coverage(config: dict) -> None:

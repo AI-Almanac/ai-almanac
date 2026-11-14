@@ -11,7 +11,8 @@ different environments:
   - ``score``: assemble the staged season files and score against the trained
     blend. Runs in the *blending* environment — scoring only needs blending's
     stack (numpy/pandas/sklearn), which conflicts with earth2studio's pins, so
-    it must not live in a forecast env.
+    it must not live in a forecast env. A forecast without a blend skips this
+    phase; the server publishes its staged seasons directly.
 
 forecast_pipeline is a plain module with no Modal dependency, imported normally
 here. The scoring step reuses blend_entrypoint's Modal-stubbing loader for
@@ -129,6 +130,7 @@ def run_scoring(config: dict, plan: SeasonPlan, staging_dir: Path, output_dir: P
         raise RuntimeError(f"Cannot score; missing staged season data for {missing}")
 
     _score_live(config, plan.season, live_forecast_paths, output_dir)
+    forecast_pipeline.publish_season_files(list(live_forecast_paths), staging_dir, output_dir)
     print("==> Forecast generation complete", flush=True)
 
 

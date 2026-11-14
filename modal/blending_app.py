@@ -148,10 +148,13 @@ def _ref_onset_for(ref_onset_month_day: str | None) -> dict | None:
 # carry it, so both are read (the new name wins when both are present).
 # `min_onset_years` is not a submission field (the guardrails own it); local
 # configs set it to build from records shorter than the default ten years.
+# `issue_end_month_day` is the season's last issue date: a forecast whose season
+# ends elsewhere sets it, so scoring covers the issue dates its plan rolled out.
 _INTERMEDIATE_PREP_KEYS = (
     "threshold_mm",
     "cutoff_month_day",
     "ref_onset_month_day",
+    "issue_end_month_day",
     "focus_area",
     "min_onset_years",
 )

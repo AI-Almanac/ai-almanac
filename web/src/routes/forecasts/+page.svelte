@@ -1,7 +1,6 @@
 <script lang="ts">
 	import {
 		listForecasts,
-		createForecast,
 		refreshForecast as refreshForecastRun,
 		listBlends,
 		getForecastModels,
@@ -12,7 +11,6 @@
 		fetchResultBlob,
 		type Blend,
 		type Forecast,
-		type ForecastCreate,
 		type ForecastModel,
 		type InitSource,
 		type JobArtifact,
@@ -22,6 +20,7 @@
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
 	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
+	import ForecastForm from '$lib/components/forecast-setup/ForecastForm.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 	import { installTour } from '$lib/tour.svelte';
@@ -106,56 +105,15 @@
 		return newestFirst.find((f) => !isExample(f)) ?? newestFirst.find(isExample);
 	}
 
+	// A forecast run without a blend has no blend id.
 	function blendName(blendId: string): string {
+		if (!blendId) return 'Unblended model forecast';
 		return blends.find((b) => b.id === blendId)?.name || blendId;
 	}
 
-	// --- Form state ---
-	let blendId = $state('');
-	let forecastModelIds = $state<string[]>([]);
-	let initTime = $state('');
-	let initSource = $state('gfs');
-	// bind:value on <input type="number"> yields a number (or undefined when
-	// empty/invalid), not a string — unlike initTime's plain text input.
-	let maxIssueDates = $state<number | undefined>(undefined);
-	let submitting = $state(false);
-	let submitError = $state<string | null>(null);
 	let updating = $state(false);
 
 	const completedBlends = $derived(blends.filter((b) => b.status === 'complete'));
-	const selectedBlend = $derived(blends.find((b) => b.id === blendId) ?? null);
-
-	// A blend member can be requested when its data is linked to a live
-	// forecast model. The blend's model NAME is what gets submitted (it keys the
-	// blend formula server-side); the registry entry is its display/run model.
-	const availableModels = $derived.by(() => {
-		if (!selectedBlend) return [];
-		const linked = selectedBlend.forecast_models ?? {};
-		return selectedBlend.model_names.flatMap((name) => {
-			const model = forecastModels.find((m) => m.id === linked[name]);
-			return model ? [{ name, model }] : [];
-		});
-	});
-
-	// Live scoring applies the blend's whole formula, so the server rejects a
-	// forecast unless every member is linked.
-	const unlinkedModels = $derived(
-		selectedBlend
-			? selectedBlend.model_names.filter((name) => !(name in (selectedBlend.forecast_models ?? {})))
-			: []
-	);
-
-	// Drop any selected model that's no longer available for the chosen blend.
-	$effect(() => {
-		const names = new Set(availableModels.map((m) => m.name));
-		if (forecastModelIds.some((id) => !names.has(id))) {
-			forecastModelIds = forecastModelIds.filter((id) => names.has(id));
-		}
-	});
-
-	const formValid = $derived(
-		blendId !== '' && forecastModelIds.length > 0 && unlinkedModels.length === 0
-	);
 
 	async function load() {
 		const [f, b, m, s] = await Promise.allSettled([
@@ -297,12 +255,6 @@
 	function startNew() {
 		creating = true;
 		selectedId = null;
-		submitError = null;
-		blendId = '';
-		forecastModelIds = [];
-		initTime = '';
-		initSource = 'gfs';
-		maxIssueDates = undefined;
 	}
 
 	function friendlyError(err: unknown): string {
@@ -315,38 +267,10 @@
 		upToDateId = null;
 	}
 
-	function toggleModel(id: string) {
-		forecastModelIds = forecastModelIds.includes(id)
-			? forecastModelIds.filter((m) => m !== id)
-			: [...forecastModelIds, id];
-	}
-
-	async function submit() {
-		if (!formValid || submitting) return;
-		submitting = true;
-		submitError = null;
-		try {
-			const params: ForecastCreate['params'] = {
-				...(initTime.trim() ? { init_time: initTime.trim() } : {}),
-				...(initSource.trim() ? { init_source: initSource.trim() } : {}),
-				...(maxIssueDates != null && !Number.isNaN(maxIssueDates)
-					? { max_issue_dates: maxIssueDates }
-					: {})
-			};
-			const body: ForecastCreate = {
-				blend_id: blendId,
-				forecast_model_ids: forecastModelIds,
-				...(Object.keys(params).length ? { params } : {})
-			};
-			const forecast = await createForecast(body);
-			forecasts = [forecast, ...forecasts];
-			creating = false;
-			selectedId = forecast.id;
-		} catch (err) {
-			submitError = friendlyError(err);
-		} finally {
-			submitting = false;
-		}
+	function forecastStarted(forecast: Forecast) {
+		forecasts = [forecast, ...forecasts];
+		creating = false;
+		selectedId = forecast.id;
 	}
 
 	// Re-run an existing forecast with its ORIGINAL spec (server-side replay of
@@ -469,90 +393,13 @@
 					Run a completed blend's models forward against the latest conditions and score them
 					against the blend's trained weights.
 				</p>
-
-				<label class="field" data-tour="forecast-blend">
-					<span>Blend</span>
-					<select bind:value={blendId}>
-						<option value="" disabled>Select a completed blend…</option>
-						{#each completedBlends as blend (blend.id)}
-							<option value={blend.id}>{blend.name || 'Untitled blend'}</option>
-						{/each}
-					</select>
-					{#if blendId === '' && completedBlends.length === 0}
-						<p class="muted">No completed blends yet. Train one under Blends first.</p>
-					{/if}
-				</label>
-
-				<label class="field" data-tour="forecast-init">
-					<span>Initialization data source</span>
-					<select bind:value={initSource}>
-						{#each initSources as source (source.id)}
-							<option value={source.id}>{source.display_name}</option>
-						{/each}
-					</select>
-					<p class="muted">The conditions each live rollout is initialized from.</p>
-				</label>
-
-				{#if selectedBlend}
-					<fieldset class="field" data-tour="forecast-models">
-						<legend>Forecast models</legend>
-						{#if unlinkedModels.length > 0}
-							<p class="muted">
-								Every model in a blend needs a live forecast model before the blend can forecast.
-								Not linked yet: {unlinkedModels.join(', ')}. Choose one for each in its data source
-								settings.
-							</p>
-						{/if}
-						{#if availableModels.length > 0}
-							<div class="model-grid">
-								{#each availableModels as entry (entry.name)}
-									<label class="checkbox">
-										<input
-											type="checkbox"
-											checked={forecastModelIds.includes(entry.name)}
-											onchange={() => toggleModel(entry.name)}
-										/>
-										<span>{entry.model.display_name}</span>
-									</label>
-								{/each}
-							</div>
-						{/if}
-					</fieldset>
-
-					<details class="advanced">
-						<summary>Advanced</summary>
-						<label class="field">
-							<span>Init time (UTC)</span>
-							<input type="text" bind:value={initTime} placeholder="defaults to latest available" />
-						</label>
-						<label class="field">
-							<span>Max season issue dates</span>
-							<input
-								type="number"
-								min="1"
-								bind:value={maxIssueDates}
-								placeholder="defaults to the whole season-to-date"
-							/>
-						</label>
-					</details>
-				{/if}
-
-				{#if submitError}
-					<p class="error">{submitError}</p>
-				{/if}
-
-				<div class="form-actions">
-					<button type="button" class="ghost" onclick={() => (creating = false)}>Cancel</button>
-					<button
-						type="button"
-						class="primary"
-						data-tour="forecast-run"
-						disabled={!formValid || submitting}
-						onclick={submit}
-					>
-						{submitting ? 'Submitting…' : 'Run forecast'}
-					</button>
-				</div>
+				<ForecastForm
+					blends={completedBlends}
+					{forecastModels}
+					{initSources}
+					onSubmitted={forecastStarted}
+					onCancel={() => (creating = false)}
+				/>
 			</section>
 		{:else if selected}
 			<section class="card detail">
@@ -763,69 +610,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
-	}
-
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-
-	.field > span,
-	.field legend {
-		font-size: 0.8rem;
-		font-weight: 700;
-		color: var(--color-text);
-	}
-
-	.field input,
-	.field select {
-		padding: 0.55rem 0.65rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		background: var(--color-bg);
-		color: var(--color-text);
-		font: inherit;
-	}
-
-	fieldset.field {
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 0.45rem;
-		padding: 0.75rem;
-	}
-
-	.model-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
-		gap: 0.4rem;
-	}
-
-	.checkbox {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		font-size: 0.9rem;
-		color: var(--color-text);
-	}
-
-	.advanced summary {
-		cursor: pointer;
-		font-weight: 700;
-		font-size: 0.85rem;
-		color: var(--color-text);
-	}
-
-	.advanced[open] {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		margin-top: 0.5rem;
-	}
-
-	.form-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.6rem;
 	}
 
 	button.primary,
