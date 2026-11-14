@@ -41,6 +41,8 @@ OFFERED = [
     *_rows({"cancel_run"}, {"workspace", PAGE_CHAT}, {"general"}),
     *_rows({"open_panel", "show"}, {"workspace"}, {PAGE_CHAT}),
     *_rows({"run_code", "run_code_sandbox", "fetch"}, set(), {"workspace"}),
+    *_rows({"plot_map"}, {"workspace"}, set()),
+    *_rows({"summarize_skill_by_area"}, {"workspace"}, {PAGE_CHAT, "blend_setup", "general"}),
 ]
 
 

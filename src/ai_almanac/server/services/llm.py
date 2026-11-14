@@ -770,6 +770,8 @@ _PRIMITIVE_SECTIONS = (
     primitives.runs,
     primitives.acquire,
     primitives.code_harness,
+    primitives.analysis,
+    primitives.figures,
 )
 
 

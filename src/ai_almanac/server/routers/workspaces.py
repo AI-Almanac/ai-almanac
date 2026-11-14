@@ -4,6 +4,7 @@ POST /workspaces                                   create
 GET  /workspaces                                   list mine
 GET  /workspaces/{id}                              detail: settings, jobs + artifacts
 GET  /workspaces/{id}/summary                      season state, setup, latest forecast, headline skill
+GET  /workspaces/{id}/runs/{run}/skill-by-area     a benchmark run's skill per area, model, window
 GET  /workspaces/{id}/settings                     the workspace's defaults, e.g. its season
 GET  /workspaces/{id}/settings/effective           the same, unset ones filled with platform defaults
 PATCH /workspaces/{id}/settings                    change named settings; null clears one
@@ -39,11 +40,15 @@ from ai_almanac.server.auth import CurrentUser, require_workspaces
 from ..services import (
     follow_ups,
     ledger,
+    skill_area_summaries,
+    skill_by_area,
     workspace_settings,
     workspace_summary,
     workspaces,
 )
+from ..services.boundaries import AreaLevel
 from ..services.run_summaries import OnsetDefinition
+from ..services.skill_area_summaries import SkillByArea
 from ..services.workspace_settings import WorkspaceSettings
 from ..services.workspace_summary import JobHeadline, WorkspaceSummary
 
@@ -269,6 +274,32 @@ async def get_workspace_summary(workspace: OwnedWorkspace):
     """The facts above a workspace's results: season state, setup, latest forecast, skill."""
     workspace_id = workspace["id"]
     return await workspace_summary.summarize(workspace_id)
+
+
+@router.get("/{workspace_id}/runs/{run_id}/skill-by-area", response_model=SkillByArea)
+async def get_run_skill_by_area(
+    workspace: OwnedWorkspace,
+    run_id: str,
+    level: Annotated[AreaLevel | None, Query()] = None,
+    within: Annotated[str | None, Query(max_length=120)] = None,
+    areas: Annotated[list[str] | None, Query()] = None,
+):
+    """A benchmark run's skill per area, model and lead window. With no query the areas
+    are the run's own area of interest; ``level`` asks for another administrative
+    level, ``within`` for the areas inside one larger area, ``areas`` for named ones."""
+    workspace_id = workspace["id"]
+    try:
+        return await skill_by_area.summarize_skill_by_area(
+            workspace_id, run_id, level=level, within=within, areas=areas
+        )
+    except skill_by_area.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except skill_area_summaries.SkillByAreaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except skill_area_summaries.SkillMapsUnreadable as exc:
+        raise HTTPException(
+            status_code=500, detail=skill_area_summaries.SKILL_MAPS_UNREADABLE
+        ) from exc
 
 
 @router.patch("/{workspace_id}/artifacts/{artifact_id}", response_model=ArtifactOut)

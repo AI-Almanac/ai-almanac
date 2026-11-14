@@ -2102,6 +2102,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/runs/{run_id}/skill-by-area": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Skill By Area
+         * @description A benchmark run's skill per area, model and lead window. With no query the areas
+         *     are the run's own area of interest; ``level`` asks for another administrative
+         *     level, ``within`` for the areas inside one larger area, ``areas`` for named ones.
+         */
+        get: operations["get_run_skill_by_area_workspaces__workspace_id__runs__run_id__skill_by_area_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -2354,6 +2376,40 @@ export interface components {
              * @enum {string}
              */
             named_by: "assistant" | "user";
+        };
+        /**
+         * AreaSkill
+         * @description Skill averaged over one area. Values are null when no scored cell is centred in it.
+         */
+        AreaSkill: {
+            /** Onset Error Days */
+            onset_error_days: number | null;
+            /** False Alarm Rate */
+            false_alarm_rate: number | null;
+            /** Miss Rate */
+            miss_rate: number | null;
+            /** Cells */
+            cells: number;
+        };
+        /** AreaSkillRow */
+        AreaSkillRow: {
+            /** Onset Error Days */
+            onset_error_days: number | null;
+            /** False Alarm Rate */
+            false_alarm_rate: number | null;
+            /** Miss Rate */
+            miss_rate: number | null;
+            /** Cells */
+            cells: number;
+            /** Area */
+            area: string;
+            /** Parent */
+            parent: string | null;
+            /** Model */
+            model: string;
+            /** Window */
+            window: string;
+            climatology: components["schemas"]["AreaSkill"] | null;
         };
         /**
          * BandStatistics
@@ -4327,6 +4383,16 @@ export interface components {
             unit: string;
         };
         /**
+         * ModelNotShown
+         * @description A model of the run that the table has no rows for, and why.
+         */
+        ModelNotShown: {
+            /** Model */
+            model: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * MultiLineString
          * @description MultiLineString Model
          */
@@ -5338,6 +5404,35 @@ export interface components {
             brier_score_forecast: number | null;
             /** Brier Score Climatology */
             brier_score_climatology: number | null;
+        };
+        /**
+         * SkillByArea
+         * @description A benchmark run's skill per area, model and lead window.
+         */
+        SkillByArea: {
+            /**
+             * Areas From
+             * @enum {string}
+             */
+            areas_from: "area_of_interest" | "boundaries";
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "adm1" | "adm2" | "adm3";
+            /** Models */
+            models: string[];
+            /** Windows */
+            windows: string[];
+            /** Rows */
+            rows: components["schemas"]["AreaSkillRow"][];
+            /** Not Covered */
+            not_covered: string[];
+            /**
+             * Not Shown
+             * @default []
+             */
+            not_shown: components["schemas"]["ModelNotShown"][];
         };
         /**
          * SourceArtifact
@@ -10402,6 +10497,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_skill_by_area_workspaces__workspace_id__runs__run_id__skill_by_area_get: {
+        parameters: {
+            query?: {
+                level?: ("adm1" | "adm2" | "adm3") | null;
+                within?: string | null;
+                areas?: string[] | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillByArea"];
                 };
             };
             /** @description Validation Error */

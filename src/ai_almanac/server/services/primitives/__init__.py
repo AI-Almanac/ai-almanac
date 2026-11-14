@@ -6,7 +6,9 @@ registers every section, one import line per section.
 """
 
 from . import acquire as acquire
+from . import analysis as analysis
 from . import code_harness as code_harness
+from . import figures as figures
 from . import inspection as inspection
 from . import registry as registry
 from . import runs as runs
