@@ -19,6 +19,7 @@ from ai_almanac.server.services import (
     coverage,
     guardrails,
     job_submission,
+    ledger,
 )
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
@@ -480,7 +481,9 @@ def _blend_create_body(spec: BlendRunSpec, run_id: str) -> job_submission.BlendC
     )
 
 
-async def submit_blend_for_session(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
+async def submit_blend_for_session(
+    user_id: str, scope: BenchmarkScope, session_id: str, attribution: ledger.Attribution
+) -> dict:
     spec = _finalize_blend_config(await _load_blend_config(session_id, user_id))
     validation = await _validation_for_config(spec, user_id)
     if not validation.can_run:
@@ -488,7 +491,11 @@ async def submit_blend_for_session(user_id: str, scope: BenchmarkScope, session_
         return blend_payload(spec, validation, error="Blend config is not runnable")
 
     run_id = str(uuid.uuid4())
-    blend = await job_submission.create_blend_for_user(_blend_create_body(spec, run_id), user_id)
+    blend = await job_submission.create_blend_for_user(
+        _blend_create_body(spec, run_id),
+        user_id,
+        attribution=attribution,
+    )
     job = blend.model_dump(mode="json")
 
     submitted = spec.model_copy(update={"status": "running"})
@@ -496,6 +503,12 @@ async def submit_blend_for_session(user_id: str, scope: BenchmarkScope, session_
     await _save_blend_state(session_id, user_id, submitted, submitted_validation, run_id)
 
     from ai_almanac.server.db import get_db
+
+    if scope.kind == "workspace":
+        from .workspaces import link_job
+
+        await link_job(scope.key, blend.id)
+        return blend_payload(submitted, submitted_validation, run_id=run_id, jobs=[job])
 
     next_scope = BenchmarkScope(kind="job_set", key=run_id, title=scope.title, job_ids=[blend.id])
     async with get_db() as conn:

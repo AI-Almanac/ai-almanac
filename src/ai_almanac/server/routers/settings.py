@@ -206,6 +206,11 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
                 "Assistant comparisons",
                 "Who can compare two assistant rulesets side by side and vote; each comparison costs two model replies. 'admins' lets admins test before exposing it to everyone",
             ),
+            (
+                "workspaces_audience",
+                "Workspaces",
+                "Who can open workspaces, where runs, forecasts and analyses sit together with the assistant. 'admins' keeps them to admins until they are ready for everyone",
+            ),
         ],
     ),
     (

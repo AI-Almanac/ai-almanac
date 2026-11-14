@@ -269,6 +269,11 @@ class Settings(BaseSettings):
     # reload_settings() to map a stored False to audience "off". Remove next
     # release, once no overlay row or env still sets it.
     enable_assistant_comparisons: bool = True
+    # Workspaces: one place to run, compare and analyse with the assistant. "admins"
+    # by default, unlike the convention above: a personal install's operator is an
+    # admin and gets them, while a shared deployment keeps them to admins until an
+    # admin opens them to everyone from the Settings page.
+    workspaces_audience: Audience = "admins"
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
@@ -294,6 +299,9 @@ class Settings(BaseSettings):
 
     def data_management_allowed(self, is_admin: bool) -> bool:
         return audience_allows(self.data_management_audience, is_admin)
+
+    def workspaces_allowed(self, is_admin: bool) -> bool:
+        return audience_allows(self.workspaces_audience, is_admin)
 
     def resolve_database_url(self) -> str:
         # Local import: settings is also imported inside the forecast envs

@@ -40,6 +40,7 @@ from ai_almanac.server.routers import (
     places,
     regions,
     tiles,
+    workspaces,
 )
 from ai_almanac.server.routers import (
     settings as settings_router,
@@ -548,6 +549,7 @@ app.include_router(places.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
 app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])
+app.include_router(workspaces.router)
 
 
 @app.get("/health")

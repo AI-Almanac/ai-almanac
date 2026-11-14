@@ -18,6 +18,7 @@ from ai_almanac.server.services.job_submission import (
     parse_benchmark_settings,
     skip_missing_years,
 )
+from ai_almanac.server.services.ledger import Attribution
 
 FIXTURES = Path(__file__).parents[1] / "testdata" / "ethiopia"
 CODE = "__import__('os').system('touch /tmp/pwned')"
@@ -211,6 +212,7 @@ async def test_chat_rerun_reports_invalid_override_without_creating_a_job(
         ),
         user_id,
         BenchmarkScope(kind="benchmark_setup", key="setup", title="Setup"),
+        Attribution.by_user(user_id),
     )
 
     assert "obs_var" in result["error"]

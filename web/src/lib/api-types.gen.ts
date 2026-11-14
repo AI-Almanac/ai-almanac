@@ -2037,6 +2037,224 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workspaces */
+        get: operations["list_workspaces_workspaces_get"];
+        put?: never;
+        /** Create Workspace */
+        post: operations["create_workspace_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workspace */
+        get: operations["get_workspace_workspaces__workspace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Summary
+         * @description The facts above a workspace's results: season state, setup, latest forecast, skill.
+         */
+        get: operations["get_workspace_summary_workspaces__workspace_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename Artifact */
+        patch: operations["rename_artifact_workspaces__workspace_id__artifacts__artifact_id__patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_workspaces__workspace_id__settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Settings */
+        patch: operations["update_settings_workspaces__workspace_id__settings_patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/settings/effective": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Effective Settings
+         * @description What a run here uses today: the settings with platform defaults for unset ones.
+         */
+        get: operations["get_effective_settings_workspaces__workspace_id__settings_effective_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace Events */
+        get: operations["workspace_events_workspaces__workspace_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link Job */
+        post: operations["link_job_workspaces__workspace_id__jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/addable-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Addable Jobs
+         * @description The user's own benchmarks, blends and forecasts that are not in the workspace.
+         */
+        get: operations["list_addable_jobs_workspaces__workspace_id__addable_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Artifacts */
+        get: operations["list_artifacts_workspaces__workspace_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Artifact
+         * @description The file as stored, with its provenance chain stamped into this copy.
+         */
+        get: operations["download_artifact_workspaces__workspace_id__artifacts__artifact_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}/provenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Artifact Provenance */
+        get: operations["artifact_provenance_workspaces__workspace_id__artifacts__artifact_id__provenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2075,25 +2293,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** ArtifactOut */
-        ArtifactOut: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Filename */
-            filename: string;
-            /** Media Type */
-            media_type: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Checksum */
-            checksum: string;
-            /** Created At */
-            created_at: string;
-            /** Url */
-            url: string;
-        };
         /**
          * BandStatistics
          * @description Band statistics
@@ -2212,6 +2411,28 @@ export interface components {
             advanced_params?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * BenchmarkSkill
+         * @description The best model of the newest benchmark run, by mean onset error.
+         */
+        BenchmarkSkill: {
+            /**
+             * Kind
+             * @default benchmark
+             * @constant
+             */
+            kind: "benchmark";
+            /** Job Id */
+            job_id: string;
+            /** Model */
+            model: string;
+            /** Mae Days */
+            mae_days: number;
+            /** Climatology Mae Days */
+            climatology_mae_days: number | null;
+            /** Window */
+            window: string;
         };
         /** BenchmarkSubmitIn */
         BenchmarkSubmitIn: {
@@ -2567,6 +2788,28 @@ export interface components {
             /** Assumptions */
             assumptions?: string[];
         };
+        /**
+         * BlendSkill
+         * @description The newest trained blend's pooled skill against Traditional Climatology.
+         */
+        BlendSkill: {
+            /**
+             * Kind
+             * @default blend
+             * @constant
+             */
+            kind: "blend";
+            /** Job Id */
+            job_id: string;
+            /** Name */
+            name: string;
+            /** Rps Skill */
+            rps_skill: number;
+            /** Brier Skill */
+            brier_skill: number;
+            /** Holdout Years */
+            holdout_years: string | null;
+        };
         /** BlendSubmitIn */
         BlendSubmitIn: {
             approval?: components["schemas"]["SubmitBlendApproval"] | null;
@@ -2771,7 +3014,7 @@ export interface components {
              * @default benchmark_run_group
              * @enum {string}
              */
-            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "general" | "job_set";
+            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "general" | "job_set" | "workspace";
             /** Key */
             key: string;
             /** Title */
@@ -3330,6 +3573,31 @@ export interface components {
             /** Up To Date */
             up_to_date: boolean;
         };
+        /** ForecastSummary */
+        ForecastSummary: {
+            /**
+             * Kind
+             * @default forecast
+             * @constant
+             */
+            kind: "forecast";
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Blended */
+            blended: boolean;
+            /** Blend Name */
+            blend_name: string | null;
+            /** First Issue Date */
+            first_issue_date: string | null;
+            /** Last Issue Date */
+            last_issue_date: string | null;
+            /** Issue Dates */
+            issue_dates: number;
+            /** Created At */
+            created_at: string;
+        };
         /** FsEntry */
         FsEntry: {
             /** Name */
@@ -3872,6 +4140,17 @@ export interface components {
             /** Length */
             length?: number | null;
         };
+        /** LinkJobIn */
+        LinkJobIn: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Origin
+             * @default added
+             * @enum {string}
+             */
+            origin: "added" | "started";
+        };
         /** LiveForecastOut */
         LiveForecastOut: {
             /**
@@ -4040,6 +4319,31 @@ export interface components {
             type: "MultiPolygon";
             /** Coordinates */
             coordinates: (components["schemas"]["Position2D"] | components["schemas"]["Position3D"])[][][];
+        };
+        /**
+         * OnsetDefinition
+         * @description An onset definition in words: its name and whichever settings are not its defaults.
+         */
+        OnsetDefinition: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Is Default */
+            is_default: boolean;
+            /** Changes */
+            changes: components["schemas"]["OnsetParameter"][];
+        };
+        /** OnsetParameter */
+        OnsetParameter: {
+            /** Label */
+            label: string;
+            /** Short Label */
+            short_label: string;
+            /** Value */
+            value: boolean | number | null;
+            /** Unit */
+            unit: string | null;
         };
         /**
          * Point
@@ -4314,6 +4618,98 @@ export interface components {
                 [key: string]: components["schemas"]["Properties"];
             };
         };
+        /** ProvenanceArtifactOut */
+        ProvenanceArtifactOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Filename */
+            filename: string;
+            /** Kind */
+            kind: string;
+            /** Format */
+            format: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Provenance Step Id */
+            provenance_step_id: string;
+        };
+        /** ProvenanceOut */
+        ProvenanceOut: {
+            artifact: components["schemas"]["ProvenanceArtifactOut"];
+            /** Steps */
+            steps: components["schemas"]["ProvenanceStepOut"][];
+            /** Artifacts */
+            artifacts: components["schemas"]["ProvenanceArtifactOut"][];
+            /** Producers */
+            producers: string[];
+            /** Lineage */
+            lineage: string;
+        };
+        /** ProvenanceStepOut */
+        ProvenanceStepOut: {
+            /** Id */
+            id: string;
+            /** Created At */
+            created_at: string;
+            /** Completed At */
+            completed_at: string | null;
+            /** Actor Kind */
+            actor_kind: string;
+            /** Primitive */
+            primitive: string;
+            /** Primitive Version */
+            primitive_version: string;
+            /** Description */
+            description: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Display Params */
+            display_params: {
+                [key: string]: unknown;
+            };
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            }[];
+            /** Outputs */
+            outputs: string[];
+            /** Runtime */
+            runtime: {
+                [key: string]: unknown;
+            };
+            /** Job Id */
+            job_id: string | null;
+            /** Code Hash */
+            code_hash: string | null;
+            /** Turn Id */
+            turn_id: string | null;
+            /** Session Id */
+            session_id: string | null;
+            /** Ruleset Id */
+            ruleset_id: string | null;
+            /** Ruleset Version */
+            ruleset_version: number | null;
+            /** Model Name */
+            model_name: string | null;
+            /** Approval Id */
+            approval_id: string | null;
+            /** Approved At */
+            approved_at: string | null;
+            /** Added At */
+            added_at?: string | null;
+            /** Added By */
+            added_by?: ("assistant" | "user") | null;
+            /** Parent Step Ids */
+            parent_step_ids: string[];
+            /** Step Hash */
+            step_hash: string;
+            /** Verification */
+            verification: string | null;
+        };
         /** ProviderIn */
         ProviderIn: {
             /** Provider Type */
@@ -4368,6 +4764,14 @@ export interface components {
             label: string;
             /** Path */
             path: string;
+        };
+        /** RenameIn */
+        RenameIn: {
+            /**
+             * Title
+             * @description The new name; null goes back to the default
+             */
+            title: string | null;
         };
         /** ResultFile */
         ResultFile: {
@@ -4610,6 +5014,48 @@ export interface components {
             model: string | null;
         };
         /**
+         * RunScope
+         * @description What tells a run from its neighbours; each part is null when its settings do not say.
+         */
+        RunScope: {
+            /** Place */
+            place: string | null;
+            years: components["schemas"]["Span"] | null;
+            lead_days: components["schemas"]["Span"] | null;
+        };
+        /** SeasonSummary */
+        SeasonSummary: {
+            /** Name */
+            name: string;
+            /** Year */
+            year: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "ended" | "in_season" | "upcoming";
+            /**
+             * First Issue Date
+             * Format: date
+             */
+            first_issue_date: string;
+            /** Starts Label */
+            starts_label: string;
+            /**
+             * Last Issue Date
+             * Format: date
+             */
+            last_issue_date: string;
+            /** Issued Through */
+            issued_through: string | null;
+            /** Days Until Start */
+            days_until_start: number | null;
+            /** Next Season Start */
+            next_season_start: string | null;
+            /** Is Default */
+            is_default: boolean;
+        };
+        /**
          * SeasonWindow
          * @description A workspace's rainy season, e.g. Ethiopia's Kiremt.
          */
@@ -4766,6 +5212,15 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SetupSummary */
+        SetupSummary: {
+            /** Region */
+            region: string | null;
+            /** Observations */
+            observations: string | null;
+            /** Models */
+            models: string[];
+        };
         /**
          * SkillBin
          * @description One lead-time bin's scores, from binned_skill_scores_*.csv.
@@ -4789,6 +5244,13 @@ export interface components {
             brier_score_forecast: number | null;
             /** Brier Score Climatology */
             brier_score_climatology: number | null;
+        };
+        /** Span */
+        Span: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
         };
         /**
          * StatisticsInGeoJSON
@@ -5224,6 +5686,151 @@ export interface components {
             };
             /** Bins */
             bins: components["schemas"]["SkillBin"][];
+        };
+        /** WorkspaceDetail */
+        WorkspaceDetail: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+            settings: components["schemas"]["WorkspaceSettings"];
+            /** Jobs */
+            jobs: components["schemas"]["WorkspaceJobOut"][];
+            /** Artifacts */
+            artifacts: components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
+        };
+        /** WorkspaceIn */
+        WorkspaceIn: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** WorkspaceJobOut */
+        WorkspaceJobOut: {
+            /** Id */
+            id: string;
+            /** Job Type */
+            job_type: string;
+            /** Status */
+            status: string;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Run Id */
+            run_id: string | null;
+            /** Model Name */
+            model_name: string | null;
+            scope: components["schemas"]["RunScope"];
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Region Id */
+            region_id: string | null;
+            /** Blended */
+            blended: boolean;
+            /** Area Of Interest */
+            area_of_interest: string[] | null;
+            onset_definition: components["schemas"]["OnsetDefinition"] | null;
+            /** Expected Seconds */
+            expected_seconds: number | null;
+            /** Headline */
+            headline?: components["schemas"]["BlendSkill"] | components["schemas"]["BenchmarkSkill"] | components["schemas"]["ForecastSummary"] | null;
+        };
+        /** WorkspaceOut */
+        WorkspaceOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * WorkspaceSettings
+         * @description Every field is optional; one left unset falls back to the platform default.
+         */
+        WorkspaceSettings: {
+            season?: components["schemas"]["SeasonWindow"] | null;
+            /** Study Area */
+            study_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+        };
+        /** WorkspaceSummary */
+        WorkspaceSummary: {
+            season: components["schemas"]["SeasonSummary"];
+            setup: components["schemas"]["SetupSummary"];
+            latest_forecast: components["schemas"]["ForecastSummary"] | null;
+            /** Skill */
+            skill: components["schemas"]["BlendSkill"] | components["schemas"]["BenchmarkSkill"] | null;
+        };
+        /** ArtifactOut */
+        ai_almanac__server__routers__jobs__ArtifactOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Filename */
+            filename: string;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Checksum */
+            checksum: string;
+            /** Created At */
+            created_at: string;
+            /** Url */
+            url: string;
+        };
+        /** ArtifactOut */
+        ai_almanac__server__routers__workspaces__ArtifactOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Title */
+            title: string;
+            /** Group */
+            group: string;
+            /** Kind */
+            kind: string;
+            /** Format */
+            format: string;
+            /** Created At */
+            created_at: string;
+            /** Job Id */
+            job_id: string | null;
+            /** Step Id */
+            step_id: string | null;
+            /** Turn Id */
+            turn_id: string | null;
+            /** Run Job Ids */
+            run_job_ids: string[];
+            /** Breadcrumb */
+            breadcrumb: string[];
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Supporting */
+            supporting: boolean;
         };
         /**
          * Point
@@ -7347,7 +7954,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactOut"][];
+                    "application/json": components["schemas"]["ai_almanac__server__routers__jobs__ArtifactOut"][];
                 };
             };
             /** @description Validation Error */
@@ -9558,6 +10165,451 @@ export interface operations {
                     "image/jp2": unknown;
                     "image/tiff; application=geotiff": unknown;
                     "application/x-binary": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspaces_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"][];
+                };
+            };
+        };
+    };
+    create_workspace_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_workspaces__workspace_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_summary_workspaces__workspace_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_artifact_workspaces__workspace_id__artifacts__artifact_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_workspaces__workspace_id__settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_settings_workspaces__workspace_id__settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_effective_settings_workspaces__workspace_id__settings_effective_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_events_workspaces__workspace_id__events_get: {
+        parameters: {
+            query?: {
+                /** @description Newest artifact created_at held */
+                since?: string | null;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_job_workspaces__workspace_id__jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkJobIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceJobOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_addable_jobs_workspaces__workspace_id__addable_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceJobOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifacts_workspaces__workspace_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_artifact_workspaces__workspace_id__artifacts__artifact_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    artifact_provenance_workspaces__workspace_id__artifacts__artifact_id__provenance_get: {
+        parameters: {
+            query?: {
+                verify?: boolean;
+            };
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvenanceOut"];
                 };
             };
             /** @description Validation Error */

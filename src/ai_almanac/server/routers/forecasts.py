@@ -33,6 +33,7 @@ from ai_almanac.server.services.job_submission import (
     forecast_row_to_out,
     refresh_forecast_for_user,
 )
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.tables import jobs
 
 # The whole router is gated on the forecasting feature flag (on by default).
@@ -45,7 +46,7 @@ router = APIRouter(
 
 @router.post("", response_model=ForecastOut, status_code=status.HTTP_201_CREATED)
 async def create_forecast(body: ForecastCreate, user: CurrentUser):
-    return await create_forecast_for_user(body, user.id)
+    return await create_forecast_for_user(body, user.id, attribution=Attribution.by_user(user.id))
 
 
 @router.post(
@@ -59,7 +60,9 @@ async def refresh_forecast(
     """Re-run a forecast with its original spec so it reuses the cached season.
     An up-to-date forecast starts no run and answers 200 with itself, unless
     `force` asks for a run anyway."""
-    refreshed = await refresh_forecast_for_user(forecast_id, user.id, force=force)
+    refreshed = await refresh_forecast_for_user(
+        forecast_id, user.id, force=force, attribution=Attribution.by_user(user.id)
+    )
     if refreshed.up_to_date:
         response.status_code = status.HTTP_200_OK
     return refreshed

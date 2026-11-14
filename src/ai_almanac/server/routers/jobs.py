@@ -18,7 +18,13 @@ from pydantic import BaseModel
 
 from ai_almanac.server.auth import AdminUser, CurrentUser, OptionalCurrentUser
 from ai_almanac.server.db import get_db
-from ai_almanac.server.services import blend_cells, blend_summaries, derived_outputs, job_access
+from ai_almanac.server.services import (
+    blend_cells,
+    blend_summaries,
+    derived_outputs,
+    job_access,
+    workspaces,
+)
 from ai_almanac.server.services.artifact_store import get_artifact_store
 from ai_almanac.server.services.artifacts import list_job_artifacts
 from ai_almanac.server.services.blend_cells import BlendCellMetrics
@@ -43,6 +49,7 @@ from ai_almanac.server.services.job_submission import (
     create_job_for_user,
     row_to_job_out,
 )
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.services.registry import (
     load_catalog,
     load_model_registry,
@@ -58,6 +65,7 @@ from ..services.metrics import (
     build_job_grids,
     compute_job_cell,
     compute_job_metrics,
+    job_metrics,
 )
 from ..services.skill_scores import JobSkillScores, compute_job_skill_scores
 from ..services.storage import GCSStorage, get_storage
@@ -93,18 +101,6 @@ class ArtifactOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _parse_metrics_cache(value: object) -> JobMetrics | None:
-    if not value:
-        return None
-    try:
-        if isinstance(value, (str, bytes, bytearray)):
-            return JobMetrics.model_validate_json(value)
-        return JobMetrics.model_validate(value)
-    except (TypeError, ValueError):
-        logger.warning("Ignoring invalid persisted metrics cache")
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -121,7 +117,7 @@ async def list_models(user: CurrentUser, dataset_id: str | None = None):
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, user: CurrentUser):
-    return await create_job_for_user(body, user.id)
+    return await create_job_for_user(body, user.id, attribution=Attribution.by_user(user.id))
 
 
 @router.get("", response_model=list[JobOut])
@@ -364,36 +360,14 @@ async def get_metrics(
     lon_max: float | None = None,
 ):
     _require_complete(job)
-    has_bbox = any(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
-
-    # Return cached result when no bbox filter is applied.
-    if not has_bbox and (cached_metrics := _parse_metrics_cache(job["metrics_cache"])):
-        return cached_metrics
-
+    bbox = (lat_min, lat_max, lon_min, lon_max)
     try:
-        result = await asyncio.to_thread(
-            compute_job_metrics,
-            job_id,
-            get_storage(),
-            lat_min,
-            lat_max,
-            lon_min,
-            lon_max,
-        )
+        if all(bound is None for bound in bbox):
+            return await job_metrics(job_id, job["metrics_cache"])
+        return await asyncio.to_thread(compute_job_metrics, job_id, get_storage(), *bbox)
     except Exception as e:
         logger.exception("Error computing metrics for job %s", job_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-    # Persist unfiltered result for future requests.
-    if not has_bbox:
-        async with get_db() as conn:
-            await conn.execute(
-                sa.update(jobs)
-                .where(jobs.c.id == job_id)
-                .values(metrics_cache=result.model_dump(mode="json"))
-            )
-
-    return result
 
 
 @router.get("/{job_id}/skill-scores", response_model=JobSkillScores)
@@ -549,6 +523,7 @@ async def _set_job_visibility(job: dict, visibility: str, user) -> JobOut:
             resource_type="job",
             resource_id=job["id"],
         )
+    await workspaces.release_unreadable_job(dict(row))
     return row_to_job_out(dict(row), user.id, await load_catalog())
 
 

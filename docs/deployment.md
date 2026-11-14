@@ -441,6 +441,7 @@ and `VITE_GLOBUS_REDIRECT_URL` (default `<origin>/callback`).
 | `ENABLE_RUN_CODE`       | both   | `true`                           | Forced `false` in shared                               |
 | `CODE_SANDBOX`          | both   | `off`                            | Where workspace code runs: `off` \| `srt` \| `modal`; `srt` fails startup if it cannot sandbox; `modal` creates Sandboxes in `MODAL_ENVIRONMENT` |
 | `DATA_MANAGEMENT_AUDIENCE` | both | `everyone`                      | Who can register datasets: `off` \| `admins` \| `everyone` |
+| `WORKSPACES_AUDIENCE`   | both   | `admins`                         | Who can open workspaces: `off` \| `admins` \| `everyone`; a personal install's operator is an admin |
 | `ENABLE_FORECASTING`    | both   | `true`                           | Live AI weather forecasts; also toggled from the Settings page |
 | `RUNNER_MODE`           | both   | `pixi`                           | `pixi` \| `stub`                                       |
 | `JOB_RUNNER`            | both   | `local`                          | `local` \| `modal`; Modal requires `STORAGE_BACKEND=gcs` |

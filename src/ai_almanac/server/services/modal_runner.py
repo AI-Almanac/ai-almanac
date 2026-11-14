@@ -60,9 +60,12 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
     # obs_dir/model_dir/model_files on the forecast job's own config to check.
     # The live-scoring step does stage historical data, but from the parent
     # blend's frozen config snapshot, so validate that instead.
+    # A forecast without a blend only rolls out and publishes; it stages nothing.
     staging_config = config
     if config.get("job_type") == "forecast":
-        staging_config = config.get("blend_config_snapshot") or {}
+        staging_config = config.get("blend_config_snapshot")
+        if not staging_config:
+            return None
 
     dataset_config = staging_config.get("dataset_config") or {}
     if dataset_config.get("provider") not in _REMOTE_OBS_PROVIDERS:

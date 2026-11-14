@@ -45,6 +45,7 @@ from ai_almanac.server.services.llm import (
 from ai_almanac.server.services.local_llm import AssistantUnavailable
 from ai_almanac.server.services.rulesets import Ruleset, selectable_ruleset
 from ai_almanac.server.services.turn_events import apply_stream_event
+from ai_almanac.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,20 @@ async def _update_session_state(
     )
 
 
+def workspace_scope_hidden(scope_kind: object, user: job_access.JobUser) -> bool:
+    """A workspace conversation does not exist for anyone outside the workspaces audience."""
+    return scope_kind == "workspace" and not settings.workspaces_allowed(user.is_admin)
+
+
 async def validate_scope(scope: ChatScope, user: job_access.JobUser) -> ChatScope:
     job_ids = list(dict.fromkeys(scope.job_ids))
     validated_scope = scope.model_copy(update={"job_ids": job_ids})
+    if scope.kind == "workspace":
+        from .workspaces import get_workspace
+
+        hidden = workspace_scope_hidden(scope.kind, user)
+        if hidden or await get_workspace(scope.key, user.id) is None:
+            raise HTTPException(status_code=404, detail="Workspace not found")
     if not job_ids:
         return validated_scope
 

@@ -21,7 +21,7 @@ from ai_almanac.server.services.romp import (
     Year,
 )
 
-from . import benchmark_domain, blend_domain, boundaries, onset_rules, region_catalog
+from . import benchmark_domain, blend_domain, boundaries, ledger, onset_rules, region_catalog
 from .benchmark_state import BenchmarkEventType, BenchmarkRunSpec
 from .blend_state import BlendRunSpec
 from .chat_artifacts import create_chat_figure_artifact
@@ -377,9 +377,13 @@ async def propose_benchmark_submit(user_id: str, scope: ChatScope, session_id: s
     )
 
 
-async def submit_benchmark_for_session(user_id: str, scope: ChatScope, session_id: str) -> dict:
+async def submit_benchmark_for_session(
+    user_id: str, scope: ChatScope, session_id: str, attribution: ledger.Attribution
+) -> dict:
     return await tool_payload(
-        await benchmark_domain.submit_benchmark_for_session(user_id, scope, session_id),
+        await benchmark_domain.submit_benchmark_for_session(
+            user_id, scope, session_id, attribution
+        ),
         session_id,
         user_id,
     )
@@ -406,9 +410,11 @@ async def get_job_logs(job_id: str, max_chars: int, user_id: str, scope: ChatSco
     )
 
 
-async def rerun_job(request: RerunJobRequest, user_id: str, scope: ChatScope) -> dict:
+async def rerun_job(
+    request: RerunJobRequest, user_id: str, scope: ChatScope, attribution: ledger.Attribution
+) -> dict:
     return await tool_payload(
-        await benchmark_domain.rerun_job(request, user_id, scope), "", user_id
+        await benchmark_domain.rerun_job(request, user_id, scope, attribution), "", user_id
     )
 
 
@@ -503,9 +509,11 @@ async def propose_blend_submit(user_id: str, scope: ChatScope, session_id: str) 
     )
 
 
-async def submit_blend_for_session(user_id: str, scope: ChatScope, session_id: str) -> dict:
+async def submit_blend_for_session(
+    user_id: str, scope: ChatScope, session_id: str, attribution: ledger.Attribution
+) -> dict:
     return await tool_payload(
-        await blend_domain.submit_blend_for_session(user_id, scope, session_id),
+        await blend_domain.submit_blend_for_session(user_id, scope, session_id, attribution),
         session_id,
         user_id,
     )

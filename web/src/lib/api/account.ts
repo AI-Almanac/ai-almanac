@@ -15,6 +15,7 @@ export type Account = {
 		can_browse_fs: boolean;
 		can_manage_data: boolean;
 		can_use_forecasting: boolean;
+		can_use_workspaces: boolean;
 		can_run_code: boolean;
 	};
 };

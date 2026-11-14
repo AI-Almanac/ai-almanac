@@ -14,9 +14,20 @@ read through both paths must tolerate either shape.
 
 from __future__ import annotations
 
+import json
+
 import sqlalchemy as sa
 
 metadata = sa.MetaData()
+
+
+def json_col[T](value: object, default: T) -> T:
+    """A JSON column's value read either way: parsed through these tables, or the
+    raw text a ``text()`` query returns. Empty or NULL reads as ``default``."""
+    if isinstance(value, str):
+        return json.loads(value) if value.strip() else default
+    return default if value is None else value
+
 
 users = sa.Table(
     "users",
@@ -144,4 +155,95 @@ app_config = sa.Table(
     metadata,
     sa.Column("key", sa.Text(), primary_key=True),
     sa.Column("value", sa.JSON(), nullable=False),
+)
+
+# The provenance ledger and the workspaces that view it (migration 0030).
+# `provenance_steps` is append-only; see services/ledger.
+workspaces = sa.Table(
+    "workspaces",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("user_id", sa.Text(), sa.ForeignKey("users.id"), nullable=False),
+    sa.Column("name", sa.Text(), nullable=False),
+    sa.Column("description", sa.Text(), nullable=False, server_default=""),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("updated_at", sa.Text(), nullable=False),
+    sa.Column("settings_json", sa.Text()),  # services/workspace_settings
+)
+
+workspace_items = sa.Table(
+    "workspace_items",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("workspace_id", sa.Text(), nullable=False),
+    sa.Column("item_kind", sa.Text(), nullable=False),  # artifact | job
+    sa.Column("artifact_id", sa.Text()),
+    sa.Column("job_id", sa.Text()),
+    sa.Column("label", sa.Text()),  # artifacts only: the model's handle in this workspace
+    sa.Column("added_at", sa.Text(), nullable=False),
+    # The file's name here (NULL: derived from its filename), and whether it is
+    # something a result was made from rather than a result.
+    sa.Column("title", sa.Text()),
+    sa.Column("supporting", sa.Boolean()),
+    # Jobs only: "user" when a person added an existing run by hand;
+    # NULL when the run was made here, or linked before this was recorded.
+    sa.Column("added_by", sa.Text()),
+)
+
+provenance_steps = sa.Table(
+    "provenance_steps",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("user_id", sa.Text(), nullable=False),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("completed_at", sa.Text()),
+    sa.Column("actor_kind", sa.Text(), nullable=False),
+    sa.Column("primitive", sa.Text(), nullable=False),
+    sa.Column("primitive_version", sa.Text(), nullable=False),
+    sa.Column("params", sa.JSON(), nullable=False),
+    sa.Column("params_hash", sa.Text(), nullable=False),
+    sa.Column("inputs", sa.JSON(), nullable=False),
+    sa.Column("outputs", sa.JSON(), nullable=False),
+    sa.Column("runtime", sa.JSON(), nullable=False),
+    sa.Column("job_id", sa.Text()),
+    sa.Column("code_hash", sa.Text()),
+    sa.Column("turn_id", sa.Text()),
+    sa.Column("session_id", sa.Text()),
+    sa.Column("ruleset_id", sa.Text()),
+    sa.Column("ruleset_version", sa.Integer()),
+    sa.Column("model_name", sa.Text()),
+    sa.Column("approval_id", sa.Text()),
+    sa.Column("parent_step_ids", sa.JSON(), nullable=False),
+    sa.Column("step_hash", sa.Text(), nullable=False),
+)
+
+artifacts = sa.Table(
+    "artifacts",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("user_id", sa.Text(), nullable=False),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("kind", sa.Text(), nullable=False),
+    sa.Column("format", sa.Text(), nullable=False),
+    sa.Column("filename", sa.Text(), nullable=False),
+    sa.Column("location_kind", sa.Text(), nullable=False),  # owned | job_output
+    sa.Column("path", sa.Text()),  # owned: key under the artifact prefix
+    sa.Column("job_id", sa.Text()),  # job_output: (job_id, job_file_kind, filename)
+    sa.Column("job_file_kind", sa.Text()),
+    sa.Column("content_hash", sa.Text(), nullable=False),
+    sa.Column("size_bytes", sa.BigInteger(), nullable=False),
+    sa.Column("summary", sa.JSON(), nullable=False),
+    sa.Column("provenance_step_id", sa.Text(), nullable=False),
+)
+
+approvals = sa.Table(
+    "approvals",
+    metadata,
+    sa.Column("id", sa.Text(), primary_key=True),
+    sa.Column("user_id", sa.Text(), nullable=False),
+    sa.Column("session_id", sa.Text()),
+    sa.Column("turn_id", sa.Text()),
+    sa.Column("created_at", sa.Text(), nullable=False),
+    sa.Column("kind", sa.Text(), nullable=False),
+    sa.Column("payload_hash", sa.Text(), nullable=False),
 )

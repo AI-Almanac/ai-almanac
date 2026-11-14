@@ -24,6 +24,7 @@ function setAccount(canAdmin: boolean) {
 			can_browse_fs: false,
 			can_manage_data: false,
 			can_use_forecasting: true,
+			can_use_workspaces: true,
 			can_run_code: false
 		}
 	};

@@ -334,3 +334,23 @@ async def test_blend_cell_metrics_without_a_summary_offers_no_blend(
     body = (await _cell_metrics(client, as_new_user, job_id, model="blended_forest")).json()
 
     assert body["grids"] == [] and body["available_models"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_job_reads_as_a_successful_lookup(client, user_id: str) -> None:
+    """The chat marks a tool call failed when its result has an ``error``; looking up
+    a job that failed is not a failed lookup."""
+    from ai_almanac.server.db import get_db
+
+    job_id = str(uuid.uuid4())
+    await _insert_blend_job(user_id, job_id, status="failed")
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE jobs SET error = 'Out of memory' WHERE id = :id"), {"id": job_id}
+        )
+    scope = BenchmarkScope(kind="blend_setup", key="setup")
+
+    info = json.loads(await benchmark_domain._exec_get_job_info({"job_id": job_id}, user_id, scope))
+
+    assert "error" not in info
+    assert (info["status"], info["failure"]) == ("failed", "Out of memory")

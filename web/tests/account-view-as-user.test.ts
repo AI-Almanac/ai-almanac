@@ -18,6 +18,7 @@ function asAdmin(canAdmin: boolean): Account {
 			can_browse_fs: false,
 			can_manage_data: true,
 			can_use_forecasting: true,
+			can_use_workspaces: true,
 			can_run_code: false
 		}
 	} as unknown as Account;

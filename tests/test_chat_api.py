@@ -17,6 +17,7 @@ from pydantic_ai.models.test import TestModel
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db
+from ai_almanac.server.services.ledger import Attribution
 
 
 def _scope(*, job_ids: list[str] | None = None) -> dict:
@@ -248,7 +249,7 @@ async def _submit_from_chat(
     async def save_state(*args) -> None:
         return None
 
-    async def create_job_for_user(body, user_id):
+    async def create_job_for_user(body, user_id, *, attribution=None):
         assert user_id == "user-1"
         captured_params.append(body.params.model_dump(exclude_none=True))
         return CreatedJob()
@@ -291,6 +292,7 @@ async def _submit_from_chat(
         "user-1",
         BenchmarkScope(kind="benchmark_setup", key="setup-1", title="Setup"),
         "session-1",
+        Attribution.by_user("user-1"),
     )
     return payload, captured_params
 

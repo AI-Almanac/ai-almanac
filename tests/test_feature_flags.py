@@ -1,4 +1,4 @@
-"""Feature-flag gating for in-development features (data-management, forecasting)."""
+"""Feature-flag gating for in-development features (data management, forecasting, workspaces)."""
 
 from __future__ import annotations
 
@@ -79,3 +79,33 @@ async def test_forecasting_flag_gates_the_whole_forecasts_router(
         assert ((await client.get(path)).status_code == 404) is not enabled, path
     if not enabled:
         assert (await client.post("/forecasts", json={"blend_id": "nope"})).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("audience", "role", "can_use"),
+    [
+        ("off", "admin", False),
+        ("off", "user", False),
+        ("admins", "admin", True),
+        ("admins", "user", False),
+        ("everyone", "admin", True),
+        ("everyone", "user", True),
+    ],
+)
+async def test_workspaces_audience_hides_workspaces_from_everyone_outside_it(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    audience: str,
+    role: str,
+    can_use: bool,
+) -> None:
+    monkeypatch.setattr(settings, "workspaces_audience", audience)
+    headers = _caller_headers(monkeypatch, role)
+
+    caps = (await client.get("/auth/me", headers=headers)).json()["capabilities"]
+    assert caps["can_use_workspaces"] is can_use
+    # Unlike data management, reads are hidden too.
+    assert ((await client.get("/workspaces", headers=headers)).status_code == 404) is not can_use
+    created = await client.post("/workspaces", json={"name": "Season review"}, headers=headers)
+    assert (created.status_code == 404) is not can_use

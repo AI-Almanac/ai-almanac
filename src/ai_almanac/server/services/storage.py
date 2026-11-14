@@ -13,13 +13,15 @@ Both backends expose the same method surface so routers stay backend-agnostic.
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import BinaryIO
 
-from ai_almanac.paths import uploads_dir
-from ai_almanac.server.services import netcdf
+from ai_almanac.paths import data_root, uploads_dir
+from ai_almanac.server.services import netcdf, skill_files
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +98,10 @@ class LocalStorage:
 
     is_local: bool = True
 
-    def __init__(self, upload_dir: Path, job_outputs_dir: Path):
+    def __init__(self, upload_dir: Path, job_outputs_dir: Path, artifacts_dir: Path | None = None):
         self._upload_dir = Path(upload_dir).resolve()
         self._outputs_dir = Path(job_outputs_dir).resolve()
+        self._artifacts_dir = Path(artifacts_dir or data_root() / "artifacts").resolve()
         self._upload_dir.mkdir(parents=True, exist_ok=True)
         self._outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -174,21 +177,17 @@ class LocalStorage:
         output_dir = self._outputs_dir / job_id / "output"
         if not output_dir.exists():
             return []
-        return sorted(
-            output_dir.glob("spatial_metrics_*.nc"),
-            key=lambda p: p.name,
-        ) + sorted(
-            output_dir.glob("e2s_spatial_metrics_*.nc"),
-            key=lambda p: p.name,
-        )
+        return [
+            path
+            for pattern in skill_files.glob_patterns()
+            for path in sorted(output_dir.glob(pattern), key=lambda p: p.name)
+        ]
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         output_dir = self._outputs_dir / job_id / "output"
-        for prefix in ("spatial_metrics", "e2s_spatial_metrics"):
-            for w in (window, window.replace("-", ",")):
-                matches = list(output_dir.glob(f"{prefix}_{model}_{w}.nc"))
-                if matches:
-                    return str(matches[0])
+        for name in skill_files.candidate_names(model, window):
+            if matches := list(output_dir.glob(name)):
+                return str(matches[0])
         return None
 
     def open_nc_dataset(self, path):
@@ -237,6 +236,26 @@ class LocalStorage:
         """A text file the run wrote under the job's prefix, or "" if absent."""
         p = self._outputs_dir / job_id / name
         return p.read_text() if p.exists() else ""
+
+    # --- ledger artifacts (P7: bytes only through storage) ---
+
+    def put_artifact(self, key: str, source: Path) -> None:
+        """Store an owned artifact under its content-addressed key; a no-op if present."""
+        target = self._contained(self._artifacts_dir, key)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+    def artifact_path(self, key: str) -> Path | None:
+        return self._contained(self._artifacts_dir, key)
+
+    def open_artifact(self, key: str) -> BinaryIO | None:
+        path = self.artifact_path(key)
+        return path.open("rb") if path is not None and path.is_file() else None
+
+    def open_result(self, job_id: str, kind: str, filename: str) -> BinaryIO | None:
+        path = self.result_file_path(job_id, kind, filename)
+        return path.open("rb") if path is not None and path.is_file() else None
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +415,26 @@ class GCSStorage:
 
         return chunks(), (blob.content_type or "application/octet-stream"), int(blob.size or 0)
 
+    # Job ids are UUIDs, so this prefix never collides with a job's outputs.
+    _ARTIFACT_PREFIX = "artifacts/"
+
+    def put_artifact(self, key: str, source: Path) -> None:
+        """Store an owned artifact under its content-addressed key; a no-op if present."""
+        blob = self._bucket(self._outputs_bucket).blob(self._ARTIFACT_PREFIX + key)
+        if not blob.exists():
+            blob.upload_from_filename(str(source))
+
+    def artifact_path(self, key: str) -> Path | None:
+        return None  # read through open_artifact
+
+    def open_artifact(self, key: str) -> BinaryIO | None:
+        blob = self._bucket(self._outputs_bucket).blob(self._ARTIFACT_PREFIX + key)
+        return blob.open("rb") if blob.exists() else None
+
+    def open_result(self, job_id: str, kind: str, filename: str) -> BinaryIO | None:
+        blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/{kind}/{filename}")
+        return blob.open("rb") if blob.exists() else None
+
     def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
         results: list[tuple[str, str]] = []
         for kind in ("output", "figure"):
@@ -436,18 +475,18 @@ class GCSStorage:
     def list_nc_output_files(self, job_id: str) -> list:
         fs = self._fs()
         base = f"{self._outputs_bucket}/{job_id}/output"
-        romp = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/spatial_metrics_*.nc"))]
-        e2s = [f"gs://{f}" for f in sorted(fs.glob(f"{base}/e2s_spatial_metrics_*.nc"))]
-        return romp + e2s
+        return [
+            f"gs://{f}"
+            for pattern in skill_files.glob_patterns()
+            for f in sorted(fs.glob(f"{base}/{pattern}"))
+        ]
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         fs = self._fs()
         base = f"{self._outputs_bucket}/{job_id}/output"
-        for prefix in ("spatial_metrics", "e2s_spatial_metrics"):
-            for w in (window, window.replace("-", ",")):
-                matches = fs.glob(f"{base}/{prefix}_{model}_{w}.nc")
-                if matches:
-                    return f"gs://{matches[0]}"
+        for name in skill_files.candidate_names(model, window):
+            if matches := fs.glob(f"{base}/{name}"):
+                return f"gs://{matches[0]}"
         return None
 
     def list_dataset_files(self, path: str, glob: str) -> list[str]:

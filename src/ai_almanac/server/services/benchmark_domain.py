@@ -12,7 +12,12 @@ from typing import Any
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
-from ai_almanac.server.services import guardrails, job_submission
+from ai_almanac.server.services import (
+    guardrails,
+    job_submission,
+    ledger,
+    workspace_display,
+)
 from ai_almanac.server.services.focus_area import parse_focus_area
 from ai_almanac.server.services.forecast_models import training_summary
 from ai_almanac.server.tables import jobs as _jobs
@@ -86,6 +91,10 @@ def _scope_conditions(scope: BenchmarkScope, jobs_table: sa.Table) -> list:
                 )
             ]
         return [jobs_table.c.run_id == sa.bindparam("scope_key")]
+    if scope.kind == "workspace":
+        from .workspaces import linked_job_ids_query
+
+        return [jobs_table.c.id.in_(linked_job_ids_query(sa.bindparam("scope_key")))]
     if scope.job_ids:
         return [jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True))]
     return []
@@ -94,7 +103,7 @@ def _scope_conditions(scope: BenchmarkScope, jobs_table: sa.Table) -> list:
 def _scope_params(scope: BenchmarkScope) -> dict:
     """Return bind-parameter values that correspond to _scope_conditions."""
     params: dict = {}
-    if scope.kind == "benchmark_run_group":
+    if scope.kind in ("benchmark_run_group", "workspace"):
         params["scope_key"] = scope.key
     if scope.job_ids:
         params["job_ids"] = scope.job_ids
@@ -645,16 +654,17 @@ async def _exec_propose_benchmark_submit(
     return payload
 
 
-async def _exec_submit_benchmark(
-    args: dict, user_id: str, scope: BenchmarkScope, session_id: str
-) -> dict:
-    spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
-    catalog = await load_catalog()
-    validation = _validation_for_config(spec, catalog)
-    if not validation.can_run:
-        await _save_benchmark_state(session_id, user_id, spec, validation)
-        return benchmark_payload(spec, validation, error="Benchmark config is not runnable")
+async def _create_benchmark_jobs(
+    spec: BenchmarkRunSpec,
+    catalog: CatalogSnapshot,
+    user_id: str,
+    attribution: ledger.Attribution,
+) -> tuple[str, list[dict]]:
+    """Submit one job per selected model under a shared run id, through the chokepoint.
 
+    Raises job_submission.InvalidBenchmarkSettings, before submitting any job,
+    when a model's settings do not parse.
+    """
     models = [
         model
         for model in catalog.models_for(spec.dataset_id, spec.region_id)
@@ -667,18 +677,13 @@ async def _exec_submit_benchmark(
         "region": spec.region_id,
         "max_forecast_day": spec.forecast_window_days,
     }
-    try:
-        params_by_model = [
-            (
-                model,
-                job_submission.parse_romp_params(
-                    {**shared_params, **_clamp_model_params(model, spec)}
-                ),
-            )
-            for model in models
-        ]
-    except job_submission.InvalidBenchmarkSettings as exc:
-        return benchmark_payload(spec, validation, error=str(exc))
+    params_by_model = [
+        (
+            model,
+            job_submission.parse_romp_params({**shared_params, **_clamp_model_params(model, spec)}),
+        )
+        for model in models
+    ]
     for model, romp_params in params_by_model:
         job = await job_submission.create_job_for_user(
             job_submission.JobCreate(
@@ -688,12 +693,41 @@ async def _exec_submit_benchmark(
                 run_id=run_id,
             ),
             user_id,
+            attribution=attribution,
         )
         jobs.append(job.model_dump(mode="json"))
+    return run_id, jobs
+
+
+async def _exec_submit_benchmark(
+    args: dict,
+    user_id: str,
+    scope: BenchmarkScope,
+    session_id: str,
+    attribution: ledger.Attribution,
+) -> dict:
+    spec = _finalize_benchmark_config(await _load_benchmark_config(session_id, user_id))
+    catalog = await load_catalog()
+    validation = _validation_for_config(spec, catalog)
+    if not validation.can_run:
+        await _save_benchmark_state(session_id, user_id, spec, validation)
+        return benchmark_payload(spec, validation, error="Benchmark config is not runnable")
+
+    try:
+        run_id, jobs = await _create_benchmark_jobs(spec, catalog, user_id, attribution)
+    except job_submission.InvalidBenchmarkSettings as exc:
+        return benchmark_payload(spec, validation, error=str(exc))
     submitted = spec.model_copy(update={"status": "running"})
     submitted_validation = validation.model_copy(update={"status": "running"})
     await _save_benchmark_state(session_id, user_id, submitted, submitted_validation, run_id)
     from ai_almanac.server.db import get_db
+
+    if scope.kind == "workspace":
+        from .workspaces import link_job
+
+        for job in jobs:
+            await link_job(scope.key, job["id"])
+        return benchmark_payload(submitted, submitted_validation, run_id=run_id, jobs=jobs)
 
     next_scope = BenchmarkScope(
         kind="benchmark_run_group",
@@ -717,13 +751,6 @@ async def _exec_submit_benchmark(
     return benchmark_payload(submitted, submitted_validation, run_id=run_id, jobs=jobs)
 
 
-def _model_display_name(cfg: dict) -> str | None:
-    model_config = cfg.get("model_config") or {}
-    return (
-        cfg.get("model_display_name") or model_config.get("display_name") or cfg.get("model_name")
-    )
-
-
 def _blend_params_without_outlines(params: dict) -> dict:
     """Frozen area-of-interest outlines are bulky GeoJSON the assistant never needs."""
     focus_area = params.get("focus_area")
@@ -742,7 +769,7 @@ def _job_listing_fields(job_type: str | None, cfg: dict) -> dict:
         }
     return {
         "job_type": job_type,
-        "model_name": _model_display_name(cfg),
+        "model_name": workspace_display.model_display_name(cfg),
         "region": cfg.get("romp_params", {}).get("region"),
     }
 
@@ -763,7 +790,7 @@ def _job_config_fields(job_type: str | None, cfg: dict) -> dict:
     model_config = cfg.get("model_config") or {}
     return {
         "job_type": job_type,
-        "model_name": _model_display_name(cfg),
+        "model_name": workspace_display.model_display_name(cfg),
         "model_source_id": cfg.get("model_source_id") or model_config.get("id"),
         "model_dir": cfg.get("model_dir"),
         "obs_dir": cfg.get("obs_dir"),
@@ -857,11 +884,10 @@ async def scope_job_statuses(user_id: str, scope: BenchmarkScope) -> list[dict]:
         )
     statuses = []
     for row in rows:
-        fields = _job_listing_fields(row["job_type"], json.loads(row["config_json"] or "{}"))
         statuses.append(
             {
                 "job_id": row["id"],
-                "label": fields.get("blend_name") or fields.get("model_name") or "",
+                "label": workspace_display.job_name(json.loads(row["config_json"] or "{}")) or "",
                 "status": row["status"],
                 "completed_at": row["completed_at"],
             }
@@ -906,7 +932,8 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: BenchmarkScope) ->
             "status": row["status"],
             "dataset_id": row["dataset_id"],
             "run_id": row["run_id"],
-            "error": row["error"],
+            # Not "error": that key means the tool call itself failed.
+            "failure": row["error"],
             "created_at": row["created_at"],
             "completed_at": row["completed_at"],
             **_job_config_fields(row.get("job_type"), cfg),
@@ -951,19 +978,36 @@ async def _exec_get_job_logs(args: dict, user_id: str, scope: BenchmarkScope) ->
     )
 
 
-async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> dict:
+async def _exec_rerun_job(
+    args: dict, user_id: str, scope: BenchmarkScope, attribution: ledger.Attribution
+) -> dict:
+    params_override = args.get("params_override")
+    return await rerun_job_in_scope(
+        args["job_id"],
+        params_override if isinstance(params_override, dict) else {},
+        user_id,
+        scope,
+        attribution,
+    )
+
+
+async def rerun_job_in_scope(
+    job_id: str,
+    params_override: dict[str, Any],
+    user_id: str,
+    scope: BenchmarkScope,
+    attribution: ledger.Attribution,
+) -> dict:
+    """Clone one of the user's benchmark jobs visible in ``scope``, with overridden ROMP params."""
     from ai_almanac.server.db import get_db
 
-    job_id = args["job_id"]
-    params_override = args.get("params_override")
-    if not isinstance(params_override, dict):
-        params_override = {}
     query = (
         sa.select(
             _jobs.c.dataset_id,
             _jobs.c.config_json,
             _jobs.c.status,
             _jobs.c.run_id,
+            _jobs.c.job_type,
         )
         .where(_jobs.c.id == sa.bindparam("id"))
         .where(_jobs.c.user_id == sa.bindparam("uid"))
@@ -983,6 +1027,8 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
         )
     if not row:
         return {"error": f"Job {job_id} not found"}
+    if row["job_type"] != "benchmark":
+        return {"error": f"Job {job_id} is a {row['job_type']}; only benchmark jobs can be rerun"}
     cfg = json.loads(row["config_json"] or "{}")
     try:
         romp_params = job_submission.parse_romp_params(
@@ -1000,6 +1046,7 @@ async def _exec_rerun_job(args: dict, user_id: str, scope: BenchmarkScope) -> di
             run_id=row["run_id"],
         ),
         user_id,
+        attribution=attribution,
     )
     return {
         "source_job_id": job_id,
@@ -1343,9 +1390,11 @@ async def propose_benchmark_submit(user_id: str, scope: BenchmarkScope, session_
 
 
 async def submit_benchmark_for_session(
-    user_id: str, scope: BenchmarkScope, session_id: str
+    user_id: str, scope: BenchmarkScope, session_id: str, attribution: ledger.Attribution
 ) -> dict:
-    return _domain_payload(await _exec_submit_benchmark({}, user_id, scope, session_id))
+    return _domain_payload(
+        await _exec_submit_benchmark({}, user_id, scope, session_id, attribution)
+    )
 
 
 async def list_jobs(user_id: str, scope: BenchmarkScope, status: str | None = None) -> dict:
@@ -1363,8 +1412,10 @@ async def get_job_logs(job_id: str, max_chars: int, user_id: str, scope: Benchma
     )
 
 
-async def rerun_job(request: RerunJobRequest, user_id: str, scope: BenchmarkScope) -> dict:
-    return _domain_payload(await _exec_rerun_job(request.model_dump(), user_id, scope))
+async def rerun_job(
+    request: RerunJobRequest, user_id: str, scope: BenchmarkScope, attribution: ledger.Attribution
+) -> dict:
+    return _domain_payload(await _exec_rerun_job(request.model_dump(), user_id, scope, attribution))
 
 
 async def get_job_metrics(job_id: str, user_id: str, scope: BenchmarkScope) -> dict:
