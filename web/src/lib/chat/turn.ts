@@ -1,4 +1,5 @@
 import type { ChatEvent, ChatMessage, ChatToolCall, ChatTurnBlock } from '$lib/api';
+import { wasDeclined } from '$lib/chat/approval';
 
 /**
  * Fold stream events into the assistant turn being streamed. Mirrors the
@@ -100,6 +101,7 @@ export function foldTurnEvent(turn: ChatMessage, event: ChatEvent): ChatMessage 
 					...(turn.guardrails ?? []),
 					{
 						tool_call_id: event.tool_call_id,
+						config_kind: event.config_kind,
 						errors: event.errors,
 						warnings: event.warnings,
 						finding_keys: event.finding_keys
@@ -109,6 +111,25 @@ export function foldTurnEvent(turn: ChatMessage, event: ChatEvent): ChatMessage 
 		default:
 			return turn;
 	}
+}
+
+/**
+ * Record an outcome on the tool call that asked for it, whichever turn holds it.
+ * A step the user declined stays declined, whatever is reported about it later.
+ */
+export function withToolResult(
+	turns: ChatMessage[],
+	toolCallId: string,
+	result: unknown,
+	status: ChatToolCall['status'] = 'completed'
+): ChatMessage[] {
+	const settle = (call: ChatToolCall) =>
+		call.id === toolCallId && !wasDeclined(call) ? { ...call, status, result } : call;
+	return turns.map((turn) =>
+		turn.tool_calls?.some((call) => call.id === toolCallId)
+			? { ...turn, tool_calls: turn.tool_calls.map(settle) }
+			: turn
+	);
 }
 
 /** Events that start a new streamed turn when none is in progress. */

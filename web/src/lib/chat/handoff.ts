@@ -16,7 +16,7 @@ function isWorkflow(value: unknown): value is SetupHandoff['workflow'] {
 }
 
 /** The setup link an `open_setup` tool result offers, or null for anything else. */
-export function parseSetupHandoff(result: unknown): SetupHandoff | null {
+function parseSetupHandoff(result: unknown): SetupHandoff | null {
 	const handoff = (result as { setup_handoff?: unknown } | null)?.setup_handoff;
 	if (!handoff || typeof handoff !== 'object') return null;
 	const { workflow, request } = handoff as Record<string, unknown>;

@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ChatArtifact, ChatEvent, ChatMessage } from '../src/lib/api';
+import { resultTable } from '../src/lib/chat/tools';
+import { artifactRefFromHref, renderMarkdown } from '../src/lib/chat/markdown';
 import { emptyAssistantTurn, foldTurnEvent } from '../src/lib/chat/turn';
+import { allJobsComplete, submittedJobs } from '../src/lib/chat/tool-results';
+import { NOT_APPROVED } from '../src/lib/chat/approval';
 import {
+	groupState,
 	groupSummary,
 	liveLabel,
+	stepState,
 	turnTimeline,
 	type ActivityGroup
 } from '../src/lib/chat/timeline';
@@ -88,6 +94,39 @@ describe('chat turn timeline', () => {
 		expect((running[0] as ActivityGroup).steps).toHaveLength(1);
 	});
 
+	it('reports a step waiting on the user as waiting, not as done', () => {
+		const turn = stream([toolCall('c1', 'submit_benchmark', 'running')]);
+		const waiting: ChatMessage = {
+			...turn,
+			tool_calls: turn.tool_calls?.map((call) => ({ ...call, awaiting_approval: true }))
+		};
+		const group = turnTimeline(waiting)[0] as ActivityGroup;
+
+		expect(stepState(group.steps[0], false)).toBe('waiting');
+		expect(groupState(group, false)).toBe('waiting');
+		expect(groupSummary(group)).toBe('Waiting for your approval');
+	});
+
+	it('reports a step the user declined as declined, apart from one that failed', () => {
+		const settled = (name: string, result: unknown) =>
+			turnTimeline(
+				stream([
+					toolCall('c1', name, 'running'),
+					{ type: 'tool_result', turn_id: T, tool_call_id: 'c1', status: 'failed', result }
+				])
+			)[0] as ActivityGroup;
+
+		expect(groupState(settled('submit_benchmark', NOT_APPROVED), false)).toBe('declined');
+		expect(groupState(settled('plot_map', { error: 'No such file' }), false)).toBe('failed');
+	});
+
+	it('reports work under way while the turn is live, and done once it settles', () => {
+		const group = turnTimeline(stream([toolCall('c1', 'run_code', 'running')]))[0] as ActivityGroup;
+
+		expect(groupState(group, true)).toBe('active');
+		expect(groupState(group, false)).toBe('done');
+	});
+
 	it('carries figures a tool produced on the group so they render inline', () => {
 		const turn = stream([
 			toolCall('c1', 'run_code', 'running'),
@@ -108,5 +147,147 @@ describe('chat turn timeline', () => {
 		};
 
 		expect(turnTimeline(legacy).map((item) => item.kind)).toEqual(['text', 'activity']);
+	});
+
+	it('shows a reply after its steps when the turn was saved with the steps alone', () => {
+		const saved: ChatMessage = {
+			id: 'lost',
+			role: 'assistant',
+			content: 'I have set up the form.',
+			created_at: '2026-11-11T00:00:00Z',
+			tool_calls: [{ id: 'c1', name: 'open_panel', status: 'completed', input: {}, artifacts: [] }],
+			blocks: [{ kind: 'tool', tool_call_id: 'c1' }]
+		};
+
+		const timeline = turnTimeline(saved);
+
+		expect(timeline.map((item) => item.kind)).toEqual(['activity', 'text']);
+		expect(timeline.at(-1)).toMatchObject({ text: 'I have set up the form.' });
+	});
+});
+
+describe('tool results', () => {
+	const jobs = {
+		run_id: 'run-1',
+		jobs: [
+			{ id: 'job-1', model_name: 'fuxi', model_display_name: 'FuXi', status: 'queued' },
+			{ id: 'job-2', model_name: 'climatology', status: 'queued' }
+		]
+	};
+
+	it('lists submitted runs by model name', () => {
+		expect(submittedJobs(jobs).map((job) => job.label)).toEqual([
+			'FuXi',
+			'Traditional Climatology'
+		]);
+		expect(submittedJobs({ error: 'nope' })).toEqual([]);
+	});
+
+	it('treats a submission as finished only when every run is complete', () => {
+		const submitted = submittedJobs(jobs);
+		expect(allJobsComplete(submitted, { 'job-1': 'complete' })).toBe(false);
+		expect(allJobsComplete(submitted, { 'job-1': 'complete', 'job-2': 'complete' })).toBe(true);
+	});
+
+	it('tabulates the headline spatial metrics', () => {
+		const table = resultTable('get_job_metrics', {
+			job_id: 'job-1',
+			windows: [
+				{
+					window: '1-15',
+					model: 'fuxi',
+					tolerance_days: 3,
+					metrics: {
+						false_alarm_rate: { mean: 0.25, unit: 'fraction' },
+						mae: { mean: 4.5, unit: 'days' },
+						acc: { mean: 0.1, unit: 'dimensionless' }
+					}
+				}
+			]
+		});
+
+		expect(table?.columns).toEqual([
+			'Model',
+			'Forecast days',
+			'False alarms',
+			'Mean absolute error'
+		]);
+		expect(table?.rows).toEqual([['FuXi', 'Days 1–15', '25.0%', '4.5 d']]);
+	});
+
+	it('tabulates skill scores and blend skill', () => {
+		const skill = resultTable('get_skill_scores', {
+			windows: [
+				{
+					model: 'aifs',
+					window: '1-30',
+					overall: { ranked_probability_skill_score: 0.12, brier_skill_score: -0.05, auc: 0.7 },
+					bins: []
+				}
+			]
+		});
+		expect(skill?.rows).toEqual([['AIFS', 'Days 1–30', '0.120', '-0.050', '0.700']]);
+
+		const blend = resultTable('get_blend_results', {
+			skill: [
+				{ model: 'blended_model', is_blend: true, rps_skill: 0.2, brier_skill: null, auc: 0.65 }
+			]
+		});
+		expect(blend?.rows).toEqual([['Week-level blend', '0.200', '—', '0.650']]);
+	});
+
+	it('shows no table for errors or unknown tools', () => {
+		expect(resultTable('get_job_metrics', { error: 'Job is not complete' })).toBeNull();
+		expect(resultTable('list_models', { models: [] })).toBeNull();
+	});
+});
+
+describe('artifact links', () => {
+	it('renders run links as buttons that carry the job id', () => {
+		const html = renderMarkdown('[Open the skill maps](run:job-7)', { openArtifactLinks: true });
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		const button = doc.querySelector('button[data-run-ref]');
+
+		expect(button?.getAttribute('data-run-ref')).toBe('job-7');
+		expect(button?.textContent).toBe('Open the skill maps');
+		expect(doc.querySelector('a')).toBeNull();
+	});
+
+	it('recognises only artifact links', () => {
+		expect(artifactRefFromHref('artifact:onset-map')).toBe('onset-map');
+		expect(artifactRefFromHref('https://example.com')).toBeNull();
+		expect(artifactRefFromHref('artifact:')).toBeNull();
+	});
+
+	it('renders artifact links as buttons that carry the label', () => {
+		const html = renderMarkdown('See [the map](artifact:onset-map).', { openArtifactLinks: true });
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		const button = doc.querySelector('button[data-artifact-ref]');
+
+		expect(button?.getAttribute('data-artifact-ref')).toBe('onset-map');
+		expect(button?.textContent).toBe('the map');
+		expect(doc.querySelector('a')).toBeNull();
+	});
+
+	it('renders artifact links as plain text when they cannot be opened', () => {
+		const html = renderMarkdown('See [the map](artifact:onset-map).');
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+
+		expect(doc.body.textContent?.trim()).toBe('See the map.');
+		expect(doc.querySelector('button, a')).toBeNull();
+	});
+
+	it('cannot be used to inject markup', () => {
+		const label = 'a"onmouseover="alert(1)"<b>';
+		const html = renderMarkdown(`[x](artifact:${label})`, { openArtifactLinks: true });
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+
+		expect(doc.querySelector('[onmouseover], b')).toBeNull();
+		expect(doc.querySelector('[data-artifact-ref]')?.getAttribute('data-artifact-ref')).toBe(label);
+	});
+
+	it('leaves ordinary links alone', () => {
+		const html = renderMarkdown('[docs](https://example.com)', { openArtifactLinks: true });
+		expect(html).toContain('href="https://example.com"');
 	});
 });

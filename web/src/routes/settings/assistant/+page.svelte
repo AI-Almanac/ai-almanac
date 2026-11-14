@@ -282,6 +282,9 @@
 								</label>
 								<span class="section-meta">
 									<span class="tag">{scopeLabel(section)}</span>
+									{#if section.requires_tools.length}
+										<span class="tag">when {section.requires_tools.join(' or ')} is available</span>
+									{/if}
 									{#if section.required}<span class="tag required">required</span>{/if}
 								</span>
 							</div>

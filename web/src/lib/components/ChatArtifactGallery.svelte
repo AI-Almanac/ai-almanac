@@ -1,6 +1,7 @@
 <script lang="ts">
 	import FigureCard from '$lib/components/FigureCard.svelte';
-	import { copyCode, toolLabel, type GalleryFigure } from '$lib/chat/format';
+	import { copyCode, type GalleryFigure } from '$lib/chat/format';
+	import { toolLabel } from '$lib/chat/tools';
 
 	interface Props {
 		figures: GalleryFigure[];
@@ -33,9 +34,7 @@
 					<div class="artifact-meta">
 						<div class="artifact-meta-row">
 							<span class="artifact-source">
-								{item.toolName
-									? toolLabel({ name: item.toolName, status: 'completed' })
-									: 'Generated figure'}
+								{item.toolName ? toolLabel({ name: item.toolName }, 'done') : 'Generated figure'}
 							</span>
 							<span class="artifact-time"
 								>{new Date(item.createdAt).toLocaleTimeString([], {
@@ -86,14 +85,14 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.75rem;
+		gap: var(--space-3);
 		padding: 0.7rem 0.9rem;
 		border-bottom: 1px solid var(--color-border-subtle);
 		background: rgba(212, 147, 63, 0.05);
 	}
 
 	.artifact-gallery-title {
-		font-size: 0.74rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
@@ -107,13 +106,13 @@
 		background: var(--color-surface);
 		border: 1px solid var(--color-border-subtle);
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		text-align: center;
 	}
 
 	.artifact-gallery-grid {
 		display: grid;
-		gap: 0.75rem;
+		gap: var(--space-3);
 		padding: 0.85rem;
 		overflow-y: auto;
 	}
@@ -135,11 +134,11 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.75rem;
+		gap: var(--space-3);
 	}
 
 	.artifact-source {
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		color: var(--color-accent);
 		text-transform: uppercase;
@@ -147,7 +146,7 @@
 	}
 
 	.artifact-time {
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-dim);
 	}
 
@@ -157,12 +156,12 @@
 	}
 
 	.code-action-btn {
-		padding: 0.15rem 0.5rem;
+		padding: 0.15rem var(--space-2);
 		background: none;
 		border: 1px solid var(--color-border);
 		border-radius: 3px;
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 		cursor: pointer;
 		transition:
@@ -176,24 +175,24 @@
 
 	.code-block {
 		margin: 0;
-		padding: 0.75rem 1rem;
+		padding: var(--space-3) var(--space-4);
 		background: var(--color-bg);
 		border-top: 1px solid var(--color-border);
 		overflow-x: auto;
 		font-family: var(--font-mono, monospace);
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		line-height: 1.5;
 		color: var(--color-text);
 		white-space: pre;
 	}
 
 	.artifact-code {
-		font-size: 0.74rem;
+		font-size: var(--text-size-caption);
 	}
 
 	.artifact-gallery-empty {
-		padding: 1rem;
+		padding: var(--space-4);
 		color: var(--color-text-muted);
-		font-size: 0.85rem;
+		font-size: var(--text-size-body);
 	}
 </style>

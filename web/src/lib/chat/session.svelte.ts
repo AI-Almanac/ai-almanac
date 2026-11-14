@@ -21,7 +21,15 @@ import {
 	type ChatSession,
 	type Job
 } from '$lib/api';
-import { emptyAssistantTurn, foldTurnEvent, startsTurn } from '$lib/chat/turn';
+import {
+	NOT_APPROVED,
+	approvalFromRequest,
+	isApprovalRequest,
+	withAwaitingApproval,
+	type PendingApproval
+} from '$lib/chat/approval';
+import { actionFromToolCall, type InterfaceAction } from '$lib/interface-actions/actions';
+import { emptyAssistantTurn, foldTurnEvent, startsTurn, withToolResult } from '$lib/chat/turn';
 
 export interface ChatSessionCallbacks {
 	onSessionReady?: (sessionId: string) => void;
@@ -30,10 +38,13 @@ export interface ChatSessionCallbacks {
 	onBenchmarkSubmitted?: (runId: string, jobs: Job[], sessionId: string | null) => void;
 	onBlendConfig?: (config: BlendRunSpec, validation?: BlendValidation | null) => void;
 	onBlendSubmitted?: (runId: string, jobs: Blend[], sessionId: string | null) => void;
+	/** The assistant asked the interface to act, in a reply that is streaming now. */
+	onInterfaceAction?: (action: InterfaceAction) => void;
 }
 
 /** What the assistant is told when the user declines its card, by what the card proposed. */
-const DECLINED = {
+const DECLINED: Record<PendingApproval['kind'], string> = {
+	step: 'The user declined this step.',
 	benchmark: 'The user wants to revise the benchmark before running it.',
 	blend: 'The user wants to revise the blend before training it.'
 };
@@ -97,24 +108,13 @@ export class ChatSessionState {
 		| { kind: 'blend'; runId: string; jobs: Blend[] }
 		| null
 	>(null);
-	pendingApproval = $state<
-		| {
-				kind: 'benchmark';
-				toolCallId: string;
-				config: BenchmarkRunSpec;
-				validation: BenchmarkValidation | null;
-		  }
-		| {
-				kind: 'blend';
-				toolCallId: string;
-				config: BlendRunSpec;
-				validation: BlendValidation | null;
-		  }
-		| null
-	>(null);
+	pendingApproval = $state<PendingApproval | null>(null);
 
 	readonly visibleTurns = $derived(
-		this.streamingTurn ? [...this.messages, this.streamingTurn] : this.messages
+		withAwaitingApproval(
+			this.streamingTurn ? [...this.messages, this.streamingTurn] : this.messages,
+			this.pendingApproval?.toolCallId
+		)
 	);
 	readonly currentSession = $derived(this.sessions.find((s) => s.id === this.sessionId));
 
@@ -289,7 +289,7 @@ export class ChatSessionState {
 		this.assistantWaking = false;
 		this.error = null;
 		this.pendingSubmission = null;
-		this.pendingApproval = null;
+		this.leaveApprovalUnanswered();
 
 		this.messages = [
 			...this.messages,
@@ -336,21 +336,20 @@ export class ChatSessionState {
 	private askForApproval(request: ChatApprovalRequest) {
 		if (request.type === 'benchmark_approval_request') {
 			this.callbacks.onBenchmarkConfig?.(request.config, request.validation ?? null);
-			this.pendingApproval = {
-				kind: 'benchmark',
-				toolCallId: request.tool_call_id,
-				config: request.config,
-				validation: request.validation ?? null
-			};
 		} else if (request.type === 'blend_approval_request') {
 			this.callbacks.onBlendConfig?.(request.config, request.validation ?? null);
-			this.pendingApproval = {
-				kind: 'blend',
-				toolCallId: request.tool_call_id,
-				config: request.config,
-				validation: request.validation ?? null
-			};
 		}
+		this.pendingApproval = approvalFromRequest(request);
+	}
+
+	private markNotRun(toolCallId: string) {
+		this.messages = withToolResult(this.messages, toolCallId, NOT_APPROVED, 'failed');
+	}
+
+	/** Writing a new message instead of answering the card leaves its step not run. */
+	private leaveApprovalUnanswered() {
+		if (this.pendingApproval) this.markNotRun(this.pendingApproval.toolCallId);
+		this.pendingApproval = null;
 	}
 
 	private applyStreamEvent(
@@ -373,14 +372,27 @@ export class ChatSessionState {
 		if (event.type === 'tool_result') {
 			const createdJob = jobFromToolResult(event.result);
 			if (createdJob) this.callbacks.onJobsCreated?.([createdJob]);
+			// Only here, as the reply streams: a reloaded conversation leaves its actions as buttons.
+			const call = this.streamingTurn?.tool_calls?.find((tc) => tc.id === event.tool_call_id);
+			const action = call ? actionFromToolCall({ name: call.name, result: event.result }) : null;
+			if (action) this.callbacks.onInterfaceAction?.(action);
+			const inStreamingTurn = this.streamingTurn?.tool_calls?.some(
+				(tc) => tc.id === event.tool_call_id
+			);
+			// An approved step reports back in the turn that continues after it.
+			if (!inStreamingTurn) {
+				this.messages = withToolResult(
+					this.messages,
+					event.tool_call_id,
+					event.result,
+					event.status
+				);
+			}
 		}
 
 		if (event.type === 'error') {
 			throw new Error(chatErrorMessage(event));
-		} else if (
-			event.type === 'benchmark_approval_request' ||
-			event.type === 'blend_approval_request'
-		) {
+		} else if (isApprovalRequest(event)) {
 			this.askForApproval(event);
 		} else if (event.type === 'benchmark_config') {
 			this.callbacks.onBenchmarkConfig?.(event.config, event.validation ?? null);
@@ -434,6 +446,7 @@ export class ChatSessionState {
 		if (!this.sessionId || !this.pendingApproval) return;
 		const approval = this.pendingApproval;
 		this.pendingApproval = null;
+		if (!approved) this.markNotRun(approval.toolCallId);
 		try {
 			const message = approved ? undefined : DECLINED[approval.kind];
 			await this.decideStep(approval.toolCallId, approved, message);
