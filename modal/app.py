@@ -45,11 +45,12 @@ ENABLE_GCS_FUNCTIONS = os.environ.get("ALMANAC_MODAL_ENABLE_GCS", "1").lower() n
 }
 # Pinned by digest: Modal caches from_registry builds by the image string, so a
 # mutable tag like :latest keeps serving whatever it resolved to first. Bump this
-# (and the momp rev in src/ai_almanac/envs/benchmark.pixi.toml) when ROMP changes.
-# This digest is romp:sha-7da9e39, AI-Almanac/ROMP main at 7da9e39.
+# when ROMP changes, together with the momp rev in src/ai_almanac/envs/benchmark.pixi.toml
+# and analysis.pixi.toml.
+# This digest is romp:sha-7271f27, AI-Almanac/ROMP main at 7271f27.
 ROMP_IMAGE_URI = os.environ.get(
     "ALMANAC_MODAL_ROMP_IMAGE_URI",
-    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:14cfdab7fe434595fcca4d6a125db0a53c859835668903ecb24473c30333f65f",
+    "us-central1-docker.pkg.dev/ai-almanac/almanac/romp@sha256:2215096b4e85fe72716b25be88f273f462349dcc79b1519eb029eb85978572d4",
 )
 GCR_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCR_SECRET_NAME", "gcr-credentials")
 GCP_SECRET_NAME = os.environ.get("ALMANAC_MODAL_GCP_SECRET_NAME", "gcp-service-account")
@@ -797,6 +798,11 @@ def _stage_paths(stage_root: Path) -> tuple[Path, Path, Path, Path]:
     return local_obs, local_model, local_out, local_fig
 
 
+def _env_value(value) -> str:
+    """generate_config.py json-decodes structured values such as onset_rule_params."""
+    return json.dumps(value) if isinstance(value, dict) else str(value)
+
+
 # focus_area reaches ROMP as the nc_mask _with_focus_mask writes from it.
 _SETTINGS_NOT_FOR_ROMP = frozenset({"focus_area"})
 
@@ -841,7 +847,7 @@ def _romp_env(
         "ROMP_DIR_OUT": str(local_out),
         "ROMP_DIR_FIG": str(local_fig),
         **{
-            f"ROMP_{k.upper()}": str(v)
+            f"ROMP_{k.upper()}": _env_value(v)
             for k, v in romp_params.items()
             if v is not None and k not in _SETTINGS_NOT_FOR_ROMP
         },

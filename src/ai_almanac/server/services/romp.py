@@ -124,6 +124,9 @@ DataPath = Annotated[
 ModelDims = dict[Literal["init_time", "step", "member", "lat", "lon"], RompName]
 """ROMP's forecast dim names mapped to the names used in the model files."""
 
+# render_romp_config's verification windows end on day 30, so a benchmark scores at least that many.
+DEFAULT_MAX_FORECAST_DAY = 30
+
 _INIT_DAYS = TypeAdapter(InitDays)
 _MEMBERS = TypeAdapter(Members)
 _MODEL_DIMS = TypeAdapter(ModelDims | None)
@@ -209,6 +212,8 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "dry_spell": params.get("dry_spell", 7),
         "dry_extent": params.get("dry_extent", 0),
         "thresh_file": params.get("thresh_file"),
+        "onset_rule": params.get("onset_rule") or "legacy",
+        "onset_rule_params": params.get("onset_rule_params"),
         "thresh_var": None,
         "onset_percentage_threshold": 0.5,
         "start_date": start_date,
@@ -221,7 +226,7 @@ def render_romp_config(config: dict, output_dir: Path, figure_dir: Path) -> str:
         "date_filter_year": int(params.get("date_filter_year") or start_date[0]),
         "verification_window_list": ((1, 15), (16, 30)),
         "tolerance_days_list": (3, 5),
-        "max_forecast_day": int(params.get("max_forecast_day") or 30),
+        "max_forecast_day": int(params.get("max_forecast_day") or DEFAULT_MAX_FORECAST_DAY),
         "day_bins": ((1, 5), (6, 10), (11, 15), (16, 20), (21, 25), (26, 30)),
         "FAR": True,
         "MAE": True,

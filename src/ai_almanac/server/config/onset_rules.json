@@ -1,0 +1,148 @@
+[
+  {
+    "name": "legacy",
+    "doc": "Every day of a wet_spell-day window is >= wet_init mm and the window total exceeds the threshold; optionally rejected if a dry_spell-day run of days < wet_init occurs within dry_extent days of the candidate (dry_extent > wet_spell enables the check).",
+    "params": [
+      {
+        "name": "wet_init",
+        "type": "float",
+        "default": 1.0,
+        "min": 0.0,
+        "max": 50.0,
+        "unit": "mm",
+        "doc": "Minimum rain for a wet day"
+      },
+      {
+        "name": "wet_spell",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 30,
+        "unit": "days",
+        "doc": "Accumulation window"
+      },
+      {
+        "name": "dry_spell",
+        "type": "int",
+        "default": 0,
+        "min": 0,
+        "max": 30,
+        "unit": "days",
+        "doc": "Dry-run length that vetoes onset"
+      },
+      {
+        "name": "dry_extent",
+        "type": "int",
+        "default": 0,
+        "min": 0,
+        "max": 90,
+        "unit": "days",
+        "doc": "Window searched for the dry run (0 = off)"
+      }
+    ]
+  },
+  {
+    "name": "moron_robertson",
+    "doc": "First day > wet_day_mm and the wet_days-day total exceeds the threshold, not followed within follow_days (from the candidate day) by any dry_window-day period totalling < dry_min_mm. threshold=None uses the per-cell threshold file.",
+    "params": [
+      {
+        "name": "wet_day_mm",
+        "type": "float",
+        "default": 1.0,
+        "min": 0.0,
+        "max": 50.0,
+        "unit": "mm",
+        "doc": "First day must exceed this"
+      },
+      {
+        "name": "wet_days",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 30,
+        "unit": "days",
+        "doc": "Accumulation window"
+      },
+      {
+        "name": "threshold",
+        "type": "float | None",
+        "default": null,
+        "min": 0.0,
+        "max": 500.0,
+        "unit": "mm",
+        "doc": "None = per-cell threshold file"
+      },
+      {
+        "name": "follow_days",
+        "type": "int",
+        "default": 30,
+        "min": 0,
+        "max": 90,
+        "unit": "days",
+        "doc": "Veto search window (0 = no veto)"
+      },
+      {
+        "name": "dry_window",
+        "type": "int",
+        "default": 10,
+        "min": 1,
+        "max": 60,
+        "unit": "days",
+        "doc": "Length of the dry period that vetoes"
+      },
+      {
+        "name": "dry_min_mm",
+        "type": "float",
+        "default": 5.0,
+        "min": 0.0,
+        "max": 200.0,
+        "unit": "mm",
+        "doc": "Dry period total below this vetoes"
+      }
+    ]
+  },
+  {
+    "name": "two_stage",
+    "doc": "At least stage1_mm over the first stage1_days, and at least stage2_mm over the following stage2_days. Ignores the per-cell threshold file.",
+    "params": [
+      {
+        "name": "stage1_days",
+        "type": "int",
+        "default": 10,
+        "min": 1,
+        "max": 60,
+        "unit": "days"
+      },
+      {
+        "name": "stage1_mm",
+        "type": "float",
+        "default": 10.0,
+        "min": 0.0,
+        "max": 500.0,
+        "unit": "mm"
+      },
+      {
+        "name": "stage2_days",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 90,
+        "unit": "days"
+      },
+      {
+        "name": "stage2_mm",
+        "type": "float",
+        "default": 20.0,
+        "min": 0.0,
+        "max": 1000.0,
+        "unit": "mm"
+      },
+      {
+        "name": "inclusive",
+        "type": "bool",
+        "default": true,
+        "doc": "Use >= (True) or > (False) for both stages"
+      }
+    ]
+  }
+]
