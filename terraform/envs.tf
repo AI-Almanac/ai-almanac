@@ -117,6 +117,7 @@ module "env" {
   image                   = local.app_image
   romp_image              = local.romp_image
   job_runner              = var.job_runner
+  code_sandbox            = var.code_sandbox
   batch_worker_email      = google_service_account.batch_worker.email
   batch_worker_sa_name    = google_service_account.batch_worker.name
   ci_sa_email             = google_service_account.ci.email

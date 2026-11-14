@@ -156,11 +156,20 @@ _FIELD_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     (
         "Assistant capabilities",
         [
-            ("enable_run_code", "Allow code execution", "Let the assistant run code"),
+            (
+                "enable_run_code",
+                "Allow code on the Benchmarks and Blends pages",
+                "Let the page assistants run code next to job outputs. Always off on shared deployments; workspace code is controlled by the code sandbox setting",
+            ),
             (
                 "enable_run_code_sandbox",
                 "Allow sandboxed code execution",
                 "Let the assistant run code in a remote sandbox (requires a sandbox runner; off in local builds)",
+            ),
+            (
+                "code_sandbox",
+                "Workspace code sandbox",
+                "Where the assistant runs code against workspace results: 'off', 'srt' (this machine, no network; needs `ai-almanac env prepare`), or 'modal' (a cloud sandbox)",
             ),
         ],
     ),
@@ -378,6 +387,8 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
                 detail=f"{key} is environment-only in shared deployments",
             )
         cleaned[key] = value
+    if cleaned.get("code_sandbox") == "srt":
+        _require_local_sandbox()
 
     try:
         write_settings_overlay(cleaned)
@@ -392,6 +403,15 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
         ) from exc
     reload_settings()
     return _read_settings()
+
+
+def _require_local_sandbox() -> None:
+    """Refuse `code_sandbox: srt` on a host that cannot run it, rather than saving a
+    setting that silently hides run_code."""
+    from ai_almanac.server.services import code_sandbox
+
+    if reason := code_sandbox.recheck_sandbox():
+        raise HTTPException(status_code=400, detail=f"code_sandbox=srt, but {reason}")
 
 
 @router.get("/config-yaml-path")

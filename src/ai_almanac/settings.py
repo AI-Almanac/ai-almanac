@@ -12,7 +12,7 @@ import os
 import re
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,6 +44,9 @@ DEFAULT_LOCAL_LLM_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
 # ---------------------------------------------------------------------------
 # Settings.
 # ---------------------------------------------------------------------------
+
+CodeSandbox = Literal["off", "srt", "modal"]
+CODE_SANDBOXES: tuple[str, ...] = get_args(CodeSandbox)
 
 # Who can reach a feature that admins may want to try before everyone does.
 Audience = Literal["off", "admins", "everyone"]
@@ -199,8 +202,15 @@ class Settings(BaseSettings):
     # a value replaces them wholesale. --host/--port/--uds are rejected: the
     # server's dev endpoints are unauthenticated and must stay on its private socket.
     llm_serve_args: str = ""
+    # Whether the assistant may run code at all; forced off in shared deployments.
     enable_run_code: bool = True
     enable_run_code_sandbox: bool = True
+    # Where workspace run_code runs: `off` (not offered), `srt` (this machine, under
+    # sandbox-runtime in the analysis env; startup fails if srt cannot sandbox here), or
+    # `modal` (a network-blocked Modal Sandbox; cloud deployments).
+    code_sandbox: CodeSandbox = "off"
+    # Path to the `srt` executable; empty means look it up on PATH.
+    sandbox_runtime_bin: str = ""
 
     # DEPRECATED. Superseded by assistant rulesets, which replace a single
     # wholesale prompt override with named, versioned, section-by-section rows
@@ -357,6 +367,7 @@ RESTART_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "identity_issuer_header",
         "identity_groups_header",
         "credential_encryption_key",
+        "code_sandbox",
         # Baked into the managed vLLM's command line at `serve` startup.
         "llm_engine",
         "llm_gpu_memory_utilization",
@@ -418,6 +429,7 @@ SHARED_ENV_ONLY_FIELDS: frozenset[str] = frozenset(
         # since env wins over config.yaml, so surface them read-only instead.
         "enable_run_code",
         "enable_run_code_sandbox",
+        "code_sandbox",
     }
 )
 

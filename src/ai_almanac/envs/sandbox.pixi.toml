@@ -1,0 +1,16 @@
+# Tools behind local code execution (services/code_sandbox.py): Node for
+# sandbox-runtime (`srt`, pinned in sandbox/package-lock.json), ripgrep for its
+# deny-path scan, and on Linux bubblewrap + socat for the sandbox and its proxy bridge.
+# macOS needs neither: srt uses the built-in sandbox-exec there.
+[workspace]
+name = "ai-almanac-sandbox"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+nodejs = ">=20.11"
+ripgrep = "*"
+
+[target.linux.dependencies]
+bubblewrap = "*"
+socat = "*"

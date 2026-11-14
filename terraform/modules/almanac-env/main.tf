@@ -416,6 +416,10 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.job_runner
       }
       env {
+        name  = "CODE_SANDBOX"
+        value = var.code_sandbox
+      }
+      env {
         name  = "MODAL_ENVIRONMENT"
         value = var.modal_environment
       }
