@@ -210,9 +210,14 @@ class Settings(BaseSettings):
     # sandbox-runtime in the analysis env; startup fails if srt cannot sandbox here), or
     # `modal` (a network-blocked Modal Sandbox; cloud deployments).
     code_sandbox: CodeSandbox = "off"
+    local_code_timeout_seconds: int = 120
     # After a workspace turn adds results, name them in a few words with one small call
     # to the turn's model (services/analysis_names.py).
     name_workspace_analyses: bool = True
+    # Workspace fetches: requests whose plan estimates more are refused before approval,
+    # and a fetch that runs longer is stopped. Fetches run inside the chat turn.
+    max_fetch_bytes: int = 1_000_000_000
+    fetch_timeout_seconds: int = 1800
     # Path to the `srt` executable; empty means look it up on PATH.
     sandbox_runtime_bin: str = ""
 

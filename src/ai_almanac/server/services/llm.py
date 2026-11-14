@@ -768,11 +768,13 @@ _PRIMITIVE_SECTIONS = (
     primitives.inspection,
     primitives.workspace,
     primitives.runs,
+    primitives.acquire,
+    primitives.code_harness,
 )
 
 
 def _workspace_toolsets() -> list[FunctionToolset[ChatDeps]]:
-    """Typed primitives only (D-R7): stateless submissions over the workspace's runs and files."""
+    """Typed primitives only (D-R7): stateless submissions and a provenance-stamping run_code."""
     return [
         _run_control_toolset(),
         *(primitives.toolset(section) for section in _PRIMITIVE_SECTIONS),

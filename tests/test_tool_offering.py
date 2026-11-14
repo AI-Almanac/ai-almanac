@@ -40,6 +40,7 @@ OFFERED = [
     *_rows({"update_benchmark_config"}, {PAGE_CHAT}, set()),
     *_rows({"cancel_run"}, {"workspace", PAGE_CHAT}, {"general"}),
     *_rows({"open_panel", "show"}, {"workspace"}, {PAGE_CHAT}),
+    *_rows({"run_code", "run_code_sandbox", "fetch"}, set(), {"workspace"}),
 ]
 
 
