@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { isMonthDay, onsetParamsBody, onsetParamsError } from '../src/routes/blends/onset-params';
+import {
+	isMonthDay,
+	onsetParamsBody,
+	onsetParamsError
+} from '../src/lib/components/blend-setup/onset-params';
 
 const blank = { thresholdMm: '', cutoffMonthDay: '', refOnsetMonthDay: '' };
 

@@ -7,6 +7,8 @@
 
 	let logoFailed = $state(false);
 	let navHeight = $state(0);
+	// Inside a workspace the screen belongs to the stage, so the nav takes one row.
+	const compact = $derived($page.url.pathname.startsWith('/workspace/'));
 
 	// The nav wraps at narrow widths, so pages that fill the screen below it
 	// read its real height instead of guessing.
@@ -15,7 +17,7 @@
 	});
 </script>
 
-<nav class="site-nav" bind:offsetHeight={navHeight}>
+<nav class="site-nav" class:compact bind:offsetHeight={navHeight}>
 	<div class="nav-inner">
 		<div class="logo-row">
 			<a href="/" class="brand">
@@ -46,6 +48,11 @@
 				<a href="/almanac" class:active={$page.url.pathname.startsWith('/almanac')}>Almanac</a>
 				<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
 				<a href="/blends" class:active={$page.url.pathname === '/blends'}>Blends</a>
+				{#if account.canUseWorkspaces}
+					<a href="/workspaces" class:active={$page.url.pathname.startsWith('/workspace')}
+						>Workspaces</a
+					>
+				{/if}
 				{#if account.canUseForecasting}
 					<a href="/forecasts" class:active={$page.url.pathname === '/forecasts'}>Forecasts</a>
 				{/if}
@@ -270,6 +277,54 @@
 	.links a.active {
 		color: var(--color-text);
 		background: var(--color-surface-muted);
+	}
+
+	/* One row: both logos, smaller, then the links, with the actions at the end. */
+	.compact .nav-inner {
+		flex-flow: row wrap;
+		align-items: center;
+		gap: var(--space-1) var(--space-4);
+		width: min(100% - 2rem, 120rem);
+		padding: var(--space-1) 0;
+	}
+
+	.compact .logo-row {
+		flex: none;
+		gap: var(--space-3);
+	}
+
+	.compact .brand-logo {
+		height: 1.5rem;
+	}
+
+	.compact .uchicago-logo {
+		height: 1.75rem;
+	}
+
+	.compact .nav-row {
+		display: flex;
+		flex: 1 1 20rem;
+		justify-content: space-between;
+		min-width: 0;
+	}
+
+	/* Too many links for the row go onto a second line whole; none is squeezed or cut. */
+	.compact .links {
+		flex: 1 1 auto;
+		flex-wrap: wrap;
+		row-gap: 0;
+		overflow-x: visible;
+	}
+
+	.compact .nav-right {
+		flex: none;
+	}
+
+	.compact .links a {
+		flex: none;
+		padding: var(--space-1) var(--space-2);
+		font-size: var(--text-size-label);
+		white-space: nowrap;
 	}
 
 	@media (max-width: 680px) {

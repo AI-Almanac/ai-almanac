@@ -6,6 +6,7 @@
 		type RunStatus
 	} from '$lib/components/RunSidebar.svelte';
 	import type { BenchmarkStore } from '$lib/benchmarks.svelte';
+	import { isActiveStatus } from '$lib/run-status';
 
 	interface Props {
 		store: BenchmarkStore;
@@ -27,10 +28,7 @@
 	}
 
 	function groupStatus(group: (typeof store.runGroups)[number]): RunStatus {
-		if (
-			group.jobs.some((job) => ['queued', 'starting', 'running', 'canceling'].includes(job.status))
-		)
-			return 'running';
+		if (group.jobs.some((job) => isActiveStatus(job.status))) return 'running';
 		if (group.jobs.every((job) => job.status === 'complete')) return 'complete';
 		if (group.jobs.every((job) => job.status === 'canceled')) return 'canceled';
 		if (group.jobs.every((job) => job.status === 'failed')) return 'failed';

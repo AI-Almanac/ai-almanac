@@ -536,25 +536,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit Session Benchmark */
+        /**
+         * Submit Session Benchmark
+         * @description Submit the session's draft as the user, from the setup form's own control.
+         */
         post: operations["submit_session_benchmark_chat_sessions__session_id__benchmark_submit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/chat/sessions/{session_id}/benchmark/approval": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Deny Session Benchmark Approval */
-        post: operations["deny_session_benchmark_approval_chat_sessions__session_id__benchmark_approval_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -587,7 +573,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit Session Blend */
+        /**
+         * Submit Session Blend
+         * @description Submit the session's draft as the user, from the setup form's own control.
+         */
         post: operations["submit_session_blend_chat_sessions__session_id__blend_submit_post"];
         delete?: never;
         options?: never;
@@ -595,7 +584,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/chat/sessions/{session_id}/blend/approval": {
+    "/chat/sessions/{session_id}/tool-approval": {
         parameters: {
             query?: never;
             header?: never;
@@ -604,8 +593,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Deny Session Blend Approval */
-        post: operations["deny_session_blend_approval_chat_sessions__session_id__blend_approval_post"];
+        /**
+         * Decide Tool Approval
+         * @description Approve or decline a step the assistant paused for, a run's submission included;
+         *     streams the rest of the turn as SSE, like a message.
+         */
+        post: operations["decide_tool_approval_chat_sessions__session_id__tool_approval_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2037,6 +2030,300 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workspaces */
+        get: operations["list_workspaces_workspaces_get"];
+        put?: never;
+        /** Create Workspace */
+        post: operations["create_workspace_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Session */
+        post: operations["promote_session_workspaces_promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workspace */
+        get: operations["get_workspace_workspaces__workspace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Summary
+         * @description The facts above a workspace's results: season state, setup, latest forecast, skill.
+         */
+        get: operations["get_workspace_summary_workspaces__workspace_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/runs/{run_id}/skill-by-area": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Skill By Area
+         * @description A benchmark run's skill per area, model and lead window. With no query the areas
+         *     are the run's own area of interest; ``level`` asks for another administrative
+         *     level, ``within`` for the areas inside one larger area, ``areas`` for named ones.
+         */
+        get: operations["get_run_skill_by_area_workspaces__workspace_id__runs__run_id__skill_by_area_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename Artifact */
+        patch: operations["rename_artifact_workspaces__workspace_id__artifacts__artifact_id__patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/analyses/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename Analysis
+         * @description Name an analysis; null clears the name, so it shows the question again.
+         */
+        patch: operations["rename_analysis_workspaces__workspace_id__analyses__turn_id__patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_workspaces__workspace_id__settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Settings */
+        patch: operations["update_settings_workspaces__workspace_id__settings_patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/settings/effective": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Effective Settings
+         * @description What a run here uses today: the settings with platform defaults for unset ones.
+         */
+        get: operations["get_effective_settings_workspaces__workspace_id__settings_effective_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace Events */
+        get: operations["workspace_events_workspaces__workspace_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link Job */
+        post: operations["link_job_workspaces__workspace_id__jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/addable-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Addable Jobs
+         * @description The user's own benchmarks, blends and forecasts that are not in the workspace.
+         */
+        get: operations["list_addable_jobs_workspaces__workspace_id__addable_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Artifacts */
+        get: operations["list_artifacts_workspaces__workspace_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Artifact
+         * @description The file as stored, with its provenance chain stamped into this copy.
+         */
+        get: operations["download_artifact_workspaces__workspace_id__artifacts__artifact_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/artifacts/{artifact_id}/provenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Artifact Provenance */
+        get: operations["artifact_provenance_workspaces__workspace_id__artifacts__artifact_id__provenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/follow-ups/{follow_up_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel Follow Up */
+        delete: operations["cancel_follow_up_workspaces__workspace_id__follow_ups__follow_up_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2075,24 +2362,54 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** ArtifactOut */
-        ArtifactOut: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Filename */
-            filename: string;
-            /** Media Type */
-            media_type: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Checksum */
-            checksum: string;
-            /** Created At */
-            created_at: string;
-            /** Url */
-            url: string;
+        /**
+         * AnalysisOut
+         * @description The name of the files one chat turn made.
+         */
+        AnalysisOut: {
+            /** Turn Id */
+            turn_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Named By
+             * @enum {string}
+             */
+            named_by: "assistant" | "user";
+        };
+        /**
+         * AreaSkill
+         * @description Skill averaged over one area. Values are null when no scored cell is centred in it.
+         */
+        AreaSkill: {
+            /** Onset Error Days */
+            onset_error_days: number | null;
+            /** False Alarm Rate */
+            false_alarm_rate: number | null;
+            /** Miss Rate */
+            miss_rate: number | null;
+            /** Cells */
+            cells: number;
+        };
+        /** AreaSkillRow */
+        AreaSkillRow: {
+            /** Onset Error Days */
+            onset_error_days: number | null;
+            /** False Alarm Rate */
+            false_alarm_rate: number | null;
+            /** Miss Rate */
+            miss_rate: number | null;
+            /** Cells */
+            cells: number;
+            /** Area */
+            area: string;
+            /** Parent */
+            parent: string | null;
+            /** Model */
+            model: string;
+            /** Window */
+            window: string;
+            climatology: components["schemas"]["AreaSkill"] | null;
         };
         /**
          * BandStatistics
@@ -2134,14 +2451,22 @@ export interface components {
         };
         /** BaseModel */
         BaseModel: Record<string, never>;
-        /** BenchmarkApprovalIn */
-        BenchmarkApprovalIn: {
-            approval: components["schemas"]["SubmitBenchmarkApproval"];
+        /**
+         * BenchmarkApprovalRequest
+         * @description The assistant asking the user to approve a benchmark run, as it is streamed.
+         */
+        BenchmarkApprovalRequest: {
             /**
-             * Message
-             * @default The user declined to run the benchmark.
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            message: string;
+            type: "benchmark_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            config: components["schemas"]["BenchmarkRunSpec"];
+            validation?: components["schemas"]["BenchmarkValidation"] | null;
         };
         /** BenchmarkConfigOut */
         BenchmarkConfigOut: {
@@ -2213,9 +2538,27 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** BenchmarkSubmitIn */
-        BenchmarkSubmitIn: {
-            approval?: components["schemas"]["SubmitBenchmarkApproval"] | null;
+        /**
+         * BenchmarkSkill
+         * @description The best model of the newest benchmark run, by mean onset error.
+         */
+        BenchmarkSkill: {
+            /**
+             * Kind
+             * @default benchmark
+             * @constant
+             */
+            kind: "benchmark";
+            /** Job Id */
+            job_id: string;
+            /** Model */
+            model: string;
+            /** Mae Days */
+            mae_days: number;
+            /** Climatology Mae Days */
+            climatology_mae_days: number | null;
+            /** Window */
+            window: string;
         };
         /** BenchmarkSubmitOut */
         BenchmarkSubmitOut: {
@@ -2250,14 +2593,22 @@ export interface components {
             /** Finding Keys */
             finding_keys?: string[];
         };
-        /** BlendApprovalIn */
-        BlendApprovalIn: {
-            approval: components["schemas"]["SubmitBlendApproval"];
+        /**
+         * BlendApprovalRequest
+         * @description The assistant asking the user to approve training a blend, as it is streamed.
+         */
+        BlendApprovalRequest: {
             /**
-             * Message
-             * @default The user declined to train the blend.
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            message: string;
+            type: "blend_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            config: components["schemas"]["BlendRunSpec"];
+            validation?: components["schemas"]["BlendValidation"] | null;
         };
         /**
          * BlendAreaMetric
@@ -2395,6 +2746,8 @@ export interface components {
             params: components["schemas"]["BlendParams"];
             /** Run Id */
             run_id?: string | null;
+            /** Train Day Level Blend */
+            train_day_level_blend?: boolean | null;
         };
         /** BlendOut */
         BlendOut: {
@@ -2556,6 +2909,8 @@ export interface components {
              * @default
              */
             ref_onset_month_day: string;
+            /** Train Day Level Blend */
+            train_day_level_blend?: boolean | null;
             /**
              * Status
              * @default collecting
@@ -2567,9 +2922,27 @@ export interface components {
             /** Assumptions */
             assumptions?: string[];
         };
-        /** BlendSubmitIn */
-        BlendSubmitIn: {
-            approval?: components["schemas"]["SubmitBlendApproval"] | null;
+        /**
+         * BlendSkill
+         * @description The newest trained blend's pooled skill against Traditional Climatology.
+         */
+        BlendSkill: {
+            /**
+             * Kind
+             * @default blend
+             * @constant
+             */
+            kind: "blend";
+            /** Job Id */
+            job_id: string;
+            /** Name */
+            name: string;
+            /** Rps Skill */
+            rps_skill: number;
+            /** Brier Skill */
+            brier_skill: number;
+            /** Holdout Years */
+            holdout_years: string | null;
         };
         /** BlendSubmitOut */
         BlendSubmitOut: {
@@ -2739,6 +3112,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Workspace Artifact Id */
+            workspace_artifact_id?: string | null;
         };
         /** ChatJobActivity */
         ChatJobActivity: {
@@ -2771,7 +3146,7 @@ export interface components {
              * @default benchmark_run_group
              * @enum {string}
              */
-            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "general" | "job_set";
+            kind: "benchmark_run_group" | "benchmark_setup" | "blend_setup" | "general" | "job_set" | "workspace";
             /** Key */
             key: string;
             /** Title */
@@ -2810,6 +3185,11 @@ export interface components {
              */
             role: "assistant" | "user";
             /**
+             * Trigger
+             * @default user
+             */
+            trigger: string;
+            /**
              * Content
              * @default
              */
@@ -2833,8 +3213,12 @@ export interface components {
             artifacts?: components["schemas"]["ChatArtifact"][];
             /** Guardrails */
             guardrails?: components["schemas"]["GuardrailNotice"][];
+            /** Source Artifacts */
+            source_artifacts?: components["schemas"]["SourceArtifact"][];
             /** Blocks */
             blocks?: (components["schemas"]["TextBlock"] | components["schemas"]["ThinkingBlock"] | components["schemas"]["ToolBlock"])[];
+            /** Approval Requests */
+            approval_requests?: (components["schemas"]["BenchmarkApprovalRequest"] | components["schemas"]["BlendApprovalRequest"] | components["schemas"]["ToolApprovalRequest"])[];
         };
         /** CompareRequest */
         CompareRequest: {
@@ -3330,6 +3714,31 @@ export interface components {
             /** Up To Date */
             up_to_date: boolean;
         };
+        /** ForecastSummary */
+        ForecastSummary: {
+            /**
+             * Kind
+             * @default forecast
+             * @constant
+             */
+            kind: "forecast";
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Blended */
+            blended: boolean;
+            /** Blend Name */
+            blend_name: string | null;
+            /** First Issue Date */
+            first_issue_date: string | null;
+            /** Last Issue Date */
+            last_issue_date: string | null;
+            /** Issue Dates */
+            issue_dates: number;
+            /** Created At */
+            created_at: string;
+        };
         /** FsEntry */
         FsEntry: {
             /** Name */
@@ -3548,6 +3957,8 @@ export interface components {
         GuardrailNotice: {
             /** Tool Call Id */
             tool_call_id?: string | null;
+            /** Config Kind */
+            config_kind?: ("benchmark" | "blend") | null;
             /** Errors */
             errors?: string[];
             /** Warnings */
@@ -3872,6 +4283,17 @@ export interface components {
             /** Length */
             length?: number | null;
         };
+        /** LinkJobIn */
+        LinkJobIn: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Origin
+             * @default added
+             * @enum {string}
+             */
+            origin: "added" | "started";
+        };
         /** LiveForecastOut */
         LiveForecastOut: {
             /**
@@ -3961,6 +4383,16 @@ export interface components {
             unit: string;
         };
         /**
+         * ModelNotShown
+         * @description A model of the run that the table has no rows for, and why.
+         */
+        ModelNotShown: {
+            /** Model */
+            model: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * MultiLineString
          * @description MultiLineString Model
          */
@@ -4040,6 +4472,31 @@ export interface components {
             type: "MultiPolygon";
             /** Coordinates */
             coordinates: (components["schemas"]["Position2D"] | components["schemas"]["Position3D"])[][][];
+        };
+        /**
+         * OnsetDefinition
+         * @description An onset definition in words: its name and whichever settings are not its defaults.
+         */
+        OnsetDefinition: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Is Default */
+            is_default: boolean;
+            /** Changes */
+            changes: components["schemas"]["OnsetParameter"][];
+        };
+        /** OnsetParameter */
+        OnsetParameter: {
+            /** Label */
+            label: string;
+            /** Short Label */
+            short_label: string;
+            /** Value */
+            value: boolean | number | null;
+            /** Unit */
+            unit: string | null;
         };
         /**
          * Point
@@ -4186,6 +4643,11 @@ export interface components {
             /** Api Key */
             api_key?: string | null;
         };
+        /** PromoteIn */
+        PromoteIn: {
+            /** Session Id */
+            session_id: string;
+        };
         /**
          * PromptSection
          * @description One toggleable block of the system prompt.
@@ -4314,6 +4776,98 @@ export interface components {
                 [key: string]: components["schemas"]["Properties"];
             };
         };
+        /** ProvenanceArtifactOut */
+        ProvenanceArtifactOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Filename */
+            filename: string;
+            /** Kind */
+            kind: string;
+            /** Format */
+            format: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Provenance Step Id */
+            provenance_step_id: string;
+        };
+        /** ProvenanceOut */
+        ProvenanceOut: {
+            artifact: components["schemas"]["ProvenanceArtifactOut"];
+            /** Steps */
+            steps: components["schemas"]["ProvenanceStepOut"][];
+            /** Artifacts */
+            artifacts: components["schemas"]["ProvenanceArtifactOut"][];
+            /** Producers */
+            producers: string[];
+            /** Lineage */
+            lineage: string;
+        };
+        /** ProvenanceStepOut */
+        ProvenanceStepOut: {
+            /** Id */
+            id: string;
+            /** Created At */
+            created_at: string;
+            /** Completed At */
+            completed_at: string | null;
+            /** Actor Kind */
+            actor_kind: string;
+            /** Primitive */
+            primitive: string;
+            /** Primitive Version */
+            primitive_version: string;
+            /** Description */
+            description: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Display Params */
+            display_params: {
+                [key: string]: unknown;
+            };
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            }[];
+            /** Outputs */
+            outputs: string[];
+            /** Runtime */
+            runtime: {
+                [key: string]: unknown;
+            };
+            /** Job Id */
+            job_id: string | null;
+            /** Code Hash */
+            code_hash: string | null;
+            /** Turn Id */
+            turn_id: string | null;
+            /** Session Id */
+            session_id: string | null;
+            /** Ruleset Id */
+            ruleset_id: string | null;
+            /** Ruleset Version */
+            ruleset_version: number | null;
+            /** Model Name */
+            model_name: string | null;
+            /** Approval Id */
+            approval_id: string | null;
+            /** Approved At */
+            approved_at: string | null;
+            /** Added At */
+            added_at?: string | null;
+            /** Added By */
+            added_by?: ("assistant" | "user") | null;
+            /** Parent Step Ids */
+            parent_step_ids: string[];
+            /** Step Hash */
+            step_hash: string;
+            /** Verification */
+            verification: string | null;
+        };
         /** ProviderIn */
         ProviderIn: {
             /** Provider Type */
@@ -4368,6 +4922,14 @@ export interface components {
             label: string;
             /** Path */
             path: string;
+        };
+        /** RenameIn */
+        RenameIn: {
+            /**
+             * Title
+             * @description The new name; null goes back to the default
+             */
+            title: string | null;
         };
         /** ResultFile */
         ResultFile: {
@@ -4610,6 +5172,48 @@ export interface components {
             model: string | null;
         };
         /**
+         * RunScope
+         * @description What tells a run from its neighbours; each part is null when its settings do not say.
+         */
+        RunScope: {
+            /** Place */
+            place: string | null;
+            years: components["schemas"]["Span"] | null;
+            lead_days: components["schemas"]["Span"] | null;
+        };
+        /** SeasonSummary */
+        SeasonSummary: {
+            /** Name */
+            name: string;
+            /** Year */
+            year: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "ended" | "in_season" | "upcoming";
+            /**
+             * First Issue Date
+             * Format: date
+             */
+            first_issue_date: string;
+            /** Starts Label */
+            starts_label: string;
+            /**
+             * Last Issue Date
+             * Format: date
+             */
+            last_issue_date: string;
+            /** Issued Through */
+            issued_through: string | null;
+            /** Days Until Start */
+            days_until_start: number | null;
+            /** Next Season Start */
+            next_season_start: string | null;
+            /** Is Default */
+            is_default: boolean;
+        };
+        /**
          * SeasonWindow
          * @description A workspace's rainy season, e.g. Ethiopia's Kiremt.
          */
@@ -4672,6 +5276,8 @@ export interface components {
             ruleset_id?: string | null;
             /** Transcript */
             transcript: components["schemas"]["ChatTurn"][];
+            /** Pending Approval */
+            pending_approval?: (components["schemas"]["BenchmarkApprovalRequest"] | components["schemas"]["BlendApprovalRequest"] | components["schemas"]["ToolApprovalRequest"]) | null;
         };
         /** SessionOut */
         SessionOut: {
@@ -4766,6 +5372,15 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SetupSummary */
+        SetupSummary: {
+            /** Region */
+            region: string | null;
+            /** Observations */
+            observations: string | null;
+            /** Models */
+            models: string[];
+        };
         /**
          * SkillBin
          * @description One lead-time bin's scores, from binned_skill_scores_*.csv.
@@ -4789,6 +5404,52 @@ export interface components {
             brier_score_forecast: number | null;
             /** Brier Score Climatology */
             brier_score_climatology: number | null;
+        };
+        /**
+         * SkillByArea
+         * @description A benchmark run's skill per area, model and lead window.
+         */
+        SkillByArea: {
+            /**
+             * Areas From
+             * @enum {string}
+             */
+            areas_from: "area_of_interest" | "boundaries";
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "adm1" | "adm2" | "adm3";
+            /** Models */
+            models: string[];
+            /** Windows */
+            windows: string[];
+            /** Rows */
+            rows: components["schemas"]["AreaSkillRow"][];
+            /** Not Covered */
+            not_covered: string[];
+            /**
+             * Not Shown
+             * @default []
+             */
+            not_shown: components["schemas"]["ModelNotShown"][];
+        };
+        /**
+         * SourceArtifact
+         * @description A workspace artifact a turn's tools read, as the workspace labels it.
+         */
+        SourceArtifact: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** Span */
+        Span: {
+            /** Start */
+            start: number;
+            /** End */
+            end: number;
         };
         /**
          * StatisticsInGeoJSON
@@ -4843,18 +5504,6 @@ export interface components {
              * @description Links to style related resources. Possible link 'rel' values are: 'style' for a URL pointing to the style description, 'styleSpec' for a URL pointing to the specification or standard used to define the style.
              */
             links?: components["schemas"]["Link"][] | null;
-        };
-        /** SubmitBenchmarkApproval */
-        SubmitBenchmarkApproval: {
-            /** Tool Call Id */
-            tool_call_id: string;
-            approved_config?: components["schemas"]["BenchmarkRunSpec"] | null;
-        };
-        /** SubmitBlendApproval */
-        SubmitBlendApproval: {
-            /** Tool Call Id */
-            tool_call_id: string;
-            approved_config?: components["schemas"]["BlendRunSpec"] | null;
         };
         /**
          * SuggestedYears
@@ -5122,6 +5771,40 @@ export interface components {
          * @example 2017-08-17T08:05:32Z
          */
         TimeStamp: string;
+        /** ToolApprovalIn */
+        ToolApprovalIn: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Approved */
+            approved: boolean;
+            /**
+             * Message
+             * @default The user declined this step.
+             */
+            message: string;
+        };
+        /**
+         * ToolApprovalRequest
+         * @description The assistant asking the user to approve a workspace step, as it is streamed.
+         *
+         *     ``metadata`` carries the step's ``params`` and the ``display`` facts its card shows.
+         */
+        ToolApprovalRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "tool_approval_request";
+            /** Turn Id */
+            turn_id: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            tool_call: components["schemas"]["ChatToolCall"];
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
         /** ToolBlock */
         ToolBlock: {
             /**
@@ -5224,6 +5907,153 @@ export interface components {
             };
             /** Bins */
             bins: components["schemas"]["SkillBin"][];
+        };
+        /** WorkspaceDetail */
+        WorkspaceDetail: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+            settings: components["schemas"]["WorkspaceSettings"];
+            /** Jobs */
+            jobs: components["schemas"]["WorkspaceJobOut"][];
+            /** Artifacts */
+            artifacts: components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
+            /** Analyses */
+            analyses: components["schemas"]["AnalysisOut"][];
+        };
+        /** WorkspaceIn */
+        WorkspaceIn: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** WorkspaceJobOut */
+        WorkspaceJobOut: {
+            /** Id */
+            id: string;
+            /** Job Type */
+            job_type: string;
+            /** Status */
+            status: string;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Run Id */
+            run_id: string | null;
+            /** Model Name */
+            model_name: string | null;
+            scope: components["schemas"]["RunScope"];
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Region Id */
+            region_id: string | null;
+            /** Blended */
+            blended: boolean;
+            /** Area Of Interest */
+            area_of_interest: string[] | null;
+            onset_definition: components["schemas"]["OnsetDefinition"] | null;
+            /** Expected Seconds */
+            expected_seconds: number | null;
+            /** Headline */
+            headline?: components["schemas"]["BlendSkill"] | components["schemas"]["BenchmarkSkill"] | components["schemas"]["ForecastSummary"] | null;
+        };
+        /** WorkspaceOut */
+        WorkspaceOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * WorkspaceSettings
+         * @description Every field is optional; one left unset falls back to the platform default.
+         */
+        WorkspaceSettings: {
+            season?: components["schemas"]["SeasonWindow"] | null;
+            /** Study Area */
+            study_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
+        };
+        /** WorkspaceSummary */
+        WorkspaceSummary: {
+            season: components["schemas"]["SeasonSummary"];
+            setup: components["schemas"]["SetupSummary"];
+            latest_forecast: components["schemas"]["ForecastSummary"] | null;
+            /** Skill */
+            skill: components["schemas"]["BlendSkill"] | components["schemas"]["BenchmarkSkill"] | null;
+        };
+        /** ArtifactOut */
+        ai_almanac__server__routers__jobs__ArtifactOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Filename */
+            filename: string;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Checksum */
+            checksum: string;
+            /** Created At */
+            created_at: string;
+            /** Url */
+            url: string;
+        };
+        /** ArtifactOut */
+        ai_almanac__server__routers__workspaces__ArtifactOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Title */
+            title: string;
+            /** Group */
+            group: string;
+            /** Kind */
+            kind: string;
+            /** Format */
+            format: string;
+            /** Created At */
+            created_at: string;
+            /** Job Id */
+            job_id: string | null;
+            /** Step Id */
+            step_id: string | null;
+            /** Turn Id */
+            turn_id: string | null;
+            /** Run Job Ids */
+            run_job_ids: string[];
+            /** Breadcrumb */
+            breadcrumb: string[];
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Supporting */
+            supporting: boolean;
         };
         /**
          * Point
@@ -6231,11 +7061,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkSubmitIn"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -6245,39 +7071,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["BenchmarkSubmitOut"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deny_session_benchmark_approval_chat_sessions__session_id__benchmark_approval_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BenchmarkApprovalIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -6334,11 +7127,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BlendSubmitIn"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -6360,7 +7149,7 @@ export interface operations {
             };
         };
     };
-    deny_session_blend_approval_chat_sessions__session_id__blend_approval_post: {
+    decide_tool_approval_chat_sessions__session_id__tool_approval_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -6371,16 +7160,18 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BlendApprovalIn"];
+                "application/json": components["schemas"]["ToolApprovalIn"];
             };
         };
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {
@@ -7347,7 +8138,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactOut"][];
+                    "application/json": components["schemas"]["ai_almanac__server__routers__jobs__ArtifactOut"][];
                 };
             };
             /** @description Validation Error */
@@ -9559,6 +10350,586 @@ export interface operations {
                     "image/tiff; application=geotiff": unknown;
                     "application/x-binary": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspaces_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"][];
+                };
+            };
+        };
+    };
+    create_workspace_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_session_workspaces_promote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_workspaces__workspace_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workspace_summary_workspaces__workspace_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_skill_by_area_workspaces__workspace_id__runs__run_id__skill_by_area_get: {
+        parameters: {
+            query?: {
+                level?: ("adm1" | "adm2" | "adm3") | null;
+                within?: string | null;
+                areas?: string[] | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillByArea"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_artifact_workspaces__workspace_id__artifacts__artifact_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_analysis_workspaces__workspace_id__analyses__turn_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                turn_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_workspaces__workspace_id__settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_settings_workspaces__workspace_id__settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_effective_settings_workspaces__workspace_id__settings_effective_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_events_workspaces__workspace_id__events_get: {
+        parameters: {
+            query?: {
+                /** @description Newest artifact created_at held */
+                since?: string | null;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_job_workspaces__workspace_id__jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkJobIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceJobOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_addable_jobs_workspaces__workspace_id__addable_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceJobOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifacts_workspaces__workspace_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_artifact_workspaces__workspace_id__artifacts__artifact_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    artifact_provenance_workspaces__workspace_id__artifacts__artifact_id__provenance_get: {
+        parameters: {
+            query?: {
+                verify?: boolean;
+            };
+            header?: never;
+            path: {
+                artifact_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvenanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_follow_up_workspaces__workspace_id__follow_ups__follow_up_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                follow_up_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

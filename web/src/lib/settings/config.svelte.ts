@@ -31,6 +31,14 @@ export class ConfigSettingsState {
 
 	readonly isShared = $derived(this.deploymentMode === 'shared');
 
+	/** `onSaved` runs after settings change on the server, for whatever else on the
+	 * page was derived from them. */
+	private readonly onSaved: () => Promise<void>;
+
+	constructor(onSaved: () => Promise<void> = async () => {}) {
+		this.onSaved = onSaved;
+	}
+
 	value(name: string): unknown {
 		return this.values[name];
 	}
@@ -117,6 +125,7 @@ export class ConfigSettingsState {
 					this.original[name] = updated.values[name];
 				}
 			}
+			await this.onSaved();
 			this.flash(`${group.name} saved`);
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : String(e);

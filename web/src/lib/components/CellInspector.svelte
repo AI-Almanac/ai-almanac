@@ -20,7 +20,7 @@
 		forecastOutlook,
 		splitAtOnset
 	} from '$lib/onset-outlook';
-	import { formatCoord } from '$lib/geo';
+	import { formatCoord } from '$lib/geo/coordinates';
 
 	type Props = {
 		point: BlendForecastPoint;

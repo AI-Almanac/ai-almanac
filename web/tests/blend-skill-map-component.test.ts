@@ -10,7 +10,7 @@
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import BlendSkillMap from '../src/routes/blends/BlendSkillMap.svelte';
+import BlendSkillMap from '../src/lib/components/blend/BlendSkillMap.svelte';
 import type { BlendCellMetrics } from '../src/lib/api';
 
 // MapLibre needs a real WebGL context, which jsdom does not provide.

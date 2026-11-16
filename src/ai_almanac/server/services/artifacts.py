@@ -77,7 +77,23 @@ async def index_job_artifacts(job_id: str, claim: str = "artifacts_published_at"
                     "created_at": artifact.created_at,
                 },
             )
+    if claim == "artifacts_published_at":
+        await _record_in_workspaces(job_id)
     return len(artifacts)
+
+
+async def _record_in_workspaces(job_id: str) -> None:
+    """Hand the published job to the ledger and its workspaces.
+
+    Publication has already committed, so a ledger failure is logged rather than
+    reported as a failed publication.
+    """
+    from ai_almanac.server.services.workspaces import on_job_published
+
+    try:
+        await on_job_published(job_id)
+    except Exception as exc:  # noqa: BLE001 — published outputs stand regardless
+        logger.warning("recording job %s in the ledger failed: %s", job_id, exc)
 
 
 async def publish_pending() -> None:

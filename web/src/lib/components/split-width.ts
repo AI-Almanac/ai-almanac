@@ -1,21 +1,35 @@
 /**
- * The assistant column's width, as a number of pixels the page will honour.
+ * How wide a draggable pane may be, as a number of pixels the page will honour.
  *
- * Separate from the component so the clamping — the part with an off-by-one
+ * Separate from the components so the clamping — the part with an off-by-one
  * that a screenshot would not catch — is testable without a DOM.
  */
 
-/** Narrower than this and the assistant is unusable for prose. */
-export const MIN_ASIDE_PX = 352; // 22rem
-/** Past this the results stop being the dominant pane, which is the point of
- * the layout; a comparison gets its own floor instead (see COMPARE_MIN_PX). */
-export const MAX_ASIDE_FRACTION = 0.6;
+/** How far a pane can be dragged. */
+export type PaneLimits = {
+	/** Narrower than this and the pane stops being usable. */
+	min: number;
+	/** The share of the available space the pane may take at most. */
+	maxFraction: number;
+};
+
+export function clampPane(size: number, available: number, limits: PaneLimits): number {
+	const max = Math.max(limits.min, Math.round(available * limits.maxFraction));
+	return Math.min(Math.max(Math.round(size), limits.min), max);
+}
+
 /** Two answers side by side need at least this much, whatever width was saved. */
 export const COMPARE_MIN_PX = 640; // 40rem
 
+/** Narrower than this and the assistant is unusable for prose. */
+export const MIN_ASIDE_PX = 352; // 22rem
+
+/** Past 60% the results stop being the dominant pane, which is the point of the layout;
+ * a comparison gets its own floor instead (see COMPARE_MIN_PX). */
+const ASIDE_LIMITS: PaneLimits = { min: MIN_ASIDE_PX, maxFraction: 0.6 };
+
 export function clampAside(width: number, containerWidth: number): number {
-	const max = Math.max(MIN_ASIDE_PX, Math.round(containerWidth * MAX_ASIDE_FRACTION));
-	return Math.min(Math.max(Math.round(width), MIN_ASIDE_PX), max);
+	return clampPane(width, containerWidth, ASIDE_LIMITS);
 }
 
 /**

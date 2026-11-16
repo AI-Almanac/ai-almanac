@@ -194,3 +194,14 @@ def test_only_registered_code_tools_are_explained(
     available_tools: set[str] | None, mentions: tuple[bool, bool]
 ) -> None:
     assert _code_tool_mentions(available_tools) == mentions
+
+
+def test_a_workspace_prompt_explains_only_the_workspace_code_tool() -> None:
+    """A workspace's ``run_code`` reads artifacts, not a job's output directory;
+    the page-chat code sections share its name and must not reach it."""
+    without = rulesets.build_instructions(builtin(), "workspace", available_tools={"plot_map"})
+    assert "run_code" not in without
+
+    workspace = rulesets.build_instructions(builtin(), "workspace", available_tools={"run_code"})
+    assert "def compute(inputs" in workspace
+    assert "run_code_sandbox" not in workspace and "nc_dir" not in workspace

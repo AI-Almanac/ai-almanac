@@ -40,6 +40,7 @@ from ai_almanac.server.routers import (
     places,
     regions,
     tiles,
+    workspaces,
 )
 from ai_almanac.server.routers import (
     settings as settings_router,
@@ -138,7 +139,22 @@ async def lifespan(app: FastAPI):
         reconciler.cancel()
         with suppress(asyncio.CancelledError):
             await reconciler
+        await _finish_detached_turns()
         await _suspend_local_llm()
+
+
+# Cloud Run allows 10 seconds after SIGTERM; a step still running after this is cut off.
+_DETACHED_TURNS_GRACE_SECONDS = 8
+
+
+async def _finish_detached_turns() -> None:
+    """Let approved steps whose client already left finish before the process exits."""
+    from ai_almanac.server.services import chat_turns
+
+    try:
+        await asyncio.wait_for(chat_turns.detached_turns_finished(), _DETACHED_TURNS_GRACE_SECONDS)
+    except TimeoutError:
+        logger.warning("Shutting down with approved steps still running")
 
 
 async def _start_local_llm() -> None:
@@ -263,11 +279,13 @@ async def _run_background_step(name: str, step) -> None:
 async def _reconcile_jobs() -> None:
     from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.day_level_blends import reconcile_day_level_blends
+    from ai_almanac.server.services.follow_up_runs import start_ready
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
     await _run_background_step("job_reconciliation", reconcile_jobs)
     await _run_background_step("day_level_reconciliation", reconcile_day_level_blends)
     await _run_background_step("artifact_publication", publish_pending)
+    await _run_background_step("follow_ups", start_ready)
 
 
 async def _local_llm_idle_sleep() -> None:
@@ -548,6 +566,7 @@ app.include_router(places.router)
 app.include_router(regions.router)
 app.include_router(settings_router.router)
 app.include_router(tiles.router, prefix="/cog", tags=["COG tiles"])
+app.include_router(workspaces.router)
 
 
 @app.get("/health")

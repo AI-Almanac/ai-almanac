@@ -7,6 +7,8 @@ import { cleanup } from '@testing-library/svelte';
 // from hiding behind noise.
 if (!('ResizeObserver' in globalThis)) {
 	globalThis.ResizeObserver = class {
+		// Takes the callback as the real one does; the stub never calls it.
+		constructor(_callback: ResizeObserverCallback) {}
 		observe() {}
 		unobserve() {}
 		disconnect() {}

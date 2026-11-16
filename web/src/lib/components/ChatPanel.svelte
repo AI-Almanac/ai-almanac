@@ -5,6 +5,9 @@
 	import ChatMessages from '$lib/components/ChatMessages.svelte';
 	import ChatArtifactGallery from '$lib/components/ChatArtifactGallery.svelte';
 	import ChatCompare from '$lib/components/ChatCompare.svelte';
+	import QueuedFollowUps from '$lib/components/QueuedFollowUps.svelte';
+	import { isQueued, sessionGainedTurn, settledIds } from '$lib/chat/follow-ups';
+	import { BETA_NOTICE, betaNoticeDue, betaNoticeKey, foldsToolbar } from '$lib/chat/column';
 	import { ChatSessionState } from '$lib/chat/session.svelte';
 	import { ComparisonState, compareBlocker } from '$lib/chat/compare.svelte';
 	import { sessionFigures } from '$lib/chat/format';
@@ -18,8 +21,16 @@
 		BlendValidation,
 		ChatScope,
 		Job,
-		RulesetOption
+		RulesetOption,
+		ChatArtifact,
+		ChatMessage,
+		FollowUp
 	} from '$lib/api';
+	import type {
+		ActionSource,
+		InterfaceAction,
+		WorkspaceTarget
+	} from '$lib/interface-actions/actions';
 
 	interface Props {
 		jobs?: Job[];
@@ -42,6 +53,23 @@
 		/** Lets the page widen this column: two answers need more than the
 		 * assistant rail's normal width to be readable side by side. */
 		onComparingChange?: (comparing: boolean) => void;
+		/** The settled transcript, for hosts that label results by the question behind them. */
+		onTranscriptChange?: (messages: ChatMessage[]) => void;
+		/** Where chat links and figures open; when set, the host owns artifacts and the Artifacts tab is hidden. */
+		onOpenItem?: (target: WorkspaceTarget) => void;
+		/** What the host does when the assistant, or a button in the conversation, asks the interface to act. */
+		onInterfaceAction?: (action: InterfaceAction, source: ActionSource) => void;
+		/** Current names of the workspace's files by id, so references show what the user calls them. */
+		fileTitles?: Record<string, string>;
+		/** Latest known status per job id, for runs the assistant submitted. */
+		jobStatuses?: Record<string, string>;
+		/** A turn to scroll to and briefly highlight. */
+		focusTurnId?: string | null;
+		/** Work the assistant queued in this workspace until its jobs finish. */
+		followUps?: FollowUp[];
+		onCancelFollowUp?: (followUpId: string) => void;
+		/** Told when the assistant starts and stops working, so a collapsed host can show it. */
+		onWorkingChange?: (working: boolean) => void;
 	}
 
 	let {
@@ -66,8 +94,26 @@
 		onBenchmarkSubmitted,
 		onBlendConfig,
 		onBlendSubmitted,
-		onComparingChange
+		onComparingChange,
+		onTranscriptChange,
+		onOpenItem,
+		onInterfaceAction,
+		fileTitles,
+		jobStatuses,
+		focusTurnId = null,
+		followUps = [],
+		onCancelFollowUp,
+		onWorkingChange
 	}: Props = $props();
+
+	let composer = $state<HTMLTextAreaElement | null>(null);
+
+	/** For a host that opens the conversation and wants typing to start there. */
+	export function focusComposer() {
+		composer?.focus();
+	}
+
+	const toolbarFolded = $derived(foldsToolbar(scopeKind));
 
 	function titleCase(value: string): string {
 		return value
@@ -118,7 +164,39 @@
 		onBenchmarkSubmitted: (runId, created, sessionId) =>
 			onBenchmarkSubmitted?.(runId, created, sessionId),
 		onBlendConfig: (config, validation) => onBlendConfig?.(config, validation),
+		onInterfaceAction: (action) => onInterfaceAction?.(action, 'assistant'),
 		onBlendSubmitted: (runId, created, sessionId) => onBlendSubmitted?.(runId, created, sessionId)
+	});
+
+	$effect(() => onTranscriptChange?.(chat.messages));
+
+	const queuedHere = $derived(
+		followUps.filter((f) => f.session_id === chat.sessionId && isQueued(f))
+	);
+	// A follow-up turn runs on the server; sending alongside it would race the transcript.
+	const followUpRunning = $derived(queuedHere.some((f) => f.status === 'running'));
+	const inputLocked = $derived(chat.sending || followUpRunning);
+
+	// Waiting on an approval ends the stream, so it reports as not working.
+	let reportedWorking = false;
+	$effect(() => {
+		const working = inputLocked;
+		if (working === reportedWorking) return;
+		reportedWorking = working;
+		onWorkingChange?.(working);
+	});
+
+	let seenSettled: Set<string> | null = null;
+	$effect(() => {
+		const previous = seenSettled;
+		seenSettled = settledIds(followUps);
+		if (
+			previous &&
+			chat.sessionId &&
+			!chat.sending &&
+			sessionGainedTurn(previous, followUps, chat.sessionId)
+		)
+			void chat.loadSession(chat.sessionId);
 	});
 
 	let input = $state('');
@@ -128,13 +206,13 @@
 	let selectedFigureIndex = $state<number | null>(null);
 
 	const galleryFigures = $derived(sessionFigures(chat.visibleTurns));
-
 	// Any chat that has produced figures gets the tab; one that has not (a setup
-	// chat, a fresh session) has nothing to put in it.
-	const hasArtifacts = $derived(galleryFigures.length > 0);
+	// chat, a fresh session) has nothing to put in it. A host that opens items
+	// itself shows figures there instead.
+	const artifactsTabShown = $derived(galleryFigures.length > 0 && !onOpenItem);
 
 	$effect(() => {
-		if (!hasArtifacts && activeTab === 'artifacts') activeTab = 'chat';
+		if (!artifactsTabShown && activeTab === 'artifacts') activeTab = 'chat';
 	});
 
 	$effect(() => {
@@ -169,7 +247,7 @@
 
 	function send(overrideText?: string) {
 		const text = (overrideText ?? input).trim();
-		if (!text || !chat.canSend) return;
+		if (!text || !chat.canSend || followUpRunning) return;
 		if (!overrideText) input = '';
 		void chat.submit(text);
 	}
@@ -183,20 +261,29 @@
 
 	// ponytail: localStorage, not a user preference row — this is a one-time
 	// acknowledgement, and re-showing it on a new device is the harmless failure.
-	const BETA_NOTE_KEY = 'almanac.assistantBetaNoteDismissed';
 	let showBetaNote = $state(false);
 
+	function rememberBetaNoteSeen() {
+		localStorage.setItem(betaNoticeKey(scopeKind), '1');
+	}
+
 	onMount(() => {
-		showBetaNote = localStorage.getItem(BETA_NOTE_KEY) !== '1';
+		showBetaNote = betaNoticeDue(localStorage.getItem(betaNoticeKey(scopeKind)));
+		// Where the toolbar folds away the notice is read once, then lives on in the badge's tooltip.
+		if (showBetaNote && foldsToolbar(scopeKind)) rememberBetaNoteSeen();
 	});
 
 	function dismissBetaNote() {
 		showBetaNote = false;
-		localStorage.setItem(BETA_NOTE_KEY, '1');
+		rememberBetaNoteSeen();
 	}
 
-	function openArtifactInGallery(artifactId: string) {
-		const idx = galleryFigures.findIndex((f) => f.artifactId === artifactId);
+	function openArtifact(artifact: ChatArtifact) {
+		if (onOpenItem) {
+			onOpenItem({ kind: 'artifact', ref: artifact.workspace_artifact_id ?? artifact.id });
+			return;
+		}
+		const idx = galleryFigures.findIndex((f) => f.artifactId === artifact.id);
 		if (idx !== -1) selectedFigureIndex = idx;
 	}
 
@@ -278,9 +365,10 @@
 	}
 </script>
 
-<div class="chat-panel">
+{#snippet toolbar()}
 	<ChatHeader
 		{chat}
+		folded={toolbarFolded}
 		{rulesetOptions}
 		comparisonMode={comparisonModeActive}
 		{comparisonsEnabled}
@@ -291,41 +379,45 @@
 			compareArmIds[index] = id;
 		}}
 	/>
+{/snippet}
+
+<div class="chat-panel">
+	{#if !toolbarFolded}
+		{@render toolbar()}
+	{/if}
 
 	{#if showBetaNote}
 		<div class="beta-note">
-			<p>
-				The assistant is in development and can be wrong. It reads real benchmark and blend data
-				through tools, but check any number that matters against the results pages before relying on
-				it.
-			</p>
+			<p>{BETA_NOTICE}</p>
 			<button class="beta-note-dismiss" onclick={dismissBetaNote} aria-label="Dismiss">×</button>
 		</div>
 	{/if}
 
-	<div class="panel-tabs">
-		<button
-			class="panel-tab"
-			class:active={activeTab === 'chat'}
-			onclick={() => {
-				activeTab = 'chat';
-			}}
-		>
-			Chat
-		</button>
-		{#if hasArtifacts}
+	{#if !onOpenItem}
+		<div class="panel-tabs">
 			<button
 				class="panel-tab"
-				class:active={activeTab === 'artifacts'}
+				class:active={activeTab === 'chat'}
 				onclick={() => {
-					activeTab = 'artifacts';
+					activeTab = 'chat';
 				}}
 			>
-				Artifacts
-				<span class="panel-tab-count">{galleryFigures.length}</span>
+				Chat
 			</button>
-		{/if}
-	</div>
+			{#if artifactsTabShown}
+				<button
+					class="panel-tab"
+					class:active={activeTab === 'artifacts'}
+					onclick={() => {
+						activeTab = 'artifacts';
+					}}
+				>
+					Artifacts
+					<span class="panel-tab-count">{galleryFigures.length}</span>
+				</button>
+			{/if}
+		</div>
+	{/if}
 
 	{#if comparing}
 		<ChatCompare {comparison} onClose={() => void closeCompare()} />
@@ -336,7 +428,12 @@
 			{suggestions}
 			canRate={comparisonModeActive}
 			onSuggestion={(text) => send(text)}
-			onOpenArtifact={openArtifactInGallery}
+			onOpenArtifact={openArtifact}
+			{onOpenItem}
+			{onInterfaceAction}
+			{fileTitles}
+			{jobStatuses}
+			{focusTurnId}
 		/>
 	{:else}
 		<ChatArtifactGallery
@@ -364,13 +461,20 @@
 				{/if}
 			</p>
 		{/if}
+		{#if queuedHere.length > 0}
+			<QueuedFollowUps followUps={queuedHere} onCancel={onCancelFollowUp} />
+		{/if}
 		<div class="input-row">
+			{#if toolbarFolded}
+				{@render toolbar()}
+			{/if}
 			<textarea
+				bind:this={composer}
 				bind:value={input}
 				onkeydown={handleKeydown}
 				{placeholder}
 				rows={2}
-				disabled={chat.sending}></textarea>
+				disabled={inputLocked}></textarea>
 			{#if comparisonModeActive && compareAvailable}
 				<button
 					class="ab-btn"
@@ -385,7 +489,7 @@
 			<button
 				class="send-btn"
 				onclick={() => send()}
-				disabled={chat.sending || !input.trim() || chat.loadingSession}
+				disabled={inputLocked || !input.trim() || chat.loadingSession}
 			>
 				{chat.sending ? '…' : 'Send'}
 			</button>
@@ -429,12 +533,12 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.4rem;
-		padding: 0.38rem 0.75rem;
+		padding: 0.38rem var(--space-3);
 		border: 1px solid var(--color-border);
 		border-radius: 999px;
 		background: transparent;
 		color: var(--color-text-muted);
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
@@ -458,26 +562,26 @@
 
 	.panel-tab-count {
 		min-width: 1.15rem;
-		padding: 0.05rem 0.25rem;
+		padding: 0.05rem var(--space-1);
 		border-radius: 999px;
 		background: var(--color-surface-raised);
 		color: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		text-align: center;
 	}
 
 	.chat-error {
-		padding: 0.5rem 1rem;
+		padding: var(--space-2) var(--space-4);
 		background: #fef2f2;
 		color: #b91c1c;
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		border-top: 1px solid #fecaca;
 	}
 
 	.input-row {
 		display: flex;
-		gap: 0.5rem;
-		padding: 0.75rem;
+		gap: var(--space-2);
+		padding: var(--space-3);
 		border-top: 1px solid var(--color-border);
 		flex-shrink: 0;
 	}
@@ -485,10 +589,10 @@
 	textarea {
 		flex: 1;
 		resize: none;
-		padding: 0.5rem 0.75rem;
+		padding: var(--space-2) var(--space-3);
 		border: 1px solid var(--color-border);
 		border-radius: 6px;
-		font-size: 0.875rem;
+		font-size: var(--text-size-body);
 		font-family: inherit;
 		background: var(--color-surface);
 		color: var(--color-text);
@@ -503,12 +607,12 @@
 	}
 
 	.send-btn {
-		padding: 0 1rem;
+		padding: 0 var(--space-4);
 		background: var(--color-accent);
 		color: var(--color-bg);
 		border: none;
 		border-radius: 6px;
-		font-size: 0.875rem;
+		font-size: var(--text-size-body);
 		font-weight: 500;
 		cursor: pointer;
 		transition: opacity 0.15s;
@@ -524,18 +628,18 @@
 	}
 	.compare-hint {
 		margin: 0;
-		padding: 0.4rem 0.75rem 0;
-		font-size: 0.72rem;
+		padding: 0.4rem var(--space-3) 0;
+		font-size: var(--text-size-caption);
 		line-height: 1.4;
 		color: var(--color-text-muted);
 	}
 	.ab-btn {
-		padding: 0 0.75rem;
+		padding: 0 var(--space-3);
 		background: var(--color-surface);
 		color: var(--color-text-muted);
 		border: 1px solid var(--color-border);
 		border-radius: 6px;
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		font-weight: 600;
 		cursor: pointer;
 		align-self: flex-end;
@@ -553,12 +657,12 @@
 	.beta-note {
 		display: flex;
 		align-items: flex-start;
-		gap: 0.5rem;
-		padding: 0.6rem 0.75rem;
+		gap: var(--space-2);
+		padding: 0.6rem var(--space-3);
 		background: var(--color-status-running-bg);
 		border-bottom: 1px solid var(--color-status-running);
 		color: var(--color-status-running);
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		line-height: 1.4;
 	}
 	.beta-note p {
@@ -570,7 +674,7 @@
 		border: none;
 		color: inherit;
 		cursor: pointer;
-		font-size: 1.1rem;
+		font-size: var(--text-size-title);
 		line-height: 1;
 		padding: 0 0.15rem;
 		flex-shrink: 0;

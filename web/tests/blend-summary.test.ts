@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
-import { isDefaultVisibleSeries, parsePooledSummary } from '../src/routes/blends/blend-summary';
+import {
+	isDefaultVisibleSeries,
+	parsePooledSummary
+} from '../src/lib/components/blend/blend-summary';
 
 // Trimmed real header + two rows from a blend's summary_models_pooled CSV.
 const HEADER =

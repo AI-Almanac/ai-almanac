@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getBlendSummary, type JobArtifact } from '$lib/api';
 	import { groupBlendOutputs, parseYearlyScores, type YearlyScore } from './blend-outputs';
-	import { modelLabel } from './blend-summary';
+	import { modelLabel } from '$lib/components/blend/blend-summary';
 
 	let {
 		jobId,

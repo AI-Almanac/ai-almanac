@@ -35,6 +35,7 @@ from ai_almanac.server.services import (
     boundaries,
     day_level_blends,
     guardrails,
+    ledger,
     scoring_region,
     seasons,
     trajectory_sets,
@@ -503,6 +504,22 @@ class BlendCreate(BaseModel):
     model_ids: list[str]
     params: BlendParams
     run_id: str | None = None
+    # None follows the deployment's enable_day_level_blend; see trains_day_level_blend.
+    train_day_level_blend: bool | None = None
+
+
+def day_level_blend_error(requested: bool | None) -> str | None:
+    if requested and not settings.enable_day_level_blend:
+        return (
+            "Day-level onset probabilities are turned off on this deployment; "
+            "leave train_day_level_blend unset."
+        )
+    return None
+
+
+def trains_day_level_blend(requested: bool | None) -> bool:
+    """A blend trains day-level probabilities where the deployment allows, unless it opts out."""
+    return settings.enable_day_level_blend and requested is not False
 
 
 class BlendOut(BaseModel):
@@ -955,6 +972,17 @@ async def _resolve_model_source(model_id: str, user_id: str) -> dict:
     return {**source, "path": _readable_path(source, user_id)}
 
 
+async def _open_step(row: dict, attribution: ledger.Attribution) -> None:
+    """Write the job's provenance step at submission, before it can run (D-R2)."""
+    params = {"dataset_id": row["dataset_id"], **json.loads(row.get("config_json") or "{}")}
+    await ledger.open_job_step(
+        row["id"],
+        row["job_type"],
+        params,
+        attribution,
+    )
+
+
 async def _record_submission(job_id: str, handle: RunnerHandle) -> None:
     """Persist the runner handle once submit returns.
 
@@ -970,10 +998,14 @@ async def _record_submission(job_id: str, handle: RunnerHandle) -> None:
         await conn.execute(sa.update(jobs).where(jobs.c.id == job_id).values(**values))
 
 
-async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
+async def create_blend_for_user(
+    body: BlendCreate, user_id: str, *, attribution: ledger.Attribution
+) -> BlendOut:
     """Submit a blend-training job: prepare intermediates and train weights."""
     if not body.model_ids:
         raise HTTPException(status_code=400, detail="At least one model is required")
+    if day_level_error := day_level_blend_error(body.train_day_level_blend):
+        raise HTTPException(status_code=400, detail=day_level_error)
 
     obs_dir = await _resolve_obs_dir(body.obs_dataset_id, user_id)
     obs_source = await data_source_service.get_source(body.obs_dataset_id)
@@ -1078,7 +1110,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
         "use_adm3_domain": blend_units.on_sub_districts(country),
         "dataset_config": {"provider": "local", "source_id": body.obs_dataset_id},
         "blend_params": blend_params,
-        "train_day_level_blend": settings.enable_day_level_blend,
+        "train_day_level_blend": trains_day_level_blend(body.train_day_level_blend),
         "gcs_cache_bucket": settings.gcs_data_bucket,
         "warnings": warnings,
     }
@@ -1133,6 +1165,7 @@ async def create_blend_for_user(body: BlendCreate, user_id: str) -> BlendOut:
             quantity=1,
         )
 
+    await _open_step(row, attribution)
     try:
         handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
@@ -1418,9 +1451,13 @@ def _day_level_completed_at(blend_row: dict) -> str | None:
     return blend_row.get("day_level_completed_at")
 
 
-async def create_forecast_for_user(body: ForecastCreate, user_id: str) -> ForecastOut:
+async def create_forecast_for_user(
+    body: ForecastCreate, user_id: str, *, attribution: ledger.Attribution
+) -> ForecastOut:
     """Submit a live-forecast job: run the blend's models forward and score them."""
-    return await submit_forecast_job(await build_forecast_job(body, user_id), user_id)
+    return await submit_forecast_job(
+        await build_forecast_job(body, user_id), user_id, attribution=attribution
+    )
 
 
 async def resolve_forecast_basis(body: ForecastCreate, user_id: str) -> ForecastBasis:
@@ -1600,7 +1637,9 @@ async def build_forecast_job(body: ForecastCreate, user_id: str) -> ForecastJob:
     )
 
 
-async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
+async def submit_forecast_job(
+    job: ForecastJob, user_id: str, *, attribution: ledger.Attribution
+) -> ForecastOut:
     """Queue a built forecast job and hand it to the job runner.
 
     A run whose season is fully cached scores for free (GPU-free); any run that
@@ -1693,6 +1732,7 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
             quantity=1,
         )
 
+    await _open_step(row, attribution)
     try:
         handle = await runner.submit(ExecutionRequest(job_id=job_id))
     except Exception as exc:
@@ -1713,7 +1753,11 @@ async def submit_forecast_job(job: ForecastJob, user_id: str) -> ForecastOut:
 
 
 async def refresh_forecast_for_user(
-    forecast_id: str, user_id: str, *, force: bool = False
+    forecast_id: str,
+    user_id: str,
+    *,
+    force: bool = False,
+    attribution: ledger.Attribution,
 ) -> ForecastRefreshOut:
     """Re-run an existing forecast with its ORIGINAL generation parameters,
     unless it already scored everything a re-run would.
@@ -1752,7 +1796,10 @@ async def refresh_forecast_for_user(
     job = await build_forecast_job(_saved_forecast_request(cfg, row["run_id"]), user_id)
     if not force and row["status"] == "complete" and scores_same_inputs(job.config, cfg):
         return ForecastRefreshOut(forecast=forecast_row_to_out(dict(row), user_id), up_to_date=True)
-    return ForecastRefreshOut(forecast=await submit_forecast_job(job, user_id), up_to_date=False)
+    return ForecastRefreshOut(
+        forecast=await submit_forecast_job(job, user_id, attribution=attribution),
+        up_to_date=False,
+    )
 
 
 def _saved_forecast_request(cfg: dict, run_id: str | None) -> ForecastCreate:
@@ -1945,7 +1992,9 @@ async def _with_unit_outlines(params: dict, region_def: dict | None) -> dict:
     return {**params, "focus_area": area.model_dump(mode="json")}
 
 
-async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
+async def create_job_for_user(
+    body: JobCreate, user_id: str, *, attribution: ledger.Attribution
+) -> JobOut:
     observation_source = await data_source_service.get_source(body.dataset_id)
     if not observation_source:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -2153,6 +2202,7 @@ async def create_job_for_user(body: JobCreate, user_id: str) -> JobOut:
     storage = get_storage()
     # Remote runners (Modal) have no local workspace; only the local runner does.
     workspace = storage.job_dir(job_id) if storage.is_local else None
+    await _open_step(row, attribution)
     try:
         handle = await runner.submit(
             ExecutionRequest(

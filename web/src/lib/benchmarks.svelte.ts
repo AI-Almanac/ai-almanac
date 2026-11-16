@@ -17,6 +17,7 @@ import {
 	type JobCellResponse,
 	type JobSkillScores
 } from './api';
+import { isActiveStatus } from './run-status';
 
 // Module-level cache so metrics survive component unmount/remount.
 // Only caches the no-bbox baseline fetch — bbox-filtered requests always go to the server.
@@ -219,9 +220,7 @@ export class BenchmarkStore {
 	async cancelGroup(key: string) {
 		const group = untrack(() => this.runGroups.find((g) => g.key === key));
 		if (!group) return;
-		const active = group.jobs.filter((job) =>
-			['queued', 'starting', 'running', 'canceling'].includes(job.status)
-		);
+		const active = group.jobs.filter((job) => isActiveStatus(job.status));
 		const updated = await Promise.all(active.map((job) => cancelJob(job.id)));
 		const byId = new Map(updated.map((job) => [job.id, job]));
 		this.jobs = untrack(() => this.jobs.map((job) => byId.get(job.id) ?? job));
@@ -230,9 +229,7 @@ export class BenchmarkStore {
 	startPolling() {
 		if (this.pollTimer) return;
 		this.pollTimer = setInterval(async () => {
-			const active = untrack(() =>
-				this.jobs.filter((j) => ['queued', 'starting', 'running', 'canceling'].includes(j.status))
-			);
+			const active = untrack(() => this.jobs.filter((j) => isActiveStatus(j.status)));
 			if (active.length === 0) return;
 			const updated = await Promise.all(active.map((j) => getJob(j.id)));
 			for (const u of updated) {

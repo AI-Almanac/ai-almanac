@@ -3,7 +3,7 @@
 	import GridCellModelCard from '$lib/components/GridCellModelCard.svelte';
 	import MaeSeriesChart from '$lib/components/MaeSeriesChart.svelte';
 	import { windowLabel } from '$lib/metric-metadata';
-	import { formatCoord } from '$lib/geo';
+	import { formatCoord } from '$lib/geo/coordinates';
 
 	type MetricDef = { value: string; label: string };
 

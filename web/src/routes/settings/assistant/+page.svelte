@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount } from 'svelte';
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import {
@@ -44,7 +45,7 @@
 			const target = selectId ?? selected?.id ?? list.find((r) => r.is_active)?.id ?? list[0]?.id;
 			if (target) await select(target);
 		} catch (e) {
-			error = (e as Error).message;
+			error = failureMessage(e);
 		} finally {
 			loading = false;
 		}
@@ -56,7 +57,7 @@
 		try {
 			selected = await getRuleset(id);
 		} catch (e) {
-			error = (e as Error).message;
+			error = failureMessage(e);
 		}
 	}
 
@@ -68,7 +69,7 @@
 			await action();
 			notice = success;
 		} catch (e) {
-			error = (e as Error).message;
+			error = failureMessage(e);
 		} finally {
 			busy = false;
 		}
@@ -281,6 +282,9 @@
 								</label>
 								<span class="section-meta">
 									<span class="tag">{scopeLabel(section)}</span>
+									{#if section.requires_tools.length}
+										<span class="tag">when {section.requires_tools.join(' or ')} is available</span>
+									{/if}
 									{#if section.required}<span class="tag required">required</span>{/if}
 								</span>
 							</div>

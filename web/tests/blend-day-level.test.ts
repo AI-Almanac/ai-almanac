@@ -9,7 +9,6 @@ import {
 	dayLevelTraining
 } from '../src/routes/blends/day-level';
 
-const ACTIVE = ['queued', 'starting', 'running', 'canceling'];
 const artifact = (filename: string) => ({ filename }) as JobArtifact;
 
 describe('a blend whose day-level blend trains apart from it', () => {
@@ -17,16 +16,14 @@ describe('a blend whose day-level blend trains apart from it', () => {
 		const blend = { status: 'complete', day_level_status: 'running' } as const;
 
 		expect(dayLevelTraining(blend)).toBe(true);
-		expect(blendInProgress(blend, ACTIVE)).toBe(true);
+		expect(blendInProgress(blend)).toBe(true);
 		expect(dayLevelNote(blend)?.title).toBe('Day-level blend still training');
 	});
 
 	it('stops polling once both are done, and for blends that never trained apart', () => {
-		expect(blendInProgress({ status: 'complete', day_level_status: 'complete' }, ACTIVE)).toBe(
-			false
-		);
-		expect(blendInProgress({ status: 'complete', day_level_status: null }, ACTIVE)).toBe(false);
-		expect(blendInProgress({ status: 'running', day_level_status: null }, ACTIVE)).toBe(true);
+		expect(blendInProgress({ status: 'complete', day_level_status: 'complete' })).toBe(false);
+		expect(blendInProgress({ status: 'complete', day_level_status: null })).toBe(false);
+		expect(blendInProgress({ status: 'running', day_level_status: null })).toBe(true);
 		expect(dayLevelNote({ status: 'complete', day_level_status: 'complete' })).toBeNull();
 	});
 

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { badgeLabel, badgeTone, isActiveStatus, runTime, sidebarStatus } from '$lib/run-status';
+	import { downloadJobArtifact } from '$lib/api/jobs';
+	import { failureMessage } from '$lib/api/core';
 	import {
 		listForecasts,
 		refreshForecast as refreshForecastRun,
@@ -8,7 +11,6 @@
 		getJobArtifacts,
 		cancelJob,
 		deleteJob,
-		fetchResultBlob,
 		type Blend,
 		type Forecast,
 		type ForecastModel,
@@ -18,20 +20,18 @@
 	} from '$lib/api';
 	import { pollWhileActive } from '$lib/poll';
 	import ExampleActions from '$lib/components/ExampleActions.svelte';
-	import RunSidebar, { type RunSection, type RunStatus } from '$lib/components/RunSidebar.svelte';
+	import RunSidebar, { type RunSection } from '$lib/components/RunSidebar.svelte';
 	import BlendForecastMap from '$lib/components/BlendForecastMap.svelte';
-	import ForecastForm from '$lib/components/forecast-setup/ForecastForm.svelte';
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 	import { installTour } from '$lib/tour.svelte';
 	import { takeSetupRequest } from '$lib/setup-request';
+	import ForecastForm from '$lib/components/forecast-setup/ForecastForm.svelte';
 	import { forecastResultsSteps, forecastSetupSteps } from './tours';
 
 	$effect(() => {
 		if (account.loaded && !account.canUseForecasting) goto('/');
 	});
-
-	const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'canceling'];
 
 	let forecasts = $state<Forecast[]>([]);
 	let blends = $state<Blend[]>([]);
@@ -56,7 +56,7 @@
 	// canceled update never hides the last good forecast), else the most recent
 	// run (surface the error). Older runs stay in `forecasts`, just not listed.
 	function representativeRun(runs: Forecast[]): Forecast {
-		const active = runs.filter((r) => ACTIVE_STATUSES.includes(r.status));
+		const active = runs.filter((r) => isActiveStatus(r.status));
 		if (active.length) return newestRun(active);
 		const complete = runs.filter((r) => r.status === 'complete');
 		if (complete.length) return newestRun(complete);
@@ -144,7 +144,7 @@
 			const updated = await cancelJob(id);
 			patchStatus(id, updated.status as JobStatus);
 		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'Cancel failed';
+			actionError = failureMessage(err);
 		}
 	}
 
@@ -161,16 +161,8 @@
 			forecasts = forecasts.filter((f) => f.id !== id);
 			if (selectedId === id) selectedId = null;
 		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'Delete failed';
+			actionError = failureMessage(err);
 		}
-	}
-
-	function sidebarStatus(status: string): RunStatus {
-		if (status === 'complete') return 'complete';
-		if (status === 'failed') return 'failed';
-		if (status === 'canceled') return 'canceled';
-		if (ACTIVE_STATUSES.includes(status)) return 'running';
-		return 'mixed';
 	}
 
 	function isExample(f: (typeof forecasts)[number]): boolean {
@@ -183,10 +175,10 @@
 		return {
 			id: f.id,
 			title: blendName(f.blend_id),
-			meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${formatDate(f.created_at)}`,
+			meta: `${f.forecast_model_ids.length} model${f.forecast_model_ids.length === 1 ? '' : 's'} · ${runTime(f.created_at)}`,
 			count: f.forecast_model_ids.length,
 			status: sidebarStatus(f.status),
-			canDelete: !ACTIVE_STATUSES.includes(f.status),
+			canDelete: !isActiveStatus(f.status),
 			// Deleting a non-owned example only hides it from this account.
 			deleteTitle: isExample(f) ? 'Remove example' : undefined
 		};
@@ -218,10 +210,7 @@
 	// poll is as live as the data gets. Returning the stop fn lets $effect tear
 	// the timer down on unmount.
 	$effect(() =>
-		pollWhileActive(
-			() => forecasts.some((f) => ACTIVE_STATUSES.includes(f.status)),
-			syncForecastStatuses
-		)
+		pollWhileActive(() => forecasts.some((f) => isActiveStatus(f.status)), syncForecastStatuses)
 	);
 
 	async function syncForecastStatuses() {
@@ -257,10 +246,6 @@
 		selectedId = null;
 	}
 
-	function friendlyError(err: unknown): string {
-		return err instanceof Error ? err.message : 'Submission failed';
-	}
-
 	function selectForecast(id: string) {
 		selectedId = id;
 		creating = false;
@@ -292,43 +277,10 @@
 			}
 			selectedId = forecast.id;
 		} catch (err) {
-			actionError = friendlyError(err);
+			actionError = failureMessage(err);
 		} finally {
 			updating = false;
 		}
-	}
-
-	async function downloadArtifact(artifact: JobArtifact) {
-		const objectUrl = await fetchResultBlob(artifact.url);
-		const a = document.createElement('a');
-		a.href = objectUrl;
-		a.download = artifact.filename;
-		a.click();
-	}
-
-	function statusLabel(status: string): string {
-		if (status === 'canceling') return 'Canceling';
-		if (ACTIVE_STATUSES.includes(status)) return 'Running';
-		return status.charAt(0).toUpperCase() + status.slice(1);
-	}
-
-	function statusClass(status: string): string {
-		if (status === 'complete') return 'complete';
-		if (status === 'failed') return 'failed';
-		if (ACTIVE_STATUSES.includes(status)) return 'running';
-		return '';
-	}
-
-	function formatDate(value?: string | null): string {
-		if (!value) return '—';
-		const d = new Date(value);
-		if (Number.isNaN(d.getTime())) return value;
-		return new Intl.DateTimeFormat(undefined, {
-			month: 'short',
-			day: 'numeric',
-			hour: 'numeric',
-			minute: '2-digit'
-		}).format(d);
 	}
 
 	// --- Result view: downloadable artifacts ---
@@ -414,10 +366,10 @@
 								<span>{selected.forecast_model_ids.join(', ')}</span>
 								<span class="dot" aria-hidden="true">·</span>
 							{/if}
-							<span>Submitted {formatDate(selected.created_at)}</span>
+							<span>Submitted {runTime(selected.created_at)}</span>
 							{#if selected.completed_at}
 								<span class="dot" aria-hidden="true">·</span>
-								<span>Completed {formatDate(selected.completed_at)}</span>
+								<span>Completed {runTime(selected.completed_at)}</span>
 							{/if}
 						</p>
 					</div>
@@ -428,10 +380,10 @@
 							isExample={selected.visibility === 'example'}
 							onChanged={load}
 						/>
-						<span class="status-badge {statusClass(selected.status)}"
-							>{statusLabel(selected.status)}</span
+						<span class="status-badge {badgeTone(selected.status)}"
+							>{badgeLabel(selected.status)}</span
 						>
-						{#if ACTIVE_STATUSES.includes(selected.status)}
+						{#if isActiveStatus(selected.status)}
 							<button
 								type="button"
 								class="ghost"
@@ -490,7 +442,7 @@
 					</p>
 				{/if}
 
-				{#if ACTIVE_STATUSES.includes(selected.status)}
+				{#if isActiveStatus(selected.status)}
 					<div class="running-state">
 						<div class="spinner"></div>
 						<div>
@@ -528,7 +480,7 @@
 										<button
 											type="button"
 											class="artifact"
-											onclick={() => downloadArtifact(artifact)}
+											onclick={() => downloadJobArtifact(artifact)}
 										>
 											<span class="artifact-name">{artifact.filename}</span>
 											<span class="muted">{(artifact.size_bytes / 1024).toFixed(0)} KB</span>

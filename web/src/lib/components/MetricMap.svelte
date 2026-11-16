@@ -12,12 +12,23 @@
 	import { BASEMAP_STYLES, type BasemapStyleId } from '$lib/components/metric-map/constants';
 	import { BoundaryLayers } from '$lib/components/metric-map/boundaries.svelte';
 	import { CellInspector } from '$lib/components/metric-map/cellInspector.svelte';
+	import { COMMON_BASEMAPS, mapCredit } from '$lib/basemaps';
+	import { legendSpec, type MapImageText } from '$lib/components/metric-map/exportImage';
+	import MapExportButton from '$lib/components/metric-map/MapExportButton.svelte';
+	import { scoredBounds, type MapInitialView } from '$lib/components/metric-map/initialView';
+	import {
+		mapTitle,
+		type MapExportContext,
+		type MapTitle
+	} from '$lib/components/metric-map/exportTitle';
 	import {
 		availableModelRuns as getAvailableModelRuns,
 		currentLensKey as getCurrentLensKey,
 		currentLensKeys as getCurrentLensKeys,
 		lensSelectionsEqual,
 		normalizeLensSelection as getNormalizedLensSelection,
+		selectedModelRun,
+		selectedReferenceRun,
 		swipeRuns as getSwipeRuns,
 		type LensSelection
 	} from '$lib/components/metric-map/lensSelection';
@@ -27,11 +38,12 @@
 		buildDeltaLayerEntries,
 		buildModelRuns,
 		buildRawLayerEntries,
+		computeRobustRanges,
 		computeSharedRanges,
 		fetchGridResults,
 		indexGridResults
 	} from '$lib/components/metric-map/layerPipeline';
-	import { modelDisplayName } from '$lib/components/metric-map/mapUi';
+	import { modelRunLabel } from '$lib/components/metric-map/mapUi';
 	import { buildTooltipContent as formatTooltipContent } from '$lib/components/metric-map/tooltip';
 	import type {
 		LayerState,
@@ -52,6 +64,14 @@
 		/** Jobs that wrote climatology output; the baseline comes from the first of these. */
 		climatologyJobIds?: string[];
 		compact?: boolean;
+		/** How the map opens; read once. Left out, the map opens as it always has. */
+		initialView?: MapInitialView;
+		/** Offers "Export map", and says what area and years the picture covers. */
+		exportContext?: MapExportContext;
+		/** Told the first time, and every time, the reader changes the view by hand. */
+		onUserChange?: () => void;
+		/** False while a host keeps the map out of sight; it re-measures itself on return. */
+		shown?: boolean;
 	};
 	let {
 		jobs,
@@ -61,13 +81,20 @@
 		metricWindowAvailability,
 		metricWindowAvailabilityByJob,
 		climatologyJobIds,
-		compact = false
+		compact = false,
+		initialView,
+		exportContext,
+		onUserChange,
+		shown = true
 	}: Props = $props();
+
+	const opening: MapInitialView = untrack(() => initialView) ?? {};
 
 	let mapContainer = $state<HTMLElement | null>(null);
 	let map = $state<maplibregl.Map | null>(null);
 	let mapReady = $state(false);
-	let selectedBasemap = $state<BasemapStyleId>('carto-dark');
+	let selectedBasemap = $state<BasemapStyleId>(opening.basemap ?? 'carto-dark');
+	let appliedBasemap: BasemapStyleId = opening.basemap ?? 'carto-dark';
 
 	let layers = $state<Record<string, LayerState>>({});
 	let loading = $state<Set<string>>(new Set());
@@ -77,9 +104,9 @@
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
 	let lens = $state<LensSelection>({
-		viewMode: 'baseline',
-		selectedMetric: '',
-		selectedModelJobId: '',
+		viewMode: opening.viewMode ?? 'baseline',
+		selectedMetric: opening.metric ?? '',
+		selectedModelJobId: opening.modelJobId ?? '',
 		selectedReferenceJobId: 'climatology',
 		selectedWindow: '',
 		selectedReferenceWindow: ''
@@ -87,12 +114,22 @@
 	let swipePosition = $state(50);
 	let draggingSwipe = $state(false);
 	let loadRequestId = 0;
+	/** The reader has panned or zoomed, so the camera is theirs to keep. */
+	let userMoved = false;
+
+	function byHand<Args extends unknown[]>(action: (...args: Args) => void) {
+		return (...args: Args) => {
+			onUserChange?.();
+			action(...args);
+		};
+	}
 	const boundaryRegion = $derived(jobs[0]?.region_id ?? jobs[0]?.params?.region);
 
 	const boundaries = new BoundaryLayers(
 		() => map,
 		() => boundaryRegion
 	);
+	if (opening.boundaries) boundaries.visibleLevels = new Set(opening.boundaries);
 	const cellInspector = new CellInspector();
 
 	let panelCollapsed = $state(false);
@@ -322,7 +359,46 @@
 	// ---- Layer management --------------------------------------------------------
 
 	function fitToLayer(state: LayerState) {
-		if (map && state.bounds) map.fitBounds(state.bounds, { padding: 28, duration: 300 });
+		if (opening.holdUserView && userMoved) return;
+		const bounds = opening.fitToScoredCells
+			? (scoredBounds(state.data) ?? state.bounds)
+			: state.bounds;
+		if (map && bounds) map.fitBounds(bounds, { padding: 28, duration: 300 });
+	}
+
+	// ---- Export ------------------------------------------------------------------
+
+	/** The run the picture compares the model with; none when it shows plain values. */
+	function comparedWith(selection: LensSelection) {
+		if (selection.viewMode === 'swipe') return swipeRuns()?.right ?? null;
+		if (!visibleLayers[0]?.isDelta) return null;
+		return selection.viewMode === 'baseline'
+			? activeRuns.find((run) => run.modelName === 'climatology')
+			: selectedReferenceRun(selection, activeRuns);
+	}
+
+	function exportTitle(context: MapExportContext): MapTitle {
+		const selection = normalizeLensSelection();
+		const model = selectedModelRun(selection, activeRuns);
+		const reference = comparedWith(selection);
+		return mapTitle({
+			metric: selection.selectedMetric,
+			metricLabel: metricLabel(selection.selectedMetric),
+			model: model ? modelRunLabel(model) : '',
+			window: windowLabelFor(selection.selectedWindow),
+			reference: reference ? modelRunLabel(reference) : null,
+			area: context.area,
+			years: context.years
+		});
+	}
+
+	function exportText(context: MapExportContext): MapImageText {
+		const shown = visibleLayers[0];
+		return {
+			...exportTitle(context),
+			legend: shown ? legendSpec(shown, lens.selectedMetric) : null,
+			credit: mapCredit(selectedBasemap, boundaries.visibleLayers.length > 0)
+		};
 	}
 
 	function addLayerState(key: string, state: LayerState) {
@@ -420,7 +496,8 @@
 		const { dataByRunMetric, hasClimatology } = indexGridResults(results);
 		activeRuns = hasClimatology ? fetchRuns : modelRuns;
 
-		const sharedRangeByMetric = computeSharedRanges(
+		const computeRanges = opening.robustColourRange ? computeRobustRanges : computeSharedRanges;
+		const sharedRangeByMetric = computeRanges(
 			activeRuns,
 			activeWindows,
 			metrics,
@@ -438,7 +515,8 @@
 			metrics,
 			dataByRunMetric,
 			metricWindowAvailability,
-			metricWindowAvailabilityByJob
+			metricWindowAvailabilityByJob,
+			opening.robustColourRange
 		);
 		for (const { key, state } of deltaLayers) {
 			addLayerState(key, state);
@@ -469,7 +547,10 @@
 		});
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-		map.on('load', () => {
+		// Ready once the style is in, which is all the data layers need. `load` also
+		// waits for every basemap tile in view and a settled frame, and in a workspace
+		// run view it never fired, which left the map without data.
+		map.once('style.load', () => {
 			mapReady = true;
 			const attrib = mapContainer?.querySelector<HTMLDetailsElement>('.maplibregl-ctrl-attrib');
 			if (attrib) {
@@ -479,6 +560,12 @@
 		});
 		map.on('move', () => {
 			if (lens.viewMode === 'swipe') updateSwipeFilters();
+		});
+		// Only a gesture carries the event that caused it; fitting to data does not.
+		map.on('movestart', (event) => {
+			if (!('originalEvent' in event) || !event.originalEvent) return;
+			userMoved = true;
+			onUserChange?.();
 		});
 
 		const onPointerMove = (event: PointerEvent) => {
@@ -555,7 +642,8 @@
 
 	$effect(() => {
 		const style = selectedBasemapStyle();
-		if (!map || !mapReady) return;
+		if (!map || !mapReady || style.id === appliedBasemap) return;
+		appliedBasemap = style.id;
 		map.once('style.load', () => {
 			untrack(loadAll);
 		});
@@ -589,6 +677,10 @@
 		fullscreen;
 		setTimeout(() => map?.resize(), 300);
 	});
+
+	$effect(() => {
+		if (shown) map?.resize();
+	});
 </script>
 
 <div class="map-root" class:fullscreen class:compact data-tour="metric-map">
@@ -606,6 +698,17 @@
 		>
 			{#if fullscreen}⤡{:else}⤢{/if}
 		</button>
+
+		{#if exportContext}
+			{@const context = exportContext}
+			<div class="export">
+				<MapExportButton
+					map={() => map}
+					text={() => exportText(context)}
+					disabled={anyLoading || visibleLayers.length === 0}
+				/>
+			</div>
+		{/if}
 
 		<div bind:this={mapContainer} class="map-instance"></div>
 
@@ -669,22 +772,24 @@
 		selectedReferenceJobId={lens.selectedReferenceJobId}
 		selectedReferenceWindow={lens.selectedReferenceWindow}
 		{selectedBasemap}
+		basemapChoices={opening.shortBasemapList ? COMMON_BASEMAPS : undefined}
+		boundaryLabels={opening.boundaryLabels}
 		viewMode={lens.viewMode}
 		visibleBoundaryLevels={boundaries.visibleLevels}
 		boundaryLoading={boundaries.loading}
 		boundaryErrors={boundaries.errors}
 		onTogglePanel={() => (panelCollapsed = !panelCollapsed)}
-		onSelectMetric={selectMetric}
-		onSelectWindow={selectWindow}
-		onSelectModel={(value) => (lens.selectedModelJobId = value)}
-		onSelectViewMode={(value) => {
+		onSelectMetric={byHand(selectMetric)}
+		onSelectWindow={byHand(selectWindow)}
+		onSelectModel={byHand((value) => (lens.selectedModelJobId = value))}
+		onSelectViewMode={byHand((value) => {
 			lens.viewMode = value;
 			if (value === 'baseline') lens.selectedReferenceJobId = 'climatology';
-		}}
-		onSelectReferenceJob={(value) => (lens.selectedReferenceJobId = value)}
-		onSelectReferenceWindow={selectReferenceWindow}
-		onSelectBasemap={(value) => (selectedBasemap = value)}
-		onToggleBoundary={(level) => boundaries.toggle(level)}
+		})}
+		onSelectReferenceJob={byHand((value) => (lens.selectedReferenceJobId = value))}
+		onSelectReferenceWindow={byHand(selectReferenceWindow)}
+		onSelectBasemap={byHand((value) => (selectedBasemap = value))}
+		onToggleBoundary={byHand((level) => boundaries.toggle(level))}
 	/>
 </div>
 
@@ -809,6 +914,31 @@
 	.fullscreen-btn:hover {
 		background: white;
 		color: #111;
+	}
+
+	/* ---- Export ---- */
+	.export {
+		position: absolute;
+		top: 0.75rem;
+		right: 0.75rem;
+		z-index: 20;
+		max-width: 60%;
+	}
+	/* Over the map tiles, so on a near-opaque light card whatever the basemap. */
+	.export :global(button),
+	.export :global([role='alert']) {
+		background: rgba(255, 255, 255, 0.95);
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+		color: #333;
+	}
+	.export :global([role='alert']) {
+		padding: 0.3rem 0.5rem;
+		border-radius: 0.3rem;
+		color: var(--color-danger);
+	}
+	:global(body.figure-lightbox-open .map-root) .export,
+	:global(.map-root.fullscreen.obscured-by-lightbox) .export {
+		display: none;
 	}
 
 	/* ---- Tooltip ---- */

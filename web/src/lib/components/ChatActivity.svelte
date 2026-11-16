@@ -1,18 +1,17 @@
 <script lang="ts">
 	import FigureCard from '$lib/components/FigureCard.svelte';
+	import { technicalDetails } from '$lib/chat/technical-details';
+	import { artifactToFigure, copyCode } from '$lib/chat/format';
+	import { renderMarkdown } from '$lib/chat/markdown';
+	import { resultError } from '$lib/chat/tool-results';
+	import { toolLabel } from '$lib/chat/tools';
 	import {
-		artifactToFigure,
-		codeForToolCall,
-		copyCode,
-		renderMarkdown,
-		toolLabel
-	} from '$lib/chat/format';
-	import {
-		groupFailed,
+		groupState,
 		groupSummary,
-		isStepActive,
 		liveLabel,
-		type ActivityGroup
+		stepState,
+		type ActivityGroup,
+		type StepState
 	} from '$lib/chat/timeline';
 
 	interface Props {
@@ -20,38 +19,50 @@
 		/** The assistant is still working in this group. */
 		live: boolean;
 		onOpenArtifact: (artifactId: string) => void;
+		/** Off where whatever hosts the conversation shows the group's figures itself. */
+		drawFigures?: boolean;
+		/** Each step's tool and arguments, closed by default; without it only a code step offers its code. */
+		showTechnicalDetails?: boolean;
 	}
 
-	const { group, live, onOpenArtifact }: Props = $props();
+	const {
+		group,
+		live,
+		onOpenArtifact,
+		drawFigures = true,
+		showTechnicalDetails = false
+	}: Props = $props();
 
 	let expanded = $state(false);
-	let shownCode = $state<Set<string>>(new Set());
 
 	const latestNote = $derived.by(() => {
 		const last = group.steps.at(-1);
 		return live && last?.kind === 'thinking' ? last.text : null;
 	});
 
-	function toggleCode(id: string) {
-		const next = new Set(shownCode);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		shownCode = next;
-	}
-
-	function errorText(result: unknown): string | null {
-		if (!result || typeof result !== 'object' || !('error' in result)) return null;
-		const error = (result as { error?: unknown }).error;
-		return typeof error === 'string' ? error : null;
-	}
+	const standing = $derived(groupState(group, live));
 </script>
 
-<div class="activity" class:live class:failed={!live && groupFailed(group)}>
+{#snippet mark(of: StepState)}
+	{#if of === 'active'}
+		<span class="spinner"></span>
+	{:else if of === 'waiting'}
+		<svg class="waiting-mark" viewBox="0 0 16 16"><path d="M6 4.5v7M10 4.5v7" /></svg>
+	{:else if of === 'declined'}
+		–
+	{:else if of === 'failed'}
+		!
+	{:else}
+		✓
+	{/if}
+{/snippet}
+
+<div class="activity {standing}" class:live>
 	<button class="activity-header" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
-		<span class="status-icon" aria-hidden="true">
-			{#if live}<span class="spinner"></span>{:else if groupFailed(group)}!{:else}✓{/if}
+		<span class="status-icon" aria-hidden="true">{@render mark(standing)}</span>
+		<span class="activity-label">
+			{standing === 'active' ? `${liveLabel(group)}…` : groupSummary(group)}
 		</span>
-		<span class="activity-label">{live ? `${liveLabel(group)}…` : groupSummary(group)}</span>
 		<span class="chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
 	</button>
 
@@ -66,31 +77,40 @@
 					<li class="step note prose-sm">{@html renderMarkdown(step.text)}</li>
 				{:else}
 					{@const toolCall = step.toolCall}
-					{@const code = codeForToolCall(toolCall)}
-					{@const error = errorText(toolCall.result)}
+					{@const details = technicalDetails(toolCall)}
+					{@const stepIs = stepState(step, live)}
+					<!-- A declined step's label already says it did not run. -->
+					{@const error = stepIs === 'failed' ? resultError(toolCall.result) : null}
 					<li class="step tool-step">
 						<div class="tool-row">
-							<span class="step-status" aria-hidden="true">
-								{#if isStepActive(step) && live}
-									<span class="spinner"></span>
-								{:else if toolCall.status === 'failed'}!{:else}✓{/if}
-							</span>
-							<span class="tool-name">{toolLabel(toolCall)}</span>
-							{#if code}
-								<span class="tool-actions">
-									<button class="code-action-btn" onclick={() => copyCode(code)}>Copy</button>
-									<button class="code-action-btn" onclick={() => toggleCode(toolCall.id)}>
-										{shownCode.has(toolCall.id) ? 'Hide code' : 'Show code'}
-									</button>
-								</span>
-							{/if}
+							<span class="step-status" aria-hidden="true">{@render mark(stepIs)}</span>
+							<span class="step-label">{toolLabel(toolCall, stepIs)}</span>
 						</div>
 						{#if error}
 							<p class="tool-error">{error}</p>
 						{/if}
-						{#if code && shownCode.has(toolCall.id)}
-							<pre class="code-block"><code>{code}</code></pre>
-						{/if}
+						<!-- Outside a workspace only a code step has something to check: its code. -->
+						{#if showTechnicalDetails || details.code}<details class="technical">
+								<summary>{showTechnicalDetails ? 'Technical details' : 'Show code'}</summary>
+								<dl>
+									{#if showTechnicalDetails}
+										<dt>Tool</dt>
+										<dd><code>{details.tool}</code></dd>
+										{#if details.arguments}
+											<dt>Arguments</dt>
+											<dd><pre class="code-block"><code>{details.arguments}</code></pre></dd>
+										{/if}
+									{/if}
+									{#if details.code}
+										{@const code = details.code}
+										<dt>
+											Code
+											<button class="code-action-btn" onclick={() => copyCode(code)}>Copy</button>
+										</dt>
+										<dd><pre class="code-block"><code>{code}</code></pre></dd>
+									{/if}
+								</dl>
+							</details>{/if}
 					</li>
 				{/if}
 			{/each}
@@ -98,7 +118,7 @@
 	{/if}
 </div>
 
-{#if group.figures.length > 0}
+{#if drawFigures && group.figures.length > 0}
 	<div class="figures">
 		{#each group.figures as artifact (artifact.id)}
 			<div class="figure">
@@ -164,6 +184,14 @@
 	.tool-error {
 		color: var(--color-status-failed);
 	}
+	.waiting-mark {
+		width: 0.85rem;
+		height: 0.85rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.75;
+		stroke-linecap: round;
+	}
 
 	.chevron {
 		font-size: 0.7rem;
@@ -222,16 +250,42 @@
 		gap: 0.45rem;
 		margin-left: -1.45rem;
 	}
-	.tool-name {
+	.step-label {
 		flex: 1;
 		min-width: 0;
 	}
-	.tool-actions {
-		display: flex;
-		gap: 0.35rem;
-	}
 	.tool-error {
 		margin: 0;
+	}
+
+	.technical {
+		font-size: var(--text-size-caption);
+	}
+	.technical summary {
+		cursor: pointer;
+		width: fit-content;
+	}
+	.technical summary:hover {
+		color: var(--color-text);
+	}
+	.technical dl {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		margin: var(--space-1) 0 0;
+	}
+	.technical dt {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.technical dd {
+		margin: 0;
+		min-width: 0;
+	}
+	.technical code {
+		font-family: var(--font-mono, monospace);
+		color: var(--color-text);
 	}
 
 	.code-action-btn {
@@ -240,7 +294,7 @@
 		border: 1px solid var(--color-border);
 		border-radius: 3px;
 		font-family: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 		cursor: pointer;
 	}
@@ -257,7 +311,7 @@
 		border-radius: 6px;
 		overflow-x: auto;
 		font-family: var(--font-mono, monospace);
-		font-size: 0.75rem;
+		font-size: var(--text-size-caption);
 		line-height: 1.5;
 		color: var(--color-text);
 		white-space: pre;

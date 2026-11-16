@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount } from 'svelte';
 	import {
 		listDataSources,
@@ -59,7 +60,7 @@
 		try {
 			[sources, regions] = await Promise.all([listDataSources(), getRegions()]);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			loading = false;
 		}
@@ -134,7 +135,7 @@
 			}
 			validatedSignature = formSignature();
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			submitting = false;
 		}
@@ -161,7 +162,7 @@
 			resetForm();
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			submitting = false;
 		}
@@ -177,7 +178,7 @@
 			resetForm();
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			submitting = false;
 		}
@@ -248,7 +249,7 @@
 			const updated = await revalidateDataSource(source.id);
 			sources = sources.map((item) => (item.id === updated.id ? updated : item));
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			revalidatingId = null;
 		}
@@ -264,7 +265,7 @@
 			await deleteDataSource(source.id);
 			sources = sources.filter((s) => s.id !== source.id);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		}
 	}
 

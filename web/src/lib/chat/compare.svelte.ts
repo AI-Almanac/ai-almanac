@@ -1,3 +1,4 @@
+import { failureMessage } from '$lib/api/core';
 import { discardComparison, voteOnComparison, type CompareEvent, type RevealedArm } from '$lib/api';
 
 /**
@@ -76,7 +77,7 @@ export class ComparisonState {
 		try {
 			for await (const event of events) this.apply(event);
 		} catch (e) {
-			this.error = (e as Error).message;
+			this.error = failureMessage(e);
 		} finally {
 			this.running = false;
 		}
@@ -128,7 +129,7 @@ export class ComparisonState {
 			this.revealedArms = result.arms ?? [];
 			return true;
 		} catch (e) {
-			this.error = (e as Error).message;
+			this.error = failureMessage(e);
 			return false;
 		}
 	}

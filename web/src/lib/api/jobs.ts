@@ -150,10 +150,6 @@ export async function cancelJob(id: string): Promise<Job> {
 	return request<Job>(`/jobs/${id}/cancel`, { method: 'POST' });
 }
 
-export async function shareJob(id: string): Promise<Job> {
-	return request<Job>(`/jobs/${id}/share`, { method: 'POST' });
-}
-
 export async function unshareJob(id: string): Promise<Job> {
 	return request<Job>(`/jobs/${id}/unshare`, { method: 'POST' });
 }
@@ -235,6 +231,14 @@ export async function fetchResultBlob(resultUrl: string): Promise<string> {
 	const objectUrl = URL.createObjectURL(blob);
 	rememberBlob(resultUrl, objectUrl);
 	return objectUrl;
+}
+
+/** Save one of a run's files to the user's downloads, under its own name. */
+export async function downloadJobArtifact(artifact: JobArtifact): Promise<void> {
+	const link = document.createElement('a');
+	link.href = await fetchResultBlob(artifact.url);
+	link.download = artifact.filename;
+	link.click();
 }
 
 // ---- Job metrics / grid / cell -------------------------------------------------

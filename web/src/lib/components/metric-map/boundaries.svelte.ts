@@ -1,3 +1,4 @@
+import { failureMessage } from '$lib/api/core';
 import type * as maplibregl from 'maplibre-gl';
 import { getRegionBoundary } from '$lib/api';
 import { BOUNDARY_LEVELS } from './constants';
@@ -122,7 +123,7 @@ export class BoundaryLayers {
 		} catch (e) {
 			this.errors = {
 				...this.errors,
-				[level]: e instanceof Error ? e.message : 'Failed to load boundaries'
+				[level]: failureMessage(e)
 			};
 			const next = new Set(this.visibleLevels);
 			next.delete(level);

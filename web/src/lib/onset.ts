@@ -2,6 +2,7 @@
 // pure formatting/derivation used by both the map and the cell inspector.
 // Keeping the ramps here means the map fill, the legend, and the inspector
 // heatmap all draw from one source of truth.
+import { MONTH_ABBREVIATIONS } from './format/dates';
 
 // Only India's season is a monsoon; elsewhere (e.g. Ethiopia's Kiremt) the
 // accurate term is the start of the rainy season.
@@ -89,15 +90,13 @@ export function fmtProb(v: number): string {
 	return `${(v * 100).toFixed(0)}%`;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 export function fmtDate(iso: string): string {
 	const parts = iso.split('-');
-	return `${MONTHS[parseInt(parts[1]) - 1]} ${parseInt(parts[2])}`;
+	return `${MONTH_ABBREVIATIONS[parseInt(parts[1]) - 1]} ${parseInt(parts[2])}`;
 }
 
 export function monthLabel(iso: string): string {
-	return MONTHS[parseInt(iso.slice(5, 7)) - 1];
+	return MONTH_ABBREVIATIONS[parseInt(iso.slice(5, 7)) - 1];
 }
 
 // ---- Onset bins: how a forecast's probabilities map onto the calendar ------

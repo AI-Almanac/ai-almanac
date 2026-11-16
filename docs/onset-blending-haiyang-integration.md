@@ -127,7 +127,7 @@ Small PRs, each independently shippable:
    `cutoff_month_day`, `mok_month_day` flowed end-to-end
    (`BlendParams` → `run_blend` → intermediates) but no form field set them.
    *Done:* an "Onset definition" group in the form's Advanced block
-   (`web/src/routes/blends/onset-params.ts` holds the client checks),
+   (`web/src/lib/components/blend-setup/onset-params.ts` holds the client checks),
    `BlendRunSpec` / chat patch models / `_blend_create_body` carry them so
    the assistant path reaches them, and `onset_param_errors` in
    `job_submission.py` validates them for both paths. Decision taken: the
@@ -144,7 +144,7 @@ Small PRs, each independently shippable:
    Requires plumbing the value out of the coef bundle into the job outputs
    read by `routers/jobs.py`.
 3. **Fix the guardrail desync.** `MIN_ONSET_YEARS` and the member-count
-   warning are duplicated in `web/src/routes/blends/year-coverage.ts` rather
+   warning are duplicated in `web/src/lib/components/blend-setup/year-coverage.ts` rather
    than served from the API; admin overrides via `settings.guardrail_*`
    desync the form. Serve them from a config endpoint before Phase 3 adds
    more validated fields.

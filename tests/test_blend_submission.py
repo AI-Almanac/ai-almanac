@@ -23,6 +23,7 @@ from ai_almanac.server.services.job_submission import (
     BlendParams,
     create_blend_for_user,
 )
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.tables import jobs
 from tests.helpers.forecasts import FakeRunner, forecast_a_linked_blend
 from tests.helpers.records import link_forecast_model, seed_source
@@ -54,6 +55,7 @@ async def test_create_blend_persists_blend_routing_config(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
 
     assert out.name == "my blend"
@@ -102,6 +104,7 @@ async def test_blend_config_carries_each_models_registered_dims_and_units(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
 
     async with get_db() as conn:
@@ -308,6 +311,7 @@ async def test_create_blend_warns_when_a_member_cannot_forecast_live(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
 
     # Asserted by content rather than by count: the same list also carries any
@@ -345,6 +349,7 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
@@ -353,6 +358,7 @@ async def test_create_forecast_rejects_blend_with_an_unforecastable_member(
         await job_submission.create_forecast_for_user(
             job_submission.ForecastCreate(blend_id=blend.id, forecast_model_ids=["aifs"]),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
     assert exc.value.status_code == 400
     assert "neuralgcm: This data isn't linked to a live forecast model." in exc.value.detail
@@ -374,6 +380,7 @@ async def test_create_blend_rejects_non_model_source(client, user_id: str, _stub
                 params=BlendParams(training_years="2024", cv_holdout_years="2024"),
             ),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
     assert exc.value.status_code == 400
 
@@ -428,6 +435,7 @@ async def test_create_blend_hides_another_users_private_obs_source(
                 params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
             ),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
     assert exc.value.status_code == 404
     assert "1990" not in str(exc.value.detail)
@@ -559,6 +567,7 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
@@ -574,6 +583,7 @@ async def test_linking_member_data_after_training_makes_the_blend_forecastable(
     forecast = await job_submission.create_forecast_for_user(
         job_submission.ForecastCreate(blend_id=blend.id),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         row = (
@@ -744,6 +754,7 @@ async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         await conn.execute(sa.update(jobs).where(jobs.c.id == blend.id).values(status="complete"))
@@ -752,6 +763,7 @@ async def test_a_forecast_before_the_season_starts_is_refused_at_submission(
         await job_submission.create_forecast_for_user(
             job_submission.ForecastCreate(blend_id=blend.id),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
     assert exc.value.status_code == 409
     assert "has not started: the first issue date is 1 May 2026" in exc.value.detail
@@ -814,6 +826,7 @@ async def _submit_blend_interrupted_by(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         row = (await conn.execute(sa.select(jobs).where(jobs.c.id == out.id))).mappings().one()
@@ -902,6 +915,7 @@ async def test_a_blend_job_says_outright_whether_it_is_trained_on_sub_districts(
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
 
     async with get_db() as conn:
@@ -1030,6 +1044,7 @@ async def test_a_blend_will_not_read_a_users_saved_model_source_in_a_platform_bu
                 params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
             ),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
 
     assert exc.value.status_code == 409
@@ -1058,6 +1073,7 @@ async def test_a_forecast_will_not_reread_a_blends_saved_training_files_in_a_pla
             params=BlendParams(training_years="2019:2024", cv_holdout_years="2024"),
         ),
         user_id,
+        attribution=Attribution.by_user(user_id),
     )
     async with get_db() as conn:
         row = (await conn.execute(sa.select(jobs).where(jobs.c.id == blend.id))).mappings().one()
@@ -1072,6 +1088,7 @@ async def test_a_forecast_will_not_reread_a_blends_saved_training_files_in_a_pla
         await job_submission.create_forecast_for_user(
             job_submission.ForecastCreate(blend_id=blend.id),
             user_id,
+            attribution=Attribution.by_user(user_id),
         )
 
     assert exc.value.status_code == 409

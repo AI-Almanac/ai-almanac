@@ -6,6 +6,7 @@
  */
 import type { Blend } from '$lib/api/blends';
 import type { JobArtifact } from '$lib/api/jobs';
+import { isActiveStatus } from '$lib/run-status';
 
 // The day-level run's own files, published next to the week-level ones.
 const DAY_LEVEL_PREFIX = 'day_level_';
@@ -18,8 +19,8 @@ export function dayLevelTraining(blend: BlendState): boolean {
 }
 
 /** Whether the blend can still change: its own run, or a day-level blend after it. */
-export function blendInProgress(blend: BlendState, activeStatuses: readonly string[]): boolean {
-	return activeStatuses.includes(blend.status) || dayLevelTraining(blend);
+export function blendInProgress(blend: BlendState): boolean {
+	return isActiveStatus(blend.status) || dayLevelTraining(blend);
 }
 
 /** Whether a refreshed blend differs in anything the page renders from it. */

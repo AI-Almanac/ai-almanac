@@ -16,8 +16,10 @@ _PROB_DECIMALS = 3
 ForecastModel = Literal["weekly_model", "daily_model"]
 ForecastResolution = Literal["weekly", "daily"]
 
+# The week-level blend's per-point onset probabilities, one row per point and issue date.
+WEEKLY_PROBABILITIES_CSV = "blended_forecast_probabilities.csv"
 _SOURCE_FILES: dict[ForecastModel, str] = {
-    "weekly_model": "blended_forecast_probabilities.csv",
+    "weekly_model": WEEKLY_PROBABILITIES_CSV,
     "daily_model": "daily_onset_probabilities.csv",
 }
 _COLUMNS: dict[ForecastResolution, tuple[str, ...]] = {

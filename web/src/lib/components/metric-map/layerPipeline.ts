@@ -1,4 +1,6 @@
+import { failureMessage } from '$lib/api/core';
 import type { Job, JobGridResponse } from '$lib/api';
+import { robustRange, scoredValues, type ColourRange } from './colourRange';
 import { DIVERGING_STOPS, sharedStops } from './constants';
 import {
 	boundsFromGrid,
@@ -121,7 +123,7 @@ export async function fetchGridResults(
 								run,
 								windowValue: window.value,
 								metricValue: metric.value,
-								error: e instanceof Error ? e.message : 'Failed to load'
+								error: failureMessage(e)
 							};
 						}
 					})
@@ -147,6 +149,66 @@ export function indexGridResults(results: FetchResult[]) {
 	return { dataByRunMetric, hasClimatology };
 }
 
+/** Every run's grid for a metric, across the lead windows it was scored on. */
+function gridsForMetric(
+	metric: MetricDef,
+	activeRuns: RunDef[],
+	activeWindows: WindowDef[],
+	dataByRunMetric: Record<string, JobGridResponse>,
+	metricWindowAvailability?: MetricWindowAvailability,
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
+): JobGridResponse[] {
+	return activeRuns
+		.flatMap((run) =>
+			activeWindows
+				.filter((window) =>
+					metricAvailableForWindow(
+						availabilityForRun(run, metricWindowAvailability, metricWindowAvailabilityByJob),
+						metric.value,
+						window.value
+					)
+				)
+				.map(
+					(window) =>
+						dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
+				)
+		)
+		.filter((data): data is JobGridResponse => Boolean(data));
+}
+
+export type SharedRange = { min: number; max: number } & Partial<ColourRange>;
+
+/**
+ * One scale per metric, shared by every model and lead window as below, but ending
+ * where most scored cells are instead of at the single most extreme one.
+ */
+export function computeRobustRanges(
+	activeRuns: RunDef[],
+	activeWindows: WindowDef[],
+	metrics: MetricDef[],
+	dataByRunMetric: Record<string, JobGridResponse>,
+	metricWindowAvailability?: MetricWindowAvailability,
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
+) {
+	const rangeByMetric: Record<string, SharedRange> = {};
+	for (const metric of metrics) {
+		const range = robustRange(
+			scoredValues(
+				gridsForMetric(
+					metric,
+					activeRuns,
+					activeWindows,
+					dataByRunMetric,
+					metricWindowAvailability,
+					metricWindowAvailabilityByJob
+				)
+			)
+		);
+		if (range) rangeByMetric[metric.value] = range;
+	}
+	return rangeByMetric;
+}
+
 export function computeSharedRanges(
 	activeRuns: RunDef[],
 	activeWindows: WindowDef[],
@@ -155,24 +217,16 @@ export function computeSharedRanges(
 	metricWindowAvailability?: MetricWindowAvailability,
 	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
 ) {
-	const sharedRangeByMetric: Record<string, { min: number; max: number }> = {};
+	const sharedRangeByMetric: Record<string, SharedRange> = {};
 	for (const metric of metrics) {
-		const values = activeRuns
-			.flatMap((run) =>
-				activeWindows
-					.filter((window) =>
-						metricAvailableForWindow(
-							availabilityForRun(run, metricWindowAvailability, metricWindowAvailabilityByJob),
-							metric.value,
-							window.value
-						)
-					)
-					.map(
-						(window) =>
-							dataByRunMetric[rawLayerKey(run.jobId, run.modelName, metric.value, window.value)]
-					)
-			)
-			.filter((data): data is JobGridResponse => Boolean(data));
+		const values = gridsForMetric(
+			metric,
+			activeRuns,
+			activeWindows,
+			dataByRunMetric,
+			metricWindowAvailability,
+			metricWindowAvailabilityByJob
+		);
 		if (values.length > 0) {
 			sharedRangeByMetric[metric.value] = {
 				min: Math.min(...values.map((data) => data.min)),
@@ -185,7 +239,7 @@ export function computeSharedRanges(
 
 export function buildRawLayerEntries(
 	results: FetchResult[],
-	sharedRangeByMetric: Record<string, { min: number; max: number }>
+	sharedRangeByMetric: Record<string, SharedRange>
 ) {
 	const entries: LayerEntry[] = [];
 	const errors: Record<string, string> = {};
@@ -221,7 +275,11 @@ export function buildRawLayerEntries(
 				geojson,
 				bounds: boundsFromGrid(data),
 				stops,
-				isDelta: false
+				isDelta: false,
+				clipped: sharedRange && {
+					low: sharedRange.clippedLow ?? false,
+					high: sharedRange.clippedHigh ?? false
+				}
 			}
 		});
 	}
@@ -236,7 +294,8 @@ export function buildDeltaLayerEntries(
 	metrics: MetricDef[],
 	dataByRunMetric: Record<string, JobGridResponse>,
 	metricWindowAvailability?: MetricWindowAvailability,
-	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob
+	metricWindowAvailabilityByJob?: MetricWindowAvailabilityByJob,
+	robust = false
 ) {
 	const entries: LayerEntry[] = [];
 
@@ -286,7 +345,11 @@ export function buildDeltaLayerEntries(
 							reference.modelName,
 							referenceWindow.value
 						);
-						const { geojson, maxAbs } = buildDeltaGeojson(modelData, referenceData);
+						const { geojson, maxAbs, clipped } = buildDeltaGeojson(
+							modelData,
+							referenceData,
+							robust
+						);
 						entries.push({
 							key,
 							state: {
@@ -299,7 +362,8 @@ export function buildDeltaLayerEntries(
 								isDelta: true,
 								deltaMaxAbs: maxAbs,
 								referenceData,
-								referenceModelName: reference.modelName
+								referenceModelName: reference.modelName,
+								clipped: { low: clipped, high: clipped }
 							}
 						});
 					}

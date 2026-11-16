@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { continueComparison } from '$lib/api';
-	import { renderMarkdown } from '$lib/chat/format';
+	import { renderMarkdown } from '$lib/chat/markdown';
 	import type { ComparisonState } from '$lib/chat/compare.svelte';
 
 	interface Props {
@@ -154,7 +154,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.6rem;
-		padding: 0.75rem;
+		padding: var(--space-3);
 		overflow-y: auto;
 		flex: 1;
 		min-height: 0;
@@ -164,15 +164,15 @@
 	}
 	.compare-hint {
 		margin: 0;
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		color: var(--color-text-muted);
 		line-height: 1.45;
 	}
 	.compare-error {
 		margin: 0;
-		padding: 0.5rem 0.65rem;
+		padding: var(--space-2) 0.65rem;
 		border-radius: 0.4rem;
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		color: var(--color-status-failed);
 		background: var(--color-status-failed-bg);
 		border: 1px solid var(--color-status-failed);
@@ -193,7 +193,7 @@
 		border-radius: 0.4rem;
 		background: var(--color-accent-light);
 		border: 1px solid var(--color-accent-border);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 	}
 	/* Every round after the first opens a new exchange; the gap says so. */
 	.round-message:not(:first-child) {
@@ -211,23 +211,23 @@
 	}
 	.reveal {
 		font-weight: 400;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-accent);
 	}
 	.cautions {
 		margin: 0;
 		padding-left: 1.1rem;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-status-running);
 	}
 	.tools {
 		margin: 0;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		color: var(--color-text-muted);
 	}
 	.answer {
 		margin: 0;
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		line-height: 1.55;
 		min-width: 0;
 	}
@@ -263,10 +263,10 @@
 	.prose :global(h3),
 	.prose :global(h4) {
 		margin: 0.7rem 0 0.35rem;
-		font-size: 0.85rem;
+		font-size: var(--text-size-body);
 	}
 	.prose :global(code) {
-		padding: 0.05rem 0.25rem;
+		padding: 0.05rem var(--space-1);
 		border-radius: 0.2rem;
 		background: var(--color-surface-muted, var(--color-surface));
 		font-family: var(--font-mono, ui-monospace, monospace);
@@ -274,7 +274,7 @@
 	}
 	.prose :global(pre) {
 		margin: 0 0 0.6rem;
-		padding: 0.5rem;
+		padding: var(--space-2);
 		overflow-x: auto;
 		border-radius: 0.3rem;
 		background: var(--color-surface-muted, var(--color-surface));
@@ -290,7 +290,7 @@
 		overflow-x: auto;
 		border-collapse: collapse;
 		margin: 0 0 0.6rem;
-		font-size: 0.74rem;
+		font-size: var(--text-size-caption);
 	}
 	.prose :global(th),
 	.prose :global(td) {
@@ -312,7 +312,7 @@
 		align-items: baseline;
 		gap: 0.4rem;
 		flex-wrap: wrap;
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
 		color: var(--color-text-muted);
@@ -327,7 +327,7 @@
 		border: 1px solid var(--color-accent-border);
 		background: var(--color-accent-light);
 		color: var(--color-accent);
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		font-weight: 600;
 		cursor: pointer;
 	}
@@ -340,17 +340,17 @@
 	}
 	.vote-row {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		align-items: center;
 	}
 	.vote-row input {
 		flex: 1 1 12rem;
 		min-width: 0;
-		padding: 0.4rem 0.5rem;
+		padding: 0.4rem var(--space-2);
 		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
 		background: var(--color-surface);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		font-family: inherit;
 	}
 	.vote-row button {
@@ -358,7 +358,7 @@
 		border-radius: 0.35rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		cursor: pointer;
 		white-space: nowrap;
 	}
@@ -368,7 +368,7 @@
 	}
 	.follow-up-row {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 	.follow-up-row textarea {
 		flex: 1;
@@ -378,7 +378,7 @@
 		border: 1px solid var(--color-border);
 		border-radius: 0.35rem;
 		background: var(--color-surface);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		font-family: inherit;
 		line-height: 1.4;
 	}
@@ -388,7 +388,7 @@
 		border: 1px solid var(--color-accent-border);
 		background: var(--color-accent-light);
 		color: var(--color-accent);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		font-weight: 600;
 		cursor: pointer;
 		white-space: nowrap;
@@ -401,7 +401,7 @@
 	.compare-actions {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		align-items: center;
 	}
 	.compare-actions button {
@@ -409,7 +409,7 @@
 		border-radius: 0.35rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface);
-		font-size: 0.8rem;
+		font-size: var(--text-size-label);
 		cursor: pointer;
 	}
 	.compare-actions button:disabled {
@@ -420,7 +420,7 @@
 		margin-left: auto;
 	}
 	.thanks {
-		font-size: 0.78rem;
+		font-size: var(--text-size-label);
 		color: var(--color-accent);
 	}
 	/* Too narrow to read two columns: stack them rather than shrink to ribbons. */

@@ -35,6 +35,8 @@ class BlendRunSpec(BaseModel):
     threshold_mm: float | None = None
     cutoff_month_day: str = ""
     ref_onset_month_day: str = ""
+    # None follows the deployment's enable_day_level_blend setting.
+    train_day_level_blend: bool | None = None
     status: BlendStatus = "collecting"
     missing_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)

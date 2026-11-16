@@ -25,6 +25,10 @@
 		selectedReferenceJobId: string;
 		selectedReferenceWindow: string;
 		selectedBasemap: BasemapStyleId;
+		/** The basemaps offered; the full catalogue unless a host narrows it. */
+		basemapChoices?: readonly { id: BasemapStyleId; label: string }[];
+		/** A host's own names for the boundary levels, shown without the level code. */
+		boundaryLabels?: Partial<Record<BoundaryLevel, string>>;
 		viewMode: MapViewMode;
 		visibleBoundaryLevels: Set<BoundaryLevel>;
 		boundaryLoading: Set<BoundaryLevel>;
@@ -54,6 +58,8 @@
 		selectedReferenceJobId,
 		selectedReferenceWindow,
 		selectedBasemap,
+		basemapChoices = BASEMAP_STYLES,
+		boundaryLabels = {},
 		viewMode,
 		visibleBoundaryLevels,
 		boundaryLoading,
@@ -201,7 +207,7 @@
 					value={selectedBasemap}
 					onchange={(event) => onSelectBasemap(event.currentTarget.value as BasemapStyleId)}
 				>
-					{#each BASEMAP_STYLES as style}
+					{#each basemapChoices as style}
 						<option value={style.id}>{style.label}</option>
 					{/each}
 				</select>
@@ -224,8 +230,10 @@
 								<span class="layer-checkbox" class:checked={isVisible}>
 									{#if isVisible}<span class="checkmark">✓</span>{/if}
 								</span>
-								<span class="layer-label">{def.label}</span>
-								<span class="osm-level-chip">{def.type}</span>
+								<span class="layer-label">{boundaryLabels[boundaryLevel] ?? def.label}</span>
+								{#if !boundaryLabels[boundaryLevel]}
+									<span class="osm-level-chip">{def.type}</span>
+								{/if}
 								{#if isLoading}
 									<span class="layer-spinner"></span>
 								{:else if err}
@@ -295,17 +303,17 @@
 	}
 
 	:global(.map-root.fullscreen) .control-field select {
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		padding: 0.34rem 0.45rem;
 	}
 
 	:global(.map-root.fullscreen) .view-toggle button {
-		font-size: 0.64rem;
+		font-size: var(--text-size-caption);
 		padding: 0.28rem 0.25rem;
 	}
 
 	:global(.map-root.fullscreen) .lens-note {
-		font-size: 0.64rem;
+		font-size: var(--text-size-caption);
 	}
 
 	:global(.map-root.fullscreen) .boundary-group {
@@ -369,7 +377,7 @@
 	}
 
 	.control-field span {
-		font-size: 0.58rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.09em;
@@ -390,6 +398,7 @@
 
 	.view-toggle {
 		display: flex;
+		flex-wrap: wrap;
 		align-self: stretch;
 		padding: 0.18rem;
 		border: 1px solid #d7d0c2;
@@ -398,13 +407,13 @@
 	}
 
 	.view-toggle button {
-		flex: 1;
+		flex: 1 1 auto;
 		border: none;
 		border-radius: 0.32rem;
 		background: transparent;
 		color: #6f6b62;
 		font: inherit;
-		font-size: 0.68rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		padding: 0.35rem 0.3rem;
 		cursor: pointer;
@@ -422,7 +431,7 @@
 
 	.lens-note {
 		margin: 0;
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		line-height: 1.35;
 		color: #6f6b62;
 		align-self: center;
@@ -445,7 +454,7 @@
 	}
 
 	.layer-panel-title {
-		font-size: 0.58rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
@@ -454,7 +463,7 @@
 	}
 
 	.panel-toggle {
-		font-size: 0.6rem;
+		font-size: var(--text-size-caption);
 		color: #aaa;
 	}
 
@@ -484,7 +493,7 @@
 		content: '▾';
 		margin-left: auto;
 		color: #8a857a;
-		font-size: 0.65rem;
+		font-size: var(--text-size-caption);
 	}
 
 	.boundary-group:not([open]) .run-header::after {
@@ -498,7 +507,7 @@
 	}
 
 	.run-label {
-		font-size: 0.72rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		color: #222;
 	}
@@ -547,7 +556,7 @@
 	}
 
 	.checkmark {
-		font-size: 0.55rem;
+		font-size: var(--text-size-caption);
 		color: white;
 		line-height: 1;
 		font-weight: 700;
@@ -583,12 +592,12 @@
 	}
 
 	.layer-error {
-		font-size: 0.7rem;
+		font-size: var(--text-size-caption);
 		color: #c00;
 	}
 
 	.osm-level-chip {
-		font-size: 0.52rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		line-height: 1;
 		color: #596273;
@@ -603,7 +612,7 @@
 		margin: 0;
 		padding: 0 0.5rem 0.35rem 1.85rem;
 		color: #9b1c1c;
-		font-size: 0.62rem;
+		font-size: var(--text-size-caption);
 		line-height: 1.25;
 	}
 </style>

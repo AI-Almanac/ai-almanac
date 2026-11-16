@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount } from 'svelte';
 	import { account } from '$lib/account.svelte';
 	import {
@@ -40,7 +41,7 @@
 			providers = pr;
 			profiles = pf;
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			loading = false;
 		}
@@ -54,7 +55,7 @@
 		try {
 			await action();
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = failureMessage(e);
 		} finally {
 			busy = false;
 		}

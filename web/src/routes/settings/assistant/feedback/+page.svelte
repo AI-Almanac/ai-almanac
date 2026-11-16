@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api/core';
 	import { onMount } from 'svelte';
 	import AdminGuard from '$lib/components/AdminGuard.svelte';
 	import { getRulesetFeedback, type RulesetFeedback } from '$lib/api';
@@ -13,7 +14,7 @@
 				feedback = rows;
 			})
 			.catch((e) => {
-				error = (e as Error).message;
+				error = failureMessage(e);
 			})
 			.finally(() => {
 				loading = false;

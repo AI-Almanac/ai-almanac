@@ -13,7 +13,8 @@ import json
 import math
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -847,3 +848,31 @@ def _listed_bucket(uri: str) -> str:
 def visible_to(source: Mapping, user_id: str) -> bool:
     """Whether a user may read a source: built-in, their own, or shared (as job submission rules)."""
     return source.get("owner_id") in (None, user_id) or source.get("visibility") == "shared"
+
+
+def list_source_files(source: Mapping) -> list[str]:
+    """The files of a registered source that match its file pattern: local paths or gs:// URIs.
+
+    Raises UnreadableFiles when the saved path or pattern no longer parses, or when the files
+    lie somewhere the source's owner may not read from."""
+    path = readable_location(source)
+    glob = _file_glob(_source_file_pattern(source["kind"], source.get("metadata") or {}))
+    if isinstance(path, LocalPath):
+        return [str(file) for file in sorted(path.directory.glob(glob)) if file.is_file()]
+    return _gcs_files(path, glob, admin_registered=registered_by_admin(source))
+
+
+@contextmanager
+def open_source_file(identifier: str) -> Iterator:
+    """Open one source file lazily; a gs:// object is read in ranged blocks, not whole."""
+
+    if identifier.startswith("gs://"):
+        from ai_almanac.server.services.storage import get_storage
+
+        with get_storage().open_nc_metadata(identifier) as dataset:
+            yield dataset
+        return
+    from ai_almanac.server.services import netcdf
+
+    with netcdf.open_dataset(identifier) as dataset:
+        yield dataset

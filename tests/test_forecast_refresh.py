@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from ai_almanac.server.db import get_db, get_or_create_user
 from ai_almanac.server.services import job_submission
+from ai_almanac.server.services.ledger import Attribution
 from ai_almanac.server.tables import jobs
 
 
@@ -22,7 +23,7 @@ def _capture_rebuilt_request(monkeypatch) -> dict:
             dataset_id="ds-1", run_id=body.run_id, plan=None, config={"season_plan": {}}
         )
 
-    async def fake_submit(job, user_id):
+    async def fake_submit(job, user_id, *, attribution=None):
         return job_submission.ForecastOut(
             id="fc-new",
             blend_id="blend-123",
@@ -68,7 +69,9 @@ async def test_refresh_replays_original_params(monkeypatch):
 
     captured = _capture_rebuilt_request(monkeypatch)
 
-    await job_submission.refresh_forecast_for_user("fc-1", uid)
+    await job_submission.refresh_forecast_for_user(
+        "fc-1", uid, attribution=Attribution.by_user(uid)
+    )
 
     body = captured["body"]
     assert body.blend_id == "blend-123"
@@ -83,7 +86,9 @@ async def test_refresh_unknown_forecast_404():
     async with get_db() as conn:
         user = await get_or_create_user(conn, external_id="refresh-user-2")
     with pytest.raises(HTTPException) as exc:
-        await job_submission.refresh_forecast_for_user("nope", user["id"])
+        await job_submission.refresh_forecast_for_user(
+            "nope", user["id"], attribution=Attribution.by_user(user["id"])
+        )
     assert exc.value.status_code == 404
 
 
@@ -106,7 +111,9 @@ async def test_refresh_refuses_a_forecast_saved_with_a_retired_init_source():
         )
 
     with pytest.raises(HTTPException) as exc:
-        await job_submission.refresh_forecast_for_user("fc-era5", user["id"])
+        await job_submission.refresh_forecast_for_user(
+            "fc-era5", user["id"], attribution=Attribution.by_user(user["id"])
+        )
     assert exc.value.status_code == 409
     assert "init_source" in exc.value.detail
 
@@ -128,6 +135,8 @@ async def test_refresh_reads_a_saved_zero_issue_date_trim_as_no_trim(monkeypatch
         )
     captured = _capture_rebuilt_request(monkeypatch)
 
-    await job_submission.refresh_forecast_for_user("fc-zero", user["id"])
+    await job_submission.refresh_forecast_for_user(
+        "fc-zero", user["id"], attribution=Attribution.by_user(user["id"])
+    )
 
     assert captured["body"].params.max_issue_dates is None

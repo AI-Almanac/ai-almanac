@@ -45,6 +45,8 @@ export type LayerState = {
 	deltaMaxAbs?: number;
 	referenceData?: JobGridResponse;
 	referenceModelName?: string;
+	/** Ends of the colour scale that values lie beyond, drawn in the end colour. */
+	clipped?: { low: boolean; high: boolean };
 };
 
 export type BoundaryLevel = 'adm1' | 'adm2';

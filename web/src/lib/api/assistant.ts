@@ -17,6 +17,8 @@ export type PromptSection = {
 	enabled: boolean;
 	/** Empty means the section applies to every scope kind. */
 	scope_kinds: string[];
+	/** Shown only when one of these tools is registered; empty means always. */
+	requires_tools: string[];
 };
 
 export type ToolPolicy = {

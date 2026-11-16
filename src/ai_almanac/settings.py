@@ -210,6 +210,14 @@ class Settings(BaseSettings):
     # sandbox-runtime in the analysis env; startup fails if srt cannot sandbox here), or
     # `modal` (a network-blocked Modal Sandbox; cloud deployments).
     code_sandbox: CodeSandbox = "off"
+    local_code_timeout_seconds: int = 120
+    # After a workspace turn adds results, name them in a few words with one small call
+    # to the turn's model (services/analysis_names.py).
+    name_workspace_analyses: bool = True
+    # Workspace fetches: requests whose plan estimates more are refused before approval,
+    # and a fetch that runs longer is stopped. Fetches run inside the chat turn.
+    max_fetch_bytes: int = 1_000_000_000
+    fetch_timeout_seconds: int = 1800
     # Path to the `srt` executable; empty means look it up on PATH.
     sandbox_runtime_bin: str = ""
 
@@ -269,6 +277,11 @@ class Settings(BaseSettings):
     # reload_settings() to map a stored False to audience "off". Remove next
     # release, once no overlay row or env still sets it.
     enable_assistant_comparisons: bool = True
+    # Workspaces: one place to run, compare and analyse with the assistant. "admins"
+    # by default, unlike the convention above: a personal install's operator is an
+    # admin and gets them, while a shared deployment keeps them to admins until an
+    # admin opens them to everyone from the Settings page.
+    workspaces_audience: Audience = "admins"
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
     credential_encryption_key: str = ""
 
@@ -294,6 +307,9 @@ class Settings(BaseSettings):
 
     def data_management_allowed(self, is_admin: bool) -> bool:
         return audience_allows(self.data_management_audience, is_admin)
+
+    def workspaces_allowed(self, is_admin: bool) -> bool:
+        return audience_allows(self.workspaces_audience, is_admin)
 
     def resolve_database_url(self) -> str:
         # Local import: settings is also imported inside the forecast envs

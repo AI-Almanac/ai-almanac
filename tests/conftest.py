@@ -35,6 +35,9 @@ os.environ["LLM_BASE_URL"] = "http://test-llm.local"
 # Disable the setup gate for the entire test suite. Setup-specific tests
 # monkeypatch.delenv this and set settings.setup_complete = False explicitly.
 os.environ["SETUP_COMPLETE"] = "1"
+# Naming an analysis is a background call to the (mocked) model; tests that need it call
+# analysis_names directly.
+os.environ["NAME_WORKSPACE_ANALYSES"] = "0"
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:

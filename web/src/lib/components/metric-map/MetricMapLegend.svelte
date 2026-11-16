@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { scaleEnd } from './colourRange';
 	import { parseKey } from './layerKeys';
 	import { isHigherBetterMetric, isNeutralDeltaMetric, modelDisplayName } from './mapUi';
 	import type { LayerState, MapViewMode } from './types';
@@ -27,9 +28,9 @@
 			</div>
 			<div class="scale-bar" style="background: {gradient}"></div>
 			<div class="scale-labels">
-				<span>{vl.data.min.toFixed(2)}</span>
+				<span>{scaleEnd(vl.data.min.toFixed(2), 'low', vl.clipped?.low)}</span>
 				<span class="scale-unit">({vl.data.unit})</span>
-				<span>{vl.data.max.toFixed(2)}</span>
+				<span>{scaleEnd(vl.data.max.toFixed(2), 'high', vl.clipped?.high)}</span>
 			</div>
 		{:else}
 			{#each visibleLayers as vl, i}
@@ -56,7 +57,7 @@
 				<div class="scale-bar" style="background: {gradient}"></div>
 				{#if vl.isDelta && vl.deltaMaxAbs != null}
 					<div class="scale-labels">
-						<span>−{vl.deltaMaxAbs.toFixed(3)}</span>
+						<span>{scaleEnd(`−${vl.deltaMaxAbs.toFixed(3)}`, 'low', vl.clipped?.low)}</span>
 						<span class="scale-unit"
 							>{isNeutralDeltaMetric(vMetric)
 								? '(negative)'
@@ -72,13 +73,13 @@
 									? '(better)'
 									: '(worse)'}</span
 						>
-						<span>+{vl.deltaMaxAbs.toFixed(3)}</span>
+						<span>{scaleEnd(`+${vl.deltaMaxAbs.toFixed(3)}`, 'high', vl.clipped?.high)}</span>
 					</div>
 				{:else}
 					<div class="scale-labels">
-						<span>{vl.data.min.toFixed(2)}</span>
+						<span>{scaleEnd(vl.data.min.toFixed(2), 'low', vl.clipped?.low)}</span>
 						<span class="scale-unit">({vl.data.unit})</span>
-						<span>{vl.data.max.toFixed(2)}</span>
+						<span>{scaleEnd(vl.data.max.toFixed(2), 'high', vl.clipped?.high)}</span>
 					</div>
 				{/if}
 			{/each}
@@ -98,7 +99,7 @@
 		border-radius: 0.4rem;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 		border: 1px solid #ccc;
-		width: min(18rem, calc(100% - 7rem));
+		width: min(24rem, calc(100% - 7rem));
 		display: flex;
 		flex-direction: column;
 		gap: 0.1rem;
@@ -110,7 +111,7 @@
 	}
 
 	.legend-title {
-		font-size: 0.54rem;
+		font-size: var(--text-size-caption);
 		font-weight: 700;
 		color: #333;
 		text-transform: uppercase;
@@ -127,7 +128,7 @@
 
 	.legend-delta-badge {
 		display: inline-block;
-		font-size: 0.46rem;
+		font-size: var(--text-size-caption);
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -148,14 +149,16 @@
 
 	.scale-labels {
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: space-between;
-		font-size: 0.54rem;
+		gap: 0 0.5rem;
+		font-size: var(--text-size-caption);
 		font-family: var(--font-mono);
 		color: #555;
 	}
 
 	.scale-unit {
 		color: #999;
-		font-size: 0.52rem;
+		font-size: var(--text-size-caption);
 	}
 </style>

@@ -8,15 +8,48 @@
 		metricOptions,
 		windowLabel
 	} from '$lib/metric-metadata';
+	import { compareWindows } from '$lib/metric-comparison';
 	import { modelDisplayName } from '$lib/model-names';
+	import type { MapInitialView } from '$lib/components/metric-map/initialView';
+	import {
+		areaWords,
+		shouldRepickView,
+		stageMapView,
+		yearsWords
+	} from '$lib/components/metric-map/stage-map';
 	import MetricsTable from './MetricsTable.svelte';
 	import SkillScoresTable from './SkillScoresTable.svelte';
 	import MetricMap from './MetricMap.svelte';
 	import SegmentedTabs, { type SegmentedTabOption } from './SegmentedTabs.svelte';
 	import AllMetricsPanel from './AllMetricsPanel.svelte';
+	import ModelComparisonTable from './ModelComparisonTable.svelte';
 
-	type Props = { jobs: Job[] };
-	let { jobs }: Props = $props();
+	/** `initialWindow` opens the map on that lead-time window when the run has it. */
+	/**
+	 * `stage` is a workspace's benchmark stage: no tabs, the comparison table leads, and
+	 * the map opens on onset error for the best model over the areas the run covered, with
+	 * an export. Left out, the viewer behaves as on the Benchmarks page.
+	 */
+	type Props = {
+		jobs: Job[];
+		initialWindow?: string;
+		stage?: {
+			areaOfInterest: string[] | null;
+			/** The job of the model the run's headline names as its best, when it is known. */
+			bestModelJobId?: string | null;
+		};
+		/** False while the viewer is kept but out of sight; the map re-measures when it returns. */
+		shown?: boolean;
+		/** Where a host with views of its own shows every metric; without it, the viewer's own tab opens. */
+		onShowAllMetrics?: () => void;
+	};
+	let {
+		jobs,
+		initialWindow,
+		stage,
+		shown = true,
+		onShowAllMetrics = () => (activeTab = 'metrics')
+	}: Props = $props();
 
 	// The tab boundary is map vs. everything-else, not spatial vs. probabilistic:
 	// the All Metrics panel covers both families, so no metric is hidden behind
@@ -75,13 +108,6 @@
 			.map((metrics) => metrics.job_id)
 	);
 
-	function windowSortValue(window: string): number {
-		if (window === '1-15') return 0;
-		if (window === '16-30') return 1;
-		if (window === 'all') return 2;
-		return 10;
-	}
-
 	const windowOptions = $derived(
 		[
 			...new Set(
@@ -92,7 +118,7 @@
 				)
 			)
 		]
-			.sort((a, b) => windowSortValue(a) - windowSortValue(b) || a.localeCompare(b))
+			.sort(compareWindows)
 			.map((window) => ({ value: window, label: windowLabel(window) }))
 	);
 
@@ -145,35 +171,94 @@
 		});
 	});
 
+	// The stage map opens on the best model, which is only known once every model's
+	// scores are in; a model whose scores cannot be read must not hold the map back.
+	let unreadableMetrics = $state<Record<string, true>>({});
+	const metricsSettled = $derived(
+		jobs.every(
+			(job) => job.status !== 'complete' || metricsByJob[job.id] || unreadableMetrics[job.id]
+		)
+	);
+
+	// The stage map's opening view, and the finished models it was picked for. The
+	// map is drawn afresh when it changes, so it changes only while the reader has
+	// left the map as it opened.
+	let stageView = $state.raw<{ finishedModels: string; view: MapInitialView } | null>(null);
+	let mapChangedByHand = $state(false);
+	const mapReady = $derived(!stage || stageView !== null);
+
+	$effect(() => {
+		if (!stage || !metricsSettled) return;
+		const finishedModels = jobsKey;
+		untrack(() => {
+			if (!shouldRepickView(stageView?.finishedModels ?? null, finishedModels, mapChangedByHand))
+				return;
+			stageView = {
+				finishedModels,
+				view: stageMapView(spatialJobs, currentMetrics, initialWindow, stage.bestModelJobId)
+			};
+		});
+	});
+
 	$effect(() => {
 		for (const job of jobs) {
 			if (job.status !== 'complete' || metricsByJob[job.id]) continue;
-			getCachedJobMetrics(job.id).then((metrics) => {
-				metricsByJob = { ...metricsByJob, [job.id]: metrics };
-			});
+			getCachedJobMetrics(job.id).then(
+				(metrics) => {
+					metricsByJob = { ...metricsByJob, [job.id]: metrics };
+				},
+				() => {
+					unreadableMetrics = { ...unreadableMetrics, [job.id]: true };
+				}
+			);
 		}
 	});
 </script>
 
 <div class="viewer" data-tour="results">
-	<SegmentedTabs
-		options={TABS}
-		value={activeTab}
-		onSelect={(value) => (activeTab = value)}
-		ariaLabel="Results view"
-	/>
+	{#if !stage}
+		<SegmentedTabs
+			options={TABS}
+			value={activeTab}
+			onSelect={(value) => (activeTab = value)}
+			ariaLabel="Results view"
+		/>
+	{/if}
 
-	{#if activeTab === 'map'}
-		{#if spatialJobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
-			<MetricMap
-				jobs={spatialJobs}
-				forecastWindow={windowOptions[0].value}
-				forecastWindows={windowOptions}
-				metrics={mapMetrics}
-				{metricWindowAvailability}
-				{metricWindowAvailabilityByJob}
-				{climatologyJobIds}
+	{#if stage || activeTab === 'map'}
+		{#if stage}
+			<ModelComparisonTable
+				{jobs}
+				metrics={currentMetrics}
+				definitions={metricDefinitions}
+				{initialWindow}
+				baselineCompetes
 			/>
+		{/if}
+		{#if !mapReady}
+			<p class="empty">Loading the map…</p>
+		{:else if spatialJobs.length > 0 && mapMetrics.length > 0 && windowOptions.length > 0}
+			{#key stageView?.finishedModels}
+				<MetricMap
+					jobs={spatialJobs}
+					forecastWindow={windowOptions.find((option) => option.value === initialWindow)?.value ??
+						windowOptions[0].value}
+					forecastWindows={windowOptions}
+					metrics={mapMetrics}
+					{metricWindowAvailability}
+					{metricWindowAvailabilityByJob}
+					{climatologyJobIds}
+					initialView={stage ? stageView?.view : undefined}
+					exportContext={stage
+						? {
+								area: areaWords(stage.areaOfInterest, spatialJobs[0].region_name),
+								years: yearsWords(spatialJobs)
+							}
+						: undefined}
+					onUserChange={() => (mapChangedByHand = true)}
+					{shown}
+				/>
+			{/key}
 		{:else if pooledOnlyJobs.length === 0}
 			<p class="empty">No spatial data available for this run set.</p>
 		{/if}
@@ -182,23 +267,25 @@
 				No per-grid-point output for probabilistic runs ({pooledOnlyJobs
 					.map((job) => job.model_display_name || modelDisplayName(job.model_name))
 					.join(', ')}) — see
-				<button class="link" onclick={() => (activeTab = 'metrics')}>All Metrics</button>.
+				<button class="link" onclick={onShowAllMetrics}>All Metrics</button>.
 			</p>
 		{/if}
 
-		<div class="tables" data-tour="metrics-tables">
-			{#each jobs as job (job.id)}
-				<div class="table-section">
-					<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
-					{#if job.params?.probabilistic}
-						<SkillScoresTable jobId={job.id} />
-					{/if}
-					{#if !pooledOnlyJobs.includes(job)}
-						<MetricsTable jobId={job.id} />
-					{/if}
-				</div>
-			{/each}
-		</div>
+		{#if !stage}
+			<div class="tables" data-tour="metrics-tables">
+				{#each jobs as job (job.id)}
+					<div class="table-section">
+						<p class="table-model">{job.model_display_name || modelDisplayName(job.model_name)}</p>
+						{#if job.params?.probabilistic}
+							<SkillScoresTable jobId={job.id} />
+						{/if}
+						{#if !pooledOnlyJobs.includes(job)}
+							<MetricsTable jobId={job.id} />
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
 	{:else}
 		<AllMetricsPanel {jobs} />
 	{/if}

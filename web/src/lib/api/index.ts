@@ -19,3 +19,4 @@ export * from './blends';
 export * from './forecasts';
 export * from './chat';
 export * from './assistant';
+export * from './workspaces';

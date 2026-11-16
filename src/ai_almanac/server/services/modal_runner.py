@@ -59,8 +59,8 @@ def _preflight_error(config: dict, outputs_bucket: str) -> str | None:
     # Forecast jobs run live inference against GFS directly — there's no
     # obs_dir/model_dir/model_files on the forecast job's own config to check.
     # The live-scoring step does stage historical data, but from the parent
-    # blend's frozen config snapshot, so validate that instead. A raw forecast has no
-    # blend, stages nothing and only needs the outputs bucket.
+    # blend's frozen config snapshot, so validate that instead.
+    # A forecast without a blend only rolls out and publishes; it stages nothing.
     staging_config = config
     if config.get("job_type") == "forecast":
         staging_config = config.get("blend_config_snapshot")
