@@ -269,3 +269,16 @@ def test_a_general_chat_is_not_told_to_use_tools_it_does_not_have() -> None:
 
     for absent in ("update_benchmark_config", "submit_benchmark", "submit_blend", "rerun_job"):
         assert absent not in general
+
+
+@pytest.mark.asyncio
+async def test_onset_definitions_reach_the_assistant_with_the_names_to_say() -> None:
+    from types import SimpleNamespace
+
+    tool = llm._benchmark_toolset().tools["list_onset_rules"]
+
+    listed = await tool.function(SimpleNamespace(deps=None))
+
+    assert listed["default_display_name"]
+    assert all(rule["display_name"] and rule["description"] for rule in listed["onset_definitions"])
+    assert "never write them" in tool.description

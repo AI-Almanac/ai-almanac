@@ -31,3 +31,20 @@ matplotlib-base = ">=3.10,<4"
 pillow = ">=11"
 gcsfs = ">=2026.8.1,<2027"
 pydantic = ">=2.13.5,<3"
+# ROMP's own requirements. Onset detection imports only its onset rules, but ROMP's
+# package asks for its mapping stack, which must come from conda-forge: pyproj does
+# not build from PyPI source without PROJ.
+cartopy = "*"
+geopandas = "*"
+regionmask = "*"
+seaborn = "*"
+
+[pypi-dependencies]
+# ROMP, for its onset definitions: workspace onset detection (detect_onset) runs them
+# here, so forecasts and benchmarks read onset by the same rules. Pinned with the
+# benchmark env's ROMP (benchmark.pixi.toml); bump the two together.
+momp = { git = "https://github.com/AI-Almanac/ROMP.git", rev = "7271f277b59077c17f66b5e93bed8841b1e650bc" }
+
+[pypi-options.dependency-overrides]
+# ROMP pins an older fsspec than gcsfs needs; it does not use fsspec for onset rules.
+fsspec = "*"

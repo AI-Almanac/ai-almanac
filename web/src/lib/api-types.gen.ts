@@ -1015,7 +1015,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Models */
+        /**
+         * List Models
+         * @description Model sources: the ones that can be scored against an observation dataset when
+         *     one is named, else all of them.
+         */
         get: operations["list_models_jobs_models_get"];
         put?: never;
         post?: never;
@@ -1515,6 +1519,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/places/countries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Countries */
+        get: operations["list_countries_places_countries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/places/{iso}/boundaries/{level}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Boundary
+         * @description Simplified outlines of a country (adm0) or of the units inside it, fetched and
+         *     cached here because a browser cannot read them from their host directly.
+         */
+        get: operations["get_boundary_places__iso__boundaries__level__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/regions": {
         parameters: {
             query?: never;
@@ -1528,27 +1570,8 @@ export interface paths {
          */
         get: operations["list_regions_regions_get"];
         put?: never;
-        /** Create Region */
-        post: operations["create_region_regions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/regions/{region_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Region */
-        put: operations["update_region_regions__region_id__put"];
         post?: never;
-        /** Delete Region */
-        delete: operations["delete_region_regions__region_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2833,6 +2856,13 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** CountryOut */
+        CountryOut: {
+            /** Iso */
+            iso: string;
+            /** Name */
+            name: string;
+        };
         /** DataSourceIn */
         DataSourceIn: {
             /**
@@ -2918,7 +2948,7 @@ export interface components {
             /** Path */
             path: string;
             /** Region */
-            region: string;
+            region: string | null;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -3192,19 +3222,33 @@ export interface components {
              * Level
              * @enum {string}
              */
-            level: "adm1" | "adm2";
+            level: "adm0" | "adm1" | "adm2";
             /** Units */
             units: string[];
+            /** Iso */
+            iso?: string | null;
             /** Geometry */
             geometry?: {
                 [key: string]: unknown;
             } | null;
         };
-        /** ForecastCreate */
+        /**
+         * ForecastCreate
+         * @description A forecast request: a trained blend to score, or model archives to run raw.
+         *
+         *     A blended forecast scores its models' live season against the blend's
+         *     trained weights. A raw forecast (``models``) only rolls each model's season
+         *     out and publishes it, with no blended probabilities.
+         */
         ForecastCreate: {
             /** Blend Id */
-            blend_id: string;
-            /** Forecast Model Ids */
+            blend_id?: string | null;
+            /** Models */
+            models?: string[] | null;
+            /**
+             * Forecast Model Ids
+             * @description Blend members to roll out; defaults to every member.
+             */
             forecast_model_ids?: string[] | null;
             /**
              * @default {
@@ -3212,6 +3256,13 @@ export interface components {
              *     }
              */
             params: components["schemas"]["ForecastParams"];
+            /**
+             * Season Year
+             * @description Season to forecast; defaults to this year's. A past year is a re-forecast.
+             */
+            season_year?: number | null;
+            /** @description Season window. A blend keeps the onset dates it was trained on and takes only this window's name and last issue date. */
+            season?: components["schemas"]["SeasonWindow"] | null;
             /** Run Id */
             run_id?: string | null;
         };
@@ -4318,29 +4369,6 @@ export interface components {
             /** Path */
             path: string;
         };
-        /** RegionWrite */
-        RegionWrite: {
-            /** Display Name */
-            display_name: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /** Lat Min */
-            lat_min: number;
-            /** Lat Max */
-            lat_max: number;
-            /** Lon Min */
-            lon_min: number;
-            /** Lon Max */
-            lon_max: number;
-            /**
-             * Land Only
-             * @default false
-             */
-            land_only: boolean;
-        };
         /** ResultFile */
         ResultFile: {
             /** Name */
@@ -4433,6 +4461,12 @@ export interface components {
             ref_model_dir?: string | null;
             /** Thresh File */
             thresh_file?: string | null;
+            /** Onset Rule */
+            onset_rule?: string | null;
+            /** Onset Rule Params */
+            onset_rule_params?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RulesetDetail */
         RulesetDetail: {
@@ -4574,6 +4608,32 @@ export interface components {
             denied_tools: string[];
             /** Model */
             model: string | null;
+        };
+        /**
+         * SeasonWindow
+         * @description A workspace's rainy season, e.g. Ethiopia's Kiremt.
+         */
+        SeasonWindow: {
+            /**
+             * Name
+             * @default Rainy season
+             */
+            name: string;
+            /**
+             * Onset Search Start
+             * @default 05-01
+             */
+            onset_search_start: string;
+            /**
+             * Reference Onset
+             * @default 06-01
+             */
+            reference_onset: string;
+            /**
+             * Last Issue Date
+             * @default 07-31
+             */
+            last_issue_date: string;
         };
         /** SessionCreate */
         SessionCreate: {
@@ -7034,7 +7094,7 @@ export interface operations {
     list_models_jobs_models_get: {
         parameters: {
             query?: {
-                region?: string | null;
+                dataset_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -7991,6 +8051,60 @@ export interface operations {
             };
         };
     };
+    list_countries_places_countries_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CountryOut"][];
+                };
+            };
+        };
+    };
+    get_boundary_places__iso__boundaries__level__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                iso: string;
+                level: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_regions_regions_get: {
         parameters: {
             query?: never;
@@ -8009,107 +8123,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
-                };
-            };
-        };
-    };
-    create_region_regions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegionWrite"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_region_regions__region_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                region_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegionWrite"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_region_regions__region_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                region_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

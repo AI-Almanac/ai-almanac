@@ -1,4 +1,5 @@
 import type { DataSource } from '$lib/api';
+import { overlaps, parseBounds, type Bounds } from '$lib/geo/bbox';
 
 // Years and grid a registered source covers, read from its detected metadata.
 
@@ -24,7 +25,7 @@ export function missingYears(source: HasMetadata | undefined): number[] {
 	return Array.isArray(value) ? value.filter((y): y is number => typeof y === 'number') : [];
 }
 
-export function formatYearSpan(span: YearSpan): string {
+function formatYearSpan(span: YearSpan): string {
 	return span.start === span.end ? `${span.start}` : `${span.start}–${span.end}`;
 }
 
@@ -46,7 +47,7 @@ export function formatDegrees(step: number): string {
 	return `${Number(step.toFixed(3))}°`;
 }
 
-export function formatGridStep(source: HasMetadata | undefined): string | null {
+function formatGridStep(source: HasMetadata | undefined): string | null {
 	const step = gridStep(source);
 	return step == null ? null : formatDegrees(step);
 }
@@ -62,4 +63,23 @@ export function describeSourceCoverage(source: HasMetadata | undefined): string 
 		grid ? `${grid} grid` : null
 	].filter((part): part is string => part !== null);
 	return parts.length ? parts.join(' · ') : null;
+}
+
+type Located = Pick<DataSource, 'metadata' | 'region'>;
+
+/** Where a source has data, as detected when it was validated. */
+export function spatialBounds(source: HasMetadata | undefined): Bounds | null {
+	return parseBounds(source?.metadata?.spatial_bounds);
+}
+
+/**
+ * Whether a forecast source can be scored against observations: both have data
+ * somewhere in common. A source whose extent was never detected is matched by the
+ * region it was filed under. Mirrors services/coverage.py.
+ */
+export function scoredTogether(observations: Located, model: Located): boolean {
+	const observed = spatialBounds(observations);
+	const forecast = spatialBounds(model);
+	if (observed && forecast) return overlaps(observed, forecast);
+	return (observations.region ?? '') === (model.region ?? '');
 }

@@ -1,0 +1,80 @@
+{
+  "legacy": {
+    "display_name": "Standard wet spell",
+    "description": "Onset is the first run of wet days whose rain adds up to the onset threshold, optionally cancelled when a dry spell follows soon after.",
+    "params": {
+      "wet_init": {
+        "label": "Rain that counts as a wet day",
+        "short_label": "wet day rain"
+      },
+      "wet_spell": {
+        "label": "Wet spell length",
+        "short_label": "wet spell"
+      },
+      "dry_spell": {
+        "label": "Dry spell that cancels onset",
+        "short_label": "dry spell"
+      },
+      "dry_extent": {
+        "label": "Days checked for a dry spell",
+        "short_label": "dry spell check"
+      }
+    }
+  },
+  "moron_robertson": {
+    "display_name": "Moron–Robertson",
+    "description": "Onset is the first wet day that starts a wet spell reaching the onset threshold and is not followed by a long dry spell.",
+    "params": {
+      "wet_day_mm": {
+        "label": "Rain needed on the first day",
+        "short_label": "first day rain"
+      },
+      "wet_days": {
+        "label": "Wet spell length",
+        "short_label": "wet spell"
+      },
+      "threshold": {
+        "label": "Wet spell rain total",
+        "short_label": "onset threshold"
+      },
+      "follow_days": {
+        "label": "Days checked for a dry spell",
+        "short_label": "dry spell check"
+      },
+      "dry_window": {
+        "label": "Dry spell length",
+        "short_label": "dry spell"
+      },
+      "dry_min_mm": {
+        "label": "Rain below which a spell is dry",
+        "short_label": "dry day rain"
+      }
+    }
+  },
+  "two_stage": {
+    "display_name": "Two-stage",
+    "description": "Onset needs a set amount of rain over a first period and a further amount over the period that follows it.",
+    "params": {
+      "stage1_days": {
+        "label": "First stage length",
+        "short_label": "first stage"
+      },
+      "stage1_mm": {
+        "label": "First stage rain",
+        "short_label": "first stage rain"
+      },
+      "stage2_days": {
+        "label": "Second stage length",
+        "short_label": "second stage"
+      },
+      "stage2_mm": {
+        "label": "Second stage rain",
+        "short_label": "second stage rain"
+      },
+      "inclusive": {
+        "label": "Totals may equal the amounts",
+        "short_label": "totals may equal"
+      }
+    }
+  }
+}

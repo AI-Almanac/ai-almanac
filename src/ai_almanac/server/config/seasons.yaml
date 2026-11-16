@@ -1,0 +1,16 @@
+# Season presets
+#
+# A season is a named window: when the search for onset starts, the reference onset
+# date, and the last date a forecast is issued on, each as MM-DD.
+#
+# `countries` (three-letter codes) says where a preset is the usual season, so a
+# workspace working there starts in it until it sets a season of its own. A season is
+# never a property of a place: a run records the dates it used, and nothing else
+# looks a season up by place.
+
+- id: kiremt
+  name: "Kiremt"
+  onset_search_start: "05-01"
+  reference_onset: "06-01"
+  last_issue_date: "07-31"
+  countries: ["ETH"]

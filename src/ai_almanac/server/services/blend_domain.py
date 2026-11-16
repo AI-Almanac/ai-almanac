@@ -14,7 +14,12 @@ import uuid
 
 import sqlalchemy as sa
 
-from ai_almanac.server.services import blend_summaries, guardrails, job_submission
+from ai_almanac.server.services import (
+    blend_summaries,
+    coverage,
+    guardrails,
+    job_submission,
+)
 from ai_almanac.server.services import data_sources as data_source_service
 from ai_almanac.server.services.benchmark_state import BenchmarkScope
 from ai_almanac.server.services.blend_cells import BLEND_MODELS
@@ -77,10 +82,18 @@ async def _ready_obs_candidates(user_id: str | None = None) -> list[dict]:
 
 
 async def _ready_model_candidates(
-    region: str | None = None, user_id: str | None = None
+    observation_id: str | None = None, user_id: str | None = None
 ) -> list[dict]:
-    sources = await data_source_service.get_model_sources(region, user_id=user_id)
-    return [_model_candidate(s) for s in sources if s.get("status") == "ready"]
+    """The models that can be blended against the chosen observations; every model
+    before any are chosen."""
+    observation = await data_source_service.get_source(observation_id) if observation_id else None
+    sources = await data_source_service.get_model_sources(user_id=user_id)
+    return [
+        _model_candidate(source)
+        for source in sources
+        if source.get("status") == "ready"
+        and (observation is None or coverage.scored_together(observation, source))
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -207,12 +220,15 @@ async def _validation_for_config(spec: BlendRunSpec, user_id: str | None = None)
     if spec.obs_dataset_id and obs is None:
         errors.append(f"Unknown or unavailable observation source: {spec.obs_dataset_id}")
 
-    model_region = obs.get("region") if obs else None
-    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region, user_id)}
+    model_candidates = {
+        c["id"]: c for c in await _ready_model_candidates(obs["id"] if obs else None, user_id)
+    }
     selected_models = [model_candidates[mid] for mid in spec.model_ids if mid in model_candidates]
     bad_models = [mid for mid in spec.model_ids if mid not in model_candidates]
     if bad_models:
-        errors.append("Models are not available for this region: " + ", ".join(bad_models))
+        errors.append(
+            "Models have no data where the selected observations do: " + ", ".join(bad_models)
+        )
 
     warnings.extend(
         job_submission.historical_only_warning(
@@ -343,7 +359,8 @@ async def validation_for_config(spec: BlendRunSpec, user_id: str) -> BlendValida
 
 
 async def list_blend_models(region: str | None, user_id: str, scope: BenchmarkScope) -> dict:
-    return {"models": await _ready_model_candidates(region, user_id)}
+    sources = await data_source_service.get_model_sources(region, user_id=user_id)
+    return {"models": [_model_candidate(s) for s in sources if s.get("status") == "ready"]}
 
 
 async def get_blend_config(user_id: str, scope: BenchmarkScope, session_id: str) -> dict:
@@ -370,9 +387,10 @@ async def update_blend_config(
     obs_id = patch.get("obs_dataset_id") if "obs_dataset_id" in patch else spec.obs_dataset_id
     obs = obs_candidates.get(obs_id) if isinstance(obs_id, str) else None
 
-    # Models are region-scoped to the chosen observations, matching the UI.
-    model_region = obs.get("region") if obs else None
-    model_candidates = {c["id"]: c for c in await _ready_model_candidates(model_region, user_id)}
+    # Models are offered where the chosen observations have data, matching the UI.
+    model_candidates = {
+        c["id"]: c for c in await _ready_model_candidates(obs["id"] if obs else None, user_id)
+    }
     raw_model_ids = (
         patch["model_ids"] if isinstance(patch.get("model_ids"), list) else spec.model_ids
     )

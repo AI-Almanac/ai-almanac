@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 from sqlalchemy import text
@@ -8,16 +7,9 @@ from sqlalchemy import text
 from ai_almanac.server.db import get_db
 from ai_almanac.settings import get_packaged_regions
 
-_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
-
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def region_slug(display_name: str) -> str:
-    slug = _SLUG_PATTERN.sub("-", display_name.strip().lower()).strip("-")
-    return slug or "region"
 
 
 def _row_dict(row) -> dict:
@@ -83,103 +75,3 @@ async def get_region(region_id: str) -> dict | None:
             .fetchone()
         )
     return _row_dict(row) if row else None
-
-
-async def create_region(
-    *,
-    display_name: str,
-    description: str,
-    lat_min: float,
-    lat_max: float,
-    lon_min: float,
-    lon_max: float,
-    land_only: bool,
-) -> dict:
-    base_id = region_slug(display_name)
-    region_id = base_id
-    suffix = 2
-    async with get_db() as conn:
-        while (
-            await conn.execute(text("SELECT 1 FROM regions WHERE id = :id"), {"id": region_id})
-        ).scalar_one_or_none():
-            region_id = f"{base_id}-{suffix}"
-            suffix += 1
-
-        now = _now()
-        result = await conn.execute(
-            text(
-                "INSERT INTO regions "
-                "(id, display_name, description, lat_min, lat_max, lon_min, lon_max, "
-                "land_only, shp_only, is_builtin, created_at, updated_at) "
-                "VALUES (:id, :display_name, :description, :lat_min, :lat_max, "
-                ":lon_min, :lon_max, :land_only, FALSE, FALSE, :now, :now) RETURNING *"
-            ),
-            {
-                "id": region_id,
-                "display_name": display_name.strip(),
-                "description": description.strip(),
-                "lat_min": lat_min,
-                "lat_max": lat_max,
-                "lon_min": lon_min,
-                "lon_max": lon_max,
-                "land_only": land_only,
-                "now": now,
-            },
-        )
-        return _row_dict(result.mappings().fetchone())
-
-
-async def update_region(
-    region_id: str,
-    *,
-    display_name: str,
-    description: str,
-    lat_min: float,
-    lat_max: float,
-    lon_min: float,
-    lon_max: float,
-    land_only: bool,
-) -> dict | None:
-    async with get_db() as conn:
-        result = await conn.execute(
-            text(
-                "UPDATE regions SET display_name = :display_name, description = :description, "
-                "lat_min = :lat_min, lat_max = :lat_max, lon_min = :lon_min, "
-                "lon_max = :lon_max, land_only = :land_only, updated_at = :now "
-                "WHERE id = :id AND is_builtin = FALSE RETURNING *"
-            ),
-            {
-                "id": region_id,
-                "display_name": display_name.strip(),
-                "description": description.strip(),
-                "lat_min": lat_min,
-                "lat_max": lat_max,
-                "lon_min": lon_min,
-                "lon_max": lon_max,
-                "land_only": land_only,
-                "now": _now(),
-            },
-        )
-        row = result.mappings().fetchone()
-        return _row_dict(row) if row else None
-
-
-async def count_region_sources(region_id: str) -> int:
-    async with get_db() as conn:
-        return int(
-            (
-                await conn.execute(
-                    text("SELECT COUNT(*) FROM data_sources WHERE region = :id"),
-                    {"id": region_id},
-                )
-            ).scalar_one()
-        )
-
-
-async def delete_region(region_id: str) -> bool:
-    async with get_db() as conn:
-        result = await conn.execute(
-            text("DELETE FROM regions WHERE id = :id AND is_builtin = FALSE"),
-            {"id": region_id},
-        )
-        return result.rowcount > 0

@@ -32,6 +32,7 @@ from ai_almanac.paths import (
 _CONFIG_PKG = files("ai_almanac.server").joinpath("config")
 _ROMP_YAML = Path(str(_CONFIG_PKG.joinpath("romp.yaml")))
 _REGIONS_YAML = Path(str(_CONFIG_PKG.joinpath("regions.yaml")))
+_SEASONS_YAML = Path(str(_CONFIG_PKG.joinpath("seasons.yaml")))
 _FORECAST_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("forecast_models.yaml")))
 _LOCAL_LLM_MODELS_YAML = Path(str(_CONFIG_PKG.joinpath("local_llm_models.yaml")))
 
@@ -242,7 +243,7 @@ class Settings(BaseSettings):
     # in the "Features" group of routers/settings.py. A feature admins should be
     # able to keep to themselves uses an `<feature>_audience` instead.
     #
-    # Custom regions and user-registered datasets. "admins" keeps the Data page
+    # User-registered datasets. "admins" keeps the Data page
     # to admins, e.g. to curate the shared built-in datasets before every user
     # can register their own.
     data_management_audience: Audience = "everyone"
@@ -653,6 +654,10 @@ def get_metric_definitions() -> list[dict]:
 
 def get_packaged_regions() -> list[dict]:
     return yaml.safe_load(_REGIONS_YAML.read_text())
+
+
+def get_packaged_seasons() -> list[dict]:
+    return yaml.safe_load(_SEASONS_YAML.read_text()) or []
 
 
 _forecast_models_cache: list[dict] | None = None

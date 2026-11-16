@@ -10,7 +10,7 @@
 
 <header class="page-header">
 	<p class="eyebrow">{eyebrow}</p>
-	<h2>{title}</h2>
+	<h1>{title}</h1>
 	<p class="description">{description}</p>
 </header>
 
@@ -23,7 +23,7 @@
 		padding-bottom: 0.35rem;
 	}
 	.eyebrow,
-	h2,
+	h1,
 	.description {
 		margin: 0;
 	}
@@ -34,7 +34,7 @@
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 	}
-	h2 {
+	h1 {
 		font-family: var(--font-display);
 		font-size: 1.85rem;
 		font-weight: 550;

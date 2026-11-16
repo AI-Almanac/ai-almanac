@@ -3,7 +3,7 @@
 	import * as maplibregl from 'maplibre-gl';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import '$lib/maplibre-worker';
-	import type { FeatureCollection, Position } from 'geojson';
+	import type { FeatureCollection } from 'geojson';
 	import { BASEMAP_STYLES } from '$lib/basemaps';
 	import {
 		isFocusUnits,
@@ -11,33 +11,36 @@
 		type FocusAreaValue,
 		type FocusUnitLevel
 	} from '$lib/api/jobs';
-	import { getRegionBoundary } from '$lib/api/regions';
+	import { getCountries, getPlaceBoundary, type Country } from '$lib/api/places';
+	import { boxBetween, boxOutline, isDegenerate, shapeBounds } from '$lib/geo/bbox';
+	import { pickedPlaces, toggled, wholeCountry } from '$lib/places';
 
 	interface Props {
 		value: FocusAreaValue | null;
 		/** Bounding box to frame when nothing is drawn yet. */
 		extent?: BboxExtent | null;
-		/** Region whose border is highlighted and whose areas can be picked. */
-		regionId?: string | null;
+		/** Where places are picked until the user chooses a country, by its three-letter code. */
+		country?: string | null;
 		onchange: (value: FocusAreaValue | null) => void;
 	}
 
-	const { value, extent = null, regionId = null, onchange }: Props = $props();
+	const { value, extent = null, country: defaultCountry = null, onchange }: Props = $props();
 
-	type Mode = 'region' | 'box' | 'units';
-	const MODES: { id: Mode; label: string }[] = [
-		{ id: 'region', label: 'Whole region' },
+	type Mode = 'all' | 'box' | 'units';
+	const modes: { id: Mode; label: string }[] = [
+		{ id: 'all', label: 'All of the data' },
 		{ id: 'box', label: 'Draw a box' },
-		{ id: 'units', label: 'Pick areas' }
+		{ id: 'units', label: 'Pick places' }
 	];
-	// Larger units first: a broad area is a handful of states, not hundreds of districts.
+	// Larger places first: a broad area is a handful of states, not hundreds of districts.
 	const UNIT_LEVELS: { id: FocusUnitLevel; label: string }[] = [
+		{ id: 'adm0', label: 'Whole country' },
 		{ id: 'adm1', label: 'States & regions' },
 		{ id: 'adm2', label: 'Districts & zones' }
 	];
 
 	const SOURCE = 'focus-area';
-	const REGION = 'focus-region';
+	const COUNTRY = 'focus-country';
 	const ZONES = 'focus-zones';
 	const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
 	let container = $state<HTMLDivElement | null>(null);
@@ -45,61 +48,19 @@
 	let mapReady = $state(false);
 	let drawing = $state(false);
 	let anchor: maplibregl.LngLat | null = null;
-	let regionShape = $state<FeatureCollection | null>(null);
+	let countryShape = $state<FeatureCollection | null>(null);
 	let zones = $state<FeatureCollection | null>(null);
 	let zonesFailed = $state(false);
-	let mode = $state<Mode>('region');
+	let mode = $state<Mode>('all');
 	let unitLevel = $state<FocusUnitLevel>('adm1');
+	let countries = $state<Country[]>([]);
+	/** A country chosen here, or named by picked places; undefined until there is one. */
+	let chosenCountry = $state<string | null | undefined>(undefined);
+	/** The country places are picked in, by its three-letter code. */
+	const country = $derived(chosenCountry === undefined ? defaultCountry : chosenCountry);
 
 	const box = $derived(value && !isFocusUnits(value) ? value : null);
 	const picked = $derived(isFocusUnits(value) ? value.units : []);
-
-	function boxFrom(a: maplibregl.LngLat, b: maplibregl.LngLat): BboxExtent {
-		const round = (n: number) => Math.round(n * 100) / 100;
-		return {
-			lat_min: round(Math.min(a.lat, b.lat)),
-			lat_max: round(Math.max(a.lat, b.lat)),
-			lon_min: round(Math.min(a.lng, b.lng)),
-			lon_max: round(Math.max(a.lng, b.lng))
-		};
-	}
-
-	function polygon(area: BboxExtent | null): FeatureCollection {
-		if (!area) return EMPTY;
-		const { lat_min, lat_max, lon_min, lon_max } = area;
-		const ring = [
-			[lon_min, lat_min],
-			[lon_max, lat_min],
-			[lon_max, lat_max],
-			[lon_min, lat_max],
-			[lon_min, lat_min]
-		];
-		return {
-			type: 'FeatureCollection',
-			features: [
-				{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } }
-			]
-		};
-	}
-
-	function shapeExtent(shape: FeatureCollection): BboxExtent | null {
-		let bounds: BboxExtent | null = null;
-		const visit = (p: Position) => {
-			bounds = bounds
-				? {
-						lat_min: Math.min(bounds.lat_min, p[1]),
-						lat_max: Math.max(bounds.lat_max, p[1]),
-						lon_min: Math.min(bounds.lon_min, p[0]),
-						lon_max: Math.max(bounds.lon_max, p[0])
-					}
-				: { lat_min: p[1], lat_max: p[1], lon_min: p[0], lon_max: p[0] };
-		};
-		for (const { geometry } of shape.features) {
-			if (geometry.type === 'Polygon') geometry.coordinates.flat().forEach(visit);
-			else if (geometry.type === 'MultiPolygon') geometry.coordinates.flat(2).forEach(visit);
-		}
-		return bounds;
-	}
 
 	function setData(source: string, data: FeatureCollection) {
 		(map?.getSource(source) as maplibregl.GeoJSONSource | undefined)?.setData(data);
@@ -117,7 +78,10 @@
 	}
 
 	function frame() {
-		fitTo(box ?? extent ?? (regionShape ? shapeExtent(regionShape) : null));
+		const countryExtent = countryShape ? shapeBounds(countryShape) : null;
+		// The host's extent is its data's; a country chosen here is somewhere else.
+		const chosenHere = chosenCountry !== undefined;
+		fitTo(box ?? (chosenHere ? countryExtent : null) ?? extent ?? countryExtent);
 	}
 
 	function startDrawing() {
@@ -137,7 +101,7 @@
 		stopDrawing();
 		mode = next;
 		// The three choices are exclusive: leaving a mode discards its selection.
-		if (next === 'region' || (next === 'box') === isFocusUnits(value)) {
+		if (next === 'all' || (next === 'box') === isFocusUnits(value)) {
 			if (value) onchange(null);
 		}
 	}
@@ -150,11 +114,26 @@
 		zonesFailed = false;
 	}
 
-	// A selection is one level's areas, so changing level starts it over.
+	function countryOf(iso: string | null): Country | null {
+		return countries.find((candidate) => candidate.iso === iso) ?? null;
+	}
+
+	// A selection is one level's places, so changing level starts it over. A whole
+	// country is a selection in itself.
 	function setUnitLevel(next: FocusUnitLevel) {
 		if (next === unitLevel) return;
 		showLevel(next);
-		if (isFocusUnits(value)) onchange(null);
+		const whole = next === 'adm0' ? countryOf(country) : null;
+		if (whole) onchange(wholeCountry(whole));
+		else if (isFocusUnits(value)) onchange(null);
+	}
+
+	// Places belong to one country, so choosing another starts the selection over.
+	function setCountry(iso: string) {
+		chosenCountry = iso || null;
+		const whole = unitLevel === 'adm0' ? countryOf(chosenCountry) : null;
+		if (whole) onchange(wholeCountry(whole));
+		else if (isFocusUnits(value)) onchange(null);
 	}
 
 	function zoneName(feature: maplibregl.MapGeoJSONFeature): string | null {
@@ -163,8 +142,7 @@
 	}
 
 	function togglePicked(name: string) {
-		const next = picked.includes(name) ? picked.filter((n) => n !== name) : [...picked, name];
-		onchange(next.length ? { level: unitLevel, units: next } : null);
+		onchange(pickedPlaces(unitLevel, toggled(picked, name), country));
 	}
 
 	function clearSelection() {
@@ -192,18 +170,18 @@
 		map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 		map.on('load', () => {
 			if (!map) return;
-			// Region first, then pickable areas, then the box, so each paints above the last.
-			map.addSource(REGION, { type: 'geojson', data: regionShape ?? EMPTY });
+			// Country first, then pickable areas, then the box, so each paints above the last.
+			map.addSource(COUNTRY, { type: 'geojson', data: countryShape ?? EMPTY });
 			map.addLayer({
-				id: `${REGION}-fill`,
+				id: `${COUNTRY}-fill`,
 				type: 'fill',
-				source: REGION,
+				source: COUNTRY,
 				paint: { 'fill-color': '#0f766e', 'fill-opacity': 0.12 }
 			});
 			map.addLayer({
-				id: `${REGION}-line`,
+				id: `${COUNTRY}-line`,
 				type: 'line',
-				source: REGION,
+				source: COUNTRY,
 				paint: { 'line-color': '#0f766e', 'line-width': 1.5, 'line-opacity': 0.8 }
 			});
 			// Feature state needs an id per area; the name doubles as one.
@@ -223,7 +201,7 @@
 				source: ZONES,
 				paint: { 'line-color': '#2f6fed', 'line-width': 0.8, 'line-opacity': 0.7 }
 			});
-			map.addSource(SOURCE, { type: 'geojson', data: polygon(box) });
+			map.addSource(SOURCE, { type: 'geojson', data: boxOutline(box) });
 			map.addLayer({
 				id: `${SOURCE}-fill`,
 				type: 'fill',
@@ -260,14 +238,14 @@
 			anchor = e.lngLat;
 		});
 		map.on('mousemove', (e) => {
-			if (anchor) setData(SOURCE, polygon(boxFrom(anchor, e.lngLat)));
+			if (anchor) setData(SOURCE, boxOutline(boxBetween(anchor, e.lngLat)));
 		});
 		map.on('mouseup', (e) => {
 			if (!anchor) return;
-			const drawn = boxFrom(anchor, e.lngLat);
+			const drawn = boxBetween(anchor, e.lngLat);
 			stopDrawing();
-			if (drawn.lat_min === drawn.lat_max || drawn.lon_min === drawn.lon_max) {
-				setData(SOURCE, polygon(box));
+			if (isDegenerate(drawn)) {
+				setData(SOURCE, boxOutline(box));
 				return;
 			}
 			onchange(drawn);
@@ -276,27 +254,39 @@
 
 	onDestroy(() => map?.remove());
 
-	// A value set from outside (chat, a reloaded config) decides the mode.
+	// A value set from outside (chat, a reloaded config) decides the mode, and the
+	// country when its places name one.
 	$effect(() => {
 		if (isFocusUnits(value)) {
 			mode = 'units';
 			const level = value.level;
-			untrack(() => showLevel(level));
+			const iso = value.iso;
+			untrack(() => {
+				showLevel(level);
+				if (iso) chosenCountry = iso;
+			});
 		} else if (value) mode = 'box';
 	});
 
-	// The region's border, when the boundary service knows it. A miss just leaves
-	// the basemap, so the map stays usable for regions without boundary data.
+	// The list is only missed by the country choice; places already picked still show.
+	onMount(() => {
+		getCountries()
+			.then((listed) => (countries = listed))
+			.catch(() => {});
+	});
+
+	// The country's border, when the boundary service knows it. A miss just leaves
+	// the basemap, so the map stays usable without boundary data.
 	$effect(() => {
-		const id = regionId;
-		regionShape = null;
+		const iso = country;
+		countryShape = null;
 		zones = null;
 		zonesFailed = false;
-		if (!id) return;
+		if (!iso) return;
 		let stale = false;
-		getRegionBoundary(id, 'adm0')
+		getPlaceBoundary(iso, 'adm0')
 			.then(({ geojson }) => {
-				if (!stale && isFeatureCollection(geojson)) regionShape = geojson;
+				if (!stale && isFeatureCollection(geojson)) countryShape = geojson;
 			})
 			.catch(() => {});
 		return () => {
@@ -304,15 +294,17 @@
 		};
 	});
 
-	// Pickable areas load on demand, the first time the mode calls for them.
+	// Pickable places load on demand, the first time the mode calls for them.
 	$effect(() => {
 		const level = unitLevel;
-		const id = regionId;
-		if (mode !== 'units' || !id || zones || zonesFailed) return;
+		const iso = country;
+		if (mode !== 'units' || !iso || zones || zonesFailed) return;
 		let stale = false;
-		getRegionBoundary(id, level)
+		getPlaceBoundary(iso, level)
 			.then(({ geojson }) => {
-				if (!stale && isFeatureCollection(geojson)) zones = geojson;
+				if (stale || !isFeatureCollection(geojson)) return;
+				zones = geojson;
+				fitTo(shapeBounds(geojson));
 			})
 			.catch(() => {
 				if (!stale) zonesFailed = true;
@@ -332,14 +324,14 @@
 	}
 
 	$effect(() => {
-		if (mapReady) setData(SOURCE, polygon(box));
+		if (mapReady) setData(SOURCE, boxOutline(box));
 	});
 
-	// The region highlight means "this is what gets scored", so it yields to any
+	// The country highlight means "this is what gets scored", so it yields to any
 	// selection and returns when the selection is cleared.
 	$effect(() => {
 		if (!mapReady) return;
-		setData(REGION, value ? EMPTY : (regionShape ?? EMPTY));
+		setData(COUNTRY, value ? EMPTY : (countryShape ?? EMPTY));
 		if (!value) frame();
 	});
 
@@ -363,7 +355,7 @@
 <div class="focus-area" class:expanded>
 	<div class="toolbar">
 		<div class="modes" role="group" aria-label="Area of interest">
-			{#each MODES as option (option.id)}
+			{#each modes as option (option.id)}
 				<button
 					type="button"
 					class:active={mode === option.id}
@@ -375,7 +367,18 @@
 			{/each}
 		</div>
 		{#if mode === 'units'}
-			<div class="modes" role="group" aria-label="Kind of area to pick">
+			<select
+				class="country"
+				aria-label="Country to pick places in"
+				value={country ?? ''}
+				onchange={(event) => setCountry(event.currentTarget.value)}
+			>
+				<option value="" disabled>Choose a country</option>
+				{#each countries as listed (listed.iso)}
+					<option value={listed.iso}>{listed.name}</option>
+				{/each}
+			</select>
+			<div class="modes" role="group" aria-label="Kind of place to pick">
 				{#each UNIT_LEVELS as option (option.id)}
 					<button
 						type="button"
@@ -407,7 +410,11 @@
 					Couldn't load areas.
 					<button type="button" class="retry" onclick={() => (zonesFailed = false)}> Retry </button>
 				{:else}
-					{zones ? 'Click areas to add them' : 'Loading areas…'}
+					{#if !country}
+						Choose a country to pick places in
+					{:else}
+						{zones ? 'Click places to add them' : 'Loading places…'}
+					{/if}
 				{/if}
 			</p>
 		{/if}
@@ -431,19 +438,19 @@
 					{box.lat_min}° to {box.lat_max}° lat, {box.lon_min}° to {box.lon_max}° lon
 				</small>
 			{:else if !drawing}
-				<small>No box yet, so the whole region is scored</small>
+				<small>No box yet, so all of the data is scored</small>
 			{/if}
 		{:else if mode === 'units'}
 			{#if picked.length}
-				<button type="button" class="clear" title="Deselect every area" onclick={clearSelection}>
+				<button type="button" class="clear" title="Deselect every place" onclick={clearSelection}>
 					Clear
 				</button>
 				<small>{picked.length} selected: {picked.join(', ')}</small>
 			{:else}
-				<small>Click an area on the map to add it; click again to remove it</small>
+				<small>Click a place on the map to add it; click again to remove it</small>
 			{/if}
 		{:else}
-			<small>Whole region is scored</small>
+			<small>All of the data is scored</small>
 		{/if}
 	</div>
 </div>
@@ -502,6 +509,17 @@
 		border-radius: 0.5rem;
 		background: var(--color-bg);
 		inline-size: fit-content;
+	}
+
+	.country {
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		padding: 0.4rem 0.6rem;
+		background: var(--color-bg);
+		color: var(--color-text);
+		font: inherit;
+		font-size: 0.85rem;
+		max-inline-size: 100%;
 	}
 
 	.modes button {

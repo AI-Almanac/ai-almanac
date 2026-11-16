@@ -18,7 +18,9 @@ from ai_almanac.server.services.forecast_models import training_summary
 from ai_almanac.server.tables import jobs as _jobs
 
 from .benchmark_state import BenchmarkRunSpec, BenchmarkScope, BenchmarkValidation
+from .onset_rules import DEFAULT_ONSET_RULE, onset_fit_errors, onset_rule_errors
 from .registry import CatalogSnapshot, load_catalog, load_model_registry
+from .romp import DEFAULT_MAX_FORECAST_DAY
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,8 @@ SHARED_ROMP_PARAM_KEYS = {
     "thresh_file",
     "ref_model",
     "ref_model_dir",
+    "onset_rule",
+    "onset_rule_params",
 }
 
 PER_MODEL_ROMP_PARAM_KEYS = {
@@ -199,9 +203,9 @@ async def _dataset_candidates(user_id: str) -> list[dict]:
 
 
 def _finalize_benchmark_config(spec: BenchmarkRunSpec) -> BenchmarkRunSpec:
+    # A region is not asked for: a run is scored where its data is, or in the place
+    # it names.
     missing = []
-    if not spec.region_id:
-        missing.append("region")
     if not spec.dataset_id:
         missing.append("ground_truth_dataset")
     if not spec.model_ids:
@@ -286,6 +290,31 @@ def _model_windows(
     return windows
 
 
+def _onset_rule_errors(params: dict[str, Any]) -> list[str]:
+    rule, rule_params = params.get("onset_rule"), params.get("onset_rule_params")
+    if not rule and not rule_params:
+        return []
+    if rule_params is not None and not isinstance(rule_params, dict):
+        return ["onset_rule_params must be an object"]
+    return onset_rule_errors(rule or DEFAULT_ONSET_RULE, rule_params or {})
+
+
+def _onset_fit_errors(spec: BenchmarkRunSpec, models: list[dict]) -> list[str]:
+    """Models whose forecasts are too short for the onset definition, with the settings
+    each model's job would get."""
+    forecast_days = spec.forecast_window_days or DEFAULT_MAX_FORECAST_DAY
+    return [
+        error
+        for model in models
+        for error in onset_fit_errors(
+            _clamp_model_params(model, spec),
+            forecast_days=forecast_days,
+            forecast_steps=model.get("forecast_steps"),
+            model_name=model.get("display_name") or model["id"],
+        )
+    ]
+
+
 def _missing_year_warnings(
     windows: list[guardrails.ModelWindow], model_map: dict[str, dict]
 ) -> list[str]:
@@ -313,17 +342,28 @@ def _validation_for_config(spec: BenchmarkRunSpec, catalog: CatalogSnapshot) -> 
     region = _region_by_id(catalog, spec.region_id)
     if spec.region_id and not region:
         errors.append(f"Unknown region_id: {spec.region_id}")
-    models = catalog.models_for_region(spec.region_id)
+    models = catalog.models_for(spec.dataset_id, spec.region_id)
     model_map = {model["id"]: model for model in models}
     valid_model_ids = {model["id"] for model in models}
     bad_models = [model_id for model_id in spec.model_ids if model_id not in valid_model_ids]
     if bad_models:
-        errors.append(f"Models are not available for {spec.region_id}: {', '.join(bad_models)}")
+        unavailable = (
+            "Models have no data where the selected observations do"
+            if catalog.observation(spec.dataset_id)
+            else f"Models are not available for {spec.region_id}"
+        )
+        errors.append(f"{unavailable}: {', '.join(bad_models)}")
     if spec.forecast_window_days is not None and spec.forecast_window_days <= 0:
         errors.append("forecast_window_days must be positive")
     if spec.forecast_window_days is not None and spec.forecast_window_days < 30:
         errors.append(
             "forecast_window_days must be at least 30 because the default verification window extends to day 30"
+        )
+    onset_errors = _onset_rule_errors(spec.advanced_params)
+    errors.extend(onset_errors)
+    if not onset_errors:
+        errors.extend(
+            _onset_fit_errors(spec, [model_map[m] for m in spec.model_ids if m in model_map])
         )
     per_model_params = spec.advanced_params.get("per_model_params")
     if isinstance(per_model_params, dict):
@@ -521,7 +561,9 @@ async def _exec_update_benchmark_config(
     )
     models = [
         model
-        for model in catalog.models_for_region(region["id"] if region else None)
+        for model in catalog.models_for(
+            dataset["id"] if dataset else None, region["id"] if region else None
+        )
         if model["id"] in {mid for mid in model_ids if isinstance(mid, str)}
     ]
     advanced_params = dict(spec.advanced_params)
@@ -615,7 +657,7 @@ async def _exec_submit_benchmark(
 
     models = [
         model
-        for model in catalog.models_for_region(spec.region_id)
+        for model in catalog.models_for(spec.dataset_id, spec.region_id)
         if model["id"] in set(spec.model_ids)
     ]
     run_id = str(uuid.uuid4())
