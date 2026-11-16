@@ -598,12 +598,20 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
 
         failures: dict[str, str] = {}
         pipeline = _load_pipeline()
+        scored = pipeline.scores_against_blend(config)
         plan = None
-        try:
-            plan = _season_plan(pipeline, config)
-        except ValueError as exc:
-            failures["season_plan"] = str(exc)
-            traceback.print_exc()
+        if client is None and not scored:
+            # Without a blend the raw seasons are the only deliverable, and they
+            # cannot be published, so no GPU time is spent producing them.
+            failures["season_upload"] = (
+                "Cloud Storage could not be reached, so the season could not be published"
+            )
+        else:
+            try:
+                plan = _season_plan(pipeline, config)
+            except ValueError as exc:
+                failures["season_plan"] = str(exc)
+                traceback.print_exc()
 
         # The raw short-lead map deliverable was dropped (D1): its rollout is
         # already contained in the season loop's latest issue date.
@@ -616,7 +624,6 @@ def run_forecast(job_id: str, config: dict, outputs_bucket: str) -> None:
             if missing:
                 print(f"==> Skipping scoring and publishing; missing season data for {missing}")
             else:
-                scored = pipeline.scores_against_blend(config)
                 if scored:
                     _score_against_blend(
                         job_id, config, plan, live_forecast_bundles, outputs_bucket, failures

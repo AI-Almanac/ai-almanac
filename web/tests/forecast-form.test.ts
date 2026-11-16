@@ -27,7 +27,8 @@ const fields: ForecastFields = {
 	modelNames: ['aifs_eth'],
 	initSource: 'gfs',
 	initTime: '',
-	maxIssueDates: undefined
+	maxIssueDates: undefined,
+	seasonYear: undefined
 };
 
 describe('the models a forecast can run', () => {
@@ -65,5 +66,10 @@ describe('the request a forecast is submitted with', () => {
 		expect(
 			forecastRequest({ ...fields, initTime: ' 2027-05-01T00 ', maxIssueDates: 3 }).params
 		).toEqual({ init_time: '2027-05-01T00', init_source: 'gfs', max_issue_dates: 3 });
+	});
+
+	it('names a season year only when one was chosen, to forecast an ended season again', () => {
+		expect(forecastRequest({ ...fields, seasonYear: 2026 }).season_year).toBe(2026);
+		expect(forecastRequest({ ...fields, seasonYear: NaN })).not.toHaveProperty('season_year');
 	});
 });

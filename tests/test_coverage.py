@@ -250,3 +250,34 @@ async def test_a_benchmark_is_not_held_up_for_want_of_a_region(
     assert validation.missing_fields == []
     assert not [error for error in validation.errors if "region" in error.lower()]
     assert not [error for error in validation.errors if "no data where" in error]
+
+
+AMERICAS_WEST = {"lat_min": -10.0, "lat_max": 30.0, "lon_min": -100.0, "lon_max": -60.0}
+WEST_AFRICA = {"lat_min": 4.0, "lat_max": 20.0, "lon_min": -17.0, "lon_max": 51.0}
+
+
+def _on_0_360(box: dict) -> dict:
+    return {**box, "lon_min": box["lon_min"] % 360, "lon_max": box["lon_max"] % 360}
+
+
+def test_a_model_stored_0_to_360_is_scored_with_observations_stored_minus_180_to_180() -> None:
+    observations = _source("CHIRPS", None, AMERICAS_WEST)
+    model = _source("GraphCast", None, _on_0_360(AMERICAS_WEST))
+
+    assert coverage.mismatch(observations, model) is None
+    assert coverage.overlap(AMERICAS_WEST, _on_0_360(AMERICAS_WEST)) == AMERICAS_WEST
+
+
+def test_a_global_grid_shares_all_of_an_area_that_crosses_its_seam() -> None:
+    whole_globe = {"lat_min": -90.0, "lat_max": 90.0, "lon_min": 0.0, "lon_max": 359.75}
+
+    assert coverage.overlap(WEST_AFRICA, whole_globe) == WEST_AFRICA
+    assert coverage.overlap(whole_globe, WEST_AFRICA) == WEST_AFRICA
+
+
+def test_spans_on_either_side_of_the_antimeridian_share_what_they_cover() -> None:
+    pacific = {"lat_min": -10.0, "lat_max": 10.0, "lon_min": 170.0, "lon_max": 190.0}
+    just_east = {"lat_min": -10.0, "lat_max": 10.0, "lon_min": -175.0, "lon_max": -160.0}
+
+    assert coverage.overlap(pacific, just_east) == {**pacific, "lon_min": 185.0}
+    assert coverage.overlap(pacific, INDIA) is None
