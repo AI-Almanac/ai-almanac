@@ -612,6 +612,47 @@ def test_season_assembly_crops_each_issue_date_to_the_region_in_archive_units(tm
     np.testing.assert_allclose(tp.sel(time="2026-05-07").values, 2 * (cropped + 100))
 
 
+def _global_0_360_trajectory():
+    """A GFS-style trajectory, longitudes 0..359; each cell holds its own longitude."""
+    import numpy as np
+    import xarray as xr
+
+    lon = np.arange(0.0, 360.0, 1.0)
+    lat = np.array([10.0, 5.0, 0.0])
+    return xr.DataArray(
+        np.broadcast_to(lon, (2, lat.size, lon.size)).astype("float32"),
+        dims=("day", "lat", "lon"),
+        coords={"day": [0, 1], "lat": lat, "lon": lon},
+        name="tp",
+    )
+
+
+def test_a_0_360_trajectory_crops_to_a_box_west_of_greenwich():
+    from ai_almanac.server.services.forecast_pipeline import select_lat_lon_bounds
+
+    cropped = select_lat_lon_bounds(_global_0_360_trajectory(), Bounds(0.0, 5.0, -80.0, -70.0))
+
+    assert cropped["lon"].values.tolist() == list(range(-80, -69))
+    assert cropped.isel(day=0, lat=0).values.tolist() == list(range(280, 291))
+    assert cropped["lat"].values.tolist() == [5.0, 0.0]
+
+
+def test_a_0_360_trajectory_cropped_to_a_box_across_greenwich_keeps_both_sides():
+    from ai_almanac.server.services.forecast_pipeline import select_lat_lon_bounds
+
+    cropped = select_lat_lon_bounds(_global_0_360_trajectory(), Bounds(0.0, 10.0, -3.0, 2.0))
+
+    assert cropped["lon"].values.tolist() == [-3, -2, -1, 0, 1, 2]
+    assert cropped.isel(day=0, lat=0).values.tolist() == [357, 358, 359, 0, 1, 2]
+
+
+def test_a_trajectory_with_no_cells_in_the_box_is_refused_rather_than_cropped_to_nothing():
+    from ai_almanac.server.services.forecast_pipeline import select_lat_lon_bounds
+
+    with pytest.raises(ValueError, match="selects no grid points along lon"):
+        select_lat_lon_bounds(_trajectory(), Bounds(1.0, 3.0, -80.0, -70.0))
+
+
 def test_season_assembly_reports_progress_per_issue_date(tmp_path, capsys):
     from ai_almanac.server.services.forecast_pipeline import assemble_season_netcdf
 
