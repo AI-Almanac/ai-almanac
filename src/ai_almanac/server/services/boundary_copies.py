@@ -51,8 +51,15 @@ async def read(path: str) -> Any | None:
     except FileNotFoundError:
         return None
     except Exception as exc:
-        logger.warning("Could not read the boundary copy at %s: %s", path, type(exc).__name__)
+        logger.warning(
+            "Could not read the boundary copy at %s: %s", _one_line(path), type(exc).__name__
+        )
         return None
+
+
+def _one_line(text: str) -> str:
+    """A path as it may be logged: no line break can start a forged entry."""
+    return text.replace("\r", "").replace("\n", "")
 
 
 def write(path: str, value: Any) -> None:
