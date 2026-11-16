@@ -663,7 +663,12 @@ async def _outliving_the_client(chunks: AsyncIterator[str]) -> AsyncIterator[str
     task.add_done_callback(_finish_detached_turn)
     while (chunk := await queue.get()) is not None:
         yield chunk
-    await task
+    await asyncio.gather(task)
+
+
+def _one_line(value: str) -> str:
+    """An id from the request as it may be logged: no line break can start a forged entry."""
+    return value.replace("\r", "").replace("\n", "")
 
 
 def _finish_detached_turn(task: asyncio.Task) -> None:
@@ -673,7 +678,8 @@ def _finish_detached_turn(task: asyncio.Task) -> None:
 
 
 async def detached_turns_finished() -> None:
-    """Wait for turns still running after their client left, as at shutdown or in tests."""
+    """Wait for turns still running after their client left. Shutdown waits on this for a
+    few seconds; a step still running after that is cut off as before."""
     while _DETACHED_TURNS:
         await asyncio.gather(*_DETACHED_TURNS, return_exceptions=True)
 
@@ -849,8 +855,8 @@ async def _relay_turn(
         if not isinstance(exc, AssistantUnavailable):
             logger.exception(
                 "Chat response stream failed for session %s and user %s",
-                session_id,
-                user_id,
+                _one_line(session_id),
+                _one_line(user_id),
             )
         step_ran = settles is not None and settled and approved
         try:

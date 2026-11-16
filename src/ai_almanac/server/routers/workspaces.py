@@ -319,7 +319,8 @@ async def rename_artifact(workspace: OwnedWorkspace, artifact_id: str, body: Ren
 async def rename_analysis(workspace: OwnedWorkspace, turn_id: str, body: RenameIn):
     """Name an analysis; null clears the name, so it shows the question again."""
     workspace_id = workspace["id"]
-    if not await workspaces.turn_file_titles(workspace_id, turn_id):
+    # Clearing always works, so a name whose files have since gone can still be removed.
+    if body.title is not None and not await workspaces.turn_file_titles(workspace_id, turn_id):
         raise HTTPException(
             status_code=404, detail="No analysis in this workspace came from that turn"
         )
