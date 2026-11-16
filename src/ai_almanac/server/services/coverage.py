@@ -2,6 +2,10 @@
 
 A source's extent is inferred when it is validated. Sources from before that are
 matched by the region they were filed under, as every source once was.
+
+Longitudes are compared on the circle: a source stored 0..360 and one stored -180..180
+overlap where their data does. ROMP conforms a box to each dataset's own convention,
+so a shared box can be handed to it in either.
 """
 
 from __future__ import annotations
@@ -31,17 +35,44 @@ def bounds_of(source: Mapping) -> Bounds | None:
     return box_of(holder.get("spatial_bounds"))
 
 
+# A grid this wide goes all the way round; the gap at its seam is one grid step.
+_WHOLE_GLOBE_DEG = 350.0
+
+
 def overlap(*boxes: Bounds) -> dict[str, float] | None:
-    """The box common to all of them; None when they share none."""
-    shared = {
-        "lat_min": max(box["lat_min"] for box in boxes),
-        "lat_max": min(box["lat_max"] for box in boxes),
-        "lon_min": max(box["lon_min"] for box in boxes),
-        "lon_max": min(box["lon_max"] for box in boxes),
-    }
-    if shared["lat_min"] > shared["lat_max"] or shared["lon_min"] > shared["lon_max"]:
+    """The box common to all of them; None when they share none. Its longitudes are
+    in the first box's convention, unless that box goes all the way round."""
+    lat_min = max(box["lat_min"] for box in boxes)
+    lat_max = min(box["lat_max"] for box in boxes)
+    if lat_min > lat_max:
         return None
-    return shared
+    lon: tuple[float, float] | None = (boxes[0]["lon_min"], boxes[0]["lon_max"])
+    for box in boxes[1:]:
+        lon = lon and _lon_overlap(lon, (box["lon_min"], box["lon_max"]))
+    if lon is None:
+        return None
+    return {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon[0], "lon_max": lon[1]}
+
+
+def _lon_overlap(
+    first: tuple[float, float], second: tuple[float, float]
+) -> tuple[float, float] | None:
+    """The longitudes two spans share, in the first's convention; the widest part when
+    they share two."""
+    if _whole_globe(second):
+        return first
+    if _whole_globe(first):
+        return second
+    shared = [
+        (max(first[0], second[0] + turn), min(first[1], second[1] + turn))
+        for turn in (-360.0, 0.0, 360.0)
+    ]
+    parts = [part for part in shared if part[0] <= part[1]]
+    return max(parts, key=lambda part: part[1] - part[0], default=None)
+
+
+def _whole_globe(span: tuple[float, float]) -> bool:
+    return span[1] - span[0] >= _WHOLE_GLOBE_DEG
 
 
 def _filed_under(source: Mapping) -> str:

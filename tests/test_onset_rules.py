@@ -44,3 +44,16 @@ def test_benchmark_validation_reports_onset_errors_before_submission() -> None:
     assert _onset_rule_errors({}) == []
     assert _onset_rule_errors({"onset_rule_params": [1]}) == ["onset_rule_params must be an object"]
     assert _onset_rule_errors({"onset_rule": "two_stage", "onset_rule_params": {"x": 1}})
+
+
+def test_a_legacy_dry_spell_at_the_value_runs_use_reads_as_unchanged() -> None:
+    from ai_almanac.server.services.onset_rules import changed_params
+
+    assert changed_params("legacy", None, {"dry_spell": 7}) == []
+
+
+def test_a_legacy_dry_spell_reads_as_changed_only_when_it_differs_from_what_runs_use() -> None:
+    from ai_almanac.server.services.onset_rules import changed_params
+
+    changed = changed_params("legacy", None, {"dry_spell": 5})
+    assert [change["value"] for change in changed] == [5]
