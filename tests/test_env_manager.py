@@ -314,6 +314,38 @@ def test_cli_env_prepare_no_longer_requires_path_pixi(
     assert result.exit_code == 0, result.output
 
 
+def _prepare_with_failing_sandbox(monkeypatch: pytest.MonkeyPatch, data_dir: Path, sandbox: str):
+    from typer.testing import CliRunner
+
+    from ai_almanac.cli import app
+
+    def npm_unreachable():
+        raise RuntimeError("npm registry unreachable")
+
+    fake_result = (data_dir / "benchmark-env", data_dir / "blending-env", None)
+    monkeypatch.setenv("CODE_SANDBOX", sandbox)
+    monkeypatch.setattr("ai_almanac.envs.manager.ensure_env", lambda **kwargs: fake_result)
+    monkeypatch.setattr("ai_almanac.envs.manager.ensure_sandbox_env", npm_unreachable)
+    return CliRunner().invoke(app, ["env", "prepare"])
+
+
+def test_env_prepare_warns_when_the_unused_code_sandbox_cannot_install(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    result = _prepare_with_failing_sandbox(monkeypatch, data_dir, "off")
+    assert result.exit_code == 0, result.output
+    assert "blending env ready" in result.output
+    assert "npm registry unreachable" in result.output
+
+
+def test_env_prepare_fails_when_the_configured_code_sandbox_cannot_install(
+    monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> None:
+    result = _prepare_with_failing_sandbox(monkeypatch, data_dir, "srt")
+    assert result.exit_code == 1
+    assert "npm registry unreachable" in result.output
+
+
 def test_refused_pixi_download_raises_actionable_error(
     monkeypatch: pytest.MonkeyPatch, data_dir: Path
 ) -> None:
