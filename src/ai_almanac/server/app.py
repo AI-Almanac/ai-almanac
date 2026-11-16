@@ -139,7 +139,22 @@ async def lifespan(app: FastAPI):
         reconciler.cancel()
         with suppress(asyncio.CancelledError):
             await reconciler
+        await _finish_detached_turns()
         await _suspend_local_llm()
+
+
+# Cloud Run allows 10 seconds after SIGTERM; a step still running after this is cut off.
+_DETACHED_TURNS_GRACE_SECONDS = 8
+
+
+async def _finish_detached_turns() -> None:
+    """Let approved steps whose client already left finish before the process exits."""
+    from ai_almanac.server.services import chat_turns
+
+    try:
+        await asyncio.wait_for(chat_turns.detached_turns_finished(), _DETACHED_TURNS_GRACE_SECONDS)
+    except TimeoutError:
+        logger.warning("Shutting down with approved steps still running")
 
 
 async def _start_local_llm() -> None:
