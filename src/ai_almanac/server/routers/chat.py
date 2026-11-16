@@ -265,7 +265,7 @@ def _session_detail(row, user_id: str) -> SessionDetail:
 
 
 def _scope(session: Any) -> ChatScope:
-    return ChatScope.model_validate(json_col(session["scope"], {}))
+    return ChatScope.stored(json_col(session["scope"], {}))
 
 
 def _hidden_from(session: Any, user: CurrentUser) -> bool:
