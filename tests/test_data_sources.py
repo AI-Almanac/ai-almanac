@@ -1064,3 +1064,19 @@ def test_a_local_directory_is_stored_without_reading_the_filesystem(tmp_path) ->
     from ai_almanac.server.services.data_paths import LocalPath, parse_data_path
 
     assert parse_data_path(f"{tmp_path}/obs/../chirps/") == LocalPath(tmp_path / "chirps")
+
+
+def test_custom_bounds_wrap_when_the_sources_store_longitudes_differently() -> None:
+    from ai_almanac.server.services.job_submission import apply_inferred_custom_bounds
+
+    observations = {"lat_min": -10, "lat_max": 30, "lon_min": 250, "lon_max": 300}
+    model = {"lat_min": -60, "lat_max": 60, "lon_min": -120, "lon_max": -40}
+
+    bounded = apply_inferred_custom_bounds(
+        {"region": "custom"},
+        {"spatial_bounds": observations},
+        {"spatial_bounds": model},
+    )
+
+    assert (bounded["lon_min"], bounded["lon_max"]) == (250, 300)
+    assert (bounded["lat_min"], bounded["lat_max"]) == (-10, 30)
