@@ -288,6 +288,10 @@ async def rename_artifact(workspace: OwnedWorkspace, artifact_id: str, body: Ren
 async def rename_analysis(workspace: OwnedWorkspace, turn_id: str, body: RenameIn):
     """Name an analysis; null clears the name, so it shows the question again."""
     workspace_id = workspace["id"]
+    if not await workspaces.turn_file_titles(workspace_id, turn_id):
+        raise HTTPException(
+            status_code=404, detail="No analysis in this workspace came from that turn"
+        )
     try:
         named = await workspaces.name_analysis(workspace_id, turn_id, body.title, "user")
     except workspaces.WorkspaceError as exc:
