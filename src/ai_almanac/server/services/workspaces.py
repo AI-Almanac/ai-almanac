@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -379,12 +379,25 @@ async def on_job_published(job_id: str) -> None:
 
 
 async def release_unreadable_job(job: dict) -> None:
-    """Take a job, and the files it published, out of every workspace whose owner may no
+    """Take a job, and the files it made, out of every workspace whose owner may no
     longer read it, as when its owner stops sharing it."""
-    items, artifacts, workspaces = tables.workspace_items, tables.artifacts, tables.workspaces
-    job_outputs = sa.select(artifacts.c.id).where(artifacts.c.job_id == job["id"])
-    holds_job = sa.or_(items.c.job_id == job["id"], items.c.artifact_id.in_(job_outputs))
+    await _release_job(job["id"], still_held_by=lambda owner_id: _may_hold(job, owner_id))
+
+
+async def release_deleted_job(job_id: str) -> None:
+    """Take a deleted job, and the files it made, out of every workspace: they went with it."""
+    await _release_job(job_id, still_held_by=lambda owner_id: False)
+
+
+async def _release_job(job_id: str, *, still_held_by: Callable[[str], bool]) -> None:
+    """Drop the job, and the files it made, from each workspace whose owner may no longer
+    hold it. A file counts as the job's when the job's step lists it as an output: rows
+    are shared per owner by content, so a file can be another job's row as well. It stays
+    where another linked job, one the owner may still read, made it too."""
+    items, workspaces = tables.workspace_items, tables.workspaces
     async with get_db() as conn:
+        made = await _files_made_by(conn, job_id)
+        holds_job = sa.or_(items.c.job_id == job_id, items.c.artifact_id.in_(made))
         holders = (
             await conn.execute(
                 sa.select(workspaces.c.id, workspaces.c.user_id)
@@ -393,11 +406,45 @@ async def release_unreadable_job(job: dict) -> None:
                 .distinct()
             )
         ).fetchall()
-        released = [
-            workspace_id for workspace_id, owner_id in holders if not _may_hold(job, owner_id)
-        ]
-        if released:
-            await conn.execute(items.delete().where(items.c.workspace_id.in_(released), holds_job))
+        for workspace_id, owner_id in holders:
+            if still_held_by(owner_id):
+                continue
+            kept = await _files_made_by_other_readable_jobs(conn, workspace_id, owner_id, job_id)
+            await conn.execute(
+                items.delete().where(
+                    items.c.workspace_id == workspace_id,
+                    sa.or_(items.c.job_id == job_id, items.c.artifact_id.in_(made - kept)),
+                )
+            )
+
+
+async def _files_made_by(conn, job_id: str) -> set[str]:
+    """Every file the job's steps output, plus the rows recorded under the job itself."""
+    steps, artifacts = tables.provenance_steps, tables.artifacts
+    outputs = (
+        await conn.execute(sa.select(steps.c.outputs).where(steps.c.job_id == job_id))
+    ).scalars()
+    made = {aid for listed in outputs for aid in tables.json_col(listed, [])}
+    recorded = await conn.execute(sa.select(artifacts.c.id).where(artifacts.c.job_id == job_id))
+    return made | set(recorded.scalars())
+
+
+async def _files_made_by_other_readable_jobs(
+    conn, workspace_id: str, owner_id: str, job_id: str
+) -> set[str]:
+    items, jobs = tables.workspace_items, tables.jobs
+    linked = (
+        await conn.execute(
+            sa.select(jobs.c.id, jobs.c.user_id, jobs.c.visibility)
+            .join(items, items.c.job_id == jobs.c.id)
+            .where(items.c.workspace_id == workspace_id, jobs.c.id != job_id)
+        )
+    ).mappings()
+    kept: set[str] = set()
+    for other in [dict(row) for row in linked]:
+        if _may_hold(other, owner_id):
+            kept |= await _files_made_by(conn, other["id"])
+    return kept
 
 
 def in_workspace(workspace_id: str) -> sa.ColumnElement[bool]:
@@ -505,7 +552,8 @@ def _names(artifacts: dict[str, dict], by_id: dict[str, str]) -> dict[str, str]:
 
 
 async def describe(workspace_id: str, artifact: dict, *, verify: bool = False) -> dict:
-    steps, artifacts = await ledger.chain(artifact)
+    shown = await steps_shown_in(workspace_id, {artifact["user_id"]})
+    steps, artifacts = await ledger.chain(artifact, shown)
     status = await ledger.verify(steps, artifacts) if verify else {}
     artifacts = {**artifacts, **await _other_outputs(artifact["user_id"], steps, artifacts)}
     names = _names(artifacts, await labels(workspace_id))
@@ -575,9 +623,51 @@ async def listing(workspace_id: str, only: set[str] | None = None) -> list[dict]
     rows = await list_artifacts(workspace_id)
     if not rows:
         return []
-    steps = await ledger.user_steps(rows[0]["user_id"])
+    # A shared run's files are in their owner's ledger, so each owner's steps are read.
+    steps = await steps_shown_in(workspace_id, {art["user_id"] for art in rows})
     index = producer_index(steps)
     return [listing_item(art, steps, index) for art in rows if only is None or art["id"] in only]
+
+
+async def steps_shown_in(workspace_id: str, ledger_owners: set[str]) -> dict[str, dict]:
+    """The steps of these users' ledgers that the workspace's owner may see: their own,
+    and those of runs they may read. A shared run's file can share bytes with its
+    owner's private runs, and those runs' steps stay the owner's."""
+    owner_id = await _workspace_owner(workspace_id)
+    steps: dict[str, dict] = {}
+    for user_id in ledger_owners:
+        steps |= await ledger.user_steps(user_id)
+    readable = await _readable_jobs(owner_id, {s["job_id"] for s in steps.values() if s["job_id"]})
+    return {
+        step_id: step
+        for step_id, step in steps.items()
+        if (step["job_id"] in readable if step["job_id"] else step["user_id"] == owner_id)
+    }
+
+
+async def _workspace_owner(workspace_id: str) -> str | None:
+    workspaces = tables.workspaces
+    async with get_db() as conn:
+        return (
+            await conn.execute(
+                sa.select(workspaces.c.user_id).where(workspaces.c.id == workspace_id)
+            )
+        ).scalar()
+
+
+async def _readable_jobs(owner_id: str | None, job_ids: set[str]) -> set[str]:
+    if owner_id is None or not job_ids:
+        return set()
+    jobs = tables.jobs
+    async with get_db() as conn:
+        rows = (
+            await conn.execute(
+                sa.select(jobs.c.id, jobs.c.user_id, jobs.c.visibility).where(
+                    jobs.c.id.in_(job_ids)
+                )
+            )
+        ).mappings()
+        return {row["id"] for row in rows if _may_hold(dict(row), owner_id)}
 
 
 def producer_index(steps: dict[str, dict]) -> dict[str, list[dict]]:
