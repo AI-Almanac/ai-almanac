@@ -68,7 +68,7 @@ jobs:
           src/ai_almanac/server terraform .github .githooks modal deploy
           Dockerfile 'compose*.yaml' scripts
 
-      - uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1.0.187
+      - uses: anthropics/claude-code-action@4d75e5f390ee76b2e09c1980ecc99ff3a2e088c8 # v1.0.275
         if: steps.inputs.outputs.skip != 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
