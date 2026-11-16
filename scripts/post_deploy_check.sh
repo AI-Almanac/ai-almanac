@@ -9,8 +9,9 @@
 #    responses; any hit fails the check.
 #
 # All cloud-specific commands live HERE, not in the workflows: an AWS
-# migration rewrites this script and nothing else. Captured errors go to
-# post-deploy-errors.txt for the AI triage step.
+# migration rewrites this script and nothing else. The excerpt of captured
+# errors printed to the job log also goes to post-deploy-errors.txt for the AI
+# triage job, so the triage artifact never exposes more than the public log.
 
 set -euo pipefail
 
@@ -19,6 +20,9 @@ REGION=${2:?region required}
 BASE_URL=${3:?base url required}
 SOAK=${4:-300}
 ERRFILE="post-deploy-errors.txt"
+EXCERPT_LINES=50
+ALL_ERRORS=$(mktemp)
+trap 'rm -f "$ALL_ERRORS"' EXIT
 START_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 fail() {
@@ -68,7 +72,7 @@ AND (severity>=ERROR OR httpRequest.status>=500)"
 
 if ! gcloud logging read "$FILTER" \
   --format 'value(timestamp, severity, httpRequest.status, textPayload, jsonPayload.message)' \
-  --limit 200 >"$ERRFILE" 2>/tmp/logread.err; then
+  --limit 200 >"$ALL_ERRORS" 2>/tmp/logread.err; then
   if grep -q "PERMISSION_DENIED" /tmp/logread.err; then
     # CI SA lacks roles/logging.viewer (granted in terraform; needs apply).
     # Smoke tests passed, so warn rather than fail the deploy on the
@@ -81,10 +85,11 @@ if ! gcloud logging read "$FILTER" \
   fail "log query failed"
 fi
 
-ERRORS=$(grep -c . "$ERRFILE" || true)
+ERRORS=$(grep -c . "$ALL_ERRORS" || true)
 if [[ "$ERRORS" -gt 0 ]]; then
-  echo "--- captured errors ($ERRORS lines) ---"
-  head -50 "$ERRFILE"
+  head -n "$EXCERPT_LINES" "$ALL_ERRORS" >"$ERRFILE"
+  echo "--- captured errors ($ERRORS lines, first $EXCERPT_LINES shown) ---"
+  cat "$ERRFILE"
   fail "$ERRORS error/5xx log entries for $REVISION since $START_TS"
 fi
 
