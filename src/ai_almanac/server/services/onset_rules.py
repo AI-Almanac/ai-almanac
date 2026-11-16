@@ -12,6 +12,8 @@ from collections.abc import Callable, Mapping
 from importlib.resources import files
 from typing import Any
 
+from ai_almanac.settings import get_romp_defaults
+
 DEFAULT_ONSET_RULE = "legacy"
 _ACCEPTED_TYPES = {"int": (int,), "float": (int, float), "bool": (bool,)}
 # ROMP's legacy rule takes any of these it is not given from the flat benchmark settings.
@@ -56,8 +58,25 @@ def onset_rules() -> dict[str, dict]:
     onset_rule_names.json and joined here."""
     names = _packaged_json("onset_rule_names.json")
     return {
-        rule["name"]: _named(rule, names.get(rule["name"]) or {})
+        rule["name"]: _named(_with_run_defaults(rule), names.get(rule["name"]) or {})
         for rule in _packaged_json("onset_rules.json")
+    }
+
+
+def _with_run_defaults(rule: dict) -> dict:
+    """Legacy's defaults as a run has them: every run hands ROMP the platform's flat
+    benchmark settings (romp.yaml), which override ROMP's own legacy defaults."""
+    if rule["name"] != "legacy":
+        return rule
+    platform = get_romp_defaults()
+    return {
+        **rule,
+        "params": [
+            {**spec, "default": platform[spec["name"]]}
+            if spec["name"] in _LEGACY_SETTINGS and spec["name"] in platform
+            else spec
+            for spec in rule["params"]
+        ],
     }
 
 
