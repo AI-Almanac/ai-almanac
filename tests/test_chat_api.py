@@ -1149,3 +1149,117 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     cleared = await client.patch(url, headers=as_new_user, json={"region_id": None})
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["benchmark_config"]["region_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_stored_with_a_scope_kind_from_a_newer_release_still_opens(
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
+) -> None:
+    session_id = (await _create_session(client, as_new_user))["id"]
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
+            {
+                "scope": json.dumps({"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1"}),
+                "id": session_id,
+            },
+        )
+
+    listed = await client.get("/chat/sessions", headers=as_new_user)
+    opened = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
+
+    assert listed.status_code == 200
+    assert session_id in [session["id"] for session in listed.json()]
+    assert opened.status_code == 200
+    assert opened.json()["scope"]["kind"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_with_an_unknown_scope_kind_is_still_refused(
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
+) -> None:
+    response = await client.post(
+        "/chat/sessions",
+        headers=as_new_user,
+        json={"title": "Session", "scope": {"kind": "workspace", "key": "ws-1"}},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_a_turn_in_a_session_of_a_newer_scope_kind_leaves_its_stored_scope_alone(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from ai_almanac.server.services import chat_turns
+
+    async def reply(messages: list, info: AgentInfo):
+        yield "Done."
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: FunctionModel(stream_function=reply),
+    )
+    session_id = (await _create_session(client, as_new_user))["id"]
+    newer = {"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1", "job_ids": []}
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
+            {"scope": json.dumps(newer), "id": session_id},
+        )
+
+    async for _ in chat_turns.stream_chat_turn(session_id, user_id, "Hello", None):
+        pass
+
+    async with get_db() as conn:
+        stored = (
+            await conn.execute(
+                text("SELECT scope FROM chat_sessions WHERE id = :id"), {"id": session_id}
+            )
+        ).scalar_one()
+    assert json.loads(stored) == newer
+
+
+@pytest.mark.asyncio
+async def test_a_turn_naming_a_newer_kind_session_as_general_leaves_its_stored_scope_alone(
+    client: httpx.AsyncClient,
+    as_new_user: dict[str, str],
+    user_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from ai_almanac.server.services import chat_turns
+    from ai_almanac.server.services.chat_state import ChatScope
+
+    async def reply(messages: list, info: AgentInfo):
+        yield "Done."
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: FunctionModel(stream_function=reply),
+    )
+    session_id = (await _create_session(client, as_new_user))["id"]
+    newer = {"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1", "job_ids": []}
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
+            {"scope": json.dumps(newer), "id": session_id},
+        )
+
+    as_general = ChatScope(kind="general", key="ws-1")
+    async for _ in chat_turns.stream_chat_turn(session_id, user_id, "Hello", as_general):
+        pass
+
+    async with get_db() as conn:
+        stored = (
+            await conn.execute(
+                text("SELECT scope FROM chat_sessions WHERE id = :id"), {"id": session_id}
+            )
+        ).scalar_one()
+    assert json.loads(stored) == newer
