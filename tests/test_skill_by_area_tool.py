@@ -42,14 +42,23 @@ def _tables(items: list[dict]) -> list[dict]:
     return [item for item in items if item["kind"] == "table"]
 
 
-def test_the_quoted_table_names_its_columns_once_and_keeps_cells_and_uncovered_areas() -> None:
-    baseline = skill.AreaSkill(onset_error_days=8.0, false_alarm_rate=0.8, miss_rate=0.4, cells=4)
+def test_the_quoted_table_names_its_columns_once_and_keeps_both_cell_counts_and_uncovered_areas() -> (
+    None
+):
+    baseline = skill.AreaSkill(onset_error_days=8.0, false_alarm_rate=0.8, miss_rate=0.4, cells=3)
 
     quoted = skill_area_report.quotable(_table([_row("East Gojjam", 4, baseline)]))
 
-    assert quoted["columns"][:5] == ["area", "parent", "model", "window", "cells"]
+    assert quoted["columns"][:6] == [
+        "area",
+        "parent",
+        "model",
+        "window",
+        "cells",
+        "climatology_cells",
+    ]
     assert quoted["rows"] == [
-        ["East Gojjam", "Amhara", "AIFS", "1-15", 4, 4.0, 0.4, 0.2, 8.0, 0.8, 0.4]
+        ["East Gojjam", "Amhara", "AIFS", "1-15", 4, 3, 4.0, 0.4, 0.2, 8.0, 0.8, 0.4]
     ]
     assert quoted["not_covered"] == ["Wag Hemra"]
     assert "truncated" not in quoted

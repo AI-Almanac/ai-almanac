@@ -109,6 +109,13 @@ describe('the best value in the models side by side', () => {
 	it('stays the best model elsewhere', () => {
 		expect(bestRows()).toEqual(['AIFS']);
 	});
+
+	it('is not marked for a metric whose direction is not known yet', () => {
+		const all = [metrics('j-fuxi', 'FuXi', 6.6, 0.35), metrics('j-aifs', 'AIFS', 6.4, 0.41)];
+		const unknown = compareModels(jobs, all, '1-15', metricMap([]));
+
+		expect(unknown.rows.flatMap((row) => row.cells.map((cell) => cell.best))).not.toContain(true);
+	});
 });
 
 describe('lead windows in one order everywhere', () => {

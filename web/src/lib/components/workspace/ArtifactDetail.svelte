@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import {
 		failureMessage,
 		getArtifactProvenance,
@@ -57,21 +58,31 @@
 	// A derived id, so a live refresh of the same file does not re-run the check.
 	const fileId = $derived(file.id);
 
+	// Each check is numbered, so a slower answer for a file no longer shown is dropped.
+	let latestCheck = 0;
+
 	// Checking only re-hashes stored files, so it is cheap enough to run on every view.
 	async function checkProvenance() {
+		const check = ++latestCheck;
 		busy = true;
 		error = null;
 		try {
-			provenance = await getArtifactProvenance(workspaceId, fileId, true);
+			const checked = await getArtifactProvenance(workspaceId, fileId, true);
+			if (check === latestCheck) provenance = checked;
 		} catch (e) {
-			error = failureMessage(e);
+			if (check === latestCheck) error = failureMessage(e);
 		} finally {
-			busy = false;
+			if (check === latestCheck) busy = false;
 		}
 	}
 
 	$effect(() => {
-		checkProvenance();
+		void fileId;
+		untrack(() => {
+			// The last file's history says nothing about this one.
+			provenance = null;
+			checkProvenance();
+		});
 	});
 </script>
 
@@ -87,7 +98,12 @@
 				</RenamableName>
 			</div>
 			<span class="facts">{facts}</span>
-			<IntegrityStatus status={integrity} checking={busy} onCheck={checkProvenance} />
+			<!-- A failed re-check leaves no earlier result standing in for it. -->
+			<IntegrityStatus
+				status={error ? null : integrity}
+				checking={busy}
+				onCheck={checkProvenance}
+			/>
 		</div>
 		<DownloadButton label={name} withText onclick={() => onDownload(file)} />
 	</header>

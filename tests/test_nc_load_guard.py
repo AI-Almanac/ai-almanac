@@ -17,7 +17,7 @@ _GCS_PREFIX = "gs://bucket/fuxi"
 
 @pytest.fixture
 def load_limit_below_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storage_mod, "_MAX_EAGER_NC_BYTES", _FIXTURE.stat().st_size - 1)
+    monkeypatch.setattr(storage_mod, "MAX_EAGER_NC_BYTES", _FIXTURE.stat().st_size - 1)
 
 
 def test_gcs_file_under_the_limit_loads_whole() -> None:

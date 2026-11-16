@@ -213,3 +213,36 @@ describe('RunDetail for a blend', () => {
 		expect(screen.queryByRole('heading', { name: 'Forecast skill' })).toBeNull();
 	});
 });
+
+describe('RunDetail when another run opens in its place', () => {
+	const runOf = (key: string, id: string): Run => ({
+		key,
+		files: [],
+		jobs: [benchmark({ id, run_id: key, model_name: 'aifs', status: 'complete' })]
+	});
+
+	it('shows nothing of the last run while the next one’s results load', async () => {
+		let finishLoading: (job: unknown) => void = () => {};
+		api.getJob.mockImplementation((id: string) =>
+			id === 'bench-a'
+				? Promise.resolve({ id, status: 'complete' })
+				: new Promise((done) => (finishLoading = done))
+		);
+		const view = renderRun(runOf('run-a', 'bench-a'));
+		await fireEvent.click(await screen.findByRole('tab', { name: 'All metrics' }));
+		expect(screen.getByTestId('all-metrics')).toBeTruthy();
+
+		await view.rerender({
+			run: runOf('run-b', 'bench-b'),
+			workspaceId: 'ws-1',
+			onOpenFile: vi.fn(),
+			onDownload: vi.fn()
+		});
+
+		expect(screen.queryByTestId('all-metrics')).toBeNull();
+		expect(screen.queryByRole('tab', { name: 'All metrics' })).toBeNull();
+		finishLoading({ id: 'bench-b', status: 'complete' });
+		expect(await screen.findByRole('tab', { name: 'Models and map' })).toBeTruthy();
+		expect(screen.queryByTestId('all-metrics')).toBeNull();
+	});
+});

@@ -13,7 +13,7 @@ id: builtin
 name: Built-in
 description: 'The shipped assistant policy: domain vocabulary, the statistical interpretation caveats,
   tool-usage rules, and output style.'
-version: 15
+version: 11
 prompt_sections:
 - key: domain
   title: Domain knowledge

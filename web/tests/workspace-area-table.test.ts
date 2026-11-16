@@ -72,7 +72,7 @@ describe('area table parsing', () => {
 			steps: [{ primitive: 'forecast.summarize_by_area', params: { single_run: true } }]
 		} as unknown as ArtifactProvenance;
 		expect(valuesAreShares(provenance)).toBe(true);
-		expect(valuesAreShares(null)).toBe(false);
+		expect(valuesAreShares(null)).toBeNull();
 	});
 });
 

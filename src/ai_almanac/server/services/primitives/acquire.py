@@ -47,8 +47,9 @@ def fetch_available() -> bool:
 
 @primitive("acquire.resolve_region", "1.0.0", available=fetch_available)
 async def resolve_region(ctx: RunContext, name: str) -> dict:
-    """Resolve a region name or id to its bounding box from the region catalog. Use it
-    for a fetch's box rather than guessing coordinates."""
+    """Resolve a region name or id to its box from the region catalog, as the
+    `lat_bounds` [south, north] and `lon_bounds` [west, east] a fetch takes. Use it for a
+    fetch's box rather than guessing coordinates."""
     needle = name.strip().lower()
     regions = await region_catalog.list_regions()
     for region in regions:
@@ -59,12 +60,9 @@ async def resolve_region(ctx: RunContext, name: str) -> dict:
             return {
                 "id": region["id"],
                 "display_name": region["display_name"],
-                "bbox": [
-                    region["lat_min"],
-                    region["lon_min"],
-                    region["lat_max"],
-                    region["lon_max"],
-                ],
+                # Shaped as a fetch takes them, so a box is never read in the wrong order.
+                "lat_bounds": [region["lat_min"], region["lat_max"]],
+                "lon_bounds": [region["lon_min"], region["lon_max"]],
                 "romp_name": region.get("romp_name"),
             }
     raise Refusal(f"No region matches {name!r}", known_regions=[region["id"] for region in regions])
@@ -92,7 +90,10 @@ async def list_sources(ctx: RunContext) -> dict:
 
 
 _RECORD_END_TTL_SECONDS = 6 * 3600
-_record_ends: dict[str, tuple[float, date]] = {}
+# A source that could not be reached is asked again after this, not on every call.
+_RECORD_END_RETRY_SECONDS = 60
+_RECORD_END_TIMEOUT_SECONDS = 10
+_record_ends: dict[str, tuple[float, date | None]] = {}
 
 
 async def _record_end(source: tool_sources.Source) -> date | None:
@@ -104,13 +105,17 @@ async def _record_end(source: tool_sources.Source) -> date | None:
     if source.record_end is None:
         return None
     cached = _record_ends.get(source.name)
-    if cached and time.monotonic() - cached[0] < _RECORD_END_TTL_SECONDS:
-        return cached[1]
+    if cached:
+        fresh_for = _RECORD_END_TTL_SECONDS if cached[1] else _RECORD_END_RETRY_SECONDS
+        if time.monotonic() - cached[0] < fresh_for:
+            return cached[1]
     try:
-        end = await asyncio.to_thread(source.record_end)
+        end = await asyncio.wait_for(
+            asyncio.to_thread(source.record_end), _RECORD_END_TIMEOUT_SECONDS
+        )
     except Exception:
         logger.warning("Could not look up the record end of %s", source.name, exc_info=True)
-        return None
+        end = None
     _record_ends[source.name] = (time.monotonic(), end)
     return end
 
@@ -206,7 +211,7 @@ async def fetch(ctx: RunContext, request: FetchRequest) -> dict:
             into=out_dir,
             timeout=settings.fetch_timeout_seconds,
         )
-        outcome = harness_outcome(ran.run)
+        outcome = harness_outcome(ran.run, "fetch")
         if not outcome.get("ok"):
             raise Refusal(outcome.get("error", "The fetch failed"), ok=False)
         taken = {path.name: path for path in ran.outputs}
