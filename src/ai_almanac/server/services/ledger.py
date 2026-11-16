@@ -501,9 +501,13 @@ def producers(steps: dict[str, dict], artifact_id: str) -> list[dict]:
     )
 
 
-async def chain(artifact: dict) -> tuple[dict[str, dict], dict[str, dict]]:
-    """All steps and artifacts upstream of ``artifact``, through every producer."""
-    all_steps = await user_steps(artifact["user_id"])
+async def chain(
+    artifact: dict, all_steps: dict[str, dict] | None = None
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """All steps and artifacts upstream of ``artifact``, through every producer. With
+    ``all_steps``, only those steps are walked, as when a reader may not see them all."""
+    if all_steps is None:
+        all_steps = await user_steps(artifact["user_id"])
     steps: dict[str, dict] = {}
     artifacts: dict[str, dict] = {artifact["id"]: artifact}
     frontier = [artifact["id"]]

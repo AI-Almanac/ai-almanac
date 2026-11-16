@@ -159,7 +159,7 @@ async def test_a_new_analysis_name_reaches_an_open_workspace_page(
     naming = asyncio.create_task(name_while_the_page_is_open())
     async with client.stream("GET", f"/workspaces/{wid}/events", headers=as_new_user) as response:
         body = "".join([chunk async for chunk in response.aiter_text()])
-    await naming
+    await asyncio.gather(naming)
 
     [named] = [e for e in sse_events(body) if e["type"] == "analyses"]
     assert named["analyses"] == [
@@ -285,3 +285,18 @@ async def test_a_workspace_turn_asks_for_its_results_to_be_named_before_the_stre
     await stream.aclose()
 
     assert asked == [(workspace["id"], "Map onset by state")]
+
+
+@pytest.mark.asyncio
+async def test_only_an_analysis_the_workspace_holds_can_be_named(client, as_new_user) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+
+    response = await client.patch(
+        f"/workspaces/{workspace['id']}/analyses/{'x' * 5000}",
+        headers=as_new_user,
+        json={"title": "Not here"},
+    )
+
+    assert response.status_code == 404
+    detail = (await client.get(f"/workspaces/{workspace['id']}", headers=as_new_user)).json()
+    assert detail["analyses"] == []
