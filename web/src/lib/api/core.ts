@@ -63,7 +63,9 @@ function refusalDetail(body: string): string {
 
 /** What to tell the user about a failed call: the server's explanation when it gave one. */
 export function failureMessage(e: unknown): string {
-	if (e instanceof ApiError) return e.detail;
+	// A gateway or proxy error can arrive with no body, and an empty message shows nothing.
+	if (e instanceof ApiError)
+		return e.detail || `The request failed (error ${e.status}). Try again.`;
 	return e instanceof Error ? e.message : String(e);
 }
 

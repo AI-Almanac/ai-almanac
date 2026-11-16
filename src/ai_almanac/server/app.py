@@ -264,7 +264,7 @@ async def _run_background_step(name: str, step) -> None:
 async def _reconcile_jobs() -> None:
     from ai_almanac.server.services.artifacts import publish_pending
     from ai_almanac.server.services.day_level_blends import reconcile_day_level_blends
-    from ai_almanac.server.services.follow_ups import start_ready
+    from ai_almanac.server.services.follow_up_runs import start_ready
     from ai_almanac.server.services.job_manager import reconcile_jobs
 
     await _run_background_step("job_reconciliation", reconcile_jobs)
