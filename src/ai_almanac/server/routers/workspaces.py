@@ -445,7 +445,8 @@ async def _artifact(workspace: dict, artifact_id: str) -> dict:
 async def download_artifact(workspace: OwnedWorkspace, artifact_id: str):
     """The file as stored, with its provenance chain stamped into this copy."""
     artifact = await _artifact(workspace, artifact_id)
-    steps, _ = await ledger.chain(artifact)
+    shown = await workspaces.steps_shown_in(workspace["id"], {artifact["user_id"]})
+    steps, _ = await ledger.chain(artifact, shown)
     scratch = Path(tempfile.mkdtemp(prefix="download-"))
     copy = await asyncio.to_thread(ledger.stamped_copy, artifact, ledger.history(steps), scratch)
     if copy is None:

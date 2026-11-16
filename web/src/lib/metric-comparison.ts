@@ -114,7 +114,8 @@ export function compareModels(
 				.metrics[metric]?.unit,
 			definitions
 		);
-		const lower = lowerIsBetter(metric, definitions) ?? (metric === 'bias' ? null : true);
+		// Unknown until definitions load or when a metric has none: then no value is marked best.
+		const lower = lowerIsBetter(metric, definitions);
 		return { metric, label: metricLabel(metric, definitions), unit, lowerIsBetter: lower };
 	});
 	const best = columns.map((column) => {
