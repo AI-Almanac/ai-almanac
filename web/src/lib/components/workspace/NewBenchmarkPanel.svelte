@@ -11,7 +11,7 @@
 		type Region,
 		type RompDefaults
 	} from '$lib/api';
-	import { settled } from '$lib/api/core';
+	import { failureOf, settled } from '$lib/api/core';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { WorkspaceJob } from '$lib/api/workspaces';
 	import { BenchmarkStore } from '$lib/benchmarks.svelte';
@@ -57,6 +57,7 @@
 	let guardrails = $state<GuardrailThresholds | null>(null);
 	let startFrom = $state<BenchmarkStart | null>(null);
 	let dataLoaded = $state(false);
+	let loadFailure = $state<string | null>(null);
 	let error = $state<string | null>(null);
 
 	const note = $derived(
@@ -93,7 +94,13 @@
 			? benchmarkStartFromDraft(draft, datasets)
 			: (settled(previous, null) ??
 				(inWorkspaceArea ? benchmarkStartFromDraft(inWorkspaceArea, datasets) : null));
+		loadFailure = failureOf(fetchedRegions, fetchedDatasets);
 		dataLoaded = true;
+	}
+
+	function retry() {
+		loadFailure = null;
+		void loadChoices(latestBenchmarkJobIds(jobs));
 	}
 
 	// Once, for the workspace as it was when the form opened.
@@ -114,7 +121,7 @@
 	}
 </script>
 
-<SetupPanel title="New benchmark" {note} {error} {onCancel}>
+<SetupPanel title="New benchmark" {note} {error} {loadFailure} onRetry={retry} {onCancel}>
 	<BenchmarkForm
 		{form}
 		{regions}

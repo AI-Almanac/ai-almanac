@@ -9,11 +9,23 @@
 		error?: string | null;
 		/** The form's choices are still being fetched. */
 		loading?: boolean;
+		/** Why choices the form cannot do without could not be fetched. */
+		loadFailure?: string | null;
+		onRetry?: () => void;
 		onCancel: () => void;
 		children: Snippet;
 	}
 
-	let { title, note = null, error = null, loading = false, onCancel, children }: Props = $props();
+	let {
+		title,
+		note = null,
+		error = null,
+		loading = false,
+		loadFailure = null,
+		onRetry,
+		onCancel,
+		children
+	}: Props = $props();
 
 	const headingId = $props.id();
 </script>
@@ -28,7 +40,13 @@
 		<button type="button" class="close" onclick={onCancel}>Cancel</button>
 	</header>
 	{#if error}<p class="error" role="alert">{error}</p>{/if}
-	{#if loading}
+	{#if loadFailure}
+		<!-- An empty form would look usable; this says why it is not and offers another go. -->
+		<p class="error" role="alert">
+			The choices for this form could not be loaded: {loadFailure}
+			{#if onRetry}<button type="button" class="retry" onclick={onRetry}>Try again</button>{/if}
+		</p>
+	{:else if loading}
 		<p class="note">Loading…</p>
 	{:else}
 		{@render children()}

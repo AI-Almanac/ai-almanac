@@ -5,6 +5,7 @@
 		daysIn,
 		draftProblems,
 		hasProblems,
+		inMonth,
 		NO_PROBLEMS,
 		SEASON_DATE_FIELDS,
 		seasonDraft,
@@ -77,7 +78,12 @@
 						<option value={day}>{day}</option>
 					{/each}
 				</select>
-				<select aria-label="{label}: month" bind:value={draft[field].month}>
+				<select
+					aria-label="{label}: month"
+					value={draft[field].month}
+					onchange={(event) =>
+						(draft[field] = inMonth(draft[field], Number(event.currentTarget.value)))}
+				>
 					{#each MONTH_NAMES as name, index (name)}
 						<option value={index + 1}>{name}</option>
 					{/each}

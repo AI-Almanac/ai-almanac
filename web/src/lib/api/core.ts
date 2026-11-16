@@ -69,6 +69,12 @@ export function failureMessage(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
 }
 
+/** Why the first of these calls failed, or null when none did: for choices a form needs. */
+export function failureOf(...results: PromiseSettledResult<unknown>[]): string | null {
+	const failed = results.find((result) => result.status === 'rejected');
+	return failed ? failureMessage(failed.reason) : null;
+}
+
 /** A settled call's value, or the fallback when it failed: for choices a form can do without. */
 export function settled<T>(result: PromiseSettledResult<T>, fallback: T): T {
 	return result.status === 'fulfilled' ? result.value : fallback;
