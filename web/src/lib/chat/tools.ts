@@ -206,6 +206,8 @@ export function toolLabel(call: LabelledCall, state: StepState): string {
 			return tool.declined ?? DECLINED;
 		case 'active':
 			return call.status === 'pending' && tool.writesCode ? 'Writing analysis code' : tool.active;
+		case 'failed':
+			return `${tool.active} failed`;
 		default:
 			return tool.done;
 	}

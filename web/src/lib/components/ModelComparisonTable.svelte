@@ -54,7 +54,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each comparison.rows as row (row.model)}
+					{#each comparison.rows as row (row.jobId ?? 'climatology')}
 						<tr class:climatology={row.climatology}>
 							<th scope="row">{row.model}</th>
 							{#each row.cells as cell, i (i)}

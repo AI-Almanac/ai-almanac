@@ -15,15 +15,12 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from . import blend_domain, job_access, onset_rules, region_catalog, workspace_display
 from .focus_area import area_label, parse_focus_area
-from .seasons import SeasonWindow, spoken_date
+from .seasons import SeasonWindow
 from .workspace_display import day_label
-
-if TYPE_CHECKING:
-    from .primitives.runs import BenchmarkSpec, BlendSpec
 
 _ID_KEY = re.compile(r"_ids?$")
 _LABELS = {
@@ -246,44 +243,6 @@ def _lower_first(text: str) -> str:
 
 
 # --- step describers ----------------------------------------------------------
-
-
-def benchmark_facts(
-    spec: BenchmarkSpec,
-    sources: Sources,
-    region: str | None,
-    spans: Mapping[str, YearSpan | None],
-) -> list[Fact]:
-    """A complete benchmark spec, by name; ``spans`` are each model's evaluation years."""
-    advanced = spec.advanced_params
-    area, rule = advanced.focus_area, advanced.onset_rule
-    years = {source_names([ref], sources): span for ref, span in spans.items()}
-    return facts(
-        ("Observations", source_label(sources.get(spec.dataset_id), spec.dataset_id)),
-        ("Models", source_names(spec.model_ids, sources)),
-        ("Region", region),
-        ("Area of interest", area and area_label(area)),
-        ("Evaluation years", evaluation_years_label(years)),
-        ("Forecast days", forecast_days_label(spec.forecast_window_days)),
-        ("Onset definition", onset_definition_label(rule)),
-        ("Goal", spec.intent),
-    )
-
-
-def blend_facts(spec: BlendSpec, sources: Sources) -> list[Fact]:
-    return facts(
-        ("Name", spec.name),
-        ("Observations", source_label(sources.get(spec.obs_dataset_id), spec.obs_dataset_id)),
-        ("Models", source_names(spec.model_ids, sources)),
-        ("Area of interest", spec.focus_area and area_label(spec.focus_area)),
-        ("Onset search starts", spec.cutoff_month_day and spoken_date(spec.cutoff_month_day)),
-        ("Reference onset", spec.ref_onset_month_day and spoken_date(spec.ref_onset_month_day)),
-        ("Training years", years_label(spec.training_years)),
-        ("Cross-validation years", years_label(spec.cv_holdout_years)),
-        ("Held-out years", years_label(spec.true_holdout_years)),
-        ("Forecast years", years_label(spec.forecast_years)),
-        ("Goal", spec.intent),
-    )
 
 
 def forecast_facts(

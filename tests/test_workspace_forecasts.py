@@ -23,7 +23,7 @@ from tests.helpers.workspaces import workspace_with_session
 
 @pytest.fixture
 def _stub_runner(monkeypatch):
-    monkeypatch.setattr(job_submission, "get_job_runner", lambda: FakeRunner())
+    monkeypatch.setattr(job_submission, "get_job_runner", FakeRunner)
 
 
 @pytest.mark.asyncio
