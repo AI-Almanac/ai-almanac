@@ -183,3 +183,25 @@ async def test_a_deleted_run_leaves_its_workspace_with_its_files(client) -> None
     assert deleted.status_code == 204, deleted.text
     detail = (await client.get(f"/workspaces/{workspace['id']}", headers=owner)).json()
     assert detail["jobs"] == [] and detail["artifacts"] == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_run_a_files_bytes_are_stored_with_drops_it_even_if_a_rerun_made_it(
+    client,
+) -> None:
+    owner, owner_id = await _signed_in(client)
+    first = insert_job(owner_id, BENCHMARK_CONFIG, status="running")
+    rerun = insert_job(owner_id, BENCHMARK_CONFIG, status="running")
+    workspace, _ = await workspace_with_session(client, owner)
+    await _link(client, owner, workspace["id"], first)
+    await _link(client, owner, workspace["id"], rerun)
+    await _publish(first)
+    same_bytes = await _publish(rerun)
+    assert {artifact["job_id"] for artifact in same_bytes} == {first}
+
+    deleted = await client.delete(f"/jobs/{first}", headers=owner)
+
+    assert deleted.status_code == 204, deleted.text
+    detail = (await client.get(f"/workspaces/{workspace['id']}", headers=owner)).json()
+    assert [job["id"] for job in detail["jobs"]] == [rerun]
+    assert detail["artifacts"] == []
