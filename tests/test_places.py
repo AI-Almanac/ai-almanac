@@ -79,6 +79,7 @@ async def test_outlines_are_read_by_country_code_with_no_region_involved(
         return {"metadata": {}, "geojson": {"type": "FeatureCollection", "features": []}}
 
     monkeypatch.setattr(boundaries, "load_boundary", kenya)
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [{"iso": "KEN", "name": "Kenya"}])
 
     response = await client.get("/places/ken/boundaries/adm1")
 
@@ -97,3 +98,19 @@ async def test_something_that_is_not_a_country_code_has_no_outlines(
     monkeypatch.setattr(boundaries, "load_boundary", never)
 
     assert (await client.get("/places/kenya/boundaries/adm1")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_code_no_country_has_is_refused_without_asking_for_its_outlines(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def never(iso: str, level: str) -> dict:
+        raise AssertionError("the boundary service should not be asked")
+
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [{"iso": "KEN", "name": "Kenya"}])
+    monkeypatch.setattr(boundaries, "load_boundary", never)
+
+    response = await client.get("/places/zzz/boundaries/adm1")
+
+    assert response.status_code == 404
+    assert "ZZZ" in response.text

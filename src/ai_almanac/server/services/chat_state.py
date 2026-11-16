@@ -96,7 +96,10 @@ def new_turn_id() -> str:
 # ponytail: a turn streaming longer than this is assumed dead (e.g. the server
 # restarted mid-turn); a heartbeat on the streaming turn would make this exact.
 # While a turn streams, its relay touches the session this often, so a turn
-# whose server died stops counting as live soon after, on any instance.
+# whose server died stops counting as live soon after, on any instance. Heartbeat
+# writes that keep failing for this long (a database outage) also make a live turn
+# look dead: a second turn is then accepted, and whichever relay finishes last
+# rewrites the transcript without the other's turn.
 TURN_HEARTBEAT_SECONDS = 30
 STALE_TURN_AFTER = timedelta(minutes=2)
 
