@@ -98,7 +98,8 @@ async def list_countries() -> list[dict[str, str]]:
     countries = countries_from(listing)
     if not countries:
         raise BoundaryUnavailable("The boundary service listed no countries")
-    _COUNTRIES.extend(countries)
+    # Replaced, not extended: two first requests may both have fetched the listing.
+    _COUNTRIES[:] = countries
     return _COUNTRIES
 
 
