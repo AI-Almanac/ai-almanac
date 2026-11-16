@@ -7,6 +7,7 @@ import WorkspaceSummaryStrip from '../src/lib/components/workspace/WorkspaceSumm
 import {
 	daysIn,
 	formatMonthDay,
+	inMonth,
 	parseMonthDay,
 	seasonDraft,
 	seasonFromDraft,
@@ -166,5 +167,12 @@ describe('the season in the workspace header', () => {
 		render(WorkspaceSummaryStrip, { summary });
 
 		expect(screen.queryByRole('button', { name: /Kiremt 2026/ })).toBeNull();
+	});
+});
+
+describe('moving a season date to another month', () => {
+	it('holds the day to the month’s last, so the form shows what it will save', () => {
+		expect(inMonth({ month: 1, day: 30 }, 2)).toEqual({ month: 2, day: 28 });
+		expect(inMonth({ month: 2, day: 14 }, 3)).toEqual({ month: 3, day: 14 });
 	});
 });

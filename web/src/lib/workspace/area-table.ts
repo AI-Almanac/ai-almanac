@@ -16,13 +16,12 @@ export function isAreaSummary(file: Pick<WorkspaceArtifact, 'kind' | 'breadcrumb
 /**
  * Whether the p_ columns are the share of each area one model run puts onset in,
  * rather than a chance. Recorded by the summarizing step; tables from before it
- * was recorded read as chances.
+ * was recorded read as chances. Null until the file's history has been read.
  */
-export function valuesAreShares(provenance: ArtifactProvenance | null): boolean {
-	return (
-		provenance?.steps.some(
-			(step) => step.primitive === AREA_SUMMARY_STEP && step.params?.single_run === true
-		) ?? false
+export function valuesAreShares(provenance: ArtifactProvenance | null): boolean | null {
+	if (!provenance) return null;
+	return provenance.steps.some(
+		(step) => step.primitive === AREA_SUMMARY_STEP && step.params?.single_run === true
 	);
 }
 
@@ -115,7 +114,9 @@ export function percent(value: number | null): string {
 }
 
 /** What the numbers mean, said once under the table. */
-export function valuesNote(shares: boolean): string {
+export function valuesNote(shares: boolean | null): string {
+	if (shares === null)
+		return 'How to read these values depends on how the file was made, which is not known yet.';
 	return shares
 		? 'Values are the share of each area where this model run puts onset in the window; one run, not a chance.'
 		: 'Values are the chance of onset within each window, averaged over the area.';

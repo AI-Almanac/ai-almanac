@@ -41,8 +41,11 @@ export function formatName(format: string): string {
 
 export function formatBytes(bytes: number): string {
 	const units = ['B', 'KB', 'MB', 'GB'];
-	const exponent = Math.min(Math.floor(Math.log10(Math.max(bytes, 1)) / 3), units.length - 1);
-	return `${(bytes / 1000 ** exponent).toFixed(exponent ? 1 : 0)} ${units[exponent]}`;
+	let exponent = Math.min(Math.floor(Math.log10(Math.max(bytes, 1)) / 3), units.length - 1);
+	const shown = (at: number) => (bytes / 1000 ** at).toFixed(at ? 1 : 0);
+	// 999,999 bytes rounds to "1000.0 KB"; read it in the next unit up instead.
+	if (exponent < units.length - 1 && Number(shown(exponent)) >= 1000) exponent += 1;
+	return `${shown(exponent)} ${units[exponent]}`;
 }
 
 export type CsvTable = { columns: string[]; rows: string[][]; totalRows: number };

@@ -319,6 +319,10 @@ async def rename_artifact(workspace: OwnedWorkspace, artifact_id: str, body: Ren
 async def rename_analysis(workspace: OwnedWorkspace, turn_id: str, body: RenameIn):
     """Name an analysis; null clears the name, so it shows the question again."""
     workspace_id = workspace["id"]
+    if not await workspaces.turn_file_titles(workspace_id, turn_id):
+        raise HTTPException(
+            status_code=404, detail="No analysis in this workspace came from that turn"
+        )
     try:
         named = await workspaces.name_analysis(workspace_id, turn_id, body.title, "user")
     except workspaces.WorkspaceError as exc:
@@ -476,7 +480,8 @@ async def _artifact(workspace: dict, artifact_id: str) -> dict:
 async def download_artifact(workspace: OwnedWorkspace, artifact_id: str):
     """The file as stored, with its provenance chain stamped into this copy."""
     artifact = await _artifact(workspace, artifact_id)
-    steps, _ = await ledger.chain(artifact)
+    shown = await workspaces.steps_shown_in(workspace["id"], {artifact["user_id"]})
+    steps, _ = await ledger.chain(artifact, shown)
     scratch = Path(tempfile.mkdtemp(prefix="download-"))
     copy = await asyncio.to_thread(ledger.stamped_copy, artifact, ledger.history(steps), scratch)
     if copy is None:

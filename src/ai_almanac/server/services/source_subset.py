@@ -18,10 +18,11 @@ from ai_almanac_tools.contract import rename_to_canonical
 
 from . import data_sources, netcdf
 from .focus_area import FocusArea, FocusBox, area_label, cells_inside
+from .storage import MAX_EAGER_NC_BYTES
 
-# What storage still loads eagerly (storage._MAX_EAGER_NC_BYTES): a staged dataset
-# larger than this could not be inspected or plotted in the workspace.
-MAX_OPEN_SOURCE_BYTES = 256 * 2**20
+# What storage still loads eagerly: a staged dataset larger than this could not be
+# inspected or plotted in the workspace.
+MAX_OPEN_SOURCE_BYTES = MAX_EAGER_NC_BYTES
 
 _YEAR = re.compile(r"(?:19|20)\d{2}")
 # Registration names a model archive's dims by role; these take the contract's names.
@@ -57,6 +58,8 @@ def _outline_box(outline: dict) -> BBox:
         for feature in outline.get("features") or []
         for point in _coordinates(feature.get("geometry") or {})
     ]
+    if not points:
+        raise ValueError("The area has no outline to take a box around")
     lons, lats = zip(*points, strict=True)
     return BBox.parse((min(lats), max(lats)), (min(lons), max(lons)))
 

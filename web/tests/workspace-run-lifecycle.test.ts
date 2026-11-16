@@ -121,3 +121,13 @@ describe('run status in words', () => {
 		expect(runStatusWords(runOf(...statuses))).toEqual({ label, tone });
 	});
 });
+
+describe('a status this page does not know yet', () => {
+	it('reads as still going in the run’s status, its cancel and its progress alike', () => {
+		const run = runOf('complete', 'provisioning');
+
+		expect(runStatusWords(run)).toEqual({ label: 'Running · 1 of 2 done', tone: 'running' });
+		expect(cancellableJobIds(run)).toEqual(['j1']);
+		expect(modelProgress(run, NOW)[1].state).toBe('running');
+	});
+});

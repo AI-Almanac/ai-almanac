@@ -86,7 +86,9 @@ export function spatialMetricsTable(result: Row): ResultTable | null {
 	};
 }
 
-const SKILL_CAPTION = 'Skill against climatology: above 0 beats it, below 0 is worse';
+// ROC area is not a skill score, so it is read on its own scale.
+const SKILL_CAPTION =
+	'Skill against climatology: above 0 beats it, below 0 is worse. ROC area: 0.5 is no better than chance, 1 is perfect';
 
 function skill(value: unknown): string {
 	return formatMetricValue(number(value), 'dimensionless');

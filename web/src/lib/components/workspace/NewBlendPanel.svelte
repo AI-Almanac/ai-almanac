@@ -6,7 +6,7 @@
 		type Blend,
 		type DataSource
 	} from '$lib/api';
-	import { settled } from '$lib/api/core';
+	import { failureOf, settled } from '$lib/api/core';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import BlendForm from '$lib/components/blend-setup/BlendForm.svelte';
 	import type { BlendDraft } from '$lib/interface-actions/actions';
@@ -31,6 +31,7 @@
 	let dayLevelAvailable = $state(false);
 	let minTrainingYears = $state<number | undefined>(undefined);
 	let loaded = $state(false);
+	let loadFailure = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	// Derived once: a new object each time would fill the form in again over the user's edits.
 	const setup = $derived(draft ?? draftIn(area));
@@ -51,7 +52,14 @@
 		modelSources = ready(settled(models, []));
 		dayLevelAvailable = settled(capabilities, null)?.day_level_blend ?? false;
 		minTrainingYears = settled(guardrails, null)?.min_training_years;
+		loadFailure = failureOf(obs, models);
 		loaded = true;
+	}
+
+	function retry() {
+		loaded = false;
+		loadFailure = null;
+		void loadChoices();
 	}
 
 	let loading = false;
@@ -78,6 +86,8 @@
 		: null}
 	{error}
 	loading={!loaded}
+	{loadFailure}
+	onRetry={retry}
 	{onCancel}
 >
 	<BlendForm

@@ -63,8 +63,16 @@ function refusalDetail(body: string): string {
 
 /** What to tell the user about a failed call: the server's explanation when it gave one. */
 export function failureMessage(e: unknown): string {
-	if (e instanceof ApiError) return e.detail;
+	// A gateway or proxy error can arrive with no body, and an empty message shows nothing.
+	if (e instanceof ApiError)
+		return e.detail || `The request failed (error ${e.status}). Try again.`;
 	return e instanceof Error ? e.message : String(e);
+}
+
+/** Why the first of these calls failed, or null when none did: for choices a form needs. */
+export function failureOf(...results: PromiseSettledResult<unknown>[]): string | null {
+	const failed = results.find((result) => result.status === 'rejected');
+	return failed ? failureMessage(failed.reason) : null;
 }
 
 /** A settled call's value, or the fallback when it failed: for choices a form can do without. */

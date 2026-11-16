@@ -33,6 +33,12 @@ export function parseMonthDay(value: string): MonthDay {
 	return { month, day };
 }
 
+/** The date moved to another month, its day held to that month's last day: February
+ * has no 30th, and the form shows the day it will save. */
+export function inMonth({ day }: MonthDay, month: number): MonthDay {
+	return { month, day: Math.min(day, daysIn(month).length) };
+}
+
 /** May 1 → `05-01`; a day the month does not have becomes its last day. */
 export function formatMonthDay({ month, day }: MonthDay): string {
 	const held = Math.min(day, DAYS_IN_MONTH[month - 1] ?? 31);

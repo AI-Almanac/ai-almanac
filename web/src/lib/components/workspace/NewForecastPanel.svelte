@@ -8,7 +8,7 @@
 		type ForecastModel,
 		type InitSource
 	} from '$lib/api';
-	import { settled } from '$lib/api/core';
+	import { failureOf, settled } from '$lib/api/core';
 	import type { WorkspaceJob } from '$lib/api/workspaces';
 	import ForecastForm from '$lib/components/forecast-setup/ForecastForm.svelte';
 	import type { ForecastDraft } from '$lib/interface-actions/actions';
@@ -31,6 +31,7 @@
 	let forecastModels = $state<ForecastModel[]>([]);
 	let initSources = $state<InitSource[]>([]);
 	let loaded = $state(false);
+	let loadFailure = $state<string | null>(null);
 	let error = $state<string | null>(null);
 
 	// The draft and the workspace as they were when the form opened.
@@ -49,9 +50,16 @@
 		blends = settled(fetchedBlends, []).filter((blend) => blend.status === 'complete');
 		forecastModels = settled(fetchedModels, []);
 		initSources = settled(fetchedSources, []);
+		loadFailure = failureOf(fetchedBlends, fetchedModels, fetchedSources);
 		loaded = true;
 	}
 	void loadChoices();
+
+	function retry() {
+		loaded = false;
+		loadFailure = null;
+		void loadChoices();
+	}
 
 	async function submitted(forecast: Forecast) {
 		try {
@@ -67,6 +75,8 @@
 	note="Runs a finished blend’s models forward from the latest conditions and applies the blend’s trained weights."
 	{error}
 	loading={!loaded}
+	{loadFailure}
+	onRetry={retry}
 	{onCancel}
 >
 	<ForecastForm

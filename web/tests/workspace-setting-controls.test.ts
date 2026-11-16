@@ -108,3 +108,28 @@ describe('the area in the workspace header', () => {
 		expect(save).not.toHaveBeenCalled();
 	});
 });
+
+describe('reopening the season before it has loaded', () => {
+	it('fills the form from the newest load, not a slower earlier one', async () => {
+		const answers: ((season: SeasonWindow) => void)[] = [];
+		const load = vi.fn(() => new Promise<SeasonWindow>((done) => answers.push(done)));
+		render(SeasonControl, {
+			headline: 'Kiremt 2026 is under way',
+			isDefault: false,
+			load,
+			save: vi.fn()
+		});
+		const trigger = () => screen.getByRole('button', { name: /Kiremt 2026/ });
+
+		await fireEvent.click(trigger());
+		await fireEvent.click(trigger());
+		await fireEvent.click(trigger());
+		const [first, second] = answers;
+		first({ ...kiremt, name: 'Stale season' });
+		await new Promise((done) => setTimeout(done, 0));
+		second(kiremt);
+
+		expect(await screen.findByDisplayValue('Kiremt')).toBeTruthy();
+		expect(screen.queryByDisplayValue('Stale season')).toBeNull();
+	});
+});

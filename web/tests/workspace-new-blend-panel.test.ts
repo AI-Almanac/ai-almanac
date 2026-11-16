@@ -179,3 +179,25 @@ describe('a blend setup handed to the form', () => {
 		expect(train.disabled).toBe(false);
 	});
 });
+
+describe('a blend form whose sources could not be read', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		api.getCapabilities.mockResolvedValue({ day_level_blend: false });
+		api.getGuardrailThresholds.mockResolvedValue(null);
+	});
+
+	it('says so instead of offering an empty form, and tries again when asked', async () => {
+		api.listDataSources.mockRejectedValueOnce(new Error('offline'));
+		api.listDataSources.mockImplementation(async (kind: 'obs' | 'model') =>
+			kind === 'obs' ? observations : models
+		);
+		renderPanel();
+
+		expect(await screen.findByText(/could not be loaded: offline/)).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+		expect(await screen.findByPlaceholderText('e.g. India monsoon blend')).toBeTruthy();
+		expect(screen.queryByText(/could not be loaded/)).toBeNull();
+	});
+});

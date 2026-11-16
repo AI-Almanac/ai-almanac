@@ -19,13 +19,18 @@
 	let season = $state<SeasonWindow | null>(null);
 	let loadError = $state(false);
 
+	// Reopening the popover starts a new load; only the newest one may fill the form.
+	let latestLoad = 0;
+
 	async function loadSeason() {
+		const thisLoad = ++latestLoad;
 		season = null;
 		loadError = false;
 		try {
-			season = await load();
+			const loaded = await load();
+			if (thisLoad === latestLoad) season = loaded;
 		} catch {
-			loadError = true;
+			if (thisLoad === latestLoad) loadError = true;
 		}
 	}
 </script>

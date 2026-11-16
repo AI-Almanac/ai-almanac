@@ -493,6 +493,7 @@ async def delete_job(job_id: str, user: CurrentUser):
 
     # Remove the workspace and its files; datasets are untouched.
     await asyncio.to_thread(get_artifact_store().delete_job, job_id)
+    await workspaces.release_deleted_job(job_id)
 
 
 async def _retain_outputs(job_id: str, keep: bool) -> None:

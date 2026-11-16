@@ -31,14 +31,17 @@ const LINES: Record<JobStatus, ModelLine> = {
 	canceled: { state: 'cancelled', label: 'Canceled' }
 };
 
-/** How a job's line reads; nothing for a status the table does not know. */
-function lineOf(status: string): ModelLine | undefined {
-	return Object.hasOwn(LINES, status) ? LINES[status as JobStatus] : undefined;
+// A status the server added before this page knew it: still going, as far as we can tell.
+const UNKNOWN_LINE: ModelLine = { state: 'running', label: 'Running' };
+
+/** How a job's line reads; a status the table does not know reads as running. */
+function lineOf(status: string): ModelLine {
+	return Object.hasOwn(LINES, status) ? LINES[status as JobStatus] : UNKNOWN_LINE;
 }
 
-/** What a job is doing; a status the table does not know counts as none of its states. */
-function stateOf(status: string): ModelState | undefined {
-	return lineOf(status)?.state;
+/** What a job is doing, read the same way by every view of the run. */
+function stateOf(status: string): ModelState {
+	return lineOf(status).state;
 }
 
 /** Waiting or running: still to finish, and still reachable by a cancel. */
@@ -90,7 +93,7 @@ function jobName(job: WorkspaceJob, run: Run): string {
 /** One line per model, in the order they were submitted. */
 export function modelProgress(run: Run, now: number): ModelProgress[] {
 	return run.jobs.map((job) => {
-		const { state, label } = lineOf(job.status) ?? { state: 'running', label: 'Running' };
+		const { state, label } = lineOf(job.status);
 		return {
 			key: job.id,
 			name: jobName(job, run),
