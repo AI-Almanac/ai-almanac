@@ -185,3 +185,23 @@ async def test_an_unhandled_error_keeps_its_message_from_the_client(
 
     assert response.status_code == 500
     assert "/srv/secret" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_a_service_that_cannot_be_reached_is_not_asked_again_for_another_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aiohttp
+
+    calls: list[str] = []
+
+    async def unreachable(session, url: str):
+        calls.append(url)
+        raise aiohttp.ClientConnectionError()
+
+    monkeypatch.setattr(boundaries, "_read_json", unreachable)
+
+    with pytest.raises(boundaries.BoundaryUnreachable):
+        await boundaries._fetch_metadata(None, "ETH", "ADM1")
+    assert len({url.split("/api/current/")[1].split("/")[0] for url in calls}) == 1
+    assert len(calls) == 2

@@ -63,6 +63,11 @@ class BoundaryUnavailable(RuntimeError):
     """geoBoundaries could not supply this country and level."""
 
 
+class BoundaryUnreachable(BoundaryUnavailable):
+    """geoBoundaries could not be reached at all, so asking it anything else would wait
+    just as long."""
+
+
 def countries_from(listing: object) -> list[dict[str, str]]:
     """Each country in a geoBoundaries listing once, as its code and name, by name."""
     entries = listing if isinstance(listing, list) else []
@@ -266,6 +271,10 @@ async def _fetch_metadata(
     for release in _RELEASES:
         try:
             metadata = await _fetch_json(session, _metadata_url(iso, boundary_type, release))
+        except BoundaryUnreachable:
+            # A failed connection says nothing about the next release, and trying it would
+            # make the caller wait through another round of timeouts first.
+            raise
         except BoundaryUnavailable as exc:
             failures.append(str(exc))
             continue
@@ -284,19 +293,29 @@ async def _fetch_json(session: aiohttp.ClientSession, url: str) -> Any:
     """The JSON at ``url``. A connection that fails or times out is tried once more, as
     one from a cloud host can, then reported as the boundary service being unreachable,
     so callers answer with their usual 502 rather than an unhandled error."""
-    host = urlsplit(url).netloc
+    host = _one_line(urlsplit(url).netloc)
     try:
         return await _read_json(session, url)
     except _UNREACHABLE as exc:
-        logger.warning("Boundary request to %s failed, trying again: %r", host, exc)
+        logger.warning("Boundary request to %s failed, trying again: %s", host, _kind(exc))
     try:
         return await _read_json(session, url)
     except _UNREACHABLE as exc:
-        logger.warning("Boundary request to %s failed again: %r", host, exc)
-        raise BoundaryUnavailable(
+        logger.warning("Boundary request to %s failed again: %s", host, _kind(exc))
+        raise BoundaryUnreachable(
             f"The boundary service at {host} could not be reached ({type(exc).__name__}). "
             "Try again in a moment."
         ) from exc
+
+
+def _one_line(text: str) -> str:
+    """Text from a URL as it may be logged: no line break can start a forged entry."""
+    return text.replace("\r", "").replace("\n", "")
+
+
+def _kind(exc: BaseException) -> str:
+    """What went wrong, by its class: the message can repeat the URL."""
+    return type(exc).__name__
 
 
 async def _read_json(session: aiohttp.ClientSession, url: str) -> Any:
