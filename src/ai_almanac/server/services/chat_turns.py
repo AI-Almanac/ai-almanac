@@ -168,6 +168,23 @@ async def _update_session_state(
     updated_at: datetime,
     scope: ChatScope,
 ) -> None:
+    params = {
+        "provider_state": json.dumps(provider_state),
+        "transcript": json.dumps(transcript),
+        "now": updated_at,
+        "id": session_id,
+    }
+    if scope.stands_in:
+        # Read as general in place of a newer release's kind; the stored one stays.
+        await conn.execute(
+            text("""
+                UPDATE chat_sessions
+                SET provider_state = :provider_state, transcript = :transcript, updated_at = :now
+                WHERE id = :id
+            """),
+            params,
+        )
+        return
     await conn.execute(
         text("""
             UPDATE chat_sessions
@@ -177,13 +194,7 @@ async def _update_session_state(
                 updated_at = :now
             WHERE id = :id
         """),
-        {
-            "provider_state": json.dumps(provider_state),
-            "transcript": json.dumps(transcript),
-            "scope": json.dumps(scope.model_dump(mode="json")),
-            "now": updated_at,
-            "id": session_id,
-        },
+        {**params, "scope": json.dumps(scope.model_dump(mode="json"))},
     )
 
 
@@ -386,7 +397,7 @@ def submitting_scope(session: Mapping[str, Any]) -> ChatScope:
             status_code=400,
             detail="This session belongs to a ruleset comparison and cannot submit a run.",
         )
-    return ChatScope.model_validate(json_col(session["scope"], {}))
+    return ChatScope.stored(json_col(session["scope"], {}))
 
 
 async def _pinned_ruleset(ruleset_id: str | None, *, for_admin: bool) -> Ruleset | None:
@@ -464,7 +475,7 @@ async def _open_turn(
         session = StoredSession(
             transcript=json_col(row["transcript"], []),
             provider_state=deserialize_model_messages(row["provider_state"]),
-            scope=ChatScope.model_validate(json_col(row["scope"], {})),
+            scope=ChatScope.stored(json_col(row["scope"], {})),
             ruleset_id=row["ruleset_id"],
             comparison_id=row["comparison_id"],
         )
@@ -518,7 +529,8 @@ def _begin_message_turn(
             assistant_turn.model_dump(mode="json"),
         ],
         assistant_turn=assistant_turn,
-        scope=requested_scope or stored,
+        # A stand-in stays one: a request naming it as general must not write that back.
+        scope=stored if stored.stands_in else (requested_scope or stored),
     )
 
 
