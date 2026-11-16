@@ -345,6 +345,26 @@ def test_run_forecast_fails_a_job_queued_without_a_season_plan(forecasts_app, mo
     assert started == []
 
 
+def test_a_raw_forecast_that_cannot_reach_storage_spends_no_gpu_time(forecasts_app, monkeypatch):
+    """Without a blend the raw seasons are all a forecast delivers, so when they cannot
+    be published the run says so before any inference starts."""
+    forecasts_app._load_pipeline(forecasts_app.FORECAST_PIPELINE_PY)
+    started: list = []
+    monkeypatch.setattr(
+        forecasts_app.roll_out_missing_dates, "remote", lambda *a: started.append(a)
+    )
+
+    def no_credentials():
+        raise RuntimeError("no service account")
+
+    monkeypatch.setattr(forecasts_app, "_write_gcp_credentials_from_secret", no_credentials)
+
+    with pytest.raises(RuntimeError, match="Cloud Storage could not be reached"):
+        forecasts_app.run_forecast.local("job-raw", {"blend_config_snapshot": None}, "out")
+
+    assert started == []
+
+
 def test_the_gpu_skips_dates_another_job_stored_after_the_sweep(
     forecasts_app, monkeypatch, tmp_path
 ):

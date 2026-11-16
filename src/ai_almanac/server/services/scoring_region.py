@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .coverage import overlap
+from .coverage import box_of, overlap
 from .focus_area import FocusArea, FocusUnits, area_bounds, area_label, country_of
 
 ROMP_REGION_BY_COUNTRY = {"ETH": "Ethiopia", "IND": "India"}
@@ -24,12 +24,23 @@ def place_of(area: FocusArea | None) -> FocusUnits | None:
     return area if isinstance(area, FocusUnits) and country_of(area) else None
 
 
+def _require_data_where(place: FocusUnits, *source_bounds: object) -> None:
+    """Refuse a place the data does not reach. A source whose extent is not known yet
+    cannot be checked and is taken to reach it."""
+    known = [box for bounds in source_bounds if (box := box_of(bounds))]
+    if overlap(area_bounds(place), *known) is None:
+        raise PlaceNotScorable(
+            f"{area_label(place)} does not overlap the selected observation and forecast data."
+        )
+
+
 def scored_by_place(
     params: Mapping, place: FocusUnits, observation_bounds: object, model_bounds: object
 ) -> dict:
     """The benchmark settings with the region, box and mask the place calls for."""
     romp_region = ROMP_REGION_BY_COUNTRY.get(place.iso or "")
     if romp_region:
+        _require_data_where(place, observation_bounds, model_bounds)
         scored = {**params, "region": romp_region}
         if place.level == "adm0":
             # ROMP's own outline of the country is the mask; ours would move border cells.

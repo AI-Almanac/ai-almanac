@@ -47,6 +47,7 @@
 	let initTime = $state('');
 	// A number input binds a number, or undefined while it is empty.
 	let maxIssueDates = $state<number | undefined>(undefined);
+	let seasonYear = $state<number | undefined>(undefined);
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
 
@@ -58,7 +59,8 @@
 		modelNames,
 		initSource,
 		initTime,
-		maxIssueDates
+		maxIssueDates,
+		seasonYear
 	});
 	const valid = $derived(canSubmit(fields, blend));
 
@@ -153,6 +155,17 @@
 					bind:value={maxIssueDates}
 					placeholder="defaults to the whole season-to-date"
 				/>
+			</label>
+			<label class="field">
+				<span>Season year</span>
+				<input
+					type="number"
+					min="1900"
+					max="2200"
+					bind:value={seasonYear}
+					placeholder="defaults to this year's season"
+				/>
+				<p class="muted">Choose a past year to forecast a season that has ended again.</p>
 			</label>
 		</details>
 	{/if}

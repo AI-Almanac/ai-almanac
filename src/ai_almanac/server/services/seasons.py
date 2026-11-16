@@ -169,7 +169,7 @@ class SeasonState(BaseModel):
         if self.phase == "upcoming":
             return self.summary
         if self.phase == "ended" and not self.re_forecast:
-            return f"{self.summary} Ask for {self.year} by year to re-forecast it."
+            return f"{self.summary} To forecast it again, choose {self.year} as the season year."
         return None
 
 
