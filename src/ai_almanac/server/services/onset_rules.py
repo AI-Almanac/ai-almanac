@@ -220,12 +220,11 @@ def onset_fit_errors(
             f"{forecast_days} forecast days scored. Shorten its windows."
         ]
     needed = forecast_days + lookahead
-    if forecast_steps is not None and forecast_steps <= forecast_days:
-        # ROMP refuses these too, and no onset definition reads fewer than 0 more days.
+    if forecast_steps is not None and forecast_steps < forecast_days:
+        # No onset definition can fit: even one that reads no more days needs them all.
         return [
-            f"{model_name} forecasts run {forecast_steps} days, too few to score "
-            f"{forecast_days} forecast days and still read the {lookahead} more days the "
-            f"{display_name(name)} onset definition needs to confirm an onset."
+            f"{model_name} forecasts run {forecast_steps} days, fewer than the "
+            f"{forecast_days} forecast days scored."
         ]
     if forecast_steps is not None and forecast_steps < needed:
         return [
