@@ -1162,7 +1162,7 @@ async def test_a_session_stored_with_a_scope_kind_from_a_newer_release_still_ope
         await conn.execute(
             text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
             {
-                "scope": json.dumps({"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1"}),
+                "scope": json.dumps({"kind": "survey", "key": "sv-1", "survey_id": "sv-1"}),
                 "id": session_id,
             },
         )
@@ -1183,7 +1183,7 @@ async def test_a_new_session_with_an_unknown_scope_kind_is_still_refused(
     response = await client.post(
         "/chat/sessions",
         headers=as_new_user,
-        json={"title": "Session", "scope": {"kind": "workspace", "key": "ws-1"}},
+        json={"title": "Session", "scope": {"kind": "survey", "key": "sv-1"}},
     )
 
     assert response.status_code == 422
@@ -1208,7 +1208,7 @@ async def test_a_turn_in_a_session_of_a_newer_scope_kind_leaves_its_stored_scope
         lambda: FunctionModel(stream_function=reply),
     )
     session_id = (await _create_session(client, as_new_user))["id"]
-    newer = {"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1", "job_ids": []}
+    newer = {"kind": "survey", "key": "sv-1", "survey_id": "sv-1", "job_ids": []}
     async with get_db() as conn:
         await conn.execute(
             text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
@@ -1247,14 +1247,14 @@ async def test_a_turn_naming_a_newer_kind_session_as_general_leaves_its_stored_s
         lambda: FunctionModel(stream_function=reply),
     )
     session_id = (await _create_session(client, as_new_user))["id"]
-    newer = {"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1", "job_ids": []}
+    newer = {"kind": "survey", "key": "sv-1", "survey_id": "sv-1", "job_ids": []}
     async with get_db() as conn:
         await conn.execute(
             text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
             {"scope": json.dumps(newer), "id": session_id},
         )
 
-    as_general = ChatScope(kind="general", key="ws-1")
+    as_general = ChatScope(kind="general", key="sv-1")
     async for _ in chat_turns.stream_chat_turn(session_id, user_id, "Hello", as_general):
         pass
 
