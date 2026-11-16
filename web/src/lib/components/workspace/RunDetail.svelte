@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { failureMessage, getJob, type Job, type WorkspaceArtifact } from '$lib/api';
 	import AllMetricsPanel from '$lib/components/AllMetricsPanel.svelte';
 	import ResultsViewer from '$lib/components/ResultsViewer.svelte';
@@ -77,6 +78,20 @@
 	let loadError = $state<string | null>(null);
 	const benchmarkJobs = $derived(run.jobs.filter((job) => jobKind(job) === 'benchmark'));
 
+	// Another run opened in place: nothing of the last one's results may show under it.
+	let shownRun: string | null = null;
+	$effect(() => {
+		const key = run.key;
+		untrack(() => {
+			if (shownRun !== null && shownRun !== key) {
+				jobs = [];
+				loadError = null;
+				benchmarkView = 'models';
+			}
+			shownRun = key;
+		});
+	});
+
 	// Keyed on the id string so live workspace updates do not refetch unchanged jobs.
 	$effect(() => {
 		const ids = completeBenchmarkIds ? completeBenchmarkIds.split(',') : [];
@@ -96,81 +111,84 @@
 	});
 </script>
 
-<div class="run-detail">
-	{#if showProgress}
-		{#key run.key}<RunProgress {run} />{/key}
-	{/if}
+<!-- Remounted per run, so its views start fresh rather than as the last run left them. -->
+{#key run.key}
+	<div class="run-detail">
+		{#if showProgress}
+			<RunProgress {run} />
+		{/if}
 
-	{#if loadError}
-		<p class="error">Could not load these results: {loadError}</p>
-	{:else if jobs.length > 0}
-		<div class="viewer">
-			<SegmentedTabs
-				options={benchmarkViews}
-				value={benchmarkView}
-				onSelect={(value) => (benchmarkView = value)}
-				ariaLabel="Benchmark view"
-			/>
-			{#if workspaceId && benchmarkView === 'zones'}
-				<SkillByArea
-					{workspaceId}
-					runKey={run.key}
-					{initialWindow}
-					finishedKey={completeBenchmarkIds}
-					jobs={benchmarkJobs}
+		{#if loadError}
+			<p class="error">Could not load these results: {loadError}</p>
+		{:else if jobs.length > 0}
+			<div class="viewer">
+				<SegmentedTabs
+					options={benchmarkViews}
+					value={benchmarkView}
+					onSelect={(value) => (benchmarkView = value)}
+					ariaLabel="Benchmark view"
 				/>
-			{:else if benchmarkView === 'metrics'}
-				<AllMetricsPanel {jobs} />
-			{/if}
-			<!-- Kept while another view is shown, so the map comes back as the reader left it. -->
-			<div
-				class="viewer"
-				class:offstage={mapOffstage}
-				inert={mapOffstage}
-				aria-hidden={mapOffstage}
-			>
-				<ResultsViewer
-					{jobs}
-					{initialWindow}
-					stage={{ areaOfInterest, bestModelJobId: headlineModelJobId(benchmarkJobs) }}
-					shown={!mapOffstage}
-					onShowAllMetrics={() => (benchmarkView = 'metrics')}
+				{#if workspaceId && benchmarkView === 'zones'}
+					<SkillByArea
+						{workspaceId}
+						runKey={run.key}
+						{initialWindow}
+						finishedKey={completeBenchmarkIds}
+						jobs={benchmarkJobs}
+					/>
+				{:else if benchmarkView === 'metrics'}
+					<AllMetricsPanel {jobs} />
+				{/if}
+				<!-- Kept while another view is shown, so the map comes back as the reader left it. -->
+				<div
+					class="viewer"
+					class:offstage={mapOffstage}
+					inert={mapOffstage}
+					aria-hidden={mapOffstage}
+				>
+					<ResultsViewer
+						{jobs}
+						{initialWindow}
+						stage={{ areaOfInterest, bestModelJobId: headlineModelJobId(benchmarkJobs) }}
+						shown={!mapOffstage}
+						onShowAllMetrics={() => (benchmarkView = 'metrics')}
+					/>
+				</div>
+			</div>
+		{/if}
+
+		{#each finishedForecasts as job (job.id)}
+			<div class="viewer forecast-map">
+				<BlendForecastMap
+					jobId={job.id}
+					regionId={job.region_id ?? null}
+					initialView={BLEND_STAGE_VIEW}
+					exportContext={areaExport(job)}
 				/>
 			</div>
-		</div>
-	{/if}
+		{/each}
 
-	{#each finishedForecasts as job (job.id)}
-		<div class="viewer forecast-map">
-			<BlendForecastMap
-				jobId={job.id}
-				regionId={job.region_id ?? null}
-				initialView={BLEND_STAGE_VIEW}
-				exportContext={areaExport(job)}
-			/>
-		</div>
-	{/each}
+		{#each finishedBlends as job (job.id)}
+			<div class="viewer">
+				<BlendResults
+					jobId={job.id}
+					summaryReady={blendSummaryReady(job.id)}
+					mapView={BLEND_STAGE_VIEW}
+					mapExport={areaExport(job)}
+				/>
+			</div>
+		{/each}
 
-	{#each finishedBlends as job (job.id)}
-		<div class="viewer">
-			<BlendResults
-				jobId={job.id}
-				summaryReady={blendSummaryReady(job.id)}
-				mapView={BLEND_STAGE_VIEW}
-				mapExport={areaExport(job)}
-			/>
-		</div>
-	{/each}
-
-	<section class="files">
-		<h3>Files</h3>
-		{#if run.files.length === 0}
-			<p class="muted">No files yet.</p>
-		{:else}
-			<FileFamilies files={run.files} onOpen={onOpenFile} {onDownload} onRename={onRenameFile} />
-		{/if}
-	</section>
-</div>
+		<section class="files">
+			<h3>Files</h3>
+			{#if run.files.length === 0}
+				<p class="muted">No files yet.</p>
+			{:else}
+				<FileFamilies files={run.files} onOpen={onOpenFile} {onDownload} onRename={onRenameFile} />
+			{/if}
+		</section>
+	</div>
+{/key}
 
 <style>
 	.run-detail {
