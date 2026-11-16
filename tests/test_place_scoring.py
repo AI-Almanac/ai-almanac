@@ -21,6 +21,7 @@ from ai_almanac.server.services.focus_area import (
 from ai_almanac.server.services.scoring_region import PlaceNotScorable, scored_by_place
 
 DATA = {"lat_min": 3.0, "lat_max": 15.0, "lon_min": 33.0, "lon_max": 48.0}
+INDIA_DATA = {"lat_min": 6.0, "lat_max": 36.0, "lon_min": 68.0, "lon_max": 98.0}
 
 
 def _square(name: str, lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> dict:
@@ -137,9 +138,18 @@ def test_a_whole_country_romp_knows_is_scored_exactly_as_its_region_always_was()
         FocusUnits(level="adm0", units=["India"], iso="IND"), _square("India", 6, 36, 68, 98)
     )
 
-    scored = scored_by_place(_settings(india), india, DATA, DATA)
+    scored = scored_by_place(_settings(india), india, INDIA_DATA, INDIA_DATA)
 
     assert scored == {"wet_spell": 3, "region": "India"}
+
+
+def test_a_country_romp_knows_is_refused_when_the_data_does_not_reach_it() -> None:
+    india = _outlined(
+        FocusUnits(level="adm0", units=["India"], iso="IND"), _square("India", 6, 36, 68, 98)
+    )
+
+    with pytest.raises(PlaceNotScorable, match="does not overlap"):
+        scored_by_place(_settings(india), india, DATA, INDIA_DATA)
 
 
 def test_a_place_anywhere_else_is_scored_on_its_own_box_within_the_data() -> None:

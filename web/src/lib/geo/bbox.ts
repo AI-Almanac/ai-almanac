@@ -80,10 +80,22 @@ export function shapeBounds(shape: FeatureCollection): Bounds | null {
 	);
 }
 
-/** Whether two boxes share any point, edges included. */
-export function overlaps(a: Bounds, b: Bounds): boolean {
-	return (
-		Math.max(a.lat_min, b.lat_min) <= Math.min(a.lat_max, b.lat_max) &&
-		Math.max(a.lon_min, b.lon_min) <= Math.min(a.lon_max, b.lon_max)
+/** A grid this wide goes all the way round; the gap at its seam is one grid step. */
+const WHOLE_GLOBE_DEG = 350;
+
+function spansWholeGlobe(box: Bounds): boolean {
+	return box.lon_max - box.lon_min >= WHOLE_GLOBE_DEG;
+}
+
+/** Whether two longitude spans meet on the circle, so 0..360 and -180..180 compare. */
+function longitudesMeet(a: Bounds, b: Bounds): boolean {
+	if (spansWholeGlobe(a) || spansWholeGlobe(b)) return true;
+	return [-360, 0, 360].some(
+		(turn) => Math.max(a.lon_min, b.lon_min + turn) <= Math.min(a.lon_max, b.lon_max + turn)
 	);
+}
+
+/** Whether two boxes share any point, edges included, in either longitude convention. */
+export function overlaps(a: Bounds, b: Bounds): boolean {
+	return Math.max(a.lat_min, b.lat_min) <= Math.min(a.lat_max, b.lat_max) && longitudesMeet(a, b);
 }
