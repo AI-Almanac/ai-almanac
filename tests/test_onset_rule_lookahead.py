@@ -76,10 +76,19 @@ def test_the_default_definition_fits_and_reads_the_flat_dry_spell_settings() -> 
 def test_a_model_too_short_for_the_days_scored_is_refused_for_its_length_not_the_definition() -> (
     None
 ):
-    (error,) = _fit({}, forecast_steps=30)
+    (error,) = _fit({}, forecast_steps=29)
 
-    assert "FuXi forecasts run 30 days, too few to score 30 forecast days" in error
+    assert "FuXi forecasts run 29 days, fewer than the 30 forecast days scored" in error
     assert "Shorten" not in error
+
+
+def test_a_model_exactly_as_long_as_the_days_scored_fits_a_definition_that_reads_no_more() -> None:
+    one_wet_day = {"wet_days": 1, "follow_days": 0}
+    settings = {"onset_rule": "moron_robertson", "onset_rule_params": one_wet_day}
+
+    assert _fit(settings, forecast_steps=30) == []
+    (error,) = _fit({}, forecast_steps=30)
+    assert "at most 0 more days" in error
 
 
 def test_a_model_of_unknown_forecast_length_is_only_held_to_the_days_scored() -> None:
