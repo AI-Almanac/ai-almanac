@@ -93,6 +93,15 @@ def _supervisor_loss(row: dict) -> str | None:
     return SUPERVISOR_HUNG
 
 
+def _signal_name(number: int) -> str:
+    """SIGTERM for 15; the number itself for one Python does not name, like Linux's
+    real-time signals."""
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return str(number)
+
+
 def _failure_message(exit_code: int) -> str:
     """What the user is told when the run's own process exits with an error."""
     if exit_code == -signal.SIGKILL:
@@ -102,7 +111,7 @@ def _failure_message(exit_code: int) -> str:
         )
     if exit_code < 0:
         return (
-            f"The run was stopped by a {signal.Signals(-exit_code).name} signal from "
+            f"The run was stopped by signal {_signal_name(-exit_code)} from "
             "outside the platform. The run log shows how far it got."
         )
     # The log's path is on this host; the user reaches the log from the run page.

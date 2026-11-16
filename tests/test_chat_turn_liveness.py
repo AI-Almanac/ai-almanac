@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 
@@ -93,3 +95,75 @@ async def test_a_long_turn_keeps_marking_its_conversation_live(
 
     before, during = seen
     assert during > before, "the conversation was touched while the model was still replying"
+
+
+def _leave_a_turn_streaming(session_id: str, touched: datetime) -> list[dict]:
+    transcript = [
+        {"id": "u1", "role": "user", "content": "First", "created_at": touched.isoformat()},
+        {"id": "a1", "role": "assistant", "created_at": touched.isoformat(), "status": "streaming"},
+    ]
+    with sqlite3.connect(database_path()) as conn:
+        conn.execute(
+            "UPDATE chat_sessions SET transcript = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(transcript), touched.isoformat(), session_id),
+        )
+    return transcript
+
+
+def _stored_transcript(session_id: str) -> list[dict]:
+    with sqlite3.connect(database_path()) as conn:
+        (transcript,) = conn.execute(
+            "SELECT transcript FROM chat_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return json.loads(transcript)
+
+
+async def _second_turn(session_id: str, user_id: str) -> list[dict]:
+    events = []
+    async for chunk in chat_turns.stream_chat_turn(session_id, user_id, "Second", None):
+        events.extend(json.loads(line[len("data: ") :]) for line in chunk.splitlines() if line)
+    return events
+
+
+async def _new_session(client, headers) -> str:
+    response = await client.post(
+        "/chat/sessions",
+        headers=headers,
+        json={"title": "busy", "scope": {"kind": "benchmark_setup", "key": "setup-1"}},
+    )
+    return response.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_turn_is_refused_while_the_first_still_streams(
+    client, as_new_user, user_id
+) -> None:
+    session_id = await _new_session(client, as_new_user)
+    transcript = _leave_a_turn_streaming(session_id, datetime.now(UTC))
+
+    events = await _second_turn(session_id, user_id)
+
+    assert [event.get("error_type") for event in events] == ["session_busy"]
+    assert _stored_transcript(session_id) == transcript
+
+
+@pytest.mark.asyncio
+async def test_a_second_turn_is_taken_once_the_first_has_gone_stale(
+    client, as_new_user, user_id, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    async def reply(messages: list, info: AgentInfo):
+        yield "Done."
+
+    monkeypatch.setattr(
+        "ai_almanac.server.services.llm._build_model",
+        lambda: FunctionModel(stream_function=reply),
+    )
+    session_id = await _new_session(client, as_new_user)
+    _leave_a_turn_streaming(session_id, datetime.now(UTC) - chat_state.STALE_TURN_AFTER)
+
+    events = await _second_turn(session_id, user_id)
+
+    assert "session_busy" not in [event.get("error_type") for event in events]
+    assert [turn.get("content") for turn in _stored_transcript(session_id)][2] == "Second"
