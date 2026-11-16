@@ -73,3 +73,11 @@ async def test_enabling_srt_where_it_cannot_run_is_refused_with_the_reason(
     response = await client.patch("/settings", json={"values": {"code_sandbox": "srt"}})
     assert response.status_code == 400
     assert "srt is not installed" in response.text
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_the_server_cannot_start_with_is_refused(client) -> None:
+    response = await client.patch("/settings", json={"values": {"code_sandbox": "docker"}})
+    assert response.status_code == 400
+    assert "code_sandbox" in response.text
+    assert (await client.get("/settings")).json()["values"]["code_sandbox"] == "off"
