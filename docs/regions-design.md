@@ -121,9 +121,10 @@ Still there, on purpose:
 
 ## Known limits
 
-- **Longitude convention.** Outlines and overlaps use −180 to 180. A dataset on a 0 to
-  360 grid does not overlap a place west of Greenwich, so such a run is refused as not
-  overlapping.
+- **Longitude convention.** Outlines are drawn −180 to 180, and datasets may be stored
+  either way. Overlaps compare longitudes on the circle, and a mask compares the grid's
+  longitudes in the area's convention while keeping the grid's own labels. A grid that
+  spans 350° or more counts as global.
 - **Observations filed under no region, with no place named, are blended on grid
   cells** even when they cover Ethiopia, because nothing says which country they are in.
   Naming Ethiopia as the area, or filing the observations under it, restores the
