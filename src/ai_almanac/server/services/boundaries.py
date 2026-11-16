@@ -28,10 +28,10 @@ from ai_almanac.server.services.focus_area import (
     polygons_of,
 )
 
-# aiohttp uses the system CA store, which some container images leave empty;
-# certifi's bundle makes the geoBoundaries fetch work everywhere.
 logger = logging.getLogger(__name__)
 
+# aiohttp uses the system CA store, which some container images leave empty;
+# certifi's bundle makes the geoBoundaries fetch work everywhere.
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 BOUNDARY_LEVELS = {
