@@ -1,16 +1,35 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from .benchmark_state import BenchmarkScope
 
 
 class ChatScope(BenchmarkScope):
-    pass
+    _stands_in: bool = PrivateAttr(default=False)
+
+    @classmethod
+    def stored(cls, scope: Mapping[str, Any]) -> ChatScope:
+        """A session's scope as stored. A kind this release does not know was written by a
+        newer one, so after a rollback it reads as a general chat rather than failing every
+        request that loads the session. New scopes are still checked strictly."""
+        known = get_args(cls.model_fields["kind"].annotation)
+        if scope.get("kind") in known:
+            return cls.model_validate(scope)
+        stand_in = cls.model_validate({**scope, "kind": "general"})
+        stand_in._stands_in = True
+        return stand_in
+
+    @property
+    def stands_in(self) -> bool:
+        """Read as general in place of a newer release's kind. Never written back, so the
+        session keeps its kind and fields for when that release returns."""
+        return self._stands_in
 
 
 class ChatArtifact(BaseModel):
