@@ -64,9 +64,7 @@ def _python_source_dirs() -> list[str]:
 
     import ai_almanac_tools
 
-    import ai_almanac
-
-    return [str(Path(module.__file__).parent) for module in (ai_almanac, ai_almanac_tools)]
+    return [str(Path(__file__).parent), str(Path(ai_almanac_tools.__file__).parent)]
 
 
 @app.command()
@@ -200,15 +198,14 @@ def env_prepare() -> None:
     environments.
 
     Also installs the local model server (and its weights) when the assistant
-    is set to run on this machine.
+    is set to run on this machine. The code sandbox and analysis environments only
+    fail the command when this machine is set to run code (`code_sandbox: srt`).
     """
     import subprocess
 
     from ai_almanac.envs.manager import (
         download_llm_model,
-        ensure_analysis_env,
         ensure_env,
-        ensure_sandbox_env,
         llm_env_ready,
     )
     from ai_almanac.settings import reload_settings, settings
@@ -219,8 +216,6 @@ def env_prepare() -> None:
         benchmark_dir, blending_dir, forecast_dir = ensure_env(include_llm=include_llm)
         if include_llm and llm_env_ready():
             download_llm_model(settings.llm_model)
-        sandbox_dir = ensure_sandbox_env()
-        analysis_dir = ensure_analysis_env()
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
@@ -230,6 +225,25 @@ def env_prepare() -> None:
         typer.echo(f"forecast env ready at {forecast_dir}")
     if include_llm and llm_env_ready():
         typer.echo(f"local model {settings.llm_model} ready")
+    _prepare_code_envs(required=settings.code_sandbox == "srt")
+
+
+def _prepare_code_envs(*, required: bool) -> None:
+    """Install the environments local code runs in. Choosing `code_sandbox: srt` needs
+    them installed already, so they are always attempted; until then a failure only warns."""
+    import subprocess
+
+    from ai_almanac.envs.manager import ensure_analysis_env, ensure_sandbox_env
+
+    try:
+        sandbox_dir = ensure_sandbox_env()
+        analysis_dir = ensure_analysis_env()
+    except (RuntimeError, subprocess.CalledProcessError) as exc:
+        if required:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        typer.secho(f"code sandbox not installed: {exc}", fg=typer.colors.YELLOW, err=True)
+        return
     if sandbox_dir is not None:
         typer.echo(f"code sandbox env ready at {sandbox_dir}")
     if analysis_dir is not None:
