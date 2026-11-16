@@ -179,3 +179,42 @@ def test_states_and_districts_can_be_picked_but_subdistricts_cannot(
     picked = parse_focus_area(area)
     assert isinstance(picked, FocusUnits)
     assert picked.level == level
+
+
+def _mask(path: Path) -> xr.DataArray:
+    return xr.load_dataarray(path)
+
+
+def test_a_place_across_greenwich_is_masked_whole_on_a_grid_stored_0_to_360(
+    tmp_path: Path,
+) -> None:
+    lat = np.array([5.0, 6.0])
+    lon = np.array([0.0, 1.0, 2.0, 357.0, 358.0, 359.0])
+    ghana_ish = FocusUnits.model_validate(
+        {
+            "level": "adm0",
+            "units": ["Ghana"],
+            "iso": "GHA",
+            "geometry": {
+                "type": "FeatureCollection",
+                "features": [_square("Ghana", 4, 7, -3.5, 1.5)],
+            },
+        }
+    )
+
+    mask = _mask(write_focus_mask(ghana_ish, tmp_path / "m.nc", lat, lon))
+
+    assert list(mask.lon.values) == list(lon), "the mask keeps the grid's own labels"
+    assert mask.sel(lat=5.0).values.tolist() == [1, 1, 0, 1, 1, 1]
+
+
+def test_a_box_drawn_minus_180_to_180_is_masked_on_a_grid_stored_0_to_360(
+    tmp_path: Path,
+) -> None:
+    lat = np.array([0.0])
+    lon = np.array([250.0, 270.0, 290.0])
+    box = FocusBox(lat_min=-1, lat_max=1, lon_min=-100, lon_max=-80)
+
+    mask = _mask(write_focus_mask(box, tmp_path / "m.nc", lat, lon))
+
+    assert mask.values.tolist() == [[0, 1, 0]]

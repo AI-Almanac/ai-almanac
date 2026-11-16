@@ -286,13 +286,9 @@ def apply_inferred_custom_bounds(
             detail="Custom coverage requires inferred spatial bounds for both data sources.",
         )
 
-    overlap = {
-        "lat_min": max(observation_bounds["lat_min"], model_bounds["lat_min"]),
-        "lat_max": min(observation_bounds["lat_max"], model_bounds["lat_max"]),
-        "lon_min": max(observation_bounds["lon_min"], model_bounds["lon_min"]),
-        "lon_max": min(observation_bounds["lon_max"], model_bounds["lon_max"]),
-    }
-    if overlap["lat_min"] > overlap["lat_max"] or overlap["lon_min"] > overlap["lon_max"]:
+    # The same comparison that paired the sources, so the two never disagree.
+    overlap = data_coverage.overlap(observation_bounds, model_bounds)
+    if overlap is None:
         raise HTTPException(
             status_code=400,
             detail="The selected observation and forecast sources do not overlap geographically.",
