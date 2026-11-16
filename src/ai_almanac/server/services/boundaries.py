@@ -60,6 +60,7 @@ _NAME_FIELDS = ("shapeName", "ADM2_EN", "ADM3_EN", "adm3_name", "name", "NAME")
 
 _CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 _ENCODED: dict[tuple[str, str], bytes] = {}
+_ENCODING: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 _COUNTRIES: list[dict[str, str]] = []
@@ -168,9 +169,7 @@ async def is_listed_country(iso: str) -> bool:
 
 async def load_boundary(iso: str, level: str) -> dict[str, Any]:
     """Return ``{"metadata": ..., "geojson": ...}`` for a country and admin level."""
-    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
-    if not boundary_type:
-        raise BoundaryUnavailable(f"Unsupported boundary level {level!r}")
+    boundary_type = _boundary_type(level)
     cache_key = (iso, boundary_type)
     cached = _CACHE.get(cache_key)
     if cached:
@@ -185,14 +184,23 @@ async def load_boundary(iso: str, level: str) -> dict[str, Any]:
 async def load_encoded_boundary(iso: str, level: str) -> bytes:
     """What ``load_boundary`` returns, as gzipped JSON encoded once per country and
     level: a country's smallest units run to tens of megabytes of JSON."""
-    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower(), level)
-    cache_key = (iso, boundary_type)
-    encoded = _ENCODED.get(cache_key)
-    if encoded is None:
-        boundary = await load_boundary(iso, level)
-        encoded = await asyncio.to_thread(gzipped_json, boundary)
-        _ENCODED[cache_key] = encoded
+    cache_key = (iso, _boundary_type(level))
+    if (encoded := _ENCODED.get(cache_key)) is not None:
+        return encoded
+    # One encoding per outline, however many first requests arrive together.
+    async with _ENCODING.setdefault(cache_key, asyncio.Lock()):
+        if (encoded := _ENCODED.get(cache_key)) is None:
+            boundary = await load_boundary(iso, level)
+            encoded = await asyncio.to_thread(gzipped_json, boundary)
+            _ENCODED[cache_key] = encoded
     return encoded
+
+
+def _boundary_type(level: str) -> str:
+    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
+    if not boundary_type:
+        raise BoundaryUnavailable(f"Unsupported boundary level {level!r}")
+    return boundary_type
 
 
 async def fetch_boundary(iso: str, boundary_type: str) -> dict[str, Any]:

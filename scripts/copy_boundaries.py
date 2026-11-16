@@ -29,6 +29,9 @@ async def copy_country(root: str, iso: str) -> None:
     for boundary_type in boundaries.BOUNDARY_LEVELS.values():
         try:
             boundary = await boundaries.fetch_boundary(iso, boundary_type)
+        except boundaries.BoundaryUnreachable:
+            # Every other level would wait out the same timeouts.
+            raise
         except boundaries.BoundaryUnavailable as exc:
             print(f"{iso} {boundary_type}: not copied, {exc}")
             continue
@@ -50,4 +53,7 @@ async def main(bucket: str, wanted: list[str]) -> None:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    asyncio.run(main(sys.argv[1], sys.argv[2:]))
+    try:
+        asyncio.run(main(sys.argv[1], sys.argv[2:]))
+    except boundaries.BoundaryUnreachable as exc:
+        sys.exit(f"Stopped, nothing more was copied: {exc}")

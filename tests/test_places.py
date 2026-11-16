@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -113,6 +114,28 @@ async def test_outlines_are_encoded_once_and_sent_compressed(
         first.json() == second.json() == {"metadata": {"boundaryName": "Kenya"}, "geojson": REGIONS}
     )
     assert asked == [("KEN", "adm1")]
+
+
+@pytest.mark.asyncio
+async def test_outlines_asked_for_together_are_loaded_and_encoded_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: list[str] = []
+
+    async def kenya(iso: str, level: str) -> dict:
+        asked.append(iso)
+        await asyncio.sleep(0.01)
+        return {"metadata": {}, "geojson": REGIONS}
+
+    monkeypatch.setattr(boundaries, "load_boundary", kenya)
+
+    first, second = await asyncio.gather(
+        boundaries.load_encoded_boundary("KEN", "adm1"),
+        boundaries.load_encoded_boundary("KEN", "adm1"),
+    )
+
+    assert first is second
+    assert asked == ["KEN"]
 
 
 @pytest.mark.asyncio

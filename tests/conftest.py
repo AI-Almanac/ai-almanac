@@ -95,6 +95,7 @@ def forget_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(boundaries, "_CACHE", {})
     monkeypatch.setattr(boundaries, "_ENCODED", {})
+    monkeypatch.setattr(boundaries, "_ENCODING", {})
     monkeypatch.setattr(boundaries, "_COUNTRIES", [])
 
 
