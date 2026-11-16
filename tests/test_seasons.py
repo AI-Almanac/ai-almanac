@@ -38,7 +38,7 @@ def test_in_november_the_season_has_ended_and_names_the_next_start():
     assert state.summary == (
         "Kiremt 2026 ended on 31 July 2026; the first 2027 issue date is 1 May 2027."
     )
-    assert "Ask for 2026 by year" in state.refusal
+    assert "choose 2026 as the season year" in state.refusal
 
 
 def test_an_ended_season_asked_for_by_year_is_a_re_forecast():
