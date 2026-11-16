@@ -390,7 +390,9 @@ async def stream_chat_turn(
                     message="Session scope does not match the current view",
                 )
                 return
-            scope = requested_scope
+            # A stand-in stays one: the request names it as general, and writing that back
+            # would take the session's kind from the release that made it.
+            scope = stored_scope if stored_scope.stands_in else requested_scope
         else:
             scope = stored_scope
 
