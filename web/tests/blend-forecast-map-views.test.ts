@@ -15,6 +15,8 @@ vi.mock('maplibre-gl', () => ({
 		addControl = vi.fn();
 		on = vi.fn();
 		once = vi.fn();
+		off = vi.fn();
+		setStyle = vi.fn();
 		remove = vi.fn();
 		resize = vi.fn();
 	},
