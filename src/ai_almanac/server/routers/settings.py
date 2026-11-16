@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any, Literal, get_args, get_origin
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ai_almanac.paths import config_yaml_path
 from ai_almanac.server.auth import AdminUser
@@ -27,6 +27,7 @@ from ai_almanac.settings import (
     RESTART_REQUIRED_FIELDS,
     SENSITIVE_FIELDS,
     SHARED_ENV_ONLY_FIELDS,
+    Settings,
     get_local_llm_models,
     reload_settings,
     settings,
@@ -391,7 +392,7 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
                 status_code=400,
                 detail=f"{key} is environment-only in shared deployments",
             )
-        cleaned[key] = value
+        cleaned[key] = _parsed_setting(key, value)
     if cleaned.get("code_sandbox") == "srt":
         _require_local_sandbox()
 
@@ -408,6 +409,19 @@ def patch_settings(body: SettingsPatch, _admin: AdminUser) -> SettingsValues:
         ) from exc
     reload_settings()
     return _read_settings()
+
+
+def _parsed_setting(key: str, value: Any) -> Any:
+    """`value` as the field `key` declares it, or a 400; None still clears the override.
+    Settings are not validated on assignment, so a bad value saved here would only fail
+    at the next startup."""
+    if value is None:
+        return None
+    try:
+        return TypeAdapter(Settings.model_fields[key].annotation).validate_python(value)
+    except ValidationError as exc:
+        detail = exc.errors()[0]["msg"]
+        raise HTTPException(status_code=400, detail=f"invalid {key}: {detail}") from exc
 
 
 def _require_local_sandbox() -> None:
