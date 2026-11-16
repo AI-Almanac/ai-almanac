@@ -31,7 +31,7 @@ from tests.helpers.records import link_forecast_model, seed_source
 
 @pytest_asyncio.fixture
 async def _stub_runner(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(job_submission, "get_job_runner", lambda: FakeRunner())
+    monkeypatch.setattr(job_submission, "get_job_runner", FakeRunner)
 
 
 @pytest.mark.asyncio
