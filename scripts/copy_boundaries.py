@@ -25,7 +25,9 @@ def region_countries() -> list[str]:
     return sorted({r["boundary_iso"] for r in get_packaged_regions() if r.get("boundary_iso")})
 
 
-async def copy_country(root: str, iso: str) -> None:
+async def copy_country(root: str, iso: str) -> list[str]:
+    """Copies every level of a country; returns the levels left uncopied."""
+    skipped: list[str] = []
     for boundary_type in boundaries.BOUNDARY_LEVELS.values():
         try:
             boundary = await boundaries.fetch_boundary(iso, boundary_type)
@@ -34,9 +36,11 @@ async def copy_country(root: str, iso: str) -> None:
             raise
         except boundaries.BoundaryUnavailable as exc:
             print(f"{iso} {boundary_type}: not copied, {exc}")
+            skipped.append(f"{iso} {boundary_type}")
             continue
         boundary_copies.write(boundary_copies.boundary_path(root, iso, boundary_type), boundary)
         print(f"{iso} {boundary_type}: {len(boundary['geojson']['features'])} areas copied")
+    return skipped
 
 
 async def main(bucket: str, wanted: list[str]) -> None:
@@ -46,8 +50,11 @@ async def main(bucket: str, wanted: list[str]) -> None:
     print(f"{len(countries)} countries copied to {root}")
     # Not checked against that list: it leaves out some countries, India among them,
     # whose outlines geoBoundaries still has.
+    skipped: list[str] = []
     for iso in [parse_country_code(code) for code in wanted] or region_countries():
-        await copy_country(root, iso)
+        skipped += await copy_country(root, iso)
+    # Not a failure: geoBoundaries publishes no subdistricts for some countries.
+    print(f"Not copied: {', '.join(skipped)}" if skipped else "Every level was copied")
 
 
 if __name__ == "__main__":
