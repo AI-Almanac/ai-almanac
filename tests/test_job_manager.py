@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -438,3 +439,10 @@ async def test_reconcile_escalates_a_job_whose_modal_status_stays_unreadable(
     levels = [record.levelno for record in caplog.records if job_id in record.getMessage()]
     assert levels == [logging.WARNING, logging.WARNING, logging.ERROR]
     assert (await _job_row(job_id))["status"] == "running"
+
+
+def test_a_run_stopped_by_a_signal_python_does_not_name_says_its_number() -> None:
+    from ai_almanac.server.services import job_manager
+
+    assert "signal 40 " in job_manager._failure_message(-40)
+    assert "signal SIGTERM " in job_manager._failure_message(-signal.SIGTERM)
