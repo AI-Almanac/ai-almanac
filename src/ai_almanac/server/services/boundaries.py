@@ -102,6 +102,12 @@ async def list_countries() -> list[dict[str, str]]:
     return _COUNTRIES
 
 
+async def is_listed_country(iso: str) -> bool:
+    """Whether the boundary service lists a country by this code. Asked before fetching
+    a country's outlines, so a made-up code costs no request of its own."""
+    return any(country["iso"] == iso for country in await list_countries())
+
+
 async def load_boundary(iso: str, level: str) -> dict[str, Any]:
     """Return ``{"metadata": ..., "geojson": ...}`` for a country and admin level."""
     boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
