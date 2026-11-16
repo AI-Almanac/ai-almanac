@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import httpx
 import pytest
 
 from ai_almanac.server.services import boundaries
+from tests.helpers.places import REGIONS
 
 LISTING = [
     {"boundaryISO": "KEN", "boundaryName": "Kenya", "boundaryType": "ADM0"},
@@ -49,6 +53,7 @@ async def test_countries_are_asked_of_the_boundary_service_once(
         == second.json()
         == [
             {"iso": "ETH", "name": "Ethiopia"},
+            {"iso": "IND", "name": "India"},
             {"iso": "KEN", "name": "Kenya"},
         ]
     )
@@ -86,6 +91,69 @@ async def test_outlines_are_read_by_country_code_with_no_region_involved(
     assert response.status_code == 200
     assert response.json()["geojson"]["type"] == "FeatureCollection"
     assert asked == [("KEN", "adm1")]
+
+
+@pytest.mark.asyncio
+async def test_outlines_are_encoded_once_and_sent_compressed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[tuple[str, str]] = []
+
+    async def kenya(iso: str, level: str) -> dict:
+        asked.append((iso, level))
+        return {"metadata": {"boundaryName": "Kenya"}, "geojson": REGIONS}
+
+    monkeypatch.setattr(boundaries, "load_boundary", kenya)
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [{"iso": "KEN", "name": "Kenya"}])
+
+    first = await client.get("/places/KEN/boundaries/adm1")
+    second = await client.get("/places/KEN/boundaries/adm1")
+
+    assert first.headers["content-encoding"] == second.headers["content-encoding"] == "gzip"
+    assert (
+        first.json() == second.json() == {"metadata": {"boundaryName": "Kenya"}, "geojson": REGIONS}
+    )
+    assert asked == [("KEN", "adm1")]
+
+
+@pytest.mark.asyncio
+async def test_outlines_asked_for_together_are_loaded_and_encoded_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: list[str] = []
+
+    async def kenya(iso: str, level: str) -> dict:
+        asked.append(iso)
+        await asyncio.sleep(0.01)
+        return {"metadata": {}, "geojson": REGIONS}
+
+    monkeypatch.setattr(boundaries, "load_boundary", kenya)
+
+    first, second = await asyncio.gather(
+        boundaries.load_encoded_boundary("KEN", "adm1"),
+        boundaries.load_encoded_boundary("KEN", "adm1"),
+    )
+
+    assert first is second
+    assert asked == ["KEN"]
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_cannot_decompress_is_sent_plain_outlines(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def kenya(iso: str, level: str) -> dict:
+        return {"metadata": {}, "geojson": REGIONS}
+
+    monkeypatch.setattr(boundaries, "load_boundary", kenya)
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [{"iso": "KEN", "name": "Kenya"}])
+
+    response = await client.get(
+        "/places/KEN/boundaries/adm1", headers={"Accept-Encoding": "identity"}
+    )
+
+    assert "content-encoding" not in response.headers
+    assert json.loads(response.content) == {"metadata": {}, "geojson": REGIONS}
 
 
 @pytest.mark.asyncio

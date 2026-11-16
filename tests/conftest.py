@@ -89,6 +89,17 @@ def restore_settings() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def forget_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outlines one test served must not answer for the next."""
+    from ai_almanac.server.services import boundaries
+
+    monkeypatch.setattr(boundaries, "_CACHE", {})
+    monkeypatch.setattr(boundaries, "_ENCODED", {})
+    monkeypatch.setattr(boundaries, "_ENCODING", {})
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [])
+
+
+@pytest.fixture(autouse=True)
 def clear_auth_caches() -> None:
     from ai_almanac.server import auth
 

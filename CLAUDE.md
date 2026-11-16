@@ -213,7 +213,9 @@ All buckets are in GCP project `ai-almanac`
 (`gcloud config set project ai-almanac`):
 
 - `almanac-data-ai-almanac` — shared datasets, registered in the app as
-  `gs://` data-source pointers
+  `gs://` data-source pointers. Its `boundaries/` folder holds the copies of
+  geoBoundaries outlines that deployments read first; refresh them with
+  `pixi run python scripts/copy_boundaries.py almanac-data-ai-almanac [ISO...]`
 - `almanac-uploads-ai-almanac` / `almanac-job-outputs-ai-almanac` — prod
 - `almanac-uploads-staging-ai-almanac` /
   `almanac-job-outputs-staging-ai-almanac` — staging

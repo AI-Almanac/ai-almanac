@@ -3,11 +3,13 @@
 The frontend cannot fetch the GitHub-hosted GeoJSON directly because of browser
 CORS restrictions, so the API fetches and caches it here. The same loader
 attaches selected outlines to an area of interest at submission time, so a job
-carries the exact shapes it was scored on.
+carries the exact shapes it was scored on. A deployment reads the copies kept in
+its data bucket (``boundary_copies``) before asking geoBoundaries.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -21,12 +23,15 @@ import aiohttp
 import certifi
 import numpy as np
 
+from ai_almanac.server.compressed_json import gzipped_json
+from ai_almanac.server.services import boundary_copies
 from ai_almanac.server.services.focus_area import (
     FocusArea,
     FocusUnits,
     points_inside,
     polygons_of,
 )
+from ai_almanac.settings import get_packaged_regions
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,8 @@ _RELEASES = ("gbHumanitarian", "gbOpen")
 _NAME_FIELDS = ("shapeName", "ADM2_EN", "ADM3_EN", "adm3_name", "name", "NAME")
 
 _CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_ENCODED: dict[tuple[str, str], bytes] = {}
+_ENCODING: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 _COUNTRIES: list[dict[str, str]] = []
@@ -95,21 +102,63 @@ def match_countries(countries: list[dict[str, str]], wanted: str) -> list[dict[s
     return exact or [country for country in countries if needle in country["name"].casefold()]
 
 
+def copied_countries(copy: object) -> list[dict[str, str]]:
+    """The countries in a copy of the list that ``list_countries`` returns."""
+    entries = copy if isinstance(copy, list) else []
+    return [
+        {"iso": str(entry["iso"]), "name": str(entry["name"])}
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("iso") and entry.get("name")
+    ]
+
+
+def copied_boundary(copy: object) -> dict[str, Any] | None:
+    """A copy of what ``load_boundary`` returns, or None if it is not one."""
+    if not isinstance(copy, dict):
+        return None
+    metadata, geojson = copy.get("metadata"), copy.get("geojson")
+    if not isinstance(metadata, dict) or not isinstance(geojson, dict):
+        return None
+    if not isinstance(geojson.get("features"), list):
+        return None
+    return {"metadata": metadata, "geojson": geojson}
+
+
+def with_region_countries(
+    countries: list[dict[str, str]], regions: list[dict]
+) -> list[dict[str, str]]:
+    """The listed countries and each region's country, by name. geoBoundaries' listing
+    of every country leaves some out, India among them, whose outlines it still has."""
+    named = {
+        str(region["boundary_iso"]): str(region.get("display_name") or region["boundary_iso"])
+        for region in regions
+        if region.get("boundary_iso")
+    }
+    named.update({country["iso"]: country["name"] for country in countries})
+    return sorted(
+        ({"iso": iso, "name": name} for iso, name in named.items()), key=lambda c: c["name"]
+    )
+
+
 async def list_countries() -> list[dict[str, str]]:
     """Every country a place can be picked in."""
     if _COUNTRIES:
         return _COUNTRIES
-    timeout = aiohttp.ClientTimeout(total=30)
-    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+    listed = await _read_copied_countries() or await fetch_countries()
+    # Replaced, not extended: two first requests may both have fetched the listing.
+    _COUNTRIES[:] = with_region_countries(listed, get_packaged_regions())
+    return _COUNTRIES
+
+
+async def fetch_countries() -> list[dict[str, str]]:
+    """Every country, as geoBoundaries lists them now."""
+    async with _session() as session:
         # gbOpen is the release that covers every country.
         listing = await _fetch_json(session, _metadata_url("ALL", "ADM0", "gbOpen"))
     countries = countries_from(listing)
     if not countries:
         raise BoundaryUnavailable("The boundary service listed no countries")
-    # Replaced, not extended: two first requests may both have fetched the listing.
-    _COUNTRIES[:] = countries
-    return _COUNTRIES
+    return countries
 
 
 async def is_listed_country(iso: str) -> bool:
@@ -120,19 +169,46 @@ async def is_listed_country(iso: str) -> bool:
 
 async def load_boundary(iso: str, level: str) -> dict[str, Any]:
     """Return ``{"metadata": ..., "geojson": ...}`` for a country and admin level."""
-    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
-    if not boundary_type:
-        raise BoundaryUnavailable(f"Unsupported boundary level {level!r}")
+    boundary_type = _boundary_type(level)
     cache_key = (iso, boundary_type)
     cached = _CACHE.get(cache_key)
     if cached:
         return cached
-    timeout = aiohttp.ClientTimeout(total=30)
-    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+    boundary = await _read_copied_boundary(iso, boundary_type) or await fetch_boundary(
+        iso, boundary_type
+    )
+    _CACHE[cache_key] = boundary
+    return boundary
+
+
+async def load_encoded_boundary(iso: str, level: str) -> bytes:
+    """What ``load_boundary`` returns, as gzipped JSON encoded once per country and
+    level: a country's smallest units run to tens of megabytes of JSON."""
+    cache_key = (iso, _boundary_type(level))
+    if (encoded := _ENCODED.get(cache_key)) is not None:
+        return encoded
+    # One encoding per outline, however many first requests arrive together.
+    async with _ENCODING.setdefault(cache_key, asyncio.Lock()):
+        if (encoded := _ENCODED.get(cache_key)) is None:
+            boundary = await load_boundary(iso, level)
+            encoded = await asyncio.to_thread(gzipped_json, boundary)
+            _ENCODED[cache_key] = encoded
+    return encoded
+
+
+def _boundary_type(level: str) -> str:
+    boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
+    if not boundary_type:
+        raise BoundaryUnavailable(f"Unsupported boundary level {level!r}")
+    return boundary_type
+
+
+async def fetch_boundary(iso: str, boundary_type: str) -> dict[str, Any]:
+    """A country's outlines at one level (``ADM1``), as geoBoundaries publishes them now."""
+    async with _session() as session:
         metadata = await _fetch_metadata(session, iso, boundary_type)
         geojson = await _fetch_json(session, _geojson_url(metadata) or "")
-    result = {
+    return {
         "metadata": {
             key: metadata.get(key)
             for key in (
@@ -146,8 +222,6 @@ async def load_boundary(iso: str, level: str) -> dict[str, Any]:
         },
         "geojson": geojson,
     }
-    _CACHE[cache_key] = result
-    return result
 
 
 def normalize_area_name(value: str) -> str:
@@ -252,6 +326,33 @@ async def attach_unit_outlines(area: FocusArea, region_def: dict | None) -> Focu
         else select_units(boundary["geojson"], area.units)
     )
     return area.model_copy(update={"geometry": outlines})
+
+
+async def _read_copied_countries() -> list[dict[str, str]]:
+    root = boundary_copies.deployment_root()
+    if root is None:
+        return []
+    return copied_countries(await boundary_copies.read(boundary_copies.countries_path(root)))
+
+
+async def _read_copied_boundary(iso: str, boundary_type: str) -> dict[str, Any] | None:
+    root = boundary_copies.deployment_root()
+    if root is None or not _is_country_code(iso):
+        return None
+    copy = await boundary_copies.read(boundary_copies.boundary_path(root, iso, boundary_type))
+    return copied_boundary(copy)
+
+
+def _is_country_code(iso: str) -> bool:
+    """Whether ``iso`` can name a copy's path: callers may pass it unparsed."""
+    return len(iso) == 3 and iso.isascii() and iso.isalpha() and iso.isupper()
+
+
+def _session() -> aiohttp.ClientSession:
+    return aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=30),
+        connector=aiohttp.TCPConnector(ssl=_SSL_CONTEXT),
+    )
 
 
 def _metadata_url(iso: str, boundary_type: str, release: str) -> str:
