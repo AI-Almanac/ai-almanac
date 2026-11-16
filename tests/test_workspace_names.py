@@ -300,3 +300,18 @@ async def test_only_an_analysis_the_workspace_holds_can_be_named(client, as_new_
     assert response.status_code == 404
     detail = (await client.get(f"/workspaces/{workspace['id']}", headers=as_new_user)).json()
     assert detail["analyses"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_name_whose_files_have_gone_can_still_be_cleared(client, as_new_user) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+    await workspaces.name_analysis(wid, "turn-gone", "Old map", "assistant")
+
+    cleared = await client.patch(
+        f"/workspaces/{wid}/analyses/turn-gone", headers=as_new_user, json={"title": None}
+    )
+
+    assert cleared.status_code == 200, cleared.text
+    detail = (await client.get(f"/workspaces/{wid}", headers=as_new_user)).json()
+    assert detail["analyses"] == []
