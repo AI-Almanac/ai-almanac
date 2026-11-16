@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import ai_almanac_tools
 import sqlalchemy as sa
 
 from ai_almanac.envs.manager import run as pixi_run
@@ -123,14 +124,8 @@ def _run_forecast(job_id: str, config: dict) -> None:
     staging_dir = output_dir.parent / "season-staging"
     entrypoint = Path(__file__).parents[2] / "envs" / "forecast_entrypoint.py"
     process_env = os.environ.copy()
-    # forecast_entrypoint imports ai_almanac (settings, forecast_pipeline,
-    # blend_entrypoint), but the forecast envs don't install the package —
-    # expose this checkout/site-packages copy to the subprocess.
-    package_root = str(Path(__file__).parents[3])
-    process_env["PYTHONPATH"] = (
-        f"{package_root}{os.pathsep}{process_env['PYTHONPATH']}"
-        if process_env.get("PYTHONPATH")
-        else package_root
+    process_env["PYTHONPATH"] = os.pathsep.join(
+        [*_forecast_package_roots(), *filter(None, [process_env.get("PYTHONPATH")])]
     )
     # Let the caching allocator return freed blocks instead of fragmenting;
     # on unified-memory hosts the chat model wakes into what is left over.
@@ -176,6 +171,14 @@ def _run_forecast(job_id: str, config: dict) -> None:
         _mark_trajectory_coverage(config)
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: failed to record trajectory coverage: {exc}", flush=True)
+
+
+def _forecast_package_roots() -> list[str]:
+    """Where the forecast subprocess finds ai_almanac and ai_almanac_tools. The
+    forecast envs install neither, and in a checkout the two live in different
+    source trees, so both directories go on its path."""
+    roots = [Path(__file__).parents[3], Path(ai_almanac_tools.__file__).parents[1]]
+    return list(dict.fromkeys(str(root) for root in roots))
 
 
 def _score_in_blending_env(

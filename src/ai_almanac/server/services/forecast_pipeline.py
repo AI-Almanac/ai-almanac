@@ -2,8 +2,8 @@
 rollouts, the trajectory store, and season assembly.
 
 Deliberately self-contained: only stdlib and scientific-stack imports
-(earth2studio, xarray, numpy), never anything else from
-`ai_almanac` — this is what lets the exact same file run in two places:
+(earth2studio, xarray, numpy) plus `ai_almanac_tools.bbox`, never anything
+from `ai_almanac` — this is what lets the exact same file run in two places:
 
   - Bundled as a single file into the Modal image (see modal/forecasts_app.py,
     which is a thin wrapper handling only Modal-specific plumbing: GPU/image
@@ -662,13 +662,14 @@ def _daily_precip_trajectory(
 
 
 def select_lat_lon_bounds(data_array, bounds: Bounds):
+    """The part of a trajectory inside the bounds, with its longitudes relabelled
+    into the bounds' convention: a 0..360 trajectory cropped to a -180..180 box
+    comes back -180..180, so it lines up with the archive the box came from."""
+    from ai_almanac_tools.bbox import BBox
+
     lat_name, lon_name = lat_lon_names(data_array)
-    lat_bounds = (bounds.lat_min, bounds.lat_max)
-    lon_bounds = (bounds.lon_min, bounds.lon_max)
-    lat_values = data_array[lat_name].values
-    reverse = bool(len(lat_values) >= 2 and lat_values[0] > lat_values[-1])
-    lat_slice = slice(*sorted(lat_bounds, reverse=reverse))
-    return data_array.sel({lat_name: lat_slice, lon_name: slice(min(lon_bounds), max(lon_bounds))})
+    box = BBox.parse((bounds.lat_min, bounds.lat_max), (bounds.lon_min, bounds.lon_max))
+    return box.select(data_array, lat=lat_name, lon=lon_name)
 
 
 _gcs_client_singleton: Any = None

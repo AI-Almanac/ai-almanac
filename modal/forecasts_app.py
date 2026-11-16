@@ -109,6 +109,7 @@ def _inference_image(extras: list[str]) -> modal.Image:
         )
         .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
         .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
+        .add_local_python_source("ai_almanac_tools")
     )
 
 
@@ -132,6 +133,7 @@ cpu_image = (
     )
     .add_local_file(FORECAST_MODELS_YAML, "/almanac/forecast_models.yaml")
     .add_local_file(FORECAST_PIPELINE_PY, "/almanac/forecast_pipeline.py")
+    .add_local_python_source("ai_almanac_tools")
 )
 
 
@@ -140,7 +142,8 @@ _BUNDLED_PIPELINE_PY = Path("/almanac/forecast_pipeline.py")
 
 def _load_pipeline(path: Path = _BUNDLED_PIPELINE_PY):
     """Load forecast_pipeline.py by explicit path — the container has no
-    `ai_almanac` package installed, only this one file, bundled at `path`.
+    `ai_almanac` package installed, only this one file, bundled at `path`, and
+    the `ai_almanac_tools` package it crops with.
 
     The module is registered in sys.modules before it runs: dataclasses resolve
     its string annotations through sys.modules, so an unregistered module fails

@@ -33,24 +33,25 @@ class BBox:
             raise ValueError(f"lon bounds {lon_bounds} must lie within -180..180 or within 0..360")
         return cls(lat, lon)
 
-    def select(self, da: xr.DataArray) -> xr.DataArray:
-        """The part of ``da`` inside the box; raises if no grid points fall inside."""
+    def select(self, da: xr.DataArray, lat: str = "lat", lon: str = "lon") -> xr.DataArray:
+        """The part of ``da`` inside the box, along the coordinates named ``lat`` and
+        ``lon``; raises if no grid points fall inside."""
         if self.lat:
-            da = da.sel(lat=_coord_slice(da["lat"].values, self.lat))
+            da = da.sel({lat: _coord_slice(da[lat].values, self.lat)})
         if self.lon:
-            da = self._select_lon(da)
-        empty = [dim for dim in ("lat", "lon") if dim in da.dims and da.sizes[dim] == 0]
+            da = self._select_lon(da, lon)
+        empty = [dim for dim in (lat, lon) if dim in da.dims and da.sizes[dim] == 0]
         if empty:
             raise ValueError(f"{self} selects no grid points along {', '.join(empty)}")
         return da
 
-    def _select_lon(self, da: xr.DataArray) -> xr.DataArray:
+    def _select_lon(self, da: xr.DataArray, name: str) -> xr.DataArray:
         west, east = self.lon
-        lon = np.asarray(da["lon"].values, dtype=float)
+        lon = np.asarray(da[name].values, dtype=float)
         lon = ((lon + 180) % 360) - 180 if west < 0 else lon % 360
         inside = np.flatnonzero((lon >= west) & (lon <= east))
         order = inside[np.argsort(lon[inside], kind="stable")]
-        return da.isel(lon=order).assign_coords(lon=lon[order])
+        return da.isel({name: order}).assign_coords({name: lon[order]})
 
 
 def _ordered_pair(bounds: Bounds, name: str) -> tuple[float, float] | None:
