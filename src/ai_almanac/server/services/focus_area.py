@@ -189,20 +189,28 @@ def _inside_ring(ring: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return inside
 
 
+def longitudes_from(lon: np.ndarray, west: float) -> np.ndarray:
+    """The same longitudes counted east from ``west``, each in [west, west + 360), so a
+    grid stored 0..360 compares with an area drawn -180..180 and the other way round."""
+    return (lon - west) % 360 + west
+
+
 def write_focus_mask(area: FocusArea, path: Path, lat: np.ndarray, lon: np.ndarray) -> Path:
     """Write a 0/1 NetCDF mask on the given grid that is 1 inside the area.
 
     ROMP aligns the mask to the data with an exact label match, so the mask
-    must sit on the data grid itself rather than on a grid of our choosing.
+    must sit on the data grid itself rather than on a grid of our choosing. The
+    grid keeps its own longitude labels; only the comparison with the area wraps.
     """
     if isinstance(area, FocusBox):
         inside_lat = (lat >= area.lat_min) & (lat <= area.lat_max)
-        inside_lon = (lon >= area.lon_min) & (lon <= area.lon_max)
+        inside_lon = longitudes_from(lon, area.lon_min) <= area.lon_max
         inside = inside_lat[:, None] & inside_lon[None, :]
     else:
         if not area.geometry:
             raise ValueError("Area of interest outlines were not attached at submission")
-        inside = cells_inside(area.geometry, lat, lon)
+        # Outlines from geoBoundaries are drawn -180..180.
+        inside = cells_inside(area.geometry, lat, longitudes_from(lon, -180.0))
     if not inside.any():
         raise ValueError("No grid cells fall inside the area of interest")
     mask = xr.DataArray(
