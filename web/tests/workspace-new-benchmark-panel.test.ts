@@ -48,7 +48,7 @@ function job(overrides: Partial<Job>): Job {
 
 /** What the form was started from, once its choices have loaded. */
 async function formStart() {
-	const shown = screen.getByTestId('form-start');
+	const shown = await screen.findByTestId('form-start');
 	await waitFor(() => expect(shown.textContent?.trim()).not.toBe('loading'));
 	return JSON.parse(shown.textContent ?? 'null');
 }
@@ -135,5 +135,32 @@ describe('starting a benchmark from the workspace', () => {
 
 		expect(onCancel).toHaveBeenCalled();
 		expect(screen.getByRole('heading', { name: 'New benchmark' })).toBeTruthy();
+	});
+});
+
+describe('a benchmark form whose choices could not be read', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		api.getRegions.mockResolvedValue([]);
+		api.getRompDefaults.mockResolvedValue(null);
+		api.getGuardrailThresholds.mockResolvedValue(null);
+		api.getJob.mockImplementation(async (id: string) => job({ id }));
+	});
+
+	it('still starts from the last benchmark once trying again succeeds', async () => {
+		api.getDatasets
+			.mockRejectedValueOnce(new Error('offline'))
+			.mockResolvedValue([{ id: 'chirps', region: 'ethiopia' }]);
+		render(NewBenchmarkPanel, {
+			jobs: [workspaceJob({ id: 'job-1' })],
+			onStarted: vi.fn(),
+			onCancel: vi.fn()
+		});
+
+		expect(await screen.findByText(/could not be loaded: offline/)).toBeTruthy();
+		expect(screen.queryByTestId('form-start')).toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+		expect(await formStart()).toMatchObject({ regionId: 'ethiopia', datasetId: 'chirps' });
 	});
 });

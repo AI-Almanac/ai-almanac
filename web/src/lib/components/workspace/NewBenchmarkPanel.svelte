@@ -99,6 +99,9 @@
 	}
 
 	function retry() {
+		// The form mounts again only once the retried choices are in, so it starts from them.
+		dataLoaded = false;
+		startFrom = null;
 		loadFailure = null;
 		void loadChoices(latestBenchmarkJobIds(jobs));
 	}
@@ -121,7 +124,15 @@
 	}
 </script>
 
-<SetupPanel title="New benchmark" {note} {error} {loadFailure} onRetry={retry} {onCancel}>
+<SetupPanel
+	title="New benchmark"
+	{note}
+	{error}
+	loading={!dataLoaded}
+	{loadFailure}
+	onRetry={retry}
+	{onCancel}
+>
 	<BenchmarkForm
 		{form}
 		{regions}
