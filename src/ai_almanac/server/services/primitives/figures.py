@@ -282,11 +282,14 @@ def _area_values(text: str, column: str, issue_date: str | None) -> tuple[dict[s
     shown = issue_date or dates[-1]
     if shown not in dates:
         raise ValueError(f"No issue date {shown}; the table has {dates[0]} to {dates[-1]}")
-    return {
+    values = {
         row["area"]: value
         for row in rows
         if row["issue_date"] == shown and (value := _number(row[column])) is not None
-    }, shown
+    }
+    if not values:
+        raise ValueError(f"No area has a {column} value on {shown}")
+    return values, shown
 
 
 def _is_plottable(column: str) -> bool:

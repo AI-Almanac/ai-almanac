@@ -544,3 +544,35 @@ def test_a_failed_runs_error_reaches_the_assistant_as_one_short_platform_line() 
     assert message.startswith("[Platform update — written by the platform, not the user]")
     [line] = [line for line in message.splitlines() if "Amhara" in line]
     assert "do this instead" not in line and len(line) < 400
+
+
+@pytest.mark.asyncio
+async def test_one_chats_follow_ups_failing_to_start_leaves_the_others_to_start(
+    client, as_new_user, user_id, turns, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = []
+    for name in ("broken", "fine"):
+        workspace, session = await workspace_with_session(client, as_new_user)
+        job_id = insert_job(user_id, {}, job_type="blend")
+        _set_job(job_id, "running")
+        await workspaces.link_job(workspace["id"], job_id)
+        ctx = tool_ctx(user_id, session["id"], workspace["id"])
+        await workspace_tools.continue_after_jobs(ctx, job_ids=[job_id], instruction=f"plot {name}")
+        _set_job(job_id, "complete", published=True)
+        sessions.append((workspace["id"], session["id"]))
+    (broken_ws, broken), (fine_ws, _) = sessions
+    real_status = follow_up_runs._chat_status
+
+    async def status(conn, session_id):
+        if session_id == broken:
+            raise RuntimeError("this chat's row cannot be read")
+        return await real_status(conn, session_id)
+
+    monkeypatch.setattr(follow_up_runs, "_chat_status", status)
+    await _tick()
+
+    assert [turn for turn in turns if "plot fine" in turn]
+    [still_waiting] = await follow_ups.list_for_workspace(broken_ws)
+    assert still_waiting["status"] == "waiting"
+    [done] = await follow_ups.list_for_workspace(fine_ws)
+    assert done["status"] == "done"

@@ -340,3 +340,24 @@ async def test_an_approved_step_still_runs_when_the_client_leaves_as_it_starts(
 
     assert _runs_canceled() == 1
     assert (await _reloaded(client, as_new_user, session_id))["pending_approval"] is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_lets_an_approved_step_whose_client_left_finish(
+    client, as_new_user, user_id, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server import app as server_app
+    from ai_almanac.server.services import chat_turns
+
+    session_id = await _conversation_waiting_on_an_approval(
+        client, as_new_user, user_id, monkeypatch
+    )
+    stream = chat_turns.stream_approval_turn(
+        session_id, user_id, "call-1", approved=True, for_admin=False
+    )
+    await anext(stream)
+    await stream.aclose()
+
+    await server_app._finish_detached_turns()
+
+    assert _runs_canceled() == 1
