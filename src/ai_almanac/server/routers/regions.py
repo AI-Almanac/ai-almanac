@@ -1,9 +1,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from ai_almanac.server.auth import OptionalCurrentUser
+from ai_almanac.server.compressed_json import gzipped_json_response
 from ai_almanac.server.services import boundaries, region_catalog
 from ai_almanac.server.services.regions import list_region_options
 
@@ -17,8 +18,10 @@ async def list_regions(_user: OptionalCurrentUser) -> list[dict]:
     return await list_region_options()
 
 
-@router.get("/{region}/boundaries/{level}")
-async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> dict[str, Any]:
+@router.get("/{region}/boundaries/{level}", response_model=dict[str, Any])
+async def get_boundary(
+    region: str, level: str, request: Request, _user: OptionalCurrentUser
+) -> Response:
     """
     Return simplified geoBoundaries GeoJSON (gbHumanitarian, else gbOpen) for a region.
 
@@ -29,7 +32,8 @@ async def get_boundary(region: str, level: str, _user: OptionalCurrentUser) -> d
     if not region_def or not region_def.get("boundary_iso"):
         raise HTTPException(status_code=404, detail=f"No boundary mapping for region {region!r}")
     try:
-        return await boundaries.load_boundary(region_def["boundary_iso"], level)
+        body = await boundaries.load_encoded_boundary(region_def["boundary_iso"], level)
     except boundaries.BoundaryUnavailable as exc:
         status = 404 if "Unsupported boundary level" in str(exc) else 502
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return gzipped_json_response(body, request)
