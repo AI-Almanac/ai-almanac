@@ -64,15 +64,14 @@ class SandboxRunner(Protocol):
 
     The script reads ``WORKSPACE_INPUTS`` (JSON: each input's label to the path of its
     copy), writes its results to ``ARTIFACT_DIR`` and works in ``SCRATCH_DIR``. The
-    regular files it leaves in ``ARTIFACT_DIR`` are copied into ``into``, a directory
-    the sandbox never had, and are the result's ``outputs``."""
+    regular files it leaves in ``ARTIFACT_DIR`` are copied into ``into``, an empty
+    directory the sandbox never had, and are the result's ``outputs``."""
 
     # Whether a run can be let through to ``allowed_domains``; otherwise it has no network.
     reaches_network: bool
 
     def ready(self) -> bool:
         """Whether it can run anything on this host right now."""
-        ...
 
     async def run(
         self,
@@ -82,7 +81,8 @@ class SandboxRunner(Protocol):
         *,
         timeout: float,
         allowed_domains: tuple[str, ...] = (),
-    ) -> SandboxResult: ...
+    ) -> SandboxResult:
+        """Run ``script``; raises :class:`SandboxUnavailable` when it cannot run at all."""
 
 
 def configured_runner() -> SandboxRunner | None:
@@ -130,6 +130,7 @@ def run_script(
 
     Everything the sandbox can touch lives in a private directory beside ``into`` that is
     removed afterwards, so only the copied outputs outlive the run."""
+    require_empty(into)
     work = Path(tempfile.mkdtemp(prefix=f"{into.name}_sandbox_", dir=into.parent))
     try:
         stage, artifacts, scratch = (work / name for name in ("inputs", "outputs", "scratch"))
@@ -161,15 +162,31 @@ def run_script(
 
 def _read_only_copy(source: Path, parent: Path) -> Path:
     """A copy of a staged file, or a directory of files, inside ``parent``. The sandbox
-    can never write the stage; a file copy is made read-only besides."""
+    can never write the stage; a file copy is made read-only besides.
+    Links inside a directory are left out: copied, they would hand the sandbox whatever
+    they point at."""
     parent.mkdir(parents=True)
     target = parent / source.name
     if source.is_dir():
-        shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(source, target, ignore=_caches_and_links)
     else:
         shutil.copyfile(source, target)
         target.chmod(0o444)
     return target
+
+
+def _caches_and_links(directory: str, names: list[str]) -> set[str]:
+    return {
+        name
+        for name in names
+        if name == "__pycache__" or os.path.islink(os.path.join(directory, name))
+    }
+
+
+def require_empty(into: Path) -> None:
+    """Refuse an ``into`` that already holds files, which would be mistaken for outputs."""
+    if any(into.iterdir()):
+        raise ValueError(f"{into} must be empty: a sandbox run's outputs are what it holds")
 
 
 def sandbox_runtime() -> str | None:

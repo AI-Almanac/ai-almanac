@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from ai_almanac.server.services import code_sandbox
 
 
@@ -60,3 +62,25 @@ def test_an_output_directory_that_is_gone_has_no_outputs(tmp_path: Path) -> None
     taken_into.mkdir()
 
     assert code_sandbox.take_outputs(tmp_path / "removed", taken_into) == []
+
+
+def test_a_run_refuses_an_output_directory_that_already_holds_files(tmp_path: Path) -> None:
+    into = tmp_path / "taken"
+    into.mkdir()
+    (into / "earlier.csv").write_text("from another run")
+
+    with pytest.raises(ValueError, match="must be empty"):
+        code_sandbox.run_script("print('hi')", {}, into, timeout=5)
+
+
+def test_links_in_a_staged_directory_are_left_out(tmp_path: Path) -> None:
+    outside = _secret_outside(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "obs.nc").write_bytes(b"data")
+    os.symlink(outside / "credentials.txt", source / "linked.txt")
+    os.symlink(outside, source / "linked_dir")
+
+    staged = code_sandbox._read_only_copy(source, tmp_path / "stage")
+
+    assert sorted(path.name for path in staged.iterdir()) == ["obs.nc"]
