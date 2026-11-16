@@ -165,7 +165,7 @@ async def _update_session_state(
         "now": updated_at,
         "id": session_id,
     }
-    if scope is None:
+    if scope is None or scope.stands_in:
         await conn.execute(
             text("""
                 UPDATE chat_sessions
