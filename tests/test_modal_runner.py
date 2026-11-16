@@ -126,6 +126,10 @@ def test_preflight_requires_outputs_bucket() -> None:
         # A forecast's own config has no obs_dir/model_files — only its
         # blend_config_snapshot does (live inference reads GFS directly).
         pytest.param(_FORECAST_CONFIG, id="forecast-checks-its-blend-snapshot"),
+        pytest.param(
+            {"job_type": "forecast", "blend_config_snapshot": None},
+            id="raw-forecast-stages-nothing",
+        ),
     ],
 )
 def test_preflight_accepts_configs_modal_can_stage(config: dict) -> None:

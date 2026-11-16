@@ -43,7 +43,13 @@ export type ForecastFields = {
 	initTime: string;
 	/** Undefined or NaN when the field is empty: the whole season to date. */
 	maxIssueDates: number | undefined;
+	/** Undefined or NaN when the field is empty: this year's season. */
+	seasonYear: number | undefined;
 };
+
+function entered(value: number | undefined): value is number {
+	return value != null && !Number.isNaN(value);
+}
 
 export function canSubmit(fields: ForecastFields, blend: Blend | null): boolean {
 	return (
@@ -58,13 +64,12 @@ export function forecastRequest(fields: ForecastFields): ForecastCreate {
 	const params: ForecastCreate['params'] = {
 		...(initTime ? { init_time: initTime } : {}),
 		...(initSource ? { init_source: initSource } : {}),
-		...(fields.maxIssueDates != null && !Number.isNaN(fields.maxIssueDates)
-			? { max_issue_dates: fields.maxIssueDates }
-			: {})
+		...(entered(fields.maxIssueDates) ? { max_issue_dates: fields.maxIssueDates } : {})
 	};
 	return {
 		blend_id: fields.blendId,
 		forecast_model_ids: fields.modelNames,
+		...(entered(fields.seasonYear) ? { season_year: fields.seasonYear } : {}),
 		...(Object.keys(params).length ? { params } : {})
 	};
 }
