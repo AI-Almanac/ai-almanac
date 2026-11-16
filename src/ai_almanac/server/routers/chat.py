@@ -66,6 +66,7 @@ from ..services.chat_turns import (
     save_provider_state,
     stream_chat_turn,
     validate_scope,
+    with_interrupted_turns,
 )
 from ..services.llm import llm_is_configured
 from ..services.llm_profiles import chat_available_for_user
@@ -285,7 +286,7 @@ def _session_out(row) -> SessionOut:
 
 
 def _session_detail(row, user_id: str) -> SessionDetail:
-    transcript = json_list(row["transcript"])
+    transcript = with_interrupted_turns(json_list(row["transcript"]), row["updated_at"])
     return SessionDetail(
         **_session_out(row).model_dump(),
         transcript=[

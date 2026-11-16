@@ -65,6 +65,9 @@ function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string 
 	if (event.error_type === 'scope_mismatch') {
 		return 'This chat belongs to a different benchmark view. Start a new chat for this benchmark.';
 	}
+	if (event.error_type === 'session_busy') {
+		return 'The assistant is still replying in this chat. Wait for it to finish, then send again.';
+	}
 	return event.message || 'Chat request failed.';
 }
 
