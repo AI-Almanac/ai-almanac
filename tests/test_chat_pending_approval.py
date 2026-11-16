@@ -319,3 +319,24 @@ def test_benchmark_and_blend_requests_are_kept_on_the_turn_in_their_streamed_sha
 
     assert pending is not None and pending.type == "blend_approval_request"
     assert pending.config == BlendRunSpec()
+
+
+@pytest.mark.asyncio
+async def test_an_approved_step_still_runs_when_the_client_leaves_as_it_starts(
+    client, as_new_user, user_id, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import chat_turns
+
+    session_id = await _conversation_waiting_on_an_approval(
+        client, as_new_user, user_id, monkeypatch
+    )
+
+    stream = chat_turns.stream_approval_turn(
+        session_id, user_id, "call-1", approved=True, for_admin=False
+    )
+    await anext(stream)
+    await stream.aclose()
+    await chat_turns.detached_turns_finished()
+
+    assert _runs_canceled() == 1
+    assert (await _reloaded(client, as_new_user, session_id))["pending_approval"] is None

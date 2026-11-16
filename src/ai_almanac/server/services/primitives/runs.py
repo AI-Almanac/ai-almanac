@@ -7,6 +7,7 @@ approves is exactly what is validated, submitted and hashed.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import replace
 
 import numpy as np
@@ -31,8 +32,8 @@ from .. import (
 from ..approval_display import Fact
 from ..blend_forecast import WEEKLY_PROBABILITIES_CSV
 from ..chat_tools import BenchmarkAdvancedParams, PerModelRompParams
-from ..focus_area import FocusArea
-from ..seasons import SeasonWindow
+from ..focus_area import FocusArea, area_label
+from ..seasons import SeasonWindow, spoken_date
 from .registry import Refusal, json_params, primitive
 
 
@@ -207,15 +208,53 @@ async def validate_benchmark(ctx: RunContext, spec: BenchmarkSpec) -> dict:
     )
 
 
+def _benchmark_facts(
+    spec: BenchmarkSpec,
+    sources: approval_display.Sources,
+    region: str | None,
+    spans: Mapping[str, approval_display.YearSpan | None],
+) -> list[Fact]:
+    """A complete benchmark spec, by name; ``spans`` are each model's evaluation years."""
+    show = approval_display
+    advanced = spec.advanced_params
+    area, rule = advanced.focus_area, advanced.onset_rule
+    years = {show.source_names([ref], sources): span for ref, span in spans.items()}
+    return show.facts(
+        ("Observations", show.source_label(sources.get(spec.dataset_id), spec.dataset_id)),
+        ("Models", show.source_names(spec.model_ids, sources)),
+        ("Region", region),
+        ("Area of interest", area and area_label(area)),
+        ("Evaluation years", show.evaluation_years_label(years)),
+        ("Forecast days", show.forecast_days_label(spec.forecast_window_days)),
+        ("Onset definition", show.onset_definition_label(rule)),
+        ("Goal", spec.intent),
+    )
+
+
+def _blend_facts(spec: BlendSpec, sources: approval_display.Sources) -> list[Fact]:
+    show = approval_display
+    return show.facts(
+        ("Name", spec.name),
+        ("Observations", show.source_label(sources.get(spec.obs_dataset_id), spec.obs_dataset_id)),
+        ("Models", show.source_names(spec.model_ids, sources)),
+        ("Area of interest", spec.focus_area and area_label(spec.focus_area)),
+        ("Onset search starts", spec.cutoff_month_day and spoken_date(spec.cutoff_month_day)),
+        ("Reference onset", spec.ref_onset_month_day and spoken_date(spec.ref_onset_month_day)),
+        ("Training years", show.years_label(spec.training_years)),
+        ("Cross-validation years", show.years_label(spec.cv_holdout_years)),
+        ("Held-out years", show.years_label(spec.true_holdout_years)),
+        ("Forecast years", show.years_label(spec.forecast_years)),
+        ("Goal", spec.intent),
+    )
+
+
 async def _describe_submit_benchmark(ctx: RunContext, spec: BenchmarkSpec) -> list[Fact]:
     sources = await approval_display.ready_sources(ctx.deps.user_id)
     dataset = sources.get(spec.dataset_id) or {}
     region_id = spec.region_id or dataset.get("region")
     spans = _evaluation_spans(spec, sources)
     return [
-        *approval_display.benchmark_facts(
-            spec, sources, await approval_display.region_label(region_id), spans
-        ),
+        *_benchmark_facts(spec, sources, await approval_display.region_label(region_id), spans),
         *await proposed_run_facts.execution_facts(
             ctx.deps.user_id,
             proposed_run_facts.benchmark_jobs(
@@ -313,9 +352,7 @@ async def validate_blend(ctx: RunContext, spec: BlendSpec) -> dict:
 
 
 async def _describe_submit_blend(ctx: RunContext, spec: BlendSpec) -> list[Fact]:
-    return approval_display.blend_facts(
-        spec, await approval_display.ready_sources(ctx.deps.user_id)
-    )
+    return _blend_facts(spec, await approval_display.ready_sources(ctx.deps.user_id))
 
 
 @primitive(

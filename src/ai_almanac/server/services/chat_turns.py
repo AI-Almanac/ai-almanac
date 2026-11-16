@@ -574,21 +574,65 @@ async def stream_approval_turn(
         return
     session, pending = opened
     decision = True if approved else ToolDenied(message or "The user declined this step.")
+    relay = _relay_turn(
+        session_id,
+        user_id,
+        pending,
+        settles=tool_call_id,
+        approved=approved,
+        deferred_tool_results=DeferredToolResults(
+            approvals={tool_call_id: decision},
+            metadata={tool_call_id: approved_step(session.transcript, tool_call_id)},
+        ),
+        active_ruleset=await _pinned_ruleset(session.ruleset_id, for_admin=for_admin),
+        turn_id=pending.assistant_turn.id,
+    )
+    # The step the user approved runs in this turn, so a client that leaves must not stop
+    # it halfway: a partial run would be left with its card offered again.
+    async for chunk in _outliving_the_client(_kept_alive(session_id, relay)):
+        yield chunk
+
+
+async def _kept_alive(session_id: str, chunks: AsyncIterator[str]) -> AsyncIterator[str]:
     async with _keeping_session_alive(session_id):
-        async for chunk in _relay_turn(
-            session_id,
-            user_id,
-            pending,
-            settles=tool_call_id,
-            approved=approved,
-            deferred_tool_results=DeferredToolResults(
-                approvals={tool_call_id: decision},
-                metadata={tool_call_id: approved_step(session.transcript, tool_call_id)},
-            ),
-            active_ruleset=await _pinned_ruleset(session.ruleset_id, for_admin=for_admin),
-            turn_id=pending.assistant_turn.id,
-        ):
+        async for chunk in chunks:
             yield chunk
+
+
+# Strong references to turns still running after their client left, so none is collected.
+_DETACHED_TURNS: set[asyncio.Task] = set()
+
+
+async def _outliving_the_client(chunks: AsyncIterator[str]) -> AsyncIterator[str]:
+    """Relay ``chunks`` from a task of their own. When the client goes, only the relaying
+    stops: the turn runs to the end and stores its outcome as it would have."""
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def drain() -> None:
+        try:
+            async for chunk in chunks:
+                queue.put_nowait(chunk)
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(drain())
+    _DETACHED_TURNS.add(task)
+    task.add_done_callback(_finish_detached_turn)
+    while (chunk := await queue.get()) is not None:
+        yield chunk
+    await task
+
+
+def _finish_detached_turn(task: asyncio.Task) -> None:
+    _DETACHED_TURNS.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("A turn failed after its client left", exc_info=task.exception())
+
+
+async def detached_turns_finished() -> None:
+    """Wait for turns still running after their client left, as at shutdown or in tests."""
+    while _DETACHED_TURNS:
+        await asyncio.gather(*_DETACHED_TURNS, return_exceptions=True)
 
 
 def _without_step(blocks: list, tool_call_id: str | None) -> list:
