@@ -114,3 +114,74 @@ async def test_a_code_no_country_has_is_refused_without_asking_for_its_outlines(
 
     assert response.status_code == 404
     assert "ZZZ" in response.text
+
+
+@pytest.mark.asyncio
+async def test_an_outline_service_that_cannot_be_reached_is_tried_again_then_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aiohttp
+
+    calls: list[str] = []
+
+    async def unreachable(session, url: str):
+        calls.append(url)
+        raise aiohttp.ClientConnectionError()
+
+    monkeypatch.setattr(boundaries, "_read_json", unreachable)
+
+    with pytest.raises(boundaries.BoundaryUnavailable, match="www.geoboundaries.org could not"):
+        await boundaries._fetch_json(None, "https://www.geoboundaries.org/api/current/x/")
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_connection_that_drops_once_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    answers = [TimeoutError(), {"ok": True}]
+
+    async def flaky(session, url: str):
+        answer = answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(boundaries, "_read_json", flaky)
+
+    assert await boundaries._fetch_json(None, "https://www.geoboundaries.org/x/") == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_a_blend_whose_outlines_cannot_be_fetched_says_so_with_a_502(
+    client: httpx.AsyncClient, as_new_user: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_almanac.server.services import job_submission
+
+    async def unreachable(area, region_def):
+        raise boundaries.BoundaryUnavailable("The boundary service could not be reached")
+
+    monkeypatch.setattr(boundaries, "attach_unit_outlines", unreachable)
+
+    params = {"focus_area": {"level": "adm1", "units": ["Amhara"], "iso": "ETH"}}
+    with pytest.raises(job_submission.HTTPException) as refused:
+        await job_submission._with_unit_outlines(params, None)
+    assert refused.value.status_code == 502
+    assert "could not be reached" in refused.value.detail
+
+
+@pytest.mark.asyncio
+async def test_an_unhandled_error_keeps_its_message_from_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_almanac.server.app import app
+
+    async def broken():
+        raise RuntimeError("internal detail /srv/secret")
+
+    monkeypatch.setattr(boundaries, "_COUNTRIES", [])
+    monkeypatch.setattr(boundaries, "list_countries", broken)
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as quiet:
+        response = await quiet.get("/places/countries")
+
+    assert response.status_code == 500
+    assert "/srv/secret" not in response.text

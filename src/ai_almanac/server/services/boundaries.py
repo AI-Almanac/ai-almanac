@@ -9,11 +9,13 @@ carries the exact shapes it was scored on.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import ssl
 import unicodedata
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import aiohttp
 import certifi
@@ -28,6 +30,8 @@ from ai_almanac.server.services.focus_area import (
 
 # aiohttp uses the system CA store, which some container images leave empty;
 # certifi's bundle makes the geoBoundaries fetch work everywhere.
+logger = logging.getLogger(__name__)
+
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 BOUNDARY_LEVELS = {
@@ -271,7 +275,31 @@ async def _fetch_metadata(
     raise BoundaryUnavailable("; ".join(failures))
 
 
+# What a request can fail with before any response: no connection, a dropped one, or none
+# within the session's timeout.
+_UNREACHABLE = (aiohttp.ClientError, TimeoutError)
+
+
 async def _fetch_json(session: aiohttp.ClientSession, url: str) -> Any:
+    """The JSON at ``url``. A connection that fails or times out is tried once more, as
+    one from a cloud host can, then reported as the boundary service being unreachable,
+    so callers answer with their usual 502 rather than an unhandled error."""
+    host = urlsplit(url).netloc
+    try:
+        return await _read_json(session, url)
+    except _UNREACHABLE as exc:
+        logger.warning("Boundary request to %s failed, trying again: %r", host, exc)
+    try:
+        return await _read_json(session, url)
+    except _UNREACHABLE as exc:
+        logger.warning("Boundary request to %s failed again: %r", host, exc)
+        raise BoundaryUnavailable(
+            f"The boundary service at {host} could not be reached ({type(exc).__name__}). "
+            "Try again in a moment."
+        ) from exc
+
+
+async def _read_json(session: aiohttp.ClientSession, url: str) -> Any:
     async with session.get(url) as response:
         body = await response.text()
         if response.status >= 400:
