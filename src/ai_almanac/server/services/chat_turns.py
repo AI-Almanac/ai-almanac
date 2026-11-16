@@ -166,7 +166,7 @@ async def _update_session_state(
         "now": updated_at,
         "id": session_id,
     }
-    if scope is None:
+    if scope is None or scope.stands_in:
         await conn.execute(
             text("""
                 UPDATE chat_sessions
@@ -362,7 +362,7 @@ async def resume_deferred_setup_tool(
     run; the returned payload uses generic ``config`` / ``validation`` keys.
     """
     row = await get_session_provider_scope(session_id, user_id)
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     provider_state = deserialize_model_messages(row["provider_state"])
     # The approval continues a conversation, so it runs under the same pinned
     # ruleset as the turns around it — falling back to the active one exactly
@@ -452,7 +452,7 @@ async def stream_chat_turn(
         provider_state = _deny_unprocessed_tool_calls(
             deserialize_model_messages(row["provider_state"])
         )
-        stored_scope = ChatScope.model_validate(json_dict(row["scope"]))
+        stored_scope = ChatScope.stored(json_dict(row["scope"]))
         if requested_scope is not None:
             if requested_scope.kind != stored_scope.kind or requested_scope.key != stored_scope.key:
                 yield _stream_event(
@@ -461,7 +461,9 @@ async def stream_chat_turn(
                     message="Session scope does not match the current view",
                 )
                 return
-            scope = requested_scope
+            # A stand-in stays one: the request names it as general, and writing that back
+            # would take the session's kind from the release that made it.
+            scope = stored_scope if stored_scope.stands_in else requested_scope
         else:
             scope = stored_scope
 
