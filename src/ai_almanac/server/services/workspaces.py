@@ -385,11 +385,15 @@ async def release_unreadable_job(job: dict) -> None:
 
 
 async def release_deleted_job(job_id: str) -> None:
-    """Take a deleted job, and the files it made, out of every workspace: they went with it."""
-    await _release_job(job_id, still_held_by=lambda owner_id: False)
+    """Take a deleted job, and the files it made, out of every workspace: they went with it.
+    A file another run also made stays, unless its bytes were stored with this job's
+    outputs, which the delete removed."""
+    await _release_job(job_id, still_held_by=lambda owner_id: False, bytes_deleted=True)
 
 
-async def _release_job(job_id: str, *, still_held_by: Callable[[str], bool]) -> None:
+async def _release_job(
+    job_id: str, *, still_held_by: Callable[[str], bool], bytes_deleted: bool = False
+) -> None:
     """Drop the job, and the files it made, from each workspace whose owner may no longer
     hold it. A file counts as the job's when the job's step lists it as an output: rows
     are shared per owner by content, so a file can be another job's row as well. It stays
@@ -397,6 +401,7 @@ async def _release_job(job_id: str, *, still_held_by: Callable[[str], bool]) -> 
     items, workspaces = tables.workspace_items, tables.workspaces
     async with get_db() as conn:
         made = await _files_made_by(conn, job_id)
+        stored_with_job = await _files_stored_with(conn, job_id) if bytes_deleted else set()
         holds_job = sa.or_(items.c.job_id == job_id, items.c.artifact_id.in_(made))
         holders = (
             await conn.execute(
@@ -410,6 +415,7 @@ async def _release_job(job_id: str, *, still_held_by: Callable[[str], bool]) -> 
             if still_held_by(owner_id):
                 continue
             kept = await _files_made_by_other_readable_jobs(conn, workspace_id, owner_id, job_id)
+            kept -= stored_with_job
             await conn.execute(
                 items.delete().where(
                     items.c.workspace_id == workspace_id,
@@ -418,15 +424,21 @@ async def _release_job(job_id: str, *, still_held_by: Callable[[str], bool]) -> 
             )
 
 
+async def _files_stored_with(conn, job_id: str) -> set[str]:
+    """Files whose bytes sit in the job's own outputs: rows recorded under the job."""
+    artifacts = tables.artifacts
+    rows = await conn.execute(sa.select(artifacts.c.id).where(artifacts.c.job_id == job_id))
+    return set(rows.scalars())
+
+
 async def _files_made_by(conn, job_id: str) -> set[str]:
     """Every file the job's steps output, plus the rows recorded under the job itself."""
-    steps, artifacts = tables.provenance_steps, tables.artifacts
+    steps = tables.provenance_steps
     outputs = (
         await conn.execute(sa.select(steps.c.outputs).where(steps.c.job_id == job_id))
     ).scalars()
     made = {aid for listed in outputs for aid in tables.json_col(listed, [])}
-    recorded = await conn.execute(sa.select(artifacts.c.id).where(artifacts.c.job_id == job_id))
-    return made | set(recorded.scalars())
+    return made | await _files_stored_with(conn, job_id)
 
 
 async def _files_made_by_other_readable_jobs(
