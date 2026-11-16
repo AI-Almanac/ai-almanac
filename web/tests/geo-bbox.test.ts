@@ -86,6 +86,13 @@ describe('comparing boxes', () => {
 		expect(overlaps(ethiopia, { lat_min: 15, lat_max: 20, lon_min: 40, lon_max: 42 })).toBe(true);
 		expect(overlaps(ethiopia, { lat_min: 8, lat_max: 30, lon_min: 68, lon_max: 97 })).toBe(false);
 	});
+
+	it('compares a box stored 0 to 360 with one stored -180 to 180 where their data is', () => {
+		const americas = { lat_min: -10, lat_max: 30, lon_min: -100, lon_max: -60 };
+		expect(overlaps(americas, { ...americas, lon_min: 260, lon_max: 300 })).toBe(true);
+		expect(overlaps(americas, { ...americas, lon_min: 310, lon_max: 340 })).toBe(false);
+		expect(overlaps(americas, { ...americas, lon_min: 0, lon_max: 359.75 })).toBe(true);
+	});
 });
 
 describe('bounds read from detected metadata', () => {
