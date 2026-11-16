@@ -29,7 +29,7 @@ FORECASTS_APP = Path(__file__).parents[1] / "modal" / "forecasts_app.py"
 
 @pytest.fixture
 def _stub_runner(monkeypatch):
-    monkeypatch.setattr(job_submission, "get_job_runner", lambda: FakeRunner())
+    monkeypatch.setattr(job_submission, "get_job_runner", FakeRunner)
 
 
 @pytest.fixture
@@ -192,9 +192,7 @@ def test_a_local_raw_forecast_publishes_each_season_without_scoring(monkeypatch,
     monkeypatch.setattr(
         job_workload,
         "get_storage",
-        lambda: type(
-            "S", (), {"is_local": True, "job_output_uri": lambda _, j: (output_dir, None)}
-        )(),
+        type("S", (), {"is_local": True, "job_output_uri": lambda _, j: (output_dir, None)}),
     )
 
     def fake_inference(cmd, env=None, environment="base"):
