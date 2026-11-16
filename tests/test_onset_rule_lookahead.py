@@ -73,6 +73,15 @@ def test_the_default_definition_fits_and_reads_the_flat_dry_spell_settings() -> 
     assert "needs 49" in error
 
 
+def test_a_model_too_short_for_the_days_scored_is_refused_for_its_length_not_the_definition() -> (
+    None
+):
+    (error,) = _fit({}, forecast_steps=30)
+
+    assert "FuXi forecasts run 30 days, too few to score 30 forecast days" in error
+    assert "Shorten" not in error
+
+
 def test_a_model_of_unknown_forecast_length_is_only_held_to_the_days_scored() -> None:
     settings = {"onset_rule": "two_stage", "onset_rule_params": SHORT_TWO_STAGE}
 
