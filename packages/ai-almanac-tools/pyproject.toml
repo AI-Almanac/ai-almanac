@@ -1,0 +1,15 @@
+[project]
+name = "ai-almanac-tools"
+version = "0.1.0"
+description = "Fetchers and transforms for weather and climate forecast data."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "AI Almanac contributors" }]
+dependencies = ["xarray>=2026.2.0", "zarr>=3.4.0,<4", "gcsfs>=2026.5.0,<2027", "numpy", "pandas", "pydantic>=2,<3"]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_almanac_tools"]

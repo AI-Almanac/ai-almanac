@@ -125,6 +125,7 @@ async def lifespan(app: FastAPI):
     # Mark existing installs that predate the wizard as already complete.
     if _grandfather_install():
         _reload_user_config()
+    _require_code_sandbox()
     await _seed_regions()
     await _seed_assistant_rulesets()
     await _reconcile_jobs()
@@ -169,6 +170,20 @@ def _reload_user_config() -> None:
     from ai_almanac.settings import reload_settings
 
     reload_settings()
+
+
+def _require_code_sandbox() -> None:
+    """Fail startup when the configured workspace code sandbox cannot run code here,
+    rather than silently leaving the assistant without run_code."""
+    from ai_almanac.server.services import code_sandbox
+    from ai_almanac.settings import CODE_SANDBOXES, settings
+
+    if settings.code_sandbox not in CODE_SANDBOXES:
+        raise RuntimeError(
+            f"code_sandbox must be one of {', '.join(CODE_SANDBOXES)}; got {settings.code_sandbox!r}"
+        )
+    if settings.code_sandbox == "srt" and (reason := code_sandbox.sandbox_unavailable_reason()):
+        raise RuntimeError(f"code_sandbox=srt, but {reason}")
 
 
 async def _wait_for_database() -> None:

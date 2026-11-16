@@ -2,6 +2,7 @@ services:
   app:
     environment:
       JOB_RUNNER: modal
+      CODE_SANDBOX: modal
       MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:?set MODAL_TOKEN_ID}
       MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:?set MODAL_TOKEN_SECRET}
       MODAL_ENVIRONMENT: ${MODAL_ENVIRONMENT:-staging}

@@ -29,7 +29,7 @@ log() { printf 'deploy-plan: %s\n' "$*" >&2; }
 ships_in_image() {
 	case $1 in
 	*.md | web/tests/* | *.test.ts) return 1 ;;
-	src/* | web/* | Dockerfile | pyproject.toml | pixi.lock) return 0 ;;
+	src/* | packages/* | web/* | Dockerfile | pyproject.toml | pixi.lock) return 0 ;;
 	esac
 	return 1
 }
@@ -38,7 +38,7 @@ ships_in_image() {
 # pins the Modal client that deploys them.
 ships_to_modal() {
 	case $1 in
-	modal/* | pixi.lock) return 0 ;;
+	modal/* | packages/ai-almanac-tools/src/* | pixi.lock) return 0 ;;
 	src/ai_almanac/server/config/forecast_models.yaml) return 0 ;;
 	src/ai_almanac/server/services/forecast_pipeline.py) return 0 ;;
 	src/ai_almanac/server/services/e2s.py) return 0 ;;

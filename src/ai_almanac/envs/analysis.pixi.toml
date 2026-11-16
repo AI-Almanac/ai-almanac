@@ -1,0 +1,33 @@
+# Pixi spec for the analysis environment that workspace `run_code` and ai-almanac-tools
+# fetches run in.
+#
+# One pinned package set for both code sandboxes: locally, srt runs this env's
+# interpreter (never the server's, so server packages stay out of reach); on
+# Modal, the Sandbox image installs this manifest from analysis.pixi.lock
+# (services/modal_code_sandbox.py). The lockfile's hash is the `env_digest` every
+# local run_code step records.
+#
+# Installed into `$AI_ALMANAC_DATA_DIR/analysis-env/` by `ai-almanac env prepare`.
+# After editing, regenerate the lockfile with pixi (never by hand):
+#   scripts/lock-analysis-env.sh
+
+[workspace]
+name = "ai-almanac-analysis"
+description = "Analysis environment for sandboxed workspace code."
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+python = "3.13.*"
+numpy = ">=2.2,<3"
+scipy = ">=1.15,<2"
+pandas = ">=2.2,<4"
+xarray = ">=2025.1"
+h5netcdf = ">=1.4,<2"
+netcdf4 = ">=1.7,<2"
+zarr = ">=3,<4"
+pint = ">=0.24,<1"
+matplotlib-base = ">=3.10,<4"
+pillow = ">=11"
+gcsfs = ">=2026.8.1,<2027"
+pydantic = ">=2.13.5,<3"

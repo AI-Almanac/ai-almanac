@@ -132,6 +132,10 @@ variable "job_runner" {
   type = string
 }
 
+variable "code_sandbox" {
+  type = string
+}
+
 variable "modal_environment" {
   description = "Modal environment whose deployed apps this env's backend calls"
   type        = string

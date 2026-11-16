@@ -82,6 +82,14 @@ def llm_env_dir() -> Path:
     return env_root() / "llm-env"
 
 
+def sandbox_env_dir() -> Path:
+    return data_root() / "sandbox-env"
+
+
+def analysis_env_dir() -> Path:
+    return data_root() / "analysis-env"
+
+
 def cache_dir() -> Path:
     return data_root() / "cache"
 

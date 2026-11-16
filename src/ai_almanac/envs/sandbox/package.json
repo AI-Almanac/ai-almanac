@@ -1,0 +1,7 @@
+{
+  "name": "ai-almanac-sandbox",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.77"
+  }
+}

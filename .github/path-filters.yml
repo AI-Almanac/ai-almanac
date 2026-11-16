@@ -9,6 +9,7 @@ ci: &ci
 python:
   - *ci
   - "src/**"
+  - "packages/**"
   - "tests/**"
   - "modal/**"
   - "scripts/**"

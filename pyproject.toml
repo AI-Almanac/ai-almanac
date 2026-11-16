@@ -85,7 +85,9 @@ requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai_almanac"]
+# ai_almanac_tools ships inside the platform wheel: the server imports it and copies
+# it into the code sandboxes. It keeps its own pyproject so it installs on its own too.
+packages = ["src/ai_almanac", "packages/ai-almanac-tools/src/ai_almanac_tools"]
 
 [tool.hatch.build.targets.wheel.force-include]
 # The SvelteKit SPA is built into web/build by `npm run build` and bundled
@@ -97,7 +99,14 @@ packages = ["src/ai_almanac"]
 # The wheel is built from the sdist by standard Python build frontends, so the
 # sdist carries exactly what the wheel needs — not infra, CI, or agent config.
 # Include the generated SPA even though web/build is ignored by Git.
-only-include = ["src", "web/build", "modal/blending_app.py", "README.md", "LICENSE"]
+only-include = [
+    "src",
+    "packages/ai-almanac-tools/src",
+    "web/build",
+    "modal/blending_app.py",
+    "README.md",
+    "LICENSE",
+]
 artifacts = ["web/build", "modal/blending_app.py"]
 
 [tool.ruff]
@@ -111,6 +120,7 @@ include = [
     "modal/**/*.{py,pyi}",
     "scripts/**/*.{py,pyi}",
     "evals/**/*.{py,pyi}",
+    "packages/**/*.{py,pyi}",
 ]
 
 [tool.ruff.lint]
@@ -121,7 +131,7 @@ ignore = ["E501"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-testpaths = ["tests"]
+testpaths = ["tests", "packages/ai-almanac-tools/tests"]
 pythonpath = "."
 
 [tool.pixi.workspace]

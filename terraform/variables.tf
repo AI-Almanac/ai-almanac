@@ -168,6 +168,17 @@ variable "job_runner" {
   default     = "modal"
 }
 
+variable "code_sandbox" {
+  description = "Where workspace run_code runs: 'modal' (network-blocked Modal Sandbox) or 'off'."
+  type        = string
+  default     = "modal"
+
+  validation {
+    condition     = contains(["off", "modal"], var.code_sandbox)
+    error_message = "code_sandbox must be one of off, modal."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Monitoring (monitoring.tf)
 # ---------------------------------------------------------------------------
