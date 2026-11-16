@@ -88,6 +88,14 @@ cog_tiler = TilerFactory(
 router = cog_tiler.router
 
 
+# titiler's table also maps bare Exception to a 500 that sends str(exc) to the client.
+# Registered on the app, that would answer every unhandled error in every route with its
+# internal message, or with an empty one. Only the tile errors are kept.
+TILE_ERROR_STATUS_CODES = {
+    error: code for error, code in DEFAULT_STATUS_CODES.items() if error is not Exception
+}
+
+
 def add_exception_handlers(app: FastAPI) -> None:
     """Map rio-tiler's exceptions (e.g. tile out of bounds) to HTTP status codes."""
-    _add_exception_handlers(app, DEFAULT_STATUS_CODES)
+    _add_exception_handlers(app, TILE_ERROR_STATUS_CODES)
