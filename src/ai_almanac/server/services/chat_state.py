@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -10,7 +11,15 @@ from .benchmark_state import BenchmarkScope
 
 
 class ChatScope(BenchmarkScope):
-    pass
+    @classmethod
+    def stored(cls, scope: Mapping[str, Any]) -> ChatScope:
+        """A session's scope as stored. A kind this release does not know was written by a
+        newer one, so after a rollback it reads as a general chat rather than failing every
+        request that loads the session. New scopes are still checked strictly."""
+        known = get_args(cls.model_fields["kind"].annotation)
+        if scope.get("kind") not in known:
+            scope = {**scope, "kind": "general"}
+        return cls.model_validate(scope)
 
 
 class ChatArtifact(BaseModel):

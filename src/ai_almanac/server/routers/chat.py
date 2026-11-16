@@ -275,7 +275,7 @@ def _session_out(row) -> SessionOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         message_count=len(transcript),
-        scope=ChatScope.model_validate(json_dict(row["scope"])),
+        scope=ChatScope.stored(json_dict(row["scope"])),
         benchmark_config=_benchmark_config(row.get("benchmark_config")),
         benchmark_validation=_benchmark_validation(row.get("benchmark_validation")),
         blend_config=_blend_config(row.get("blend_config")),
@@ -418,7 +418,7 @@ async def get_session_job_events(session_id: str, user: CurrentUser) -> ChatJobA
         )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     return await scope_job_activity(user.id, scope, row["created_at"])
 
 
@@ -480,7 +480,7 @@ async def submit_session_benchmark(
         return _benchmark_submit_out(payload)
 
     row = await get_session_provider_scope(session_id, user.id)
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     payload = await submit_benchmark_for_session(user.id, scope, session_id)
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
@@ -524,7 +524,7 @@ async def update_session_benchmark_config(
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     try:
         payload = await update_benchmark_config(
             body.model_dump(exclude_unset=True), user.id, scope, session_id
@@ -560,7 +560,7 @@ async def submit_session_blend(
         return _blend_submit_out(payload)
 
     row = await get_session_provider_scope(session_id, user.id)
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     payload = await submit_blend_for_session(user.id, scope, session_id)
     if payload.get("error"):
         raise HTTPException(status_code=400, detail=payload["error"])
@@ -599,7 +599,7 @@ async def update_session_blend_config(session_id: str, body: BlendConfigPatchIn,
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    scope = ChatScope.model_validate(json_dict(row["scope"]))
+    scope = ChatScope.stored(json_dict(row["scope"]))
     try:
         payload = await update_blend_config(
             body.model_dump(exclude_unset=True), user.id, scope, session_id

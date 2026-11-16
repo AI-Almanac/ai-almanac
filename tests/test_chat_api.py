@@ -1149,3 +1149,39 @@ async def test_patch_benchmark_config_keeps_omitted_fields_and_clears_null_ones(
     cleared = await client.patch(url, headers=as_new_user, json={"region_id": None})
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["benchmark_config"]["region_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_session_stored_with_a_scope_kind_from_a_newer_release_still_opens(
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
+) -> None:
+    session_id = (await _create_session(client, as_new_user))["id"]
+    async with get_db() as conn:
+        await conn.execute(
+            text("UPDATE chat_sessions SET scope = :scope WHERE id = :id"),
+            {
+                "scope": json.dumps({"kind": "workspace", "key": "ws-1", "workspace_id": "ws-1"}),
+                "id": session_id,
+            },
+        )
+
+    listed = await client.get("/chat/sessions", headers=as_new_user)
+    opened = await client.get(f"/chat/sessions/{session_id}", headers=as_new_user)
+
+    assert listed.status_code == 200
+    assert session_id in [session["id"] for session in listed.json()]
+    assert opened.status_code == 200
+    assert opened.json()["scope"]["kind"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_with_an_unknown_scope_kind_is_still_refused(
+    client: httpx.AsyncClient, as_new_user: dict[str, str]
+) -> None:
+    response = await client.post(
+        "/chat/sessions",
+        headers=as_new_user,
+        json={"title": "Session", "scope": {"kind": "workspace", "key": "ws-1"}},
+    )
+
+    assert response.status_code == 422
