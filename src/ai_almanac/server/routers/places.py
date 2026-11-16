@@ -37,6 +37,8 @@ async def get_boundary(iso: str, level: str, _user: OptionalCurrentUser) -> dict
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
+        if not await boundaries.is_listed_country(country):
+            raise HTTPException(status_code=404, detail=f"No country has the code {country}")
         return await boundaries.load_boundary(country, level)
     except boundaries.BoundaryUnavailable as exc:
         status = 404 if "Unsupported boundary level" in str(exc) else 502
