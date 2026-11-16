@@ -267,7 +267,7 @@ def _lose(job_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
 def _outgrow_the_load_limit(job_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_almanac.server.services import storage as storage_module
 
-    monkeypatch.setattr(storage_module, "_MAX_EAGER_NC_BYTES", 10)
+    monkeypatch.setattr(storage_module, "MAX_EAGER_NC_BYTES", 10)
 
 
 @pytest.mark.asyncio

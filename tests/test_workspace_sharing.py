@@ -103,3 +103,83 @@ async def test_a_conversation_promoted_to_a_workspace_brings_only_runs_still_sha
     assert promoted.status_code == 201, promoted.text
     detail = (await client.get(f"/workspaces/{promoted.json()['id']}", headers=reader)).json()
     assert [job["id"] for job in detail["jobs"]] == [mine]
+
+
+async def _link(client, headers: dict[str, str], wid: str, job_id: str) -> None:
+    linked = await client.post(f"/workspaces/{wid}/jobs", headers=headers, json={"job_id": job_id})
+    assert linked.status_code == 200, linked.text
+
+
+@pytest.mark.asyncio
+async def test_unsharing_a_rerun_takes_back_files_its_owners_private_run_made_first(
+    client,
+) -> None:
+    owner, owner_id = await _signed_in(client)
+    reader, _ = await _signed_in(client)
+    private = insert_job(owner_id, BENCHMARK_CONFIG, status="running")
+    await _publish(private)
+    rerun = insert_job(owner_id, BENCHMARK_CONFIG, status="running", visibility="shared")
+    same_bytes = await _publish(rerun)
+    assert {artifact["job_id"] for artifact in same_bytes} == {private}
+    workspace, _ = await workspace_with_session(client, reader)
+    wid = workspace["id"]
+    await _link(client, reader, wid, rerun)
+
+    await client.post(f"/jobs/{rerun}/unshare", headers=owner)
+
+    detail = (await client.get(f"/workspaces/{wid}", headers=reader)).json()
+    assert detail["jobs"] == [] and detail["artifacts"] == []
+    for artifact in same_bytes:
+        download = f"/workspaces/{wid}/artifacts/{artifact['id']}/download"
+        assert (await client.get(download, headers=reader)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_shared_runs_history_leaves_out_its_owners_private_runs(client) -> None:
+    owner, owner_id = await _signed_in(client)
+    reader, _ = await _signed_in(client)
+    private = insert_job(owner_id, BENCHMARK_CONFIG, status="running")
+    await _publish(private)
+    shared = insert_job(owner_id, BENCHMARK_CONFIG, status="running", visibility="shared")
+    [artifact, *_] = await _publish(shared)
+    workspace, _ = await workspace_with_session(client, reader)
+    await _link(client, reader, workspace["id"], shared)
+
+    provenance = await client.get(
+        f"/workspaces/{workspace['id']}/artifacts/{artifact['id']}/provenance", headers=reader
+    )
+
+    assert provenance.status_code == 200, provenance.text
+    assert {step["job_id"] for step in provenance.json()["steps"]} == {shared}
+
+
+@pytest.mark.asyncio
+async def test_a_shared_run_is_listed_under_its_run_beside_the_readers_own(client) -> None:
+    owner, owner_id = await _signed_in(client)
+    reader, reader_id = await _signed_in(client)
+    own = insert_job(reader_id, BENCHMARK_CONFIG, status="running")
+    shared = insert_job(owner_id, BENCHMARK_CONFIG, status="running", visibility="shared")
+    workspace, _ = await workspace_with_session(client, reader)
+    await _link(client, reader, workspace["id"], own)
+    await _publish(own)
+    await _link(client, reader, workspace["id"], shared)
+    await _publish(shared)
+
+    listed = await workspaces.listing(workspace["id"])
+
+    assert {item["job_id"] for item in listed} == {own, shared}
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_run_leaves_its_workspace_with_its_files(client) -> None:
+    owner, owner_id = await _signed_in(client)
+    job_id = insert_job(owner_id, BENCHMARK_CONFIG, status="running")
+    workspace, _ = await workspace_with_session(client, owner)
+    await _link(client, owner, workspace["id"], job_id)
+    await _publish(job_id)
+
+    deleted = await client.delete(f"/jobs/{job_id}", headers=owner)
+
+    assert deleted.status_code == 204, deleted.text
+    detail = (await client.get(f"/workspaces/{workspace['id']}", headers=owner)).json()
+    assert detail["jobs"] == [] and detail["artifacts"] == []

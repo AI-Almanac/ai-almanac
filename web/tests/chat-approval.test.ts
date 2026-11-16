@@ -291,10 +291,10 @@ describe('step labels', () => {
 		);
 	});
 
-	it('still reports an ordinary failure as the step it was', () => {
+	it('reports an ordinary failure as the step that failed', () => {
 		const failed = { status: 'failed' as const, result: { error: 'No such dataset' } };
 
-		expect(label({ name: 'submit_benchmark', ...failed })).toBe('Submitted the benchmark');
+		expect(label({ name: 'submit_benchmark', ...failed })).toBe('Submitting the benchmark failed');
 	});
 
 	it.each([

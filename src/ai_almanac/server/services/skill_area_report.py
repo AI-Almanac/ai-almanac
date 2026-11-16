@@ -16,6 +16,7 @@ COLUMNS = (
     "model",
     "window",
     "cells",
+    "climatology_cells",
     *_METRICS,
     *(f"climatology_{metric}" for metric in _METRICS),
 )
@@ -24,8 +25,9 @@ COLUMNS = (
 INLINE_ROWS = 120
 
 READING = (
-    "Each value is the mean over `cells` grid cells centred in the area, with the "
-    "climatology baseline over the same cells. An area with one or two cells is close "
+    "Each value is the mean over `cells` grid cells centred in the area, and the "
+    "climatology baseline the mean over the `climatology_cells` it was scored on. When "
+    "the two counts differ, say the comparison covers different cells. An area with one or two cells is close "
     "to a point value: say how many cells it rests on. Areas in `not_covered` hold no "
     "scored cell, so they have no value at all. Models in `not_shown` belong to this "
     "run but have no rows: say which are missing and why rather than passing over them."
@@ -43,6 +45,7 @@ def flat_row(row: AreaSkillRow) -> dict:
         "model": row.model,
         "window": row.window,
         "cells": row.cells,
+        "climatology_cells": row.climatology.cells if row.climatology else None,
         **{metric: getattr(row, metric) for metric in _METRICS},
         **{f"climatology_{metric}": _baseline(row.climatology, metric) for metric in _METRICS},
     }

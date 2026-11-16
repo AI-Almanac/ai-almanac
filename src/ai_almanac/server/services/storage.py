@@ -31,18 +31,18 @@ _CHAT_FIGURE_EXTS = (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
 
 # `open_nc_dataset` holds a whole file in memory, which suits job-output grids
 # (a few MB) but would take the server down on a forecast archive.
-_MAX_EAGER_NC_BYTES = 256 * 2**20
+MAX_EAGER_NC_BYTES = 256 * 2**20
 _METADATA_BLOCK_BYTES = 2 * 2**20
 
 
 def _ensure_small_enough_to_load(path, size: int) -> None:
-    if size > _MAX_EAGER_NC_BYTES:
+    if size > MAX_EAGER_NC_BYTES:
         # The path holds a job id and the server's layout, and this message can reach
         # a user, so it is logged rather than put in the error.
         logger.warning("%s is %d bytes, too large to load whole", path, size)
         raise ValueError(
             f"This file is {size / 2**20:.0f} MiB, over the "
-            f"{_MAX_EAGER_NC_BYTES / 2**20:.0f} MiB limit for loading a NetCDF file whole."
+            f"{MAX_EAGER_NC_BYTES / 2**20:.0f} MiB limit for loading a NetCDF file whole."
         )
 
 

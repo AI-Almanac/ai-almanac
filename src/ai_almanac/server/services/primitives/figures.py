@@ -268,14 +268,34 @@ async def plot_area_map(
 
 
 def _area_values(text: str, column: str, issue_date: str | None) -> tuple[dict[str, float], str]:
+    """Each area's value in ``column`` on the issue date shown. An area whose cell is
+    empty, as coverage is when unknown, has no value and is drawn grey."""
     rows = list(csv.DictReader(io.StringIO(text)))
     if not rows or "area" not in rows[0]:
         raise ValueError("This is not a summarize_by_area table")
-    if column not in rows[0]:
-        numeric = [key for key in rows[0] if key.startswith(("p_", "most_likely_share"))]
-        raise ValueError(f"No column {column!r}; choose one of {', '.join(numeric)}")
+    plottable = [key for key in rows[0] if _is_plottable(key)]
+    if column not in plottable:
+        raise ValueError(
+            f"Column {column!r} cannot be mapped; choose one of {', '.join(plottable)}"
+        )
     dates = sorted({row["issue_date"] for row in rows})
     shown = issue_date or dates[-1]
     if shown not in dates:
         raise ValueError(f"No issue date {shown}; the table has {dates[0]} to {dates[-1]}")
-    return {row["area"]: float(row[column]) for row in rows if row["issue_date"] == shown}, shown
+    return {
+        row["area"]: value
+        for row in rows
+        if row["issue_date"] == shown and (value := _number(row[column])) is not None
+    }, shown
+
+
+def _is_plottable(column: str) -> bool:
+    """The table's numeric columns; the rest (area, parent, most_likely) are words."""
+    return column.startswith(("p_", "most_likely_share")) or column == "coverage"
+
+
+def _number(cell: str) -> float | None:
+    try:
+        return float(cell)
+    except ValueError:
+        return None
