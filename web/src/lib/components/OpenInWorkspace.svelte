@@ -2,6 +2,7 @@
 	import { failureMessage } from '$lib/api/core';
 	import { goto } from '$app/navigation';
 	import { promoteSessionToWorkspace } from '$lib/api';
+	import { account } from '$lib/account.svelte';
 
 	interface Props {
 		sessionId: string | null;
@@ -26,12 +27,15 @@
 	}
 </script>
 
-<div class="open-in-workspace">
-	<button type="button" onclick={open} disabled={busy || !sessionId}>
-		{busy ? 'Opening…' : 'Open in workspace'}
-	</button>
-	{#if error}<span class="error">{error}</span>{/if}
-</div>
+<!-- Workspaces are offered only to their audience; anyone else would open a page that is not there. -->
+{#if account.canUseWorkspaces}
+	<div class="open-in-workspace">
+		<button type="button" onclick={open} disabled={busy || !sessionId}>
+			{busy ? 'Opening…' : 'Open in workspace'}
+		</button>
+		{#if error}<span class="error">{error}</span>{/if}
+	</div>
+{/if}
 
 <style>
 	.open-in-workspace {

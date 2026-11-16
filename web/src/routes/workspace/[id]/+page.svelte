@@ -108,12 +108,28 @@
 		if (pageEl) return layout.track(pageEl);
 	});
 
+	// Moving from one workspace to another keeps this page mounted, so what it showed
+	// for the last one is dropped before the next opens.
+	let openedId: string | null = null;
 	$effect(() => {
 		const current = session;
+		untrack(() => {
+			if (openedId !== null && openedId !== id) forgetLastWorkspace();
+			openedId = id;
+		});
 		const updates = new AbortController();
 		untrack(() => void current.open(updates.signal));
 		return () => updates.abort();
 	});
+
+	function forgetLastWorkspace() {
+		view = parseCanvasView($page.url.searchParams);
+		followed = null;
+		transcript = [];
+		stagePanel = null;
+		focusTurnId = null;
+		knownProducts = null;
+	}
 
 	onMount(() => {
 		layout.restore(localStorage, window.innerWidth);

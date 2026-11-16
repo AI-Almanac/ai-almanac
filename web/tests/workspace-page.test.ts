@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { readable } from 'svelte/store';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkspacePage from '../src/routes/workspace/[id]/+page.svelte';
@@ -12,13 +11,33 @@ import {
 } from '../src/lib/api';
 import { metricsFor, provenanceStep, workspaceArtifact, workspaceJob } from './fixtures/workspace';
 
-const nav = vi.hoisted(() => ({ goto: vi.fn(), url: 'http://localhost/workspace/ws-1' }));
+const nav = vi.hoisted(() => {
+	const at = (url: string) => {
+		const parsed = new URL(url);
+		return { params: { id: parsed.pathname.split('/').pop() }, url: parsed };
+	};
+	const watching = new Set<(value: unknown) => void>();
+	return {
+		goto: vi.fn(),
+		url: 'http://localhost/workspace/ws-1',
+		at,
+		watching,
+		/** A client-side move: the page stays mounted and its store changes. */
+		moveTo(url: string) {
+			this.url = url;
+			for (const run of watching) run(at(url));
+		}
+	};
+});
 
 // Read nav.url per subscription so each test can start at its own URL.
 vi.mock('$app/stores', () => ({
 	page: {
-		subscribe: (run: (value: unknown) => void) =>
-			readable({ params: { id: 'ws-1' }, url: new URL(nav.url) }).subscribe(run)
+		subscribe: (run: (value: unknown) => void) => {
+			run(nav.at(nav.url));
+			nav.watching.add(run);
+			return () => nav.watching.delete(run);
+		}
 	}
 }));
 vi.mock('$app/navigation', () => ({ goto: nav.goto }));
@@ -393,6 +412,30 @@ describe('workspace page', () => {
 		expect(
 			await within(productsList()).findByText('Kenya long rains onset · GraphCast')
 		).toBeTruthy();
+		expect(
+			screen.getByRole('heading', { name: 'Ethiopia Kiremt onset · AIFS, FuXi' })
+		).toBeTruthy();
+		expect(
+			screen.queryByRole('heading', { name: 'Kenya long rains onset · GraphCast' })
+		).toBeNull();
+	});
+
+	it('lands a workspace the page moves to on its own newest run, not on what the last one lacked', async () => {
+		render(WorkspacePage);
+		await screen.findByRole('heading', { name: 'Ethiopia Kiremt onset · AIFS, FuXi' });
+
+		api.getWorkspace.mockResolvedValue({
+			...workspace,
+			id: 'ws-2',
+			jobs: [...workspace.jobs, laterRun]
+		});
+		nav.moveTo('http://localhost/workspace/ws-2');
+
+		// The list is drawn again for the new workspace, so it is looked up on each try.
+		await waitFor(() =>
+			expect(within(productsList()).getByText('Kenya long rains onset · GraphCast')).toBeTruthy()
+		);
+		expect(api.getWorkspace).toHaveBeenLastCalledWith('ws-2');
 		expect(
 			screen.getByRole('heading', { name: 'Ethiopia Kiremt onset · AIFS, FuXi' })
 		).toBeTruthy();
