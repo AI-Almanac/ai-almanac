@@ -17,7 +17,7 @@
 	interface Props {
 		text: string;
 		/** Whether the values are one run's area shares rather than chances. */
-		shares?: boolean;
+		shares?: boolean | null;
 	}
 
 	let { text, shares = false }: Props = $props();
@@ -90,7 +90,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each rows as row (row.area + (row.parent ?? ''))}
+					{#each rows as row, index (index)}
 						<tr>
 							<td>
 								{row.area}

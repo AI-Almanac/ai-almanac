@@ -83,10 +83,11 @@ def code_execution_available() -> bool:
     return runner is not None and runner.ready()
 
 
-def harness_outcome(run: code_sandbox.SandboxedRun) -> dict:
-    """The JSON line a sandboxed script ends with; a failure in words when it has none."""
+def harness_outcome(run: code_sandbox.SandboxedRun, step: str = "run_code") -> dict:
+    """The JSON line a sandboxed script ends with; a failure in words when it has none.
+    ``step`` names what ran, for the message when it ran out of time."""
     if run.timed_out:
-        return {"ok": False, "error": "run_code timed out"}
+        return {"ok": False, "error": f"{step} timed out"}
     stdout = run.stdout.strip()
     if not stdout:
         return {"ok": False, "error": run.stderr[-4000:] or "Code produced no output"}

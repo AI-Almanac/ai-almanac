@@ -16,14 +16,16 @@
 		workspaceId: string;
 		file: WorkspaceArtifact;
 		/** For an area summary: whether its values are one run's area shares, not chances. */
-		shares?: boolean;
+		shares?: boolean | null;
 	}
 
 	let { workspaceId, file, shares = false }: Props = $props();
 
 	const kind = $derived(previewKind(file));
 	const size = $derived(parseFileSummary(file.summary).sizeBytes);
-	const tooLarge = $derived(kind !== 'figure' && size !== null && size > PREVIEW_MAX_BYTES);
+	// Only a file shown as text can be too large to show; a NetCDF file has no preview at all.
+	const shownAsText = $derived(kind === 'table' || kind === 'code' || kind === 'text');
+	const tooLarge = $derived(shownAsText && size !== null && size > PREVIEW_MAX_BYTES);
 	const gridded = $derived(griddedFile(file));
 </script>
 
