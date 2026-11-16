@@ -94,7 +94,7 @@ async def _touch_session_every(session_id: str, seconds: float) -> None:
                     {"now": _now(), "id": session_id},
                 )
         except Exception:
-            logger.warning("Could not touch chat session %s while it streams", session_id)
+            logger.warning("Could not touch a streaming chat session", exc_info=True)
 
 
 def _previous_user_turn_at(transcript: list[dict]) -> str | None:

@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 
 from ai_almanac.envs.manager import analysis_pixi_lock, analysis_pixi_spec
 
-from .code_sandbox import SandboxedRun, SandboxResult, SandboxUnavailable
+from .code_sandbox import SandboxedRun, SandboxResult, SandboxUnavailable, require_empty
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,14 @@ class ModalSandbox:
     ) -> SandboxResult:
         if allowed_domains:
             raise ValueError("A Modal sandbox has no network to allow domains on")
+        require_empty(into)
         staged = {label: str(path) for label, path in inputs.items()}
         try:
             finished = await run_harness(script, staged, into, timeout=int(timeout))
         except Exception as exc:
             logger.exception("Modal sandbox run failed")
             raise SandboxUnavailable("Code execution is unavailable right now") from exc
-        # Only _collect writes here, and only regular files it read out of the sandbox.
+        # into started empty and only _collect writes here: regular files from the sandbox.
         outputs = sorted(path for path in into.iterdir() if path.is_file())
         runtime = {"sandbox": "modal", "env_digest": finished.image_id}
         return SandboxResult(finished.run, outputs, runtime)
