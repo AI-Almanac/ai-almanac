@@ -227,7 +227,9 @@ def test_a_modal_raw_forecast_uploads_each_season_without_scoring(forecasts_app,
         today=date(2026, 5, 12),
     )
     uploaded: list = []
-    monkeypatch.delenv("SERVICE_ACCOUNT_JSON", raising=False)
+    monkeypatch.setattr(forecasts_app, "_write_gcp_credentials_from_secret", lambda: None)
+    monkeypatch.setattr("google.cloud.storage.Client", lambda: object())
+    monkeypatch.setattr(forecasts_app, "_upload_run_log_to_gcs", lambda *a: None)
     monkeypatch.setattr(forecasts_app, "_season_bundles", lambda *a: {"fuxi": b"bundle"})
     monkeypatch.setattr(
         forecasts_app, "_upload_season_bundles_to_gcs", lambda *a: uploaded.append(a[-1])

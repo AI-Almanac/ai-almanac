@@ -32,6 +32,9 @@ export type ForecastParams = {
 export type ForecastCreate = {
 	blend_id: string;
 	forecast_model_ids?: string[];
+	// The season to forecast; unset means this year's. A past year forecasts an ended
+	// season again.
+	season_year?: number | null;
 	params?: ForecastParams;
 };
 
