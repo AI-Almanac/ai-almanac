@@ -8,13 +8,13 @@ export function countryOfArea(area: FocusAreaValue | null): string | null {
 }
 
 /**
- * The settings to make a workspace with. A choice left open is left out, so the
- * workspace follows the platform's default for it; nothing chosen is no settings.
+ * The settings to make a workspace with. An area or season left open is left out, so
+ * the workspace follows the platform's default for it; the season year is always chosen.
  */
 export function chosenSettings(
 	area: FocusAreaValue | null,
-	season: SeasonWindow | null
-): WorkspaceSettings | undefined {
-	if (!area && !season) return undefined;
-	return { ...(area && { study_area: area }), ...(season && { season }) };
+	season: SeasonWindow | null,
+	seasonYear: number
+): WorkspaceSettings {
+	return { ...(area && { study_area: area }), ...(season && { season }), season_year: seasonYear };
 }

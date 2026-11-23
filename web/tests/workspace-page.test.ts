@@ -620,7 +620,8 @@ describe('workspace page', () => {
 
 		await waitFor(() =>
 			expect(settingsApi.updateWorkspaceSettings).toHaveBeenCalledWith('ws-1', {
-				season: kiremt
+				season: kiremt,
+				season_year: 2026
 			})
 		);
 		await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());

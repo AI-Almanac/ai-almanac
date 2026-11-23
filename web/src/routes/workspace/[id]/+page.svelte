@@ -282,8 +282,11 @@
 						onUpdateForecast={updateForecast}
 						onOpenJob={showJob}
 						seasonEditor={{
-							load: () => session.seasonInForce(),
-							save: (season) => session.saveSettings({ season })
+							load: async () => ({
+								season: await session.seasonInForce(),
+								year: session.yearInForce()
+							}),
+							save: (season, season_year) => session.saveSettings({ season, season_year })
 						}}
 						areaEditor={{
 							area: workspace.settings.study_area ?? null,

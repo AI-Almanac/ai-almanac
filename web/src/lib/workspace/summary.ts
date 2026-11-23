@@ -9,15 +9,6 @@ import { modelDisplayName } from '$lib/model-names';
 
 export type Fact = { headline: string; detail: string | null };
 
-const DAY_MS = 86_400_000;
-
-/** Whole days from `today` (the reader's calendar day) to an ISO date. */
-function daysUntil(iso: string, today: Date): number {
-	const [year, month, day] = iso.split('-').map(Number);
-	const from = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-	return Math.round((Date.UTC(year, month - 1, day) - from) / DAY_MS);
-}
-
 /** The season's name carries its year, so the start date is said without one. */
 function startsFact(name: string, start: string, days: number | null): Fact {
 	return {
@@ -26,11 +17,9 @@ function startsFact(name: string, start: string, days: number | null): Fact {
 	};
 }
 
-/**
- * Where the season stands. A forecaster prepares for the season ahead, so once one
- * has ended the line leads with the next.
- */
-export function seasonFact(season: SeasonSummary, today: Date = new Date()): Fact {
+/** Where the season stands, in the year the workspace works on: once it has ended it
+ * says so, and the year only moves on when the user chooses another. */
+export function seasonFact(season: SeasonSummary): Fact {
 	const name = `${season.name} ${season.year}`;
 	if (season.phase === 'upcoming') {
 		return startsFact(name, season.first_issue_date, season.days_until_start);
@@ -41,11 +30,7 @@ export function seasonFact(season: SeasonSummary, today: Date = new Date()): Fac
 			detail: `issued through ${formatDay(season.issued_through ?? season.first_issue_date, false)} · last issue date ${formatDay(season.last_issue_date, false)}`
 		};
 	}
-	const next = season.next_season_start;
-	if (!next) {
-		return { headline: `${name} ended ${formatDay(season.last_issue_date, false)}`, detail: null };
-	}
-	return startsFact(`${season.name} ${next.slice(0, 4)}`, next, daysUntil(next, today));
+	return { headline: `${name} ended ${formatDay(season.last_issue_date, false)}`, detail: null };
 }
 
 export function forecastFact(forecast: ForecastSummary | null): Fact {

@@ -129,6 +129,10 @@ const TOOLS: Record<string, Tool> = {
 		active: 'Updating the workspace season',
 		done: 'Updated the workspace season'
 	},
+	set_workspace_season_year: {
+		active: 'Updating the workspace season year',
+		done: 'Updated the workspace season year'
+	},
 	set_workspace_area: {
 		active: 'Updating the workspace area',
 		done: 'Updated the workspace area'

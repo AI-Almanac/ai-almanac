@@ -108,6 +108,26 @@ async def test_a_workspace_forecast_uses_the_workspace_season(
 
 
 @pytest.mark.asyncio
+async def test_a_workspace_forecast_plans_the_season_year_the_workspace_chose(
+    client, as_new_user, user_id, monkeypatch
+):
+    from ai_almanac.server.services import workspace_settings
+
+    monkeypatch.setattr(job_submission, "utc_today", lambda: date(2026, 11, 5))
+    workspace, session = await _workspace_in_kiremt(client, as_new_user, user_id)
+    await workspace_settings.update_settings(
+        workspace["id"], workspace_settings.WorkspaceSettings(season_year=2025)
+    )
+    source_id = await live_model_archive()
+
+    checked = await runs.check_forecast(
+        tool_ctx(user_id, session["id"], workspace["id"]), models=[source_id]
+    )
+
+    assert checked["season"]["year"] == 2025
+
+
+@pytest.mark.asyncio
 async def test_a_forecast_approval_says_where_the_season_stands_and_what_it_costs(
     client, as_new_user, user_id, monkeypatch
 ):

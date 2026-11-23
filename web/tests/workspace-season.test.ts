@@ -11,7 +11,9 @@ import {
 	parseMonthDay,
 	seasonDraft,
 	seasonFromDraft,
-	seasonProblems
+	seasonProblems,
+	seasonYearProblem,
+	type SeasonInForce
 } from '../src/lib/workspace/season-form';
 
 const kiremt: SeasonWindow = {
@@ -93,9 +95,11 @@ describe('a refused season, in plain words', () => {
 });
 
 describe('the season in the workspace header', () => {
+	const inForce: SeasonInForce = { season: kiremt, year: 2026 };
+
 	const openForm = async (editor: {
-		load: () => Promise<SeasonWindow>;
-		save: (season: SeasonWindow | null) => Promise<void>;
+		load: () => Promise<SeasonInForce>;
+		save: (season: SeasonWindow | null, year: number) => Promise<void>;
 	}) => {
 		render(WorkspaceSummaryStrip, { summary, seasonEditor: editor });
 		await fireEvent.click(screen.getByRole('button', { name: /Kiremt 2026/ }));
@@ -104,7 +108,7 @@ describe('the season in the workspace header', () => {
 
 	it('opens a form holding the season in force and saves what is changed', async () => {
 		const save = vi.fn().mockResolvedValue(undefined);
-		const form = await openForm({ load: async () => kiremt, save });
+		const form = await openForm({ load: async () => inForce, save });
 
 		const name = await form.findByRole('textbox', { name: 'Season name' });
 		expect((name as HTMLInputElement).value).toBe('Kiremt');
@@ -114,7 +118,7 @@ describe('the season in the workspace header', () => {
 		});
 		await fireEvent.click(form.getByRole('button', { name: 'Save' }));
 
-		expect(save).toHaveBeenCalledWith({ ...kiremt, name: 'Belg', last_issue_date: '07-15' });
+		expect(save).toHaveBeenCalledWith({ ...kiremt, name: 'Belg', last_issue_date: '07-15' }, 2026);
 		await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());
 	});
 
@@ -127,7 +131,7 @@ describe('the season in the workspace header', () => {
 						'onset search start 05-01; a season that crosses the new year is not supported yet'
 				)
 			);
-		const form = await openForm({ load: async () => kiremt, save });
+		const form = await openForm({ load: async () => inForce, save });
 
 		await fireEvent.click(await form.findByRole('button', { name: 'Save' }));
 
@@ -136,9 +140,34 @@ describe('the season in the workspace header', () => {
 		expect(screen.getByRole('dialog', { name: 'Season' })).toBeTruthy();
 	});
 
+	it('starts from the season year in force and saves the one chosen', async () => {
+		const save = vi.fn().mockResolvedValue(undefined);
+		const form = await openForm({ load: async () => inForce, save });
+
+		const year = await form.findByRole('spinbutton', { name: 'Season year' });
+		expect((year as HTMLInputElement).value).toBe('2026');
+		await fireEvent.input(year, { target: { value: '2025' } });
+		await fireEvent.click(form.getByRole('button', { name: 'Save' }));
+
+		expect(save).toHaveBeenCalledWith(kiremt, 2025);
+	});
+
+	it('asks for a year a forecast could cover before saving', async () => {
+		const save = vi.fn();
+		const form = await openForm({ load: async () => inForce, save });
+
+		await fireEvent.input(await form.findByRole('spinbutton', { name: 'Season year' }), {
+			target: { value: '1066' }
+		});
+		await fireEvent.click(form.getByRole('button', { name: 'Save' }));
+
+		expect(form.getByText(seasonYearProblem(1066) ?? '')).toBeTruthy();
+		expect(save).not.toHaveBeenCalled();
+	});
+
 	it('asks for a name before saving', async () => {
 		const save = vi.fn();
-		const form = await openForm({ load: async () => kiremt, save });
+		const form = await openForm({ load: async () => inForce, save });
 
 		await fireEvent.input(await form.findByRole('textbox', { name: 'Season name' }), {
 			target: { value: '  ' }
@@ -151,10 +180,10 @@ describe('the season in the workspace header', () => {
 
 	it('goes back to the default dates, and closes on Cancel without saving', async () => {
 		const save = vi.fn().mockResolvedValue(undefined);
-		const form = await openForm({ load: async () => kiremt, save });
+		const form = await openForm({ load: async () => inForce, save });
 
 		await fireEvent.click(await form.findByRole('button', { name: 'Use the default dates' }));
-		expect(save).toHaveBeenCalledWith(null);
+		expect(save).toHaveBeenCalledWith(null, 2026);
 		await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());
 
 		await fireEvent.click(screen.getByRole('button', { name: /Kiremt 2026/ }));
@@ -174,5 +203,14 @@ describe('moving a season date to another month', () => {
 	it('holds the day to the month’s last, so the form shows what it will save', () => {
 		expect(inMonth({ month: 1, day: 30 }, 2)).toEqual({ month: 2, day: 28 });
 		expect(inMonth({ month: 2, day: 14 }, 3)).toEqual({ month: 3, day: 14 });
+	});
+});
+
+describe('a season year', () => {
+	it('is any whole year a forecast could cover', () => {
+		expect(seasonYearProblem(2026)).toBeNull();
+		expect(seasonYearProblem(1066)).toMatch(/between 1900 and 2200/);
+		expect(seasonYearProblem(2026.5)).toMatch(/between 1900 and 2200/);
+		expect(seasonYearProblem(null)).toMatch(/between 1900 and 2200/);
 	});
 });

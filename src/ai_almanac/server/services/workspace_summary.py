@@ -128,10 +128,10 @@ class WorkspaceSummary(BaseModel):
 def season_summary(
     settings: WorkspaceSettings, today: date, country: str | None = None
 ) -> SeasonSummary:
-    """Where the workspace's season stands. With no season of its own, the workspace
-    works in the one usual in ``country``."""
+    """Where the workspace's season stands, in the year it chose (else this calendar
+    year). With no season of its own, the workspace works in the one usual in ``country``."""
     window = settings.season or default_season(country)
-    state = resolve_season(window, today)
+    state = resolve_season(window, today, settings.season_year)
     return SeasonSummary(
         name=window.name,
         year=state.year,

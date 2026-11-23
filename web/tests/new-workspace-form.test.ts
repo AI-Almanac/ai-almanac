@@ -16,6 +16,7 @@ const rainy: SeasonWindow = {
 	last_issue_date: '07-31'
 };
 const kiremt: SeasonWindow = { ...rainy, name: 'Kiremt', reference_onset: '06-15' };
+const thisYear = new Date().getFullYear();
 
 function renderForm() {
 	const usualSeason = vi.fn(async (country: string | null) => (country === 'ETH' ? kiremt : rainy));
@@ -37,7 +38,7 @@ describe('making a workspace', () => {
 
 		await create();
 
-		expect(onCreate).toHaveBeenCalledWith('Kiremt 2026', '', undefined);
+		expect(onCreate).toHaveBeenCalledWith('Kiremt 2026', '', { season_year: thisYear });
 	});
 
 	it('shows the season usual where the chosen places are, and keeps the area', async () => {
@@ -49,7 +50,8 @@ describe('making a workspace', () => {
 		expect(await screen.findByText(/Kiremt/)).toBeTruthy();
 		await create();
 		expect(onCreate).toHaveBeenCalledWith('Amhara 2026', '', {
-			study_area: { level: 'adm1', units: ['Amhara'], iso: 'ETH' }
+			study_area: { level: 'adm1', units: ['Amhara'], iso: 'ETH' },
+			season_year: thisYear
 		});
 	});
 
@@ -65,7 +67,22 @@ describe('making a workspace', () => {
 		});
 		await create();
 
-		expect(onCreate).toHaveBeenCalledWith('Belg 2027', '', { season: { ...rainy, name: 'Belg' } });
+		expect(onCreate).toHaveBeenCalledWith('Belg 2027', '', {
+			season: { ...rainy, name: 'Belg' },
+			season_year: thisYear
+		});
+	});
+
+	it('makes the workspace for the season year chosen', async () => {
+		const { onCreate } = renderForm();
+		await named('Kiremt 2027');
+
+		await fireEvent.input(screen.getByRole('spinbutton', { name: 'Season year' }), {
+			target: { value: '2027' }
+		});
+		await create();
+
+		expect(onCreate).toHaveBeenCalledWith('Kiremt 2027', '', { season_year: 2027 });
 	});
 
 	it('does not make a workspace whose own season has no name', async () => {

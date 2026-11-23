@@ -72,17 +72,13 @@ describe('summary words', () => {
 		).toEqual({ headline: 'Kiremt 2027 · onset search starts 1 May', detail: 'in 173 days' });
 	});
 
-	it('leads with the next season once the last one has ended', () => {
+	it('names the season that ended rather than moving on to the next one', () => {
 		const ended: SeasonSummary = { ...season, phase: 'ended', next_season_start: '2027-05-01' };
 
-		expect(seasonFact(ended, new Date(2026, 10, 10))).toEqual({
-			headline: 'Kiremt 2027 · onset search starts 1 May',
-			detail: 'in 172 days'
+		expect(seasonFact(ended)).toEqual({
+			headline: 'Kiremt 2026 ended 31 Jul',
+			detail: null
 		});
-		expect(seasonFact(ended, new Date(2027, 3, 30, 23, 59)).detail).toBe('in 1 day');
-		expect(seasonFact({ ...ended, name: 'Rainy season' }, new Date(2026, 10, 10)).headline).toBe(
-			'Rainy season 2027 · onset search starts 1 May'
-		);
 	});
 
 	it('still says a season ended when the next one is not known', () => {

@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Annotated
 
 import sqlalchemy as sa
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
@@ -27,6 +28,9 @@ class WorkspaceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     season: SeasonWindow | None = None
+    # The year of the season the workspace works on, chosen by the user; unset, the
+    # current calendar year. The same bounds as a forecast's season year.
+    season_year: Annotated[int, Field(ge=1900, le=2200)] | None = None
     # Where runs here are scored unless a run names its own area: a box, or places.
     study_area: FocusArea | None = None
 
@@ -109,6 +113,12 @@ def describe_set_season(settings: WorkspaceSettings) -> str:
     return f"Season: {settings.season.name} — {describe_season(settings.season)}."
 
 
+def describe_season_year(settings: WorkspaceSettings) -> str:
+    if settings.season_year is None:
+        return "Season year: none chosen; the current calendar year applies."
+    return f"Season year: {settings.season_year}."
+
+
 def describe_study_area(settings: WorkspaceSettings) -> str:
     if settings.study_area is None:
         return "Area: none set; a run covers all of its data unless it names an area."
@@ -116,7 +126,10 @@ def describe_study_area(settings: WorkspaceSettings) -> str:
 
 
 def describe_settings(settings: WorkspaceSettings) -> str:
-    return f"{describe_set_season(settings)} {describe_study_area(settings)}"
+    return (
+        f"{describe_set_season(settings)} {describe_season_year(settings)} "
+        f"{describe_study_area(settings)}"
+    )
 
 
 def prompt_block(settings: WorkspaceSettings) -> str:
@@ -124,9 +137,11 @@ def prompt_block(settings: WorkspaceSettings) -> str:
     return (
         "\n\nWorkspace settings (defaults for every run here; a value the user gives "
         "in a request overrides them):\n"
-        f"- {describe_set_season(settings)}\n- {describe_study_area(settings)}\n"
+        f"- {describe_set_season(settings)}\n- {describe_season_year(settings)}\n"
+        f"- {describe_study_area(settings)}\n"
         "Call set_workspace_season when the user names the season they work in "
-        "or changes its dates, and set_workspace_area when they name the place they work in."
+        "or changes its dates, set_workspace_season_year when they name the year of the "
+        "season they work on, and set_workspace_area when they name the place they work in."
     )
 
 

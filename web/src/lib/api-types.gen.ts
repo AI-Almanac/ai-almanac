@@ -6014,6 +6014,8 @@ export interface components {
          */
         WorkspaceSettings: {
             season?: components["schemas"]["SeasonWindow"] | null;
+            /** Season Year */
+            season_year?: number | null;
             /** Study Area */
             study_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };

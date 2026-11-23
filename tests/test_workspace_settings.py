@@ -23,7 +23,7 @@ async def _patch(client, headers, workspace_id: str, body: dict):
 async def test_a_season_is_set_kept_and_cleared_through_the_settings(client, as_new_user) -> None:
     workspace, _ = await workspace_with_session(client, as_new_user)
     url = f"/workspaces/{workspace['id']}/settings"
-    unset = {"season": None, "study_area": None}
+    unset = {"season": None, "study_area": None, "season_year": None}
 
     fresh = await client.get(url, headers=as_new_user)
     updated = await _patch(client, as_new_user, workspace["id"], {"season": KIREMT})
@@ -33,9 +33,11 @@ async def test_a_season_is_set_kept_and_cleared_through_the_settings(client, as_
 
     assert (fresh.status_code, fresh.json()) == (200, unset)
     assert updated.status_code == 200, updated.text
-    assert updated.json() == {"season": KIREMT, "study_area": None}
-    assert detail.json()["settings"] == {"season": KIREMT, "study_area": None}
-    assert kept.json() == {"season": KIREMT, "study_area": None}, "a patch naming nothing"
+    assert updated.json() == {"season": KIREMT, "study_area": None, "season_year": None}
+    assert detail.json()["settings"] == {"season": KIREMT, "study_area": None, "season_year": None}
+    assert kept.json() == {"season": KIREMT, "study_area": None, "season_year": None}, (
+        "a patch naming nothing"
+    )
     assert cleared.json() == unset
 
 
@@ -59,7 +61,7 @@ async def test_a_season_out_of_order_is_refused_in_plain_words(client, as_new_us
     assert detail.startswith("Invalid workspace settings: season: the reference onset date 04-01")
     assert "Value error" not in detail
     unchanged = await client.get(f"/workspaces/{workspace['id']}/settings", headers=as_new_user)
-    assert unchanged.json() == {"season": None, "study_area": None}
+    assert unchanged.json() == {"season": None, "study_area": None, "season_year": None}
 
 
 async def test_another_user_cannot_read_or_change_the_settings(client, as_new_user) -> None:
@@ -122,8 +124,12 @@ async def test_effective_settings_fill_an_unset_season_with_the_platform_default
     await _patch(client, as_new_user, workspace["id"], {"season": KIREMT})
     chosen = await client.get(url, headers=as_new_user)
 
-    assert unset.json() == {"season": SeasonWindow().model_dump(), "study_area": None}
-    assert chosen.json() == {"season": KIREMT, "study_area": None}
+    assert unset.json() == {
+        "season": SeasonWindow().model_dump(),
+        "study_area": None,
+        "season_year": None,
+    }
+    assert chosen.json() == {"season": KIREMT, "study_area": None, "season_year": None}
 
 
 # --- the place a workspace works in --------------------------------------------
@@ -142,7 +148,7 @@ async def test_a_workspaces_area_is_read_back_and_leaves_its_season_alone(
     updated = await _patch(client, as_new_user, workspace["id"], {"study_area": area})
 
     assert updated.status_code == 200, updated.text
-    assert updated.json() == {"season": KIREMT, "study_area": area}
+    assert updated.json() == {"season": KIREMT, "study_area": area, "season_year": None}
 
 
 async def test_places_in_a_workspace_must_name_their_country(client, as_new_user) -> None:
@@ -170,7 +176,7 @@ async def test_a_workspace_is_made_with_the_area_and_season_chosen_for_it(
     stored = await client.get(f"/workspaces/{made.json()['id']}/settings", headers=as_new_user)
 
     assert made.status_code == 201, made.text
-    assert stored.json() == settings
+    assert stored.json() == {**settings, "season_year": None}
 
 
 async def test_a_workspace_with_unusable_settings_is_not_made(client, as_new_user) -> None:
@@ -198,3 +204,42 @@ async def test_a_new_workspace_starts_from_the_season_usual_in_its_country(
 
     assert response.status_code == 200, response.text
     assert response.json()["name"] == season
+
+
+# --- the season year -----------------------------------------------------------
+
+
+async def test_a_season_year_is_chosen_kept_and_cleared_through_the_settings(
+    client, as_new_user
+) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+
+    chosen = await _patch(client, as_new_user, workspace["id"], {"season_year": 2026})
+    kept = await _patch(client, as_new_user, workspace["id"], {"season": KIREMT})
+    cleared = await _patch(client, as_new_user, workspace["id"], {"season_year": None})
+
+    assert chosen.json()["season_year"] == 2026
+    assert kept.json()["season_year"] == 2026, "changing the dates keeps the year"
+    assert cleared.json()["season_year"] is None
+
+
+async def test_a_season_year_no_forecast_could_cover_is_refused_in_plain_words(
+    client, as_new_user
+) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+
+    refused = await _patch(client, as_new_user, workspace["id"], {"season_year": 1066})
+
+    assert refused.status_code == 422
+    assert "season_year" in refused.json()["detail"]
+
+
+async def test_a_workspace_is_made_with_the_season_year_chosen_for_it(client, as_new_user) -> None:
+    made = await client.post(
+        "/workspaces",
+        headers=as_new_user,
+        json={"name": "Kiremt 2026", "settings": {"season": KIREMT, "season_year": 2026}},
+    )
+
+    stored = await client.get(f"/workspaces/{made.json()['id']}/settings", headers=as_new_user)
+    assert stored.json()["season_year"] == 2026

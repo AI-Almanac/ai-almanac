@@ -8,33 +8,42 @@
 		seasonDraft,
 		seasonFromDraft,
 		seasonProblems,
+		seasonYearProblem,
 		type SeasonProblems
 	} from '$lib/workspace/season-form';
 	import SeasonFields from './SeasonFields.svelte';
+	import SeasonYearField from './SeasonYearField.svelte';
 
 	interface Props {
 		/** The season in force: the workspace's own, or the platform default. */
 		season: SeasonWindow;
+		/** The year of the season the workspace works on. */
+		year: number;
 		/** Whether the workspace has a season of its own to go back from. */
 		canReset: boolean;
-		/** Saves the season; `null` goes back to the platform default. */
-		onSave: (season: SeasonWindow | null) => Promise<void>;
+		/** Saves the season and its year; a `null` season goes back to the platform dates. */
+		onSave: (season: SeasonWindow | null, year: number) => Promise<void>;
 		onClose: () => void;
 	}
 
-	let { season, canReset, onSave, onClose }: Props = $props();
+	let { season, year, canReset, onSave, onClose }: Props = $props();
 
 	// The form edits its own copy; the season it was opened with only seeds it.
 	// svelte-ignore state_referenced_locally
 	let draft = $state(seasonDraft(season));
+	// svelte-ignore state_referenced_locally
+	let yearDraft = $state<number | null>(year);
+	let yearProblem = $state<string | null>(null);
 	let problems = $state<SeasonProblems>(NO_PROBLEMS);
 	let saving = $state(false);
 
 	async function save(next: SeasonWindow | null) {
+		yearProblem = seasonYearProblem(yearDraft);
+		if (yearProblem || yearDraft === null) return;
 		saving = true;
 		problems = NO_PROBLEMS;
 		try {
-			await onSave(next);
+			await onSave(next, yearDraft);
 			onClose();
 		} catch (e) {
 			problems = seasonProblems(e instanceof ApiError ? e.detail : String(e));
@@ -52,6 +61,7 @@
 </script>
 
 <form class="season-form" onsubmit={submit} novalidate>
+	<SeasonYearField bind:year={yearDraft} problem={yearProblem} />
 	<SeasonFields bind:draft {problems} />
 
 	{#if problems.general}<p class="problem" role="alert">{problems.general}</p>{/if}

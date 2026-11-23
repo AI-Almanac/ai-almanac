@@ -130,6 +130,21 @@ async def set_workspace_season(ctx: RunContext, season: SeasonWindow | None) -> 
     return await _updated_settings(ctx, WorkspaceSettings(season=season))
 
 
+@primitive("workspace.set_workspace_season_year", "1.0.0")
+async def set_workspace_season_year(ctx: RunContext, year: int | None) -> dict:
+    """Set the year of the season this workspace works on, e.g. 2026; null clears it,
+    and the current calendar year applies.
+
+    Later forecasts here plan this year's season unless the user names another; runs
+    already made keep theirs. Call this when the user names the season year they work
+    on, then tell them in a sentence what changed."""
+    try:
+        patch = workspace_settings.parse_patch({"season_year": year})
+    except workspace_settings.InvalidWorkspaceSettings as exc:
+        raise Refusal(str(exc)) from exc
+    return await _updated_settings(ctx, patch)
+
+
 @primitive("workspace.set_workspace_area", "1.0.0")
 async def set_workspace_area(ctx: RunContext, area: FocusArea | None) -> dict:
     """Set the place this workspace works in; null clears it.
