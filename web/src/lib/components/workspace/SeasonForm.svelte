@@ -8,8 +8,10 @@
 		seasonDraft,
 		seasonFromDraft,
 		seasonProblems,
+		seasonSave,
 		seasonYearProblem,
-		type SeasonProblems
+		type SeasonProblems,
+		type SeasonSave
 	} from '$lib/workspace/season-form';
 	import SeasonFields from './SeasonFields.svelte';
 	import SeasonYearField from './SeasonYearField.svelte';
@@ -21,8 +23,8 @@
 		year: number;
 		/** Whether the workspace has a season of its own to go back from. */
 		canReset: boolean;
-		/** Saves the season and its year; a `null` season goes back to the platform dates. */
-		onSave: (season: SeasonWindow | null, year: number) => Promise<void>;
+		/** Saves the change; a `null` season goes back to the platform dates. */
+		onSave: (change: SeasonSave) => Promise<void>;
 		onClose: () => void;
 	}
 
@@ -43,7 +45,7 @@
 		saving = true;
 		problems = NO_PROBLEMS;
 		try {
-			await onSave(next, yearDraft);
+			await onSave(seasonSave(next, year, yearDraft));
 			onClose();
 		} catch (e) {
 			problems = seasonProblems(e instanceof ApiError ? e.detail : String(e));

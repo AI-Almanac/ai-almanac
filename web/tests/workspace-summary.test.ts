@@ -22,7 +22,6 @@ const season: SeasonSummary = {
 	last_issue_date: '2026-07-31',
 	issued_through: '2026-07-09',
 	days_until_start: null,
-	next_season_start: null,
 	is_default: false
 };
 
@@ -73,16 +72,9 @@ describe('summary words', () => {
 	});
 
 	it('names the season that ended rather than moving on to the next one', () => {
-		const ended: SeasonSummary = { ...season, phase: 'ended', next_season_start: '2027-05-01' };
+		const ended: SeasonSummary = { ...season, phase: 'ended' };
 
 		expect(seasonFact(ended)).toEqual({
-			headline: 'Kiremt 2026 ended 31 Jul',
-			detail: null
-		});
-	});
-
-	it('still says a season ended when the next one is not known', () => {
-		expect(seasonFact({ ...season, phase: 'ended', next_season_start: null })).toEqual({
 			headline: 'Kiremt 2026 ended 31 Jul',
 			detail: null
 		});

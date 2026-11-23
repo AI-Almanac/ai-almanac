@@ -598,7 +598,6 @@ describe('workspace page', () => {
 				last_issue_date: '2026-07-31',
 				issued_through: null,
 				days_until_start: null,
-				next_season_start: null,
 				is_default: true
 			},
 			setup: { region: null, observations: null, models: [] },
@@ -620,8 +619,7 @@ describe('workspace page', () => {
 
 		await waitFor(() =>
 			expect(settingsApi.updateWorkspaceSettings).toHaveBeenCalledWith('ws-1', {
-				season: kiremt,
-				season_year: 2026
+				season: kiremt
 			})
 		);
 		await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());

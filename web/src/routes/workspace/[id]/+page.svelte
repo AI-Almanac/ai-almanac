@@ -286,7 +286,7 @@
 								season: await session.seasonInForce(),
 								year: session.yearInForce()
 							}),
-							save: (season, season_year) => session.saveSettings({ season, season_year })
+							save: (change) => session.saveSettings(change)
 						}}
 						areaEditor={{
 							area: workspace.settings.study_area ?? null,

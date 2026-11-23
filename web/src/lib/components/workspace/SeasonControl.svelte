@@ -1,6 +1,5 @@
 <script lang="ts">
-	import type { SeasonWindow } from '$lib/api/workspace-settings';
-	import type { SeasonInForce } from '$lib/workspace/season-form';
+	import type { SeasonInForce, SeasonSave } from '$lib/workspace/season-form';
 	import SeasonForm from './SeasonForm.svelte';
 	import SettingPopover from './SettingPopover.svelte';
 
@@ -12,7 +11,7 @@
 		isDefault: boolean;
 		/** The season in force and its year, to start the form from. */
 		load: () => Promise<SeasonInForce>;
-		save: (season: SeasonWindow | null, year: number) => Promise<void>;
+		save: (change: SeasonSave) => Promise<void>;
 	}
 
 	let { headline, detail = null, isDefault, load, save }: Props = $props();

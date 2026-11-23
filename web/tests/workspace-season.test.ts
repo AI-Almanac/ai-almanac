@@ -13,7 +13,8 @@ import {
 	seasonFromDraft,
 	seasonProblems,
 	seasonYearProblem,
-	type SeasonInForce
+	type SeasonInForce,
+	type SeasonSave
 } from '../src/lib/workspace/season-form';
 
 const kiremt: SeasonWindow = {
@@ -33,7 +34,6 @@ const summary: WorkspaceSummary = {
 		last_issue_date: '2026-07-31',
 		issued_through: null,
 		days_until_start: null,
-		next_season_start: null,
 		is_default: false
 	},
 	setup: { region: 'Ethiopia', observations: 'CHIRPS Ethiopia', models: ['aifs'] },
@@ -99,7 +99,7 @@ describe('the season in the workspace header', () => {
 
 	const openForm = async (editor: {
 		load: () => Promise<SeasonInForce>;
-		save: (season: SeasonWindow | null, year: number) => Promise<void>;
+		save: (change: SeasonSave) => Promise<void>;
 	}) => {
 		render(WorkspaceSummaryStrip, { summary, seasonEditor: editor });
 		await fireEvent.click(screen.getByRole('button', { name: /Kiremt 2026/ }));
@@ -118,7 +118,9 @@ describe('the season in the workspace header', () => {
 		});
 		await fireEvent.click(form.getByRole('button', { name: 'Save' }));
 
-		expect(save).toHaveBeenCalledWith({ ...kiremt, name: 'Belg', last_issue_date: '07-15' }, 2026);
+		expect(save).toHaveBeenCalledWith({
+			season: { ...kiremt, name: 'Belg', last_issue_date: '07-15' }
+		});
 		await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());
 	});
 
@@ -149,7 +151,7 @@ describe('the season in the workspace header', () => {
 		await fireEvent.input(year, { target: { value: '2025' } });
 		await fireEvent.click(form.getByRole('button', { name: 'Save' }));
 
-		expect(save).toHaveBeenCalledWith(kiremt, 2025);
+		expect(save).toHaveBeenCalledWith({ season: kiremt, season_year: 2025 });
 	});
 
 	it('asks for a year a forecast could cover before saving', async () => {
@@ -183,7 +185,7 @@ describe('the season in the workspace header', () => {
 		const form = await openForm({ load: async () => inForce, save });
 
 		await fireEvent.click(await form.findByRole('button', { name: 'Use the default dates' }));
-		expect(save).toHaveBeenCalledWith(null, 2026);
+		expect(save).toHaveBeenCalledWith({ season: null });
 		await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Season' })).toBeNull());
 
 		await fireEvent.click(screen.getByRole('button', { name: /Kiremt 2026/ }));

@@ -55,7 +55,6 @@ class SeasonSummary(BaseModel):
     last_issue_date: date
     issued_through: date | None
     days_until_start: int | None
-    next_season_start: date | None
     # True when no season is set on the workspace and the platform defaults frame it.
     is_default: bool
 
@@ -141,7 +140,6 @@ def season_summary(
         last_issue_date=state.last_issue_date,
         issued_through=state.issued_through,
         days_until_start=state.days_until_start,
-        next_season_start=state.next_season_start,
         is_default=settings.season is None,
     )
 
