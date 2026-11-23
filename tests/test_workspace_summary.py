@@ -305,6 +305,18 @@ async def test_a_finished_forecasts_table_is_read_once_however_often_it_is_shown
     assert tables_read == [forecast_id]
 
 
+def test_the_season_is_the_year_the_workspace_chose_not_the_next_one() -> None:
+    today = date(2026, 11, 23)
+
+    chosen = summary.season_summary(WorkspaceSettings(season_year=2026), today)
+    ahead = summary.season_summary(WorkspaceSettings(season_year=2027), today)
+    unchosen = summary.season_summary(WorkspaceSettings(), today)
+
+    assert (chosen.year, chosen.phase) == (2026, "ended")
+    assert (ahead.year, ahead.phase) == (2027, "upcoming")
+    assert unchosen.year == 2026, "with no year chosen, the calendar year"
+
+
 def test_a_workspace_without_a_season_works_in_the_one_usual_in_its_country() -> None:
     today = date(2026, 3, 1)
     unset, kiremt = WorkspaceSettings(), WorkspaceSettings(season=SeasonWindow(name="Belg"))

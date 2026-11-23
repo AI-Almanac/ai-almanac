@@ -11,10 +11,12 @@
 		seasonDraft,
 		seasonFromDraft,
 		seasonLabel,
+		seasonYearProblem,
 		type SeasonDraft,
 		type SeasonProblems
 	} from '$lib/workspace/season-form';
 	import SeasonFields from './SeasonFields.svelte';
+	import SeasonYearField from './SeasonYearField.svelte';
 
 	interface Props {
 		/** The season a workspace in `country` works in unless it sets its own. */
@@ -31,6 +33,8 @@
 	let seasonChoice = $state<'usual' | 'own'>('usual');
 	let usual = $state<SeasonWindow | null>(null);
 	let draft = $state<SeasonDraft | null>(null);
+	let seasonYear = $state<number | null>(new Date().getFullYear());
+	let yearProblem = $state<string | null>(null);
 	let problems = $state<SeasonProblems>(NO_PROBLEMS);
 	let creating = $state(false);
 	let error = $state<string | null>(null);
@@ -64,11 +68,12 @@
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
 		const season = seasonToKeep();
-		if (!name.trim() || season === 'invalid') return;
+		yearProblem = seasonYearProblem(seasonYear);
+		if (!name.trim() || season === 'invalid' || yearProblem || seasonYear === null) return;
 		creating = true;
 		error = null;
 		try {
-			await onCreate(name.trim(), description.trim(), chosenSettings(area, season));
+			await onCreate(name.trim(), description.trim(), chosenSettings(area, season, seasonYear));
 		} catch (e) {
 			error = failureMessage(e);
 		} finally {
@@ -99,6 +104,7 @@
 
 	<fieldset class="field">
 		<legend class="label">Season</legend>
+		<SeasonYearField bind:year={seasonYear} problem={yearProblem} />
 		<label class="choice">
 			<input
 				type="radio"

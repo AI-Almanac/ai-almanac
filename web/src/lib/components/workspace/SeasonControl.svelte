@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SeasonWindow } from '$lib/api/workspace-settings';
+	import type { SeasonInForce, SeasonSave } from '$lib/workspace/season-form';
 	import SeasonForm from './SeasonForm.svelte';
 	import SettingPopover from './SettingPopover.svelte';
 
@@ -9,14 +9,14 @@
 		detail?: string | null;
 		/** No season has been set here, so the platform's dates apply. */
 		isDefault: boolean;
-		/** The season in force, to start the form from. */
-		load: () => Promise<SeasonWindow>;
-		save: (season: SeasonWindow | null) => Promise<void>;
+		/** The season in force and its year, to start the form from. */
+		load: () => Promise<SeasonInForce>;
+		save: (change: SeasonSave) => Promise<void>;
 	}
 
 	let { headline, detail = null, isDefault, load, save }: Props = $props();
 
-	let season = $state<SeasonWindow | null>(null);
+	let season = $state<SeasonInForce | null>(null);
 	let loadError = $state(false);
 
 	// Reopening the popover starts a new load; only the newest one may fill the form.
@@ -46,7 +46,13 @@
 	{/snippet}
 	{#snippet children(close)}
 		{#if season}
-			<SeasonForm {season} canReset={!isDefault} onSave={save} onClose={close} />
+			<SeasonForm
+				season={season.season}
+				year={season.year}
+				canReset={!isDefault}
+				onSave={save}
+				onClose={close}
+			/>
 		{:else if loadError}
 			<p class="note">The season could not be loaded. Close this and try again.</p>
 		{:else}

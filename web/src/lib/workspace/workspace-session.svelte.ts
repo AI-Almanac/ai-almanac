@@ -102,6 +102,14 @@ export class WorkspaceSession {
 		return season;
 	}
 
+	/** The year of the season the workspace works on: its own choice, else the year the
+	 * summary is about, which is this calendar year. */
+	yearInForce(): number {
+		return (
+			this.workspace?.settings.season_year ?? this.summary?.season.year ?? new Date().getFullYear()
+		);
+	}
+
 	/** Changes the settings the patch names; `null` returns one to the platform default. */
 	async saveSettings(patch: WorkspaceSettings) {
 		const settings = await updateWorkspaceSettings(this.id, patch);

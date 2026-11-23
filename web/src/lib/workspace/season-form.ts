@@ -1,5 +1,5 @@
 /** A workspace's season: its dates as month and day, and the server's refusals in plain words. */
-import type { SeasonWindow } from '$lib/api/workspace-settings';
+import type { SeasonWindow, WorkspaceSettings } from '$lib/api/workspace-settings';
 import { dayMonth, MONTH_NAMES } from '$lib/format/dates';
 
 /** The season a workspace works in, from the onset search start to the last issue date. */
@@ -133,4 +133,32 @@ export function seasonProblems(detail: string): SeasonProblems {
 		else problems.general = [problems.general, words].filter(Boolean).join(' ');
 	}
 	return problems;
+}
+
+/** The season a workspace works in and the year of it, as its editor starts from. */
+export type SeasonInForce = { season: SeasonWindow; year: number };
+
+/** The years a season year may be: the same bounds as a forecast's season year. */
+export const SEASON_YEARS = { min: 1900, max: 2200 } as const;
+
+/** Why a season year can't be kept, in plain words; null when it can. */
+export function seasonYearProblem(year: number | null): string | null {
+	const usable =
+		year !== null && Number.isInteger(year) && year >= SEASON_YEARS.min && year <= SEASON_YEARS.max;
+	return usable ? null : `Enter a year between ${SEASON_YEARS.min} and ${SEASON_YEARS.max}.`;
+}
+
+/** What saving the season editor changes: the season, and the year only when it was changed. */
+export type SeasonSave = Pick<WorkspaceSettings, 'season' | 'season_year'>;
+
+/**
+ * The change the season editor saves. The year goes with it only when the user changed
+ * it, so saving dates never pins a year the workspace had left to the calendar.
+ */
+export function seasonSave(
+	season: SeasonWindow | null,
+	opened: number,
+	chosen: number
+): SeasonSave {
+	return chosen === opened ? { season } : { season, season_year: chosen };
 }

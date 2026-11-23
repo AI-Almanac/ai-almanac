@@ -5229,8 +5229,6 @@ export interface components {
             issued_through: string | null;
             /** Days Until Start */
             days_until_start: number | null;
-            /** Next Season Start */
-            next_season_start: string | null;
             /** Is Default */
             is_default: boolean;
         };
@@ -6014,6 +6012,8 @@ export interface components {
          */
         WorkspaceSettings: {
             season?: components["schemas"]["SeasonWindow"] | null;
+            /** Season Year */
+            season_year?: number | null;
             /** Study Area */
             study_area?: components["schemas"]["FocusBox"] | components["schemas"]["FocusUnits"] | null;
         };

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../src/lib/api/core';
 import type { FocusAreaValue } from '../src/lib/api/jobs';
 import type { SeasonWindow } from '../src/lib/api/workspace-settings';
+import type { SeasonInForce } from '../src/lib/workspace/season-form';
 
 vi.mock('../src/lib/components/FocusAreaMap.svelte', async () => ({
 	default: (await import('./fixtures/FocusAreaMapStub.svelte')).default
@@ -22,7 +23,10 @@ const kiremt: SeasonWindow = {
 const amhara: FocusAreaValue = { level: 'adm1', units: ['Amhara'] };
 
 describe('the season in the workspace header', () => {
-	function renderSeason(load = vi.fn().mockResolvedValue(kiremt), isDefault = false) {
+	function renderSeason(
+		load = vi.fn().mockResolvedValue({ season: kiremt, year: 2026 }),
+		isDefault = false
+	) {
 		const save = vi.fn().mockResolvedValue(undefined);
 		render(SeasonControl, { headline: 'Kiremt 2026 is under way', isDefault, load, save });
 		return { load, save };
@@ -79,7 +83,7 @@ describe('the area in the workspace header', () => {
 		render(SeasonControl, {
 			headline: 'Kiremt 2026 is under way',
 			isDefault: false,
-			load: vi.fn().mockResolvedValue(kiremt),
+			load: vi.fn().mockResolvedValue({ season: kiremt, year: 2026 }),
 			save: vi.fn()
 		});
 
@@ -124,8 +128,8 @@ describe('the area in the workspace header', () => {
 
 describe('reopening the season before it has loaded', () => {
 	it('fills the form from the newest load, not a slower earlier one', async () => {
-		const answers: ((season: SeasonWindow) => void)[] = [];
-		const load = vi.fn(() => new Promise<SeasonWindow>((done) => answers.push(done)));
+		const answers: ((season: SeasonInForce) => void)[] = [];
+		const load = vi.fn(() => new Promise<SeasonInForce>((done) => answers.push(done)));
 		render(SeasonControl, {
 			headline: 'Kiremt 2026 is under way',
 			isDefault: false,
@@ -138,9 +142,9 @@ describe('reopening the season before it has loaded', () => {
 		await fireEvent.click(trigger());
 		await fireEvent.click(trigger());
 		const [first, second] = answers;
-		first({ ...kiremt, name: 'Stale season' });
+		first({ season: { ...kiremt, name: 'Stale season' }, year: 2026 });
 		await new Promise((done) => setTimeout(done, 0));
-		second(kiremt);
+		second({ season: kiremt, year: 2026 });
 
 		expect(await screen.findByDisplayValue('Kiremt')).toBeTruthy();
 		expect(screen.queryByDisplayValue('Stale season')).toBeNull();

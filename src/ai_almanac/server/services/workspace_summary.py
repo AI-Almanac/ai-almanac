@@ -55,7 +55,6 @@ class SeasonSummary(BaseModel):
     last_issue_date: date
     issued_through: date | None
     days_until_start: int | None
-    next_season_start: date | None
     # True when no season is set on the workspace and the platform defaults frame it.
     is_default: bool
 
@@ -128,10 +127,10 @@ class WorkspaceSummary(BaseModel):
 def season_summary(
     settings: WorkspaceSettings, today: date, country: str | None = None
 ) -> SeasonSummary:
-    """Where the workspace's season stands. With no season of its own, the workspace
-    works in the one usual in ``country``."""
+    """Where the workspace's season stands, in the year it chose (else this calendar
+    year). With no season of its own, the workspace works in the one usual in ``country``."""
     window = settings.season or default_season(country)
-    state = resolve_season(window, today)
+    state = resolve_season(window, today, settings.season_year)
     return SeasonSummary(
         name=window.name,
         year=state.year,
@@ -141,7 +140,6 @@ def season_summary(
         last_issue_date=state.last_issue_date,
         issued_through=state.issued_through,
         days_until_start=state.days_until_start,
-        next_season_start=state.next_season_start,
         is_default=settings.season is None,
     )
 

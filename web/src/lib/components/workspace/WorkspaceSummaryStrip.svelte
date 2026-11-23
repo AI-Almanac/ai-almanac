@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { WorkspaceSummary } from '$lib/api';
 	import type { FocusAreaValue } from '$lib/api/jobs';
-	import type { SeasonWindow } from '$lib/api/workspace-settings';
+	import type { SeasonInForce, SeasonSave } from '$lib/workspace/season-form';
 	import {
 		canUpdateForecast,
 		forecastFact,
@@ -23,8 +23,8 @@
 		onOpenJob?: (jobId: string) => void;
 		/** Makes the season editable: reads the season in force, and saves a change. */
 		seasonEditor?: {
-			load: () => Promise<SeasonWindow>;
-			save: (season: SeasonWindow | null) => Promise<void>;
+			load: () => Promise<SeasonInForce>;
+			save: (change: SeasonSave) => Promise<void>;
 		};
 		/** The workspace's area and how to change it; without it the area is not shown. */
 		areaEditor?: {

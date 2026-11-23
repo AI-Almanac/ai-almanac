@@ -598,7 +598,6 @@ describe('workspace page', () => {
 				last_issue_date: '2026-07-31',
 				issued_through: null,
 				days_until_start: null,
-				next_season_start: null,
 				is_default: true
 			},
 			setup: { region: null, observations: null, models: [] },

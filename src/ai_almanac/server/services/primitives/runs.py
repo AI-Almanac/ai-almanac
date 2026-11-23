@@ -185,12 +185,14 @@ async def _blend_in_workspace(ctx: RunContext, spec: BlendSpec) -> dict:
 
 
 async def _forecast_in_workspace_season(ctx: RunContext, **arguments: object) -> dict:
-    """The forecast's arguments with a season it does not name taken from the workspace;
-    with neither, the platform default applies."""
-    if arguments.get("season") is not None:
-        return arguments
-    season = (await workspace_settings.get_settings(ctx.deps.scope.key)).season
-    return {**arguments, "season": season}
+    """The forecast's arguments with the season and season year it does not name taken
+    from the workspace; with neither, the platform defaults apply."""
+    settings_ = await workspace_settings.get_settings(ctx.deps.scope.key)
+    return {
+        **arguments,
+        "season": arguments.get("season") or settings_.season,
+        "season_year": arguments.get("season_year") or settings_.season_year,
+    }
 
 
 # --- benchmarks ---------------------------------------------------------------

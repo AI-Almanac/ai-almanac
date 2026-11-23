@@ -34,9 +34,22 @@ async def test_the_assistant_sets_the_season_without_writing_provenance(
 
     assert result["summary"].startswith("Season: Kiremt — onset searched from 1 May")
     read = await client.get(f"/workspaces/{workspace['id']}/settings", headers=as_new_user)
-    assert read.json() == {"season": KIREMT, "study_area": None}
+    assert read.json() == {"season": KIREMT, "study_area": None, "season_year": None}
     artifacts = await client.get(f"/workspaces/{workspace['id']}/artifacts", headers=as_new_user)
     assert artifacts.json() == []
+
+
+async def test_the_assistant_sets_the_season_year_and_is_told_it(
+    client, as_new_user, user_id
+) -> None:
+    workspace, session = await workspace_with_session(client, as_new_user)
+    ctx = tool_ctx(user_id, session["id"], workspace["id"])
+
+    result = await workspace_tools.set_workspace_season_year(ctx, year=2026)
+    told = workspace_settings.prompt_block(await workspace_settings.get_settings(workspace["id"]))
+
+    assert "Season year: 2026" in result["summary"]
+    assert "Season year: 2026" in told and "set_workspace_season_year" in told
 
 
 async def test_the_assistant_sets_and_is_told_the_workspaces_area(
