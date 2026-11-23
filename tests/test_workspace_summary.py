@@ -122,6 +122,24 @@ def test_setup_names_the_observations_and_each_model_once_with_display_names() -
     assert summary.most_common_region(jobs) == "ethiopia"
 
 
+def test_a_blend_naming_a_model_the_way_runs_store_it_does_not_list_it_twice() -> None:
+    jobs = [
+        _job("blend", {"model_names": ["aifs_v2", "graphcast_0_25"]}, created="2026-06-02"),
+        _job(
+            "benchmark",
+            {"model_name": "aifs_v2", "model_display_name": "AIFS v2"},
+            created="2026-06-01",
+        ),
+        _job(
+            "benchmark",
+            {"model_name": "graphcast_0_25", "model_display_name": "Graphcast 0.25"},
+            created="2026-06-01",
+        ),
+    ]
+
+    assert summary.model_names(jobs) == ["AIFS v2", "Graphcast 0.25"]
+
+
 def test_the_latest_forecast_reports_its_issue_date_span_and_blend() -> None:
     job = _job("forecast", {"blend_id": "b1"}, created="2026-07-02")
     forecast = summary.forecast_summary(

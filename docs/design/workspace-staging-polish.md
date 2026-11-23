@@ -164,7 +164,8 @@ confirmed.
   arrive, and the ledger never changes a completed step (P5). That needs a
   design choice: a second step for the day-level pass, or relaxing P5 for job
   steps.
-- **Item 6 (UI wording):** not done.
+- **Item 6 (UI wording): done.** A run with no files says "Files appear here
+  when the run finishes", "Preparing the files…" or "This run made no files".
 
 *Alternative considered:* the Modal job writes a manifest (sha256, size,
 summary) next to its outputs, so the server never reads the bytes. This is
@@ -298,7 +299,8 @@ only.
   both the create form and the header's `SeasonForm`.
 - **Area optional:** area is skippable, in keeping with settings being
   optional.
-- **Not done:** item 3 (chip labels, settings as a starting point).
+- **Item 3, partly done:** the header chips now carry their names (AREA,
+  SEASON). Listing unset settings in an empty workspace is not done.
 
 **Open question:** should Area be required at creation, or skippable ("decide
 later")? Required keeps every run scored somewhere deliberate. Skippable
@@ -315,7 +317,7 @@ respects regions being an optional attribute.
   checked.
 - The setup line lists models twice ("AIFS v2, aifs_v2, Graphcast 0.25,
   graphcast_0_25"). Display names and ids are being unioned in
-  `setup_summary`.
+  `setup_summary`. **Fixed:** models are now matched on letters and digits only.
 
 ## Suggested PR sequence
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 from collections import Counter
 from datetime import date
 from typing import Literal
@@ -172,6 +173,12 @@ def observations_name(jobs: list[dict]) -> str | None:
     return None
 
 
+def _model_key(name: str) -> str:
+    """One key for a model however a run wrote its name: its letters and digits, so
+    "Graphcast 0.25" and "graphcast_0_25" match."""
+    return re.sub(r"[^0-9a-z]", "", name.lower())
+
+
 def model_names(jobs: list[dict]) -> list[str]:
     """Every model the runs scored or blended, each once, display names winning."""
     by_key: dict[str, str] = {}
@@ -180,9 +187,9 @@ def model_names(jobs: list[dict]) -> list[str]:
         if job["job_type"] == "benchmark" and (
             name := workspace_display.model_display_name(config)
         ):
-            by_key[name.lower()] = name
+            by_key[_model_key(name)] = name
         for name in config.get("model_names") or []:
-            by_key.setdefault(str(name).lower(), str(name))
+            by_key.setdefault(_model_key(str(name)), str(name))
     return sorted(by_key.values(), key=str.lower)
 
 

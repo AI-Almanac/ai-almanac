@@ -74,6 +74,19 @@ describe('the area in the workspace header', () => {
 		expect(trigger().textContent).toContain('Amhara');
 	});
 
+	it('says which setting the header shows, so it reads as one to change', () => {
+		renderArea();
+		render(SeasonControl, {
+			headline: 'Kiremt 2026 is under way',
+			isDefault: false,
+			load: vi.fn().mockResolvedValue(kiremt),
+			save: vi.fn()
+		});
+
+		expect(screen.getByRole('button', { name: /^Area\b.*Amhara/ })).toBeTruthy();
+		expect(screen.getByRole('button', { name: /^Season\b.*Kiremt 2026/ })).toBeTruthy();
+	});
+
 	it('starts the map from the workspace’s area and saves the area picked', async () => {
 		const { save } = renderArea();
 

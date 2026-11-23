@@ -134,6 +134,17 @@ export function runStatusWords(run: Run): RunStatus {
 	return stoppedStatus(count('failed'), count('cancelled'), total);
 }
 
+/**
+ * What a run with no files yet says instead: a finished job's files are recorded
+ * shortly after it finishes, and a run that only failed or was canceled made none.
+ */
+export function noFilesWords(run: Run): string {
+	const states = run.jobs.map((job) => stateOf(job.status));
+	if (states.some(isUnfinishedState)) return 'Files appear here when the run finishes.';
+	if (states.includes('done')) return 'Preparing the files…';
+	return 'This run made no files.';
+}
+
 function stoppedStatus(failed: number, cancelled: number, total: number): RunStatus {
 	if (failed === 0 && cancelled === 0) return { label: 'Complete', tone: 'complete' };
 	if (failed === 0) {

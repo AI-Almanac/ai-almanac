@@ -11,7 +11,7 @@
 		BLEND_STAGE_VIEW,
 		headlineModelJobId
 	} from '$lib/components/metric-map/stage-map';
-	import { modelProgress, needsProgress } from '$lib/workspace/run-lifecycle';
+	import { modelProgress, needsProgress, noFilesWords } from '$lib/workspace/run-lifecycle';
 	import { finishedJobs, jobKind, type Run } from '$lib/workspace/runs';
 	import FileFamilies from './FileFamilies.svelte';
 	import RunProgress from './RunProgress.svelte';
@@ -182,7 +182,7 @@
 		<section class="files">
 			<h3>Files</h3>
 			{#if run.files.length === 0}
-				<p class="muted">No files yet.</p>
+				<p class="muted">{noFilesWords(run)}</p>
 			{:else}
 				<FileFamilies files={run.files} onOpen={onOpenFile} {onDownload} onRename={onRenameFile} />
 			{/if}
