@@ -5,6 +5,7 @@ import type { components } from '../api-types.gen';
 import { authHeaders } from '../auth';
 import { sseEvents } from './chat';
 import { BASE_URL, request } from './core';
+import type { WorkspaceSettings } from './workspace-settings';
 
 export type Workspace = components['schemas']['WorkspaceOut'];
 export type WorkspaceDetail = components['schemas']['WorkspaceDetail'];
@@ -24,10 +25,15 @@ export async function listWorkspaces(): Promise<Workspace[]> {
 	return request<Workspace[]>('/workspaces');
 }
 
-export async function createWorkspace(name: string, description = ''): Promise<Workspace> {
+/** A new workspace; `settings` holds the area and season chosen for it, if any. */
+export async function createWorkspace(
+	name: string,
+	description = '',
+	settings?: WorkspaceSettings
+): Promise<Workspace> {
 	return request<Workspace>('/workspaces', {
 		method: 'POST',
-		body: JSON.stringify({ name, description })
+		body: JSON.stringify({ name, description, settings })
 	});
 }
 

@@ -48,6 +48,7 @@ from ..services import (
 )
 from ..services.boundaries import AreaLevel
 from ..services.run_summaries import OnsetDefinition
+from ..services.seasons import SeasonWindow, default_season
 from ..services.skill_area_summaries import SkillByArea
 from ..services.workspace_settings import WorkspaceSettings
 from ..services.workspace_summary import JobHeadline, WorkspaceSummary
@@ -60,6 +61,7 @@ router = APIRouter(
 class WorkspaceIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
+    settings: WorkspaceSettings | None = None
 
 
 class WorkspaceOut(BaseModel):
@@ -239,7 +241,10 @@ OwnedWorkspace = Annotated[dict, Depends(owned_workspace)]
 @router.post("", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)
 async def create_workspace(body: WorkspaceIn, user: CurrentUser):
     try:
-        return _out(await workspaces.create_workspace(user.id, body.name, body.description))
+        made = await workspaces.create_workspace(
+            user.id, body.name, body.description, body.settings
+        )
+        return _out(made)
     except workspaces.WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -255,6 +260,15 @@ async def promote_session(body: PromoteIn, user: CurrentUser):
         return _out(await workspaces.promote_session(body.session_id, user.id))
     except workspaces.WorkspaceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/default-season", response_model=SeasonWindow)
+async def get_default_season(
+    country: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
+):
+    """The season a new workspace works in unless it sets its own: the one usual in
+    ``country`` (a three-letter code), else the platform's fallback season."""
+    return default_season(country.upper() if country else None)
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceDetail)

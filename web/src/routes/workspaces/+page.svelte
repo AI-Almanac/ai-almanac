@@ -3,6 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { account } from '$lib/account.svelte';
 	import { createWorkspace, failureMessage, listWorkspaces, type Workspace } from '$lib/api';
+	import { getDefaultSeason, type WorkspaceSettings } from '$lib/api/workspace-settings';
+	import NewWorkspaceForm from '$lib/components/workspace/NewWorkspaceForm.svelte';
 
 	$effect(() => {
 		if (account.loaded && !account.canUseWorkspaces) goto('/');
@@ -11,9 +13,7 @@
 	let workspaces = $state<Workspace[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let name = $state('');
-	let description = $state('');
-	let creating = $state(false);
+	let creatingNew = $state(false);
 
 	onMount(async () => {
 		try {
@@ -25,19 +25,9 @@
 		}
 	});
 
-	async function create(event: SubmitEvent) {
-		event.preventDefault();
-		if (!name.trim()) return;
-		creating = true;
-		error = null;
-		try {
-			const created = await createWorkspace(name.trim(), description.trim());
-			await goto(`/workspace/${created.id}`);
-		} catch (e) {
-			error = failureMessage(e);
-		} finally {
-			creating = false;
-		}
+	async function create(name: string, description: string, settings?: WorkspaceSettings) {
+		const created = await createWorkspace(name, description, settings);
+		await goto(`/workspace/${created.id}`);
 	}
 </script>
 
@@ -51,19 +41,19 @@
 		</p>
 	</header>
 
-	<form class="card new-form" onsubmit={create}>
-		<label>
-			<span>Name</span>
-			<input bind:value={name} placeholder="Ethiopia Kiremt 2026" required maxlength="120" />
-		</label>
-		<label>
-			<span>Description (optional)</span>
-			<input bind:value={description} placeholder="What this project is investigating" />
-		</label>
-		<button type="submit" disabled={creating || !name.trim()}>
-			{creating ? 'Creating…' : 'New workspace'}
-		</button>
-	</form>
+	{#if creatingNew}
+		<div class="card">
+			<NewWorkspaceForm
+				usualSeason={getDefaultSeason}
+				onCreate={create}
+				onCancel={() => (creatingNew = false)}
+			/>
+		</div>
+	{:else}
+		<div>
+			<button type="button" onclick={() => (creatingNew = true)}>New workspace</button>
+		</div>
+	{/if}
 
 	{#if error}
 		<p class="error">{error}</p>
@@ -114,27 +104,6 @@
 		background: var(--color-surface-raised);
 		padding: 1rem 1.25rem;
 	}
-	.new-form {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-		align-items: flex-end;
-	}
-	.new-form label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		flex: 1 1 14rem;
-		font-size: 0.85rem;
-		color: var(--color-text-muted);
-	}
-	.new-form input {
-		padding: 0.5rem 0.65rem;
-		border: 1px solid var(--color-border);
-		border-radius: 0.4rem;
-		background: var(--color-surface);
-		color: var(--color-text);
-	}
 	button {
 		padding: 0.55rem 1rem;
 		border: 0;
@@ -142,10 +111,6 @@
 		background: var(--color-accent);
 		color: white;
 		cursor: pointer;
-	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: default;
 	}
 	.error {
 		color: var(--color-danger);

@@ -287,6 +287,19 @@ only.
    read as workspace settings. An empty workspace (`WorkspaceStart`) lists
    unset settings as its first starting point.
 
+**Done (2026-11-23):** items 1 and 2.
+- **Create form:** "New workspace" opens a form with name, description, an
+  optional area (`FocusAreaMap`), and a season choice. The choice is either
+  "the usual season here", which follows the area's country, or "set my own
+  dates".
+- **API:** `POST /workspaces` takes optional `settings`, and the new
+  `GET /workspaces/default-season?country=` reuses `default_season`.
+- **Shared fields:** the season fields now live in `SeasonFields`, used by
+  both the create form and the header's `SeasonForm`.
+- **Area optional:** area is skippable, in keeping with settings being
+  optional.
+- **Not done:** item 3 (chip labels, settings as a starting point).
+
 **Open question:** should Area be required at creation, or skippable ("decide
 later")? Required keeps every run scored somewhere deliberate. Skippable
 respects regions being an optional attribute.

@@ -2065,6 +2065,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/default-season": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Default Season
+         * @description The season a new workspace works in unless it sets its own: the one usual in
+         *     ``country`` (a three-letter code), else the platform's fallback season.
+         */
+        get: operations["get_default_season_workspaces_default_season_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}": {
         parameters: {
             query?: never;
@@ -5937,6 +5958,7 @@ export interface components {
              * @default
              */
             description: string;
+            settings?: components["schemas"]["WorkspaceSettings"] | null;
         };
         /** WorkspaceJobOut */
         WorkspaceJobOut: {
@@ -10435,6 +10457,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_default_season_workspaces_default_season_get: {
+        parameters: {
+            query?: {
+                country?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeasonWindow"];
                 };
             };
             /** @description Validation Error */

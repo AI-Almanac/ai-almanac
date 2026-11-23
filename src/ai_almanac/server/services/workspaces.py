@@ -26,7 +26,15 @@ import sqlalchemy as sa
 from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
 
-from . import job_access, job_history, ledger, provenance, run_summaries, workspace_display
+from . import (
+    job_access,
+    job_history,
+    ledger,
+    provenance,
+    run_summaries,
+    workspace_display,
+    workspace_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +80,13 @@ def job_file_label(filename: str) -> str:
 # --- workspaces ---------------------------------------------------------------
 
 
-async def create_workspace(user_id: str, name: str, description: str = "") -> dict:
+async def create_workspace(
+    user_id: str,
+    name: str,
+    description: str = "",
+    settings: workspace_settings.WorkspaceSettings | None = None,
+) -> dict:
+    """A new workspace, with the area and season chosen for it when there are any."""
     name = name.strip()
     if not name:
         raise WorkspaceError("Workspace name is required")
@@ -81,6 +95,7 @@ async def create_workspace(user_id: str, name: str, description: str = "") -> di
         "user_id": user_id,
         "name": name[:120],
         "description": description.strip()[:2000],
+        "settings_json": workspace_settings.serialize(settings) if settings else None,
         "created_at": _now(),
         "updated_at": _now(),
     }
