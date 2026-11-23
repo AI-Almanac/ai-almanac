@@ -79,11 +79,13 @@ async def _reloaded(client, as_new_user, session_id: str) -> dict:
     return response.json()
 
 
-async def _decide(client, as_new_user, session_id: str, approved: bool) -> list[dict]:
+async def _decide(
+    client, as_new_user, session_id: str, approved: bool, tool_call_id: str = "call-1"
+) -> list[dict]:
     response = await client.post(
         f"/chat/sessions/{session_id}/tool-approval",
         headers=as_new_user,
-        json={"tool_call_id": "call-1", "approved": approved},
+        json={"tool_call_id": tool_call_id, "approved": approved},
     )
     return sse_events(response.text)
 
@@ -223,6 +225,80 @@ async def test_a_step_that_never_ran_keeps_its_card_when_the_attempt_fails(
     assert still_waiting is not None and still_waiting["tool_call_id"] == "call-1"
     [result] = [e for e in retried if e["type"] == "tool_result"]
     assert result["result"]["canceled"]
+
+
+def _asking_to_cancel_both(first_job: str, second_job: str, answers_seen: list[set[str]]):
+    """An assistant that asks to stop two runs in one reply, then carries on once both
+    are answered, noting which calls each request it gets answers."""
+
+    async def stream(messages: list, info: AgentInfo):
+        answered = {
+            p.tool_call_id for m in messages for p in m.parts if isinstance(p, ToolReturnPart)
+        }
+        if answered:
+            answers_seen.append(answered)
+            yield "Both are stopping."
+            return
+        for index, (call_id, job_id) in enumerate((("call-1", first_job), ("call-2", second_job))):
+            yield {
+                index: DeltaToolCall(
+                    name="cancel_run",
+                    json_args=json.dumps({"job_id": job_id}),
+                    tool_call_id=call_id,
+                )
+            }
+
+    return lambda: FunctionModel(stream_function=stream)
+
+
+@pytest.mark.asyncio
+async def test_steps_asked_for_together_are_approved_one_at_a_time(
+    client, as_new_user, user_id, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, session = await workspace_with_session(client, as_new_user)
+    first_job = await _running_run_in(user_id, workspace["id"])
+    second_job = await _running_run_in(user_id, workspace["id"])
+    answers_seen: list[set[str]] = []
+    model = _asking_to_cancel_both(first_job, second_job, answers_seen)
+    monkeypatch.setattr("ai_almanac.server.services.llm._build_model", model)
+    await client.post(
+        f"/chat/sessions/{session['id']}/message",
+        headers=as_new_user,
+        json={"content": "stop both"},
+    )
+
+    first = await _decide(client, as_new_user, session["id"], approved=True)
+    between = (await _reloaded(client, as_new_user, session["id"]))["pending_approval"]
+    second = await _decide(client, as_new_user, session["id"], approved=True, tool_call_id="call-2")
+
+    assert not [e for e in first + second if e["type"] == "error"]
+    assert _runs_canceled() == 2
+    assert between is not None and between["tool_call_id"] == "call-2"
+    assert answers_seen == [{"call-1", "call-2"}], "the model hears back once, about both"
+    assert (await _reloaded(client, as_new_user, session["id"]))["pending_approval"] is None
+
+
+@pytest.mark.asyncio
+async def test_declining_one_of_two_steps_still_asks_about_the_other(
+    client, as_new_user, user_id, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, session = await workspace_with_session(client, as_new_user)
+    first_job = await _running_run_in(user_id, workspace["id"])
+    second_job = await _running_run_in(user_id, workspace["id"])
+    model = _asking_to_cancel_both(first_job, second_job, [])
+    monkeypatch.setattr("ai_almanac.server.services.llm._build_model", model)
+    await client.post(
+        f"/chat/sessions/{session['id']}/message",
+        headers=as_new_user,
+        json={"content": "stop both"},
+    )
+
+    declined = await _decide(client, as_new_user, session["id"], approved=False)
+    pending = (await _reloaded(client, as_new_user, session["id"]))["pending_approval"]
+
+    assert not [e for e in declined if e["type"] == "error"]
+    assert _runs_canceled() == 0
+    assert pending is not None and pending["tool_call_id"] == "call-2"
 
 
 def test_a_result_recorded_for_a_step_answers_it_and_leaves_others_waiting() -> None:

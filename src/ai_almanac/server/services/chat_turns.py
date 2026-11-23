@@ -27,7 +27,7 @@ from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import text
 
 from ai_almanac.server.db import get_db, lock_for_update
-from ai_almanac.server.services import job_access
+from ai_almanac.server.services import approval_gate, job_access
 from ai_almanac.server.services.chat_artifacts import hydrate_turn_artifact_urls
 from ai_almanac.server.services.chat_job_events import platform_note, scope_job_activity
 from ai_almanac.server.services.chat_state import (
@@ -296,6 +296,25 @@ def approved_step(transcript: list[dict], tool_call_id: str) -> dict:
     shown = next((r for r in requests if r.get("tool_call_id") == tool_call_id), None)
     params = _shown_params(shown or {})
     return {"approved_params": params} if isinstance(params, dict) else {}
+
+
+def decision_results(
+    provider_state: list, transcript: list[dict], tool_call_id: str, decision: bool | ToolDenied
+) -> DeferredToolResults:
+    """The user's decision on one step, with every other step paused beside it asked
+    again, since a reply resumes only once each of its paused calls has an answer."""
+    others = [
+        call.tool_call_id
+        for call in unprocessed_tool_calls(provider_state)
+        if call.tool_call_id != tool_call_id
+    ]
+    return DeferredToolResults(
+        approvals={tool_call_id: decision, **dict.fromkeys(others, True)},
+        metadata={
+            tool_call_id: approved_step(transcript, tool_call_id),
+            **dict.fromkeys(others, approval_gate.ASK_AGAIN_METADATA),
+        },
+    )
 
 
 def _shown_params(request: dict) -> object:
@@ -634,9 +653,8 @@ async def stream_approval_turn(
         pending,
         settles=tool_call_id,
         approved=approved,
-        deferred_tool_results=DeferredToolResults(
-            approvals={tool_call_id: decision},
-            metadata={tool_call_id: approved_step(session.transcript, tool_call_id)},
+        deferred_tool_results=decision_results(
+            session.provider_state, session.transcript, tool_call_id, decision
         ),
         active_ruleset=await _pinned_ruleset(session.ruleset_id, for_admin=for_admin),
         turn_id=pending.assistant_turn.id,
