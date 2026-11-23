@@ -84,6 +84,10 @@ jobs = sa.Table(
     sa.Column("day_level_error", sa.Text()),
     sa.Column("day_level_completed_at", sa.Text()),
     sa.Column("day_level_published_at", sa.Text()),
+    # Recording a finished job's files into the ledger and its workspaces (migration
+    # 0032): a lease one instance holds while it records, and when it was done.
+    sa.Column("outputs_recording_at", sa.Text()),
+    sa.Column("outputs_recorded_at", sa.Text()),
 )
 
 # Per-user hiding of example jobs: "deleting" a visibility='example' job

@@ -7,6 +7,7 @@ import {
 	isUnfinished,
 	modelProgress,
 	needsProgress,
+	noFilesWords,
 	runStatusWords,
 	timingWords,
 	utcMillis
@@ -129,5 +130,17 @@ describe('a status this page does not know yet', () => {
 		expect(runStatusWords(run)).toEqual({ label: 'Running · 1 of 2 done', tone: 'running' });
 		expect(cancellableJobIds(run)).toEqual(['j1']);
 		expect(modelProgress(run, NOW)[1].state).toBe('running');
+	});
+});
+
+describe('a run with no files to show', () => {
+	it.each([
+		[['running'], 'Files appear here when the run finishes.'],
+		[['complete', 'queued'], 'Files appear here when the run finishes.'],
+		[['complete'], 'Preparing the files…'],
+		[['complete', 'failed'], 'Preparing the files…'],
+		[['failed', 'canceled'], 'This run made no files.']
+	])('with jobs %j says "%s"', (statuses, words) => {
+		expect(noFilesWords(runOf(...statuses))).toBe(words);
 	});
 });

@@ -43,6 +43,7 @@
 		{title}
 		onclick={toggle}
 	>
+		<span class="name">{label}</span>
 		{@render value()}
 		<span class="edit" aria-hidden="true">✎</span>
 	</button>
@@ -74,6 +75,13 @@
 		color: inherit;
 		font: inherit;
 		cursor: pointer;
+	}
+	.name {
+		color: var(--color-text-muted);
+		font-size: var(--text-size-caption);
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
 	}
 	.trigger:hover,
 	.trigger:focus-visible {

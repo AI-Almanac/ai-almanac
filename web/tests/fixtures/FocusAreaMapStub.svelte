@@ -14,3 +14,6 @@
 <button type="button" onclick={() => onchange({ level: 'adm1', units: ['Tigray'] })}>
 	Pick Tigray
 </button>
+<button type="button" onclick={() => onchange({ level: 'adm1', units: ['Amhara'], iso: 'ETH' })}>
+	Pick Amhara, Ethiopia
+</button>

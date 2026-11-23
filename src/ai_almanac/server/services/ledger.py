@@ -13,6 +13,7 @@ storage port only (P7): ``open_bytes`` to stream, ``stage`` for a local file.
 from __future__ import annotations
 
 import asyncio
+import io
 import shutil
 import tempfile
 import uuid
@@ -149,6 +150,45 @@ def open_bytes(artifact: dict) -> BinaryIO | None:
     if artifact["location_kind"] == OWNED:
         return storage.open_artifact(artifact["path"])
     return storage.open_result(artifact["job_id"], artifact["job_file_kind"], artifact["filename"])
+
+
+class HeadFirstReader(io.RawIOBase):
+    """A seekable remote file whose first ``head_bytes`` are read into memory up front,
+    so a reader that looks mostly at a file's head finds it there; reads past the head
+    go to the file itself."""
+
+    def __init__(self, handle: BinaryIO, head_bytes: int) -> None:
+        self._handle = handle
+        self._head = handle.read(head_bytes)
+        self._position = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._position
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_SET:
+            self._position = offset
+        elif whence == io.SEEK_CUR:
+            self._position += offset
+        else:
+            self._position = self._handle.seek(offset, io.SEEK_END)
+        return self._position
+
+    def readinto(self, buffer) -> int:
+        wanted = len(buffer)
+        data = self._head[self._position : self._position + wanted]
+        if len(data) < wanted:
+            self._handle.seek(self._position + len(data))
+            data += self._handle.read(wanted - len(data))
+        buffer[: len(data)] = data
+        self._position += len(data)
+        return len(data)
 
 
 def stage(artifact: dict, directory: Path) -> Path | None:
@@ -403,8 +443,41 @@ def _job_file_location(job_id: str, kind: str, filename: str) -> dict:
 
 
 def _job_file_facts(job_id: str, kind: str, filename: str, file_kind: str) -> _FileFacts | None:
-    with staged(_job_file_location(job_id, kind, filename)) as path:
-        return _facts(path, filename, file_kind) if path is not None else None
+    """A job file's facts, read where the file is kept. A remote file is streamed rather
+    than copied: a server instance's temporary disk is its memory, and a job's files can
+    be larger than that."""
+    location = _job_file_location(job_id, kind, filename)
+    path = local_path(location)
+    if path is not None:
+        return _facts(path, filename, file_kind) if path.is_file() else None
+    return _streamed_facts(location, filename, file_kind)
+
+
+# How much of a remote file is read into memory before it is described: a NetCDF's
+# header and coordinates are read under the process-wide HDF5 lock, so they should
+# come from memory, not the network. Most metrics files fit whole. In a larger file,
+# any read past the head (coordinates stored after the data, say) still goes to the
+# network while the lock is held.
+STREAMED_HEAD_BYTES = 32 * 2**20
+
+
+def _streamed_facts(location: dict, filename: str, kind: str) -> _FileFacts | None:
+    handle = open_bytes(location)
+    if handle is None:
+        return None
+    with handle:
+        content_hash, size_bytes = provenance.digest_stream(handle)
+        handle.seek(0)
+        head_first = HeadFirstReader(handle, STREAMED_HEAD_BYTES)
+        summary = provenance.summarize_stream(head_first, filename, size_bytes)
+    return _FileFacts(
+        filename=filename,
+        kind=kind,
+        format=provenance.format_of(filename),
+        content_hash=content_hash,
+        size_bytes=size_bytes,
+        summary=summary,
+    )
 
 
 async def _job(job_id: str) -> dict | None:

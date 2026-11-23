@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +25,17 @@ import sqlalchemy as sa
 from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
 
-from . import job_access, job_history, ledger, provenance, run_summaries, workspace_display
+from . import (
+    job_access,
+    job_history,
+    ledger,
+    provenance,
+    run_summaries,
+    workspace_display,
+    workspace_settings,
+)
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE_KIND = "workspace"
 NOT_IN_CONVERSATION = "This workspace is not available in this conversation."
@@ -68,7 +79,13 @@ def job_file_label(filename: str) -> str:
 # --- workspaces ---------------------------------------------------------------
 
 
-async def create_workspace(user_id: str, name: str, description: str = "") -> dict:
+async def create_workspace(
+    user_id: str,
+    name: str,
+    description: str = "",
+    settings: workspace_settings.WorkspaceSettings | None = None,
+) -> dict:
+    """A new workspace, with the area and season chosen for it when there are any."""
     name = name.strip()
     if not name:
         raise WorkspaceError("Workspace name is required")
@@ -77,6 +94,7 @@ async def create_workspace(user_id: str, name: str, description: str = "") -> di
         "user_id": user_id,
         "name": name[:120],
         "description": description.strip()[:2000],
+        "settings_json": workspace_settings.serialize(settings) if settings else None,
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -427,6 +445,83 @@ async def on_job_published(job_id: str) -> None:
         workspace_ids = list(workspace_ids)
     for workspace_id in workspace_ids:
         await _add_job_outputs(workspace_id, outputs)
+
+
+# How long an instance may take to record a job's files before another takes over,
+# as when the instance stops partway; a recording that failed is tried again sooner.
+RECORDING_LEASE_SECONDS = 900.0
+RECORDING_RETRY_SECONDS = 60.0
+
+
+async def _unrecorded_job_ids() -> list[str]:
+    """Published jobs whose files have not yet reached the ledger and every workspace
+    linking them, as when recording them failed or stopped partway."""
+    jobs = tables.jobs
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(jobs.c.id).where(
+                jobs.c.status == "complete",
+                jobs.c.artifacts_published_at.is_not(None),
+                jobs.c.outputs_recorded_at.is_(None),
+            )
+        )
+        return list(result.scalars())
+
+
+async def _claim_recording(job_id: str) -> bool:
+    """Take the lease on recording a job's files; False when another instance holds it."""
+    jobs = tables.jobs
+    now = datetime.now(UTC)
+    stale = (now - timedelta(seconds=RECORDING_LEASE_SECONDS)).isoformat()
+    async with get_db() as conn:
+        claimed = await conn.execute(
+            sa.update(jobs)
+            .where(
+                jobs.c.id == job_id,
+                jobs.c.outputs_recorded_at.is_(None),
+                sa.or_(jobs.c.outputs_recording_at.is_(None), jobs.c.outputs_recording_at < stale),
+            )
+            .values(outputs_recording_at=now.isoformat())
+        )
+        return claimed.rowcount == 1
+
+
+async def _retry_recording_soon(job_id: str) -> None:
+    """Hand back a lease whose recording failed, so it is taken again after the retry
+    wait rather than the whole lease."""
+    stale_from = datetime.now(UTC) + timedelta(
+        seconds=RECORDING_RETRY_SECONDS - RECORDING_LEASE_SECONDS
+    )
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(tables.jobs)
+            .where(tables.jobs.c.id == job_id)
+            .values(outputs_recording_at=stale_from.isoformat())
+        )
+
+
+async def _mark_recorded(job_id: str) -> None:
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(tables.jobs)
+            .where(tables.jobs.c.id == job_id)
+            .values(outputs_recorded_at=_now())
+        )
+
+
+async def record_published_outputs() -> None:
+    """Attach each published job's files to its step and show them in its workspaces.
+    One instance records a job at a time; one that fails is tried again later."""
+    for job_id in await _unrecorded_job_ids():
+        if not await _claim_recording(job_id):
+            continue
+        try:
+            await on_job_published(job_id)
+        except Exception:
+            logger.exception("Recording the files of job %s failed; it will be tried again", job_id)
+            await _retry_recording_soon(job_id)
+            continue
+        await _mark_recorded(job_id)
 
 
 async def release_unreadable_job(job: dict) -> None:

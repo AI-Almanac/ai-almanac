@@ -1,9 +1,11 @@
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkspaceDetail } from '../src/lib/api';
 import WorkspaceCanvas from '../src/lib/components/workspace/WorkspaceCanvas.svelte';
+import { KEPT_VIEWS } from '../src/lib/workspace/canvas-view';
 import { groupByRun } from '../src/lib/workspace/runs';
+import { mounts } from './fixtures/RunProbe.svelte';
 import { workspaceJob } from './fixtures/workspace';
 
 vi.mock('../src/lib/components/workspace/RunDetail.svelte', async () => ({
@@ -13,29 +15,67 @@ vi.mock('../src/lib/components/workspace/ArtifactDetail.svelte', async () => ({
 	default: (await import('./fixtures/StubComponent.svelte')).default
 }));
 
+const runKeys = Array.from({ length: KEPT_VIEWS + 1 }, (_, i) => `run-${i}`);
+const workspace = {
+	id: 'ws-1',
+	jobs: runKeys.map((key) => workspaceJob({ id: `job-${key}`, run_id: key })),
+	artifacts: []
+} as unknown as WorkspaceDetail;
+const results = groupByRun(workspace.jobs, workspace.artifacts);
+const onNavigate = vi.fn();
+
+function openRuns(...keys: string[]) {
+	const [first, ...rest] = keys;
+	const { rerender } = render(WorkspaceCanvas, {
+		workspace,
+		results,
+		view: { kind: 'run', runKey: first },
+		onNavigate
+	});
+	return rest.reduce(
+		(shown, key) =>
+			shown.then(() =>
+				rerender({ workspace, results, view: { kind: 'run', runKey: key }, onNavigate })
+			),
+		Promise.resolve()
+	);
+}
+
+/** Whether an element sits inside one made inert (jsdom keeps `inert` as a property only). */
+function isInert(element: HTMLElement | null): boolean {
+	for (let node = element; node; node = node.parentElement) if (node.inert) return true;
+	return false;
+}
+
+/** The run view on show; the others are kept out of sight and out of reach. */
+function shownProbe(): string {
+	const shown = screen.getAllByTestId('run-probe').filter((probe) => !isInert(probe));
+	expect(shown).toHaveLength(1);
+	return shown[0].textContent ?? '';
+}
+
+beforeEach(() => {
+	mounts.length = 0;
+});
+
 describe('the stage when another run is opened', () => {
-	const workspace = {
-		id: 'ws-1',
-		jobs: [
-			workspaceJob({ id: 'job-a', run_id: 'run-a' }),
-			workspaceJob({ id: 'job-b', run_id: 'run-b' })
-		],
-		artifacts: []
-	} as unknown as WorkspaceDetail;
-	const results = groupByRun(workspace.jobs, workspace.artifacts);
-
 	it('starts the run view afresh instead of handing the old one the new run', async () => {
-		const onNavigate = vi.fn();
-		const { rerender } = render(WorkspaceCanvas, {
-			workspace,
-			results,
-			view: { kind: 'run', runKey: 'run-a' },
-			onNavigate
-		});
-		expect(screen.getByTestId('run-probe').textContent).toBe('showing run-a, created for run-a');
+		await openRuns('run-0', 'run-1');
 
-		await rerender({ workspace, results, view: { kind: 'run', runKey: 'run-b' }, onNavigate });
+		expect(shownProbe()).toBe('showing run-1, created for run-1');
+	});
 
-		expect(screen.getByTestId('run-probe').textContent).toBe('showing run-b, created for run-b');
+	it('finds a run viewed a moment ago as it was left, without making it again', async () => {
+		await openRuns('run-0', 'run-1', 'run-0');
+
+		expect(shownProbe()).toBe('showing run-0, created for run-0');
+		expect(mounts).toEqual(['run-0', 'run-1']);
+	});
+
+	it('lets go of the run viewed longest ago once more are open than it keeps', async () => {
+		await openRuns(...runKeys, 'run-0');
+
+		expect(screen.getAllByTestId('run-probe')).toHaveLength(KEPT_VIEWS);
+		expect(mounts.filter((key) => key === 'run-0')).toHaveLength(2);
 	});
 });

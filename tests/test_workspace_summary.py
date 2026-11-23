@@ -122,9 +122,29 @@ def test_setup_names_the_observations_and_each_model_once_with_display_names() -
     assert summary.most_common_region(jobs) == "ethiopia"
 
 
+def test_a_blend_naming_a_model_the_way_runs_store_it_does_not_list_it_twice() -> None:
+    jobs = [
+        _job("blend", {"model_names": ["aifs_v2", "graphcast_0_25"]}, created="2026-06-02"),
+        _job(
+            "benchmark",
+            {"model_name": "aifs_v2", "model_display_name": "AIFS v2"},
+            created="2026-06-01",
+        ),
+        _job(
+            "benchmark",
+            {"model_name": "graphcast_0_25", "model_display_name": "Graphcast 0.25"},
+            created="2026-06-01",
+        ),
+    ]
+
+    assert summary.model_names(jobs) == ["AIFS v2", "Graphcast 0.25"]
+
+
 def test_the_latest_forecast_reports_its_issue_date_span_and_blend() -> None:
     job = _job("forecast", {"blend_id": "b1"}, created="2026-07-02")
-    forecast = summary.forecast_summary(job, "AIFS-FuXi Ethiopia Blend", _FORECAST_CSV)
+    forecast = summary.forecast_summary(
+        job, "AIFS-FuXi Ethiopia Blend", summary.issue_dates_of(_FORECAST_CSV)
+    )
     assert forecast.blended and forecast.blend_name == "AIFS-FuXi Ethiopia Blend"
     assert (forecast.first_issue_date, forecast.last_issue_date) == (
         date(2026, 5, 4),
@@ -132,7 +152,13 @@ def test_the_latest_forecast_reports_its_issue_date_span_and_blend() -> None:
     )
     assert forecast.issue_dates == 2
 
-    raw = summary.forecast_summary(_job("forecast", {"models": ["aifs"]}), None, None)
+    assert summary.issue_dates_of("id,time\na,2026-05-04\n") == summary.NO_ISSUE_DATES, (
+        "a table without probabilities is not a forecast"
+    )
+
+    raw = summary.forecast_summary(
+        _job("forecast", {"models": ["aifs"]}), None, summary.NO_ISSUE_DATES
+    )
     assert not raw.blended and raw.issue_dates == 0 and raw.first_issue_date is None
 
 
@@ -243,6 +269,40 @@ async def test_the_summary_endpoint_reads_the_newest_blend_and_forecast(
     assert headlines["blend"]["rps_skill"] == pytest.approx(0.1152)
     assert headlines["forecast"]["kind"] == "forecast"
     assert headlines["forecast"]["last_issue_date"] == "2026-07-01"
+
+
+@pytest.mark.asyncio
+async def test_a_finished_forecasts_table_is_read_once_however_often_it_is_shown(
+    client, as_new_user, user_id, monkeypatch
+) -> None:
+    from ai_almanac.server.services import workspaces
+    from ai_almanac.server.services.storage import get_storage
+
+    response = await client.post("/workspaces", headers=as_new_user, json={"name": "Kiremt"})
+    wid = response.json()["id"]
+    blend_id = insert_job(user_id, {"blend_name": "Kiremt blend"}, job_type="blend")
+    forecast_id = insert_job(user_id, {"blend_id": blend_id}, job_type="forecast")
+    (_output_dir(forecast_id) / "blended_forecast_probabilities.csv").write_text(_FORECAST_CSV)
+    await workspaces.link_job(wid, forecast_id)
+    storage = type(get_storage())
+    read_text = storage.read_result_text
+    tables_read = []
+
+    def counting(self, job_id, kind, filename):
+        if filename == "blended_forecast_probabilities.csv":
+            tables_read.append(job_id)
+        return read_text(self, job_id, kind, filename)
+
+    monkeypatch.setattr(storage, "read_result_text", counting)
+    for _ in range(2):
+        detail = (await client.get(f"/workspaces/{wid}", headers=as_new_user)).json()
+        shown = (await client.get(f"/workspaces/{wid}/summary", headers=as_new_user)).json()
+
+    [forecast] = [job for job in detail["jobs"] if job["id"] == forecast_id]
+    assert forecast["headline"]["first_issue_date"] == "2026-05-04"
+    assert shown["latest_forecast"]["last_issue_date"] == "2026-07-01"
+    assert shown["latest_forecast"]["issue_dates"] == 2
+    assert tables_read == [forecast_id]
 
 
 def test_a_workspace_without_a_season_works_in_the_one_usual_in_its_country() -> None:

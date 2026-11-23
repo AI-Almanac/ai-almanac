@@ -51,3 +51,34 @@ export function backLink(view: CanvasView, hasRuns: boolean): BackLink | null {
 	if (view.kind !== 'file' || !hasRuns) return null;
 	return { label: view.runKey ? '← Back to run' : '← Newest run', view: backFrom(view) };
 }
+
+/**
+ * How many product views the stage keeps alive, the one shown included. Each can
+ * hold maps, and a browser allows only a handful of live map canvases at once.
+ */
+export const KEPT_VIEWS = 4;
+
+/** A product view the stage keeps while another is shown; `usedAt` orders by recency. */
+export type KeptView = { key: string; usedAt: number };
+
+/**
+ * The views kept once `current` is shown. A view already kept stays where it is,
+ * since moving it in the page would lose its scroll; a new one goes after the rest.
+ * Past `limit`, the views used longest ago are let go, never the one being shown.
+ */
+export function keepView<T extends KeptView>(kept: T[], current: T, limit: number): T[] {
+	const held = kept.some((view) => view.key === current.key);
+	const next = held
+		? kept.map((view) => (view.key === current.key ? current : view))
+		: [...kept, current];
+	const excess = next.length - limit;
+	if (excess <= 0) return next;
+	const letGo = new Set(
+		next
+			.filter((view) => view.key !== current.key)
+			.sort((a, b) => a.usedAt - b.usedAt)
+			.slice(0, excess)
+			.map((view) => view.key)
+	);
+	return next.filter((view) => !letGo.has(view.key));
+}

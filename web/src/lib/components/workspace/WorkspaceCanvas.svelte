@@ -1,11 +1,18 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import {
 		downloadWorkspaceArtifact,
 		failureMessage,
 		type WorkspaceArtifact,
 		type WorkspaceDetail
 	} from '$lib/api';
-	import { backLink, type CanvasView } from '$lib/workspace/canvas-view';
+	import {
+		backLink,
+		keepView,
+		KEPT_VIEWS,
+		type CanvasView,
+		type KeptView
+	} from '$lib/workspace/canvas-view';
 	import {
 		defaultRun,
 		metricsWindow,
@@ -33,6 +40,12 @@
 
 	let { workspace, results, view, onNavigate, onOpenTurn, onRenameFile }: Props = $props();
 
+	/** A product the stage can show, keyed so that going back to it finds the same view. */
+	type StageTarget =
+		| { key: string; kind: 'run'; runKey: string; window?: string }
+		| { key: string; kind: 'file'; artifactId: string; fromRunKey: string | null };
+	type StageView = StageTarget & KeptView;
+
 	let downloadError = $state<string | null>(null);
 
 	// The stage lands on the newest run until one is chosen.
@@ -49,6 +62,40 @@
 			? (workspace.artifacts.find((file) => file.id === view.artifactId) ?? null)
 			: null
 	);
+
+	// A run opened on a lead-time window is its own view: the map starts on that window.
+	const target = $derived.by((): StageTarget | null => {
+		if (openRun) {
+			const window = view.kind === 'run' ? view.window : undefined;
+			const key = window ? `run:${openRun.key}@${window}` : `run:${openRun.key}`;
+			return { key, kind: 'run', runKey: openRun.key, window };
+		}
+		if (openFile) {
+			const fromRunKey = view.kind === 'file' ? view.runKey : null;
+			return { key: `file:${openFile.id}`, kind: 'file', artifactId: openFile.id, fromRunKey };
+		}
+		return null;
+	});
+	const targetKey = $derived(target?.key ?? null);
+
+	// Each product keeps its own view while the stage shows others, so going back to one
+	// finds its data, map settings and scroll as they were left, with nothing fetched again.
+	let kept = $state<StageView[]>([]);
+	let uses = 0;
+	$effect(() => {
+		if (targetKey === null) return;
+		untrack(() => {
+			if (target) kept = keepView(kept, { ...target, usedAt: ++uses }, KEPT_VIEWS);
+		});
+	});
+
+	function runNamed(runKey: string | null): Run | null {
+		return results.runs.find((run) => run.key === runKey) ?? null;
+	}
+
+	function fileNamed(artifactId: string): WorkspaceArtifact | null {
+		return workspace.artifacts.find((file) => file.id === artifactId) ?? null;
+	}
 
 	/** Where a file can be explored: its run's view, on the file's own lead-time window. */
 	function mapViewOf(file: WorkspaceArtifact) {
@@ -97,35 +144,47 @@
 	{#if downloadError}<p class="error">{downloadError}</p>{/if}
 
 	<div class="canvas-body">
-		{#if openRun}
-			<!-- A run's view starts afresh: nothing chosen for one run carries to the next. -->
-			{#key openRun.key}
-				<RunDetail
-					run={openRun}
-					workspaceId={workspace.id}
-					initialWindow={view.kind === 'run' ? view.window : undefined}
-					onOpenFile={(file) => showFile(file, openRun)}
-					onDownload={download}
-					{onRenameFile}
-				/>
-			{/key}
-		{:else if openFile}
-			{#key openFile.id}
-				<ArtifactDetail
-					workspaceId={workspace.id}
-					file={openFile}
-					onDownload={download}
-					{onOpenTurn}
-					onRename={onRenameFile}
-					mapView={mapViewOf(openFile)}
-				/>
-			{/key}
-		{:else if view.kind === 'overview'}
-			<p class="empty">
-				Nothing here yet. Benchmarks, blends, forecasts and analyses show up here as they are made.
-			</p>
-		{:else}
-			<p class="muted">This result is not in the workspace (yet). It may still be on its way.</p>
+		<!-- One view per product: nothing chosen for one run carries to the next. The views
+		     not on show stay in place, unpainted and out of reach. -->
+		{#each kept as entry (entry.key)}
+			{@const onShow = entry.key === targetKey}
+			<div class="kept-view" class:away={!onShow} inert={!onShow}>
+				{#if entry.kind === 'run'}
+					{@const run = runNamed(entry.runKey)}
+					{#if run}
+						<RunDetail
+							{run}
+							workspaceId={workspace.id}
+							initialWindow={entry.window}
+							onOpenFile={(file) => showFile(file, run)}
+							onDownload={download}
+							{onRenameFile}
+						/>
+					{/if}
+				{:else}
+					{@const file = fileNamed(entry.artifactId)}
+					{#if file}
+						<ArtifactDetail
+							workspaceId={workspace.id}
+							{file}
+							onDownload={download}
+							{onOpenTurn}
+							onRename={onRenameFile}
+							mapView={mapViewOf(file)}
+						/>
+					{/if}
+				{/if}
+			</div>
+		{/each}
+		{#if !target}
+			{#if view.kind === 'overview'}
+				<p class="empty">
+					Nothing here yet. Benchmarks, blends, forecasts and analyses show up here as they are
+					made.
+				</p>
+			{:else}
+				<p class="muted">This result is not in the workspace (yet). It may still be on its way.</p>
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -175,14 +234,27 @@
 		overflow-wrap: anywhere;
 	}
 	.canvas-body {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+	}
+	/* Each kept view scrolls on its own, so its place is still there on the way back. */
+	.kept-view {
+		position: absolute;
+		inset: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 0.9rem;
-		flex: 1;
-		min-height: 0;
 		overflow-y: auto;
 		overscroll-behavior: contain;
 		padding-right: 0.25rem;
+	}
+	/* Kept but not painted: scroll, maps and charts keep their state and size. */
+	.kept-view.away {
+		content-visibility: hidden;
+		pointer-events: none;
 	}
 	.link {
 		padding: 0;
