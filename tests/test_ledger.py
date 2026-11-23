@@ -142,9 +142,38 @@ def test_under_gcs_an_artifact_is_downloaded_to_be_staged(
     monkeypatch.setattr(ledger, "get_storage", BucketOnly)
     artifact = {"location_kind": ledger.OWNED, "path": "u/abc.csv", "filename": "table.csv"}
     staged = ledger.stage(artifact, tmp_path)
-    assert staged == tmp_path / "table.csv"
+    assert staged.name == "table.csv"
+    assert staged.is_relative_to(tmp_path)
     assert staged.read_bytes() == b"bytes in the bucket"
     assert ledger.stage({**artifact, "path": "u/gone.csv"}, tmp_path) is None
+
+
+def test_two_runs_files_of_the_same_name_are_staged_side_by_side(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    by_job = {"job-20mm": b"scored at 20 mm", "job-15mm": b"scored at 15 mm"}
+
+    class BucketOnly:
+        def result_file_path(self, job_id, kind, filename):
+            return None
+
+        def open_result(self, job_id, kind, filename):
+            return io.BytesIO(by_job[job_id])
+
+    monkeypatch.setattr(ledger, "get_storage", BucketOnly)
+    staged = {
+        job_id: ledger.stage(
+            {
+                "location_kind": ledger.JOB_OUTPUT,
+                "job_id": job_id,
+                "job_file_kind": "output",
+                "filename": "spatial_metrics_AIFS v2_1-15.nc",
+            },
+            tmp_path,
+        )
+        for job_id in by_job
+    }
+    assert {job_id: path.read_bytes() for job_id, path in staged.items()} == by_job
 
 
 @pytest.mark.asyncio
