@@ -327,3 +327,23 @@ respects regions being an optional attribute.
 4. Read-path performance: timing, headline cache, summary refresh (#1).
 5. Creation flow with settings (#4) + season-year fix.
 6. Infra sizing (min instances, DB tier), as a separate cost decision.
+
+## 5. Going back to a product (added 2026-11-23)
+
+**What happened:** every product on the stage was wrapped in
+`{#key openRun.key}`. Switching products destroyed the view: its data, map
+settings (zoom, layers, tab) and scroll went with it, and coming back fetched
+everything again.
+
+**Done:**
+- `WorkspaceCanvas` keeps the last `KEPT_VIEWS` (4) product views alive, one
+  per product, so nothing chosen in one run carries to another.
+- Views not on show stay in place with `content-visibility: hidden` and
+  `inert`. Each scrolls on its own, so its scroll position, map canvases and
+  charts keep their state and size.
+- `keepView` in `canvas-view.ts` decides which views stay. Kept views never
+  move in the page, and past the limit the least recently viewed is dropped.
+- The cap is there because each view can hold map canvases, and browsers allow
+  only a handful of live WebGL contexts.
+- **Checked in a local browser:** going back to a benchmark found the same
+  view, with its tab and map zoom, and made no API requests.
