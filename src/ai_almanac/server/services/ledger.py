@@ -455,7 +455,9 @@ def _job_file_facts(job_id: str, kind: str, filename: str, file_kind: str) -> _F
 
 # How much of a remote file is read into memory before it is described: a NetCDF's
 # header and coordinates are read under the process-wide HDF5 lock, so they should
-# come from memory, not the network. Most metrics files fit whole.
+# come from memory, not the network. Most metrics files fit whole. In a larger file,
+# any read past the head (coordinates stored after the data, say) still goes to the
+# network while the lock is held.
 STREAMED_HEAD_BYTES = 32 * 2**20
 
 

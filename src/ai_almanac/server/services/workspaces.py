@@ -447,9 +447,10 @@ async def on_job_published(job_id: str) -> None:
         await _add_job_outputs(workspace_id, outputs)
 
 
-# How long an instance may take to record a job's files before another takes over;
-# a recording that failed is tried again once its lease runs out.
+# How long an instance may take to record a job's files before another takes over,
+# as when the instance stops partway; a recording that failed is tried again sooner.
 RECORDING_LEASE_SECONDS = 900.0
+RECORDING_RETRY_SECONDS = 60.0
 
 
 async def _unrecorded_job_ids() -> list[str]:
@@ -485,6 +486,20 @@ async def _claim_recording(job_id: str) -> bool:
         return claimed.rowcount == 1
 
 
+async def _retry_recording_soon(job_id: str) -> None:
+    """Hand back a lease whose recording failed, so it is taken again after the retry
+    wait rather than the whole lease."""
+    stale_from = datetime.now(UTC) + timedelta(
+        seconds=RECORDING_RETRY_SECONDS - RECORDING_LEASE_SECONDS
+    )
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(tables.jobs)
+            .where(tables.jobs.c.id == job_id)
+            .values(outputs_recording_at=stale_from.isoformat())
+        )
+
+
 async def _mark_recorded(job_id: str) -> None:
     async with get_db() as conn:
         await conn.execute(
@@ -504,6 +519,7 @@ async def record_published_outputs() -> None:
             await on_job_published(job_id)
         except Exception:
             logger.exception("Recording the files of job %s failed; it will be tried again", job_id)
+            await _retry_recording_soon(job_id)
             continue
         await _mark_recorded(job_id)
 
