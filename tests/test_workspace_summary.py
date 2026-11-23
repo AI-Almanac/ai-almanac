@@ -152,6 +152,10 @@ def test_the_latest_forecast_reports_its_issue_date_span_and_blend() -> None:
     )
     assert forecast.issue_dates == 2
 
+    assert summary.issue_dates_of("id,time\na,2026-05-04\n") == summary.NO_ISSUE_DATES, (
+        "a table without probabilities is not a forecast"
+    )
+
     raw = summary.forecast_summary(
         _job("forecast", {"models": ["aifs"]}), None, summary.NO_ISSUE_DATES
     )

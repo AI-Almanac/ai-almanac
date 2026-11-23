@@ -23,6 +23,7 @@ from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
 
 from . import blend_summaries, derived_outputs, metrics, workspace_display, workspaces
+from .area_summaries import WEEKLY_COLUMNS
 from .artifacts import list_job_artifacts
 from .blend_forecast import WEEKLY_PROBABILITIES_CSV
 from .focus_area import country_of
@@ -217,7 +218,7 @@ def issue_dates_of(csv_text: str) -> IssueDates:
     table has a row per cell and date, so parsing every probability would be wasted."""
     rows = csv.reader(io.StringIO(csv_text))
     header = next(rows, [])
-    if "time" not in header:
+    if "time" not in header or not set(WEEKLY_COLUMNS) <= set(header):
         return NO_ISSUE_DATES
     column = header.index("time")
     days = sorted({row[column] for row in rows if len(row) > column})

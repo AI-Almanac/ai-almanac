@@ -12,12 +12,11 @@ import contextlib
 import json
 import logging
 import re
-import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -448,46 +447,65 @@ async def on_job_published(job_id: str) -> None:
         await _add_job_outputs(workspace_id, outputs)
 
 
-# How long a job whose files could not be recorded waits before it is tried again;
-# each further failure doubles the wait, up to the cap.
-RECORDING_RETRY_SECONDS = 60.0
-RECORDING_RETRY_CAP_SECONDS = 3600.0
+# How long an instance may take to record a job's files before another takes over;
+# a recording that failed is tried again once its lease runs out.
+RECORDING_LEASE_SECONDS = 900.0
 
 
-@dataclass(frozen=True)
-class RecordingFailures:
-    count: int
-    last_failed_at: float  # time.monotonic()
+async def _unrecorded_job_ids() -> list[str]:
+    """Published jobs whose files have not yet reached the ledger and every workspace
+    linking them, as when recording them failed or stopped partway."""
+    jobs = tables.jobs
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(jobs.c.id).where(
+                jobs.c.status == "complete",
+                jobs.c.artifacts_published_at.is_not(None),
+                jobs.c.outputs_recorded_at.is_(None),
+            )
+        )
+        return list(result.scalars())
 
 
-def recording_due(failures: RecordingFailures | None, now: float) -> bool:
-    if failures is None:
-        return True
-    wait = RECORDING_RETRY_SECONDS * 2 ** (failures.count - 1)
-    return now >= failures.last_failed_at + min(wait, RECORDING_RETRY_CAP_SECONDS)
+async def _claim_recording(job_id: str) -> bool:
+    """Take the lease on recording a job's files; False when another instance holds it."""
+    jobs = tables.jobs
+    now = datetime.now(UTC)
+    stale = (now - timedelta(seconds=RECORDING_LEASE_SECONDS)).isoformat()
+    async with get_db() as conn:
+        claimed = await conn.execute(
+            sa.update(jobs)
+            .where(
+                jobs.c.id == job_id,
+                jobs.c.outputs_recorded_at.is_(None),
+                sa.or_(jobs.c.outputs_recording_at.is_(None), jobs.c.outputs_recording_at < stale),
+            )
+            .values(outputs_recording_at=now.isoformat())
+        )
+        return claimed.rowcount == 1
 
 
-_recording_failures: dict[str, RecordingFailures] = {}
+async def _mark_recorded(job_id: str) -> None:
+    async with get_db() as conn:
+        await conn.execute(
+            sa.update(tables.jobs)
+            .where(tables.jobs.c.id == job_id)
+            .values(outputs_recorded_at=_now())
+        )
 
 
 async def record_published_outputs() -> None:
-    """Attach each published job's files to its step and show them in its workspaces,
-    trying again later for a job whose files could not be recorded."""
-    pending = await ledger.unrecorded_job_ids()
-    for job_id in _recording_failures.keys() - set(pending):
-        del _recording_failures[job_id]
-    for job_id in pending:
-        failures = _recording_failures.get(job_id)
-        if not recording_due(failures, time.monotonic()):
+    """Attach each published job's files to its step and show them in its workspaces.
+    One instance records a job at a time; one that fails is tried again later."""
+    for job_id in await _unrecorded_job_ids():
+        if not await _claim_recording(job_id):
             continue
         try:
             await on_job_published(job_id)
         except Exception:
-            count = failures.count + 1 if failures else 1
-            _recording_failures[job_id] = RecordingFailures(count, time.monotonic())
-            logger.exception("Recording the files of job %s failed (attempt %d)", job_id, count)
-        else:
-            _recording_failures.pop(job_id, None)
+            logger.exception("Recording the files of job %s failed; it will be tried again", job_id)
+            continue
+        await _mark_recorded(job_id)
 
 
 async def release_unreadable_job(job: dict) -> None:

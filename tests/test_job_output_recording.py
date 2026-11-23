@@ -3,6 +3,7 @@ remotely, and retried when recording them did not finish."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from ai_almanac.paths import database_path
-from ai_almanac.server.services import ledger, workspaces
+from ai_almanac.server.services import ledger, netcdf, workspaces
 from ai_almanac.server.services.artifacts import index_job_artifacts
 from ai_almanac.server.services.storage import get_storage
 from tests.helpers.records import BENCHMARK_CONFIG, insert_job
@@ -82,16 +83,103 @@ async def test_files_whose_recording_failed_appear_after_a_wait(
         raise MemoryError("instance memory exceeded")
 
     monkeypatch.setattr(ledger, "_job_file_facts", out_of_memory)
-    monkeypatch.setattr(workspaces, "RECORDING_RETRY_SECONDS", 3600.0)
+    monkeypatch.setattr(workspaces, "RECORDING_LEASE_SECONDS", 3600.0)
     await workspaces.record_published_outputs()
     attempts = len(reads)
     await workspaces.record_published_outputs()
 
     assert await _files_shown(client, as_new_user, workspace_id) == {}
-    assert len(reads) == attempts, "a failed recording is not retried before its wait is up"
+    assert len(reads) == attempts, "a failed recording is not retried before its lease runs out"
 
     monkeypatch.setattr(ledger, "_job_file_facts", describe)
-    monkeypatch.setattr(workspaces, "RECORDING_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(workspaces, "RECORDING_LEASE_SECONDS", 0.0)
     await workspaces.record_published_outputs()
 
     assert CLIMATOLOGY in await _files_shown(client, as_new_user, workspace_id)
+
+
+async def _published_job_in_workspace(client, as_new_user, user_id) -> tuple[str, str]:
+    workspace_id, job_id = await _running_job_in_workspace(client, as_new_user, user_id)
+    write_job_outputs(job_id, 1.0)
+    _finish(job_id)
+    await index_job_artifacts(job_id)
+    return workspace_id, job_id
+
+
+@pytest.mark.asyncio
+async def test_instances_recording_at_once_read_a_jobs_files_once(
+    client, as_new_user, user_id, monkeypatch
+) -> None:
+    workspace_id, _ = await _published_job_in_workspace(client, as_new_user, user_id)
+    reads = []
+    describe = ledger._job_file_facts
+
+    def counted(*args):
+        reads.append(args[2])
+        return describe(*args)
+
+    monkeypatch.setattr(ledger, "_job_file_facts", counted)
+
+    await asyncio.gather(*(workspaces.record_published_outputs() for _ in range(3)))
+
+    assert sorted(reads) == sorted(set(reads)), "each file is read by one instance"
+    assert CLIMATOLOGY in await _files_shown(client, as_new_user, workspace_id)
+
+
+@pytest.mark.asyncio
+async def test_files_reach_the_workspace_when_recording_stopped_after_the_ledger(
+    client, as_new_user, user_id, monkeypatch
+) -> None:
+    workspace_id, _ = await _published_job_in_workspace(client, as_new_user, user_id)
+    add_to_workspace = workspaces._add_job_outputs
+
+    async def stopped(*_args):
+        raise RuntimeError("instance stopped")
+
+    monkeypatch.setattr(workspaces, "_add_job_outputs", stopped)
+    await workspaces.record_published_outputs()
+    assert await _files_shown(client, as_new_user, workspace_id) == {}
+
+    monkeypatch.setattr(workspaces, "_add_job_outputs", add_to_workspace)
+    monkeypatch.setattr(workspaces, "RECORDING_LEASE_SECONDS", 0.0)
+    await workspaces.record_published_outputs()
+
+    assert CLIMATOLOGY in await _files_shown(client, as_new_user, workspace_id)
+
+
+@pytest.mark.asyncio
+async def test_a_remote_file_is_not_read_over_the_network_under_the_hdf5_lock(
+    client, as_new_user, user_id, monkeypatch
+) -> None:
+    reads_under_lock = []
+    open_bytes = ledger.open_bytes
+
+    class Watched:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def read(self, *args):
+            reads_under_lock.append(netcdf.HDF5_LOCK._is_owned())
+            return self._handle.read(*args)
+
+        def readinto(self, buffer):
+            reads_under_lock.append(netcdf.HDF5_LOCK._is_owned())
+            return self._handle.readinto(buffer)
+
+        def __getattr__(self, name):
+            return getattr(self._handle, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+
+    monkeypatch.setattr(ledger, "local_path", lambda _artifact: None)
+    monkeypatch.setattr(ledger, "open_bytes", lambda artifact: Watched(open_bytes(artifact)))
+    workspace_id, _ = await _published_job_in_workspace(client, as_new_user, user_id)
+
+    await workspaces.record_published_outputs()
+
+    assert CLIMATOLOGY in await _files_shown(client, as_new_user, workspace_id)
+    assert reads_under_lock and not any(reads_under_lock)

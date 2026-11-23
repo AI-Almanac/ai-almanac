@@ -84,3 +84,47 @@ def test_sync_database_url_uses_psycopg3() -> None:
     url = "postgresql+asyncpg://almanac:secret@postgres/almanac"
 
     assert sync_database_url(url) == "postgresql+psycopg://almanac:secret@postgres/almanac"
+
+
+def test_jobs_already_published_are_not_recorded_again(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_ALMANAC_DATA_DIR", str(tmp_path))
+    config = _alembic_config()
+    command.upgrade(config, "0031")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    with engine.begin() as connection:
+        for job_id, published in (
+            ("recorded", "t1"),
+            ("never-finished", "t2"),
+            ("before-the-ledger", "t3"),
+            ("unpublished", None),
+        ):
+            connection.exec_driver_sql(
+                "INSERT INTO jobs (id, user_id, dataset_id, status, created_at, "
+                "artifacts_published_at) VALUES (?, 'u', 'ds', 'complete', 'now', ?)",
+                (job_id, published),
+            )
+        for job_id, completed in (("recorded", "t1"), ("never-finished", None)):
+            connection.exec_driver_sql(
+                "INSERT INTO provenance_steps (id, user_id, created_at, completed_at, "
+                "actor_kind, primitive, primitive_version, params, params_hash, inputs, "
+                "outputs, runtime, job_id, parent_step_ids, step_hash) VALUES "
+                "(?, 'u', 'now', ?, 'user', 'benchmark.job', '1.0.0', '{}', 'h', '[]', "
+                "'[]', '{}', ?, '[]', 's')",
+                (f"step-{job_id}", completed, job_id),
+            )
+    engine.dispose()
+
+    command.upgrade(config, "0032")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    with engine.connect() as connection:
+        rows = connection.exec_driver_sql("SELECT id, outputs_recorded_at FROM jobs")
+        recorded = {job_id: at for job_id, at in rows.fetchall()}
+    engine.dispose()
+    assert recorded == {
+        "recorded": "t1",
+        "never-finished": None,
+        "before-the-ledger": "t3",
+        "unpublished": None,
+    }
