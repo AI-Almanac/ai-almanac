@@ -193,14 +193,17 @@ class HeadFirstReader(io.RawIOBase):
 
 def stage(artifact: dict, directory: Path) -> Path | None:
     """A local file holding the artifact's bytes: the stored file when storage is
-    local, else a download into ``directory``. None when the bytes are missing."""
+    local, else a download under ``directory``. None when the bytes are missing.
+
+    Each download gets a directory of its own: two runs of one model name their
+    files alike, and both are often staged side by side to be compared."""
     path = local_path(artifact)
     if path is not None:
         return path if path.is_file() else None
     handle = open_bytes(artifact)
     if handle is None:
         return None
-    target = directory / Path(artifact["filename"]).name
+    target = Path(tempfile.mkdtemp(dir=directory)) / Path(artifact["filename"]).name
     with handle, target.open("wb") as out:
         shutil.copyfileobj(handle, out)
     return target
