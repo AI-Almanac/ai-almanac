@@ -8,7 +8,6 @@ publishes; the shell at the bottom reads those rows. A headline that cannot be r
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import io
 import logging
@@ -22,8 +21,7 @@ from pydantic import BaseModel, ConfigDict
 from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
 
-from . import blend_summaries, metrics, workspace_display, workspaces
-from .area_summaries import parse_forecast_table
+from . import blend_summaries, derived_outputs, metrics, workspace_display, workspaces
 from .artifacts import list_job_artifacts
 from .blend_forecast import WEEKLY_PROBABILITIES_CSV
 from .focus_area import country_of
@@ -194,27 +192,44 @@ def setup_summary(jobs: list[dict], region_name: str | None) -> SetupSummary:
     )
 
 
-def issue_date_span(csv_text: str) -> tuple[date | None, date | None, int]:
-    """First and last issue date in a blended probabilities table, and how many."""
+class IssueDates(BaseModel):
+    """When a forecast was issued: its first and last issue date, and how many there were."""
+
+    model_config = ConfigDict(frozen=True)
+
+    first: date | None = None
+    last: date | None = None
+    count: int = 0
+
+
+NO_ISSUE_DATES = IssueDates()
+
+
+def issue_dates_of(csv_text: str) -> IssueDates:
+    """The issue dates in a probabilities table, read from its time column alone: the
+    table has a row per cell and date, so parsing every probability would be wasted."""
+    rows = csv.reader(io.StringIO(csv_text))
+    header = next(rows, [])
+    if "time" not in header:
+        return NO_ISSUE_DATES
+    column = header.index("time")
+    days = sorted({row[column] for row in rows if len(row) > column})
     try:
-        dates = parse_forecast_table(csv_text).issue_dates
-    except (KeyError, ValueError):  # no table yet, or not one of probabilities
-        return None, None, 0
-    return date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]), len(dates)
+        first, last = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
+    except (IndexError, ValueError):
+        return NO_ISSUE_DATES
+    return IssueDates(first=first, last=last, count=len(days))
 
 
-def forecast_summary(
-    job: dict, blend_name: str | None, probabilities_csv: str | None
-) -> ForecastSummary:
-    first, last, count = issue_date_span(probabilities_csv or "")
+def forecast_summary(job: dict, blend_name: str | None, issued: IssueDates) -> ForecastSummary:
     return ForecastSummary(
         job_id=job["id"],
         status=job["status"],
         blended=bool(job["config"].get("blend_id")),
         blend_name=blend_name,
-        first_issue_date=first,
-        last_issue_date=last,
-        issue_dates=count,
+        first_issue_date=issued.first,
+        last_issue_date=issued.last,
+        issue_dates=issued.count,
         created_at=job["created_at"],
     )
 
@@ -294,23 +309,33 @@ async def _job_config(job_id: str) -> dict:
     return tables.json_col(raw.scalar_one_or_none(), {})
 
 
-async def _read_output(job_id: str, filename: str) -> str | None:
+# Bump the version when IssueDates changes shape; every forecast then rebuilds it once.
+FORECAST_ISSUE_DATES = "forecast_issue_dates.v1.json"
+
+
+async def _issue_dates(job_id: str) -> IssueDates:
+    """A finished forecast's issue dates, worked out from its probabilities table on
+    first read and stored beside it: the table is large and never changes."""
     from .storage import get_storage
 
+    def build() -> bytes | None:
+        text = get_storage().read_result_text(job_id, "output", WEEKLY_PROBABILITIES_CSV)
+        return None if text is None else issue_dates_of(text).model_dump_json().encode()
+
     try:
-        return await asyncio.to_thread(get_storage().read_result_text, job_id, "output", filename)
+        stored = await derived_outputs.load_or_build(job_id, FORECAST_ISSUE_DATES, build)
     except Exception:  # a headline is never worth failing the page over
-        logger.warning("Could not read %s of job %s for the summary", filename, job_id)
-        return None
+        logger.warning("Could not read the issue dates of forecast %s", job_id)
+        return NO_ISSUE_DATES
+    return IssueDates.model_validate_json(stored) if stored else NO_ISSUE_DATES
 
 
 async def _forecast_of(job: dict) -> ForecastSummary:
     blend_id = job["config"].get("blend_id")
     blend_name = workspace_display.job_name(await _job_config(blend_id)) if blend_id else None
-    probabilities = None
-    if blend_id and job["status"] == FINISHED:
-        probabilities = await _read_output(job["id"], WEEKLY_PROBABILITIES_CSV)
-    return forecast_summary(job, blend_name, probabilities)
+    finished = blend_id and job["status"] == FINISHED
+    issued = await _issue_dates(job["id"]) if finished else NO_ISSUE_DATES
+    return forecast_summary(job, blend_name, issued)
 
 
 async def _latest_forecast(jobs: list[dict]) -> ForecastSummary | None:

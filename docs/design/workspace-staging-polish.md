@@ -243,6 +243,21 @@ Needs `/security-review` (touches `server/` and `terraform/`).
    when a job reaches a terminal state, or have the server send the summary in
    the event.
 4. Scope `listing()` to the steps the workspace's artifacts actually need.
+**Done (2026-11-23):** the biggest known cost in the job list.
+- **The cost:** a finished forecast's headline downloaded its whole
+  `blended_forecast_probabilities.csv` and parsed every probability into a
+  numpy table, synchronously on the event loop. That happened on every
+  workspace load, `jobs` event and summary request, just to find the first and
+  last issue date. At India 0.25° size (396k rows, 18 MiB) the parse alone
+  takes 0.9 s on a laptop, and longer on Cloud Run's 2 vCPU.
+- **The fix:** the issue dates are now worked out once per forecast, in a
+  thread, from the `time` column alone (0.19 s). They're stored beside its
+  outputs through `derived_outputs.load_or_build`
+  (`forecast_issue_dates.v1.json`).
+- **Item 1 (instrumentation):** `log_requests` already logs per-route
+  durations, which is enough for non-streaming routes.
+- **Items 2–4** remain for blends and ledgers; re-measure first.
+
 5. Infra (separate PR, cost decision): staging `min_instances = 1` while it's
    actively used, and a DB tier above f1-micro. Check Cloud SQL Query Insights
    first.
