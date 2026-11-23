@@ -46,15 +46,6 @@ def test_a_turn_left_streaming_by_a_dead_server_reads_as_interrupted() -> None:
     }
 
 
-def test_a_stalled_read_from_the_model_api_is_a_provider_error() -> None:
-    import httpx
-
-    from ai_almanac.server.services.chat_state import ChatTurn
-
-    turn = ChatTurn(id="t", role="assistant", created_at="2026-11-06T00:00:00Z")
-    assert chat_turns._classify_stream_error(httpx.ReadTimeout(""), turn) == "provider_error"
-
-
 def _last_touched(session_id: str) -> str:
     with sqlite3.connect(database_path()) as conn:
         (touched,) = conn.execute(

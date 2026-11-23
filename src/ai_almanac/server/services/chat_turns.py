@@ -23,6 +23,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 from pydantic_ai import DeferredToolResults, ToolDenied
+from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from sqlalchemy import text
 
@@ -40,6 +41,8 @@ from ai_almanac.server.services.chat_state import (
     unprocessed_tool_calls,
 )
 from ai_almanac.server.services.llm import (
+    LlmRateLimited,
+    ToolFailed,
     deserialize_model_messages,
     serialize_model_messages,
     stream_response,
@@ -225,20 +228,24 @@ async def validate_scope(scope: ChatScope, user: job_access.JobUser) -> ChatScop
     return validated_scope
 
 
-def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
-    message = str(exc).lower()
-    name = exc.__class__.__name__.lower()
-    # A stalled or dropped read from the model's API, raised mid-stream by httpx
-    # with no message, whatever the turn's tools did.
-    if isinstance(exc, httpx.TimeoutException | httpx.NetworkError):
-        return "provider_error"
-    if (
-        "tool" in message
-        or "tool" in name
-        or any(tool.status == "failed" for tool in assistant_turn.tool_calls)
-    ):
+# Raised by or about the model's API: httpx's stalled or dropped reads carry no message,
+# and pydantic-ai raises its own for an error response or a reply it cannot use.
+_MODEL_API_FAILURES = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    TimeoutError,
+    ModelAPIError,
+    UnexpectedModelBehavior,
+    LlmRateLimited,
+)
+
+
+def _classify_stream_error(exc: Exception) -> str:
+    """What failed, by the exception's type: a step the assistant ran, the model's API,
+    or anything else, which is the platform's own fault."""
+    if isinstance(exc, ToolFailed):
         return "tool_error"
-    if "openai" in message or "api" in name or "rate limit" in message or "timeout" in message:
+    if isinstance(exc, _MODEL_API_FAILURES):
         return "provider_error"
     return "internal_error"
 
@@ -774,15 +781,17 @@ def _completed_turn(assistant_turn: ChatTurn, done: dict, settles: str | None) -
     )
 
 
-def _failure_event(exc: Exception, assistant_turn: ChatTurn, step_ran: bool) -> str:
+def _failure_event(exc: Exception, step_ran: bool) -> str:
     """What the client is told when a reply fails. Once an approved step has run, the
     user hears that it did, whatever broke afterwards."""
     if isinstance(exc, AssistantUnavailable) and not step_ran:
         return _stream_event("error", error_type="assistant_unavailable", message=str(exc))
+    if step_ran:
+        return _stream_event(
+            "error", error_type="step_ran_reply_failed", message=REPLY_FAILED_AFTER_STEP
+        )
     return _stream_event(
-        "error",
-        error_type=_classify_stream_error(exc, assistant_turn),
-        message=REPLY_FAILED_AFTER_STEP if step_ran else "Chat response failed",
+        "error", error_type=_classify_stream_error(exc), message="Chat response failed"
     )
 
 
@@ -896,7 +905,7 @@ async def _relay_turn(
             await _save_session(
                 session_id, pending_provider_state, _replace_turn(pending_transcript, failed), scope
             )
-            terminal_event = _failure_event(exc, assistant_turn, step_ran)
+            terminal_event = _failure_event(exc, step_ran)
         except Exception:
             terminal_event = _stream_event(
                 "error",
