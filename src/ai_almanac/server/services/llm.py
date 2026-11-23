@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_ai import (
     Agent,
     AgentRunResultEvent,
@@ -831,7 +831,8 @@ class LlmRateLimited(RuntimeError):
 @dataclass
 class NameFailedTools(AbstractCapability[ChatDeps]):
     """Raise a tool's exception as ``ToolFailed``, so a failed reply can say a step failed
-    without guessing from the exception's wording."""
+    without guessing from the exception's wording. A ``ValidationError`` passes through
+    as it is: pydantic-ai turns it into a retry, letting the model fix what it sent."""
 
     async def on_tool_execute_error(
         self,
@@ -842,6 +843,8 @@ class NameFailedTools(AbstractCapability[ChatDeps]):
         args: object,
         error: Exception,
     ) -> object:
+        if isinstance(error, ValidationError):
+            raise error
         raise ToolFailed(call.tool_name) from error
 
 
