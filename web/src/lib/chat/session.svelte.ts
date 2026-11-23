@@ -74,7 +74,11 @@ function jobFromToolResult(result: unknown): Job | null {
 
 function chatErrorMessage(event: Extract<ChatEvent, { type: 'error' }>): string {
 	if (event.error_type === 'provider_error') return 'The chat provider failed. Please try again.';
-	if (event.error_type === 'tool_error') return 'A benchmark data lookup failed. Please try again.';
+	if (event.error_type === 'tool_error') {
+		return 'A step the assistant ran failed. Please try again.';
+	}
+	// The approved step ran; the server's message says so, and asking again would repeat it.
+	if (event.error_type === 'step_ran_reply_failed') return event.message;
 	// The locally run model is paused for a forecast or still loading; the
 	// server's message says which.
 	if (event.error_type === 'assistant_unavailable') return event.message;

@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_ai import (
     Agent,
     AgentRunResultEvent,
@@ -33,7 +33,7 @@ from pydantic_ai import (
     ModelMessagesTypeAdapter,
     RunContext,
 )
-from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.capabilities import AbstractCapability, ProcessHistory
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -51,6 +51,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
 from ai_almanac.settings import settings
@@ -815,6 +816,38 @@ def offered_tool_names(ruleset: Ruleset, scope_kind: str) -> list[str]:
     )
 
 
+class ToolFailed(Exception):
+    """A tool the assistant called raised, rather than returning an error for the model."""
+
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(f"The {tool_name} tool failed")
+        self.tool_name = tool_name
+
+
+class LlmRateLimited(RuntimeError):
+    """This user sent more model requests in the last minute than the platform allows."""
+
+
+@dataclass
+class NameFailedTools(AbstractCapability[ChatDeps]):
+    """Raise a tool's exception as ``ToolFailed``, so a failed reply can say a step failed
+    without guessing from the exception's wording. A ``ValidationError`` passes through
+    as it is: pydantic-ai turns it into a retry, letting the model fix what it sent."""
+
+    async def on_tool_execute_error(
+        self,
+        ctx: RunContext[ChatDeps],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: object,
+        error: Exception,
+    ) -> object:
+        if isinstance(error, ValidationError):
+            raise error
+        raise ToolFailed(call.tool_name) from error
+
+
 def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None, *, extra_instructions: str = ""):
     toolsets = _offered_toolsets(ruleset, scope.kind)
     tool_names = {name for toolset in toolsets for name in toolset.tools}
@@ -825,7 +858,7 @@ def _build_agent(scope: ChatScope, ruleset: Ruleset, model=None, *, extra_instru
         deps_type=ChatDeps,
         toolsets=toolsets,
         model_settings=ruleset.model_settings or None,
-        capabilities=[ProcessHistory(trim_chat_history)],
+        capabilities=[ProcessHistory(trim_chat_history), NameFailedTools()],
     )
 
 
@@ -998,7 +1031,7 @@ async def _acquire_llm_slot(user_id: str) -> Semaphore:
         while request_times and now - request_times[0] >= 60:
             request_times.popleft()
         if len(request_times) >= settings.max_llm_requests_per_minute:
-            raise RuntimeError("LLM request rate limit exceeded")
+            raise LlmRateLimited("LLM request rate limit exceeded")
         request_times.append(now)
         semaphore = _llm_semaphores.setdefault(
             user_id, Semaphore(settings.max_concurrent_llm_requests_per_user)
