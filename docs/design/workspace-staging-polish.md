@@ -146,6 +146,26 @@ confirmed.
 6. UI wording: a complete run whose files aren't recorded yet should say
    "Preparing files…", not "No files yet" (`RunDetail.svelte:185`).
 
+**Done (2026-11-23):** items 1–3 and 5.
+- **Retry without a migration:** a published job whose step is still open is
+  "unrecorded" (`ledger.unrecorded_job_ids`).
+  `workspaces.record_published_outputs` retries each one with an in-process
+  backoff (60 s, doubling, capped at 1 h).
+- **Concurrency:** two instances racing on one job collide on the
+  `(user_id, content_hash)` key, and the loser retries later, so no claim
+  column is needed.
+- **Remote files are streamed:** hashed in one pass, then described from the
+  NetCDF header through the same seekable handle.
+- **Separate loop:** publication no longer records inline. Recording runs in
+  its own loop (`_output_recording_loop`).
+
+**Still open:**
+- **Item 4 (day-level outputs):** their step is already complete when they
+  arrive, and the ledger never changes a completed step (P5). That needs a
+  design choice: a second step for the day-level pass, or relaxing P5 for job
+  steps.
+- **Item 6 (UI wording):** not done.
+
 *Alternative considered:* the Modal job writes a manifest (sha256, size,
 summary) next to its outputs, so the server never reads the bytes. This is
 cleaner long-term, but it means redeploying the Modal apps and their pinned

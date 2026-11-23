@@ -403,8 +403,49 @@ def _job_file_location(job_id: str, kind: str, filename: str) -> dict:
 
 
 def _job_file_facts(job_id: str, kind: str, filename: str, file_kind: str) -> _FileFacts | None:
-    with staged(_job_file_location(job_id, kind, filename)) as path:
-        return _facts(path, filename, file_kind) if path is not None else None
+    """A job file's facts, read where the file is kept. A remote file is streamed rather
+    than copied: a server instance's temporary disk is its memory, and a job's files can
+    be larger than that."""
+    location = _job_file_location(job_id, kind, filename)
+    path = local_path(location)
+    if path is not None:
+        return _facts(path, filename, file_kind) if path.is_file() else None
+    return _streamed_facts(location, filename, file_kind)
+
+
+def _streamed_facts(location: dict, filename: str, kind: str) -> _FileFacts | None:
+    handle = open_bytes(location)
+    if handle is None:
+        return None
+    with handle:
+        content_hash, size_bytes = provenance.digest_stream(handle)
+        handle.seek(0)
+        summary = provenance.summarize_stream(handle, filename, size_bytes)
+    return _FileFacts(
+        filename=filename,
+        kind=kind,
+        format=provenance.format_of(filename),
+        content_hash=content_hash,
+        size_bytes=size_bytes,
+        summary=summary,
+    )
+
+
+async def unrecorded_job_ids() -> list[str]:
+    """Published jobs whose step is still waiting for their files, as when attaching
+    them failed or the instance doing it stopped partway."""
+    jobs, steps = tables.jobs, tables.provenance_steps
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(jobs.c.id)
+            .join(steps, steps.c.job_id == jobs.c.id)
+            .where(
+                jobs.c.status == "complete",
+                jobs.c.artifacts_published_at.is_not(None),
+                steps.c.completed_at.is_(None),
+            )
+        )
+        return list(dict.fromkeys(result.scalars()))
 
 
 async def _job(job_id: str) -> dict | None:

@@ -105,11 +105,18 @@ def kind_of(path: Path | str) -> str:
 # --- content hashing ----------------------------------------------------------
 
 
-def hash_stream(handle: BinaryIO) -> str:
+def digest_stream(handle: BinaryIO) -> tuple[str, int]:
+    """sha256 and byte count of everything left in ``handle``, read a chunk at a time."""
     digest = hashlib.sha256()
+    size = 0
     while chunk := handle.read(_CHUNK):
         digest.update(chunk)
-    return digest.hexdigest()
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def hash_stream(handle: BinaryIO) -> str:
+    return digest_stream(handle)[0]
 
 
 def content_hash(path: Path) -> str:
@@ -207,22 +214,31 @@ def strip_history(path: Path) -> bool:
 
 def summarize(path: Path) -> dict:
     """Shape-level description a model can reason about without seeing data."""
-    fmt = format_of(path)
+    return _summary(path, format_of(path), path.stat().st_size)
+
+
+def summarize_stream(handle: BinaryIO, filename: str, size_bytes: int) -> dict:
+    """``summarize`` for bytes read through a seekable handle: a NetCDF is described
+    from its header and coordinates, so only those parts are read."""
+    return _summary(handle, format_of(filename), size_bytes)
+
+
+def _summary(source: Path | BinaryIO, fmt: str, size_bytes: int) -> dict:
     if fmt == "netcdf":
-        return _summarize_netcdf(path)
+        return _summarize_netcdf(source)
     if fmt in ("png", "webp", "jpeg"):
-        return _summarize_image(path)
-    return {"size_bytes": path.stat().st_size}
+        return _summarize_image(source)
+    return {"size_bytes": size_bytes}
 
 
 def _without_history(attrs: dict) -> dict:
     return {key: value for key, value in attrs.items() if key not in _HISTORY_KEYS}
 
 
-def _summarize_netcdf(path: Path) -> dict:
+def _summarize_netcdf(source: Path | BinaryIO) -> dict:
     from ai_almanac.server.services import netcdf
 
-    with netcdf.open_dataset(path, engine="h5netcdf") as ds:
+    with netcdf.open_dataset(source, engine="h5netcdf") as ds:
         coords = {}
         for name, coord in ds.coords.items():
             if coord.ndim != 1 or coord.size == 0:
@@ -249,10 +265,10 @@ def _summarize_netcdf(path: Path) -> dict:
         }
 
 
-def _summarize_image(path: Path) -> dict:
+def _summarize_image(source: Path | BinaryIO) -> dict:
     from PIL import Image
 
-    with Image.open(path) as image:
+    with Image.open(source) as image:
         return {"width": image.width, "height": image.height, "mode": image.mode}
 
 

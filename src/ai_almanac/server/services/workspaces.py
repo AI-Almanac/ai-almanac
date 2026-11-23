@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -25,6 +27,8 @@ from ai_almanac.server import tables
 from ai_almanac.server.db import get_db
 
 from . import job_access, job_history, ledger, provenance, run_summaries, workspace_display
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE_KIND = "workspace"
 NOT_IN_CONVERSATION = "This workspace is not available in this conversation."
@@ -427,6 +431,48 @@ async def on_job_published(job_id: str) -> None:
         workspace_ids = list(workspace_ids)
     for workspace_id in workspace_ids:
         await _add_job_outputs(workspace_id, outputs)
+
+
+# How long a job whose files could not be recorded waits before it is tried again;
+# each further failure doubles the wait, up to the cap.
+RECORDING_RETRY_SECONDS = 60.0
+RECORDING_RETRY_CAP_SECONDS = 3600.0
+
+
+@dataclass(frozen=True)
+class RecordingFailures:
+    count: int
+    last_failed_at: float  # time.monotonic()
+
+
+def recording_due(failures: RecordingFailures | None, now: float) -> bool:
+    if failures is None:
+        return True
+    wait = RECORDING_RETRY_SECONDS * 2 ** (failures.count - 1)
+    return now >= failures.last_failed_at + min(wait, RECORDING_RETRY_CAP_SECONDS)
+
+
+_recording_failures: dict[str, RecordingFailures] = {}
+
+
+async def record_published_outputs() -> None:
+    """Attach each published job's files to its step and show them in its workspaces,
+    trying again later for a job whose files could not be recorded."""
+    pending = await ledger.unrecorded_job_ids()
+    for job_id in _recording_failures.keys() - set(pending):
+        del _recording_failures[job_id]
+    for job_id in pending:
+        failures = _recording_failures.get(job_id)
+        if not recording_due(failures, time.monotonic()):
+            continue
+        try:
+            await on_job_published(job_id)
+        except Exception:
+            count = failures.count + 1 if failures else 1
+            _recording_failures[job_id] = RecordingFailures(count, time.monotonic())
+            logger.exception("Recording the files of job %s failed (attempt %d)", job_id, count)
+        else:
+            _recording_failures.pop(job_id, None)
 
 
 async def release_unreadable_job(job: dict) -> None:

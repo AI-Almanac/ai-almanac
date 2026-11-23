@@ -132,13 +132,18 @@ async def lifespan(app: FastAPI):
     await _seed_assistant_rulesets()
     await _reconcile_jobs()
     await _start_local_llm()
-    reconciler = asyncio.create_task(_job_reconciler_loop())
+    loops = [
+        asyncio.create_task(_job_reconciler_loop()),
+        asyncio.create_task(_output_recording_loop()),
+    ]
     try:
         yield
     finally:
-        reconciler.cancel()
-        with suppress(asyncio.CancelledError):
-            await reconciler
+        for loop in loops:
+            loop.cancel()
+        for loop in loops:
+            with suppress(asyncio.CancelledError):
+                await loop
         await _finish_detached_turns()
         await _suspend_local_llm()
 
@@ -299,6 +304,16 @@ async def _job_reconciler_loop() -> None:
         await asyncio.sleep(5)
         await _reconcile_jobs()
         await _run_background_step("llm_idle_sleep", _local_llm_idle_sleep)
+
+
+async def _output_recording_loop() -> None:
+    """Records finished jobs' files apart from the reconciler: reading a large file
+    must not hold up job status."""
+    from ai_almanac.server.services.workspaces import record_published_outputs
+
+    while True:
+        await asyncio.sleep(5)
+        await _run_background_step("output_recording", record_published_outputs)
 
 
 app = FastAPI(title="ai-almanac", lifespan=lifespan)

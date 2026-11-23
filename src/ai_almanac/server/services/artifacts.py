@@ -38,6 +38,9 @@ async def index_job_artifacts(job_id: str, claim: str = "artifacts_published_at"
     """Index a job's outputs into job_artifacts and mark the `claim` pass done.
 
     Atomic: artifact rows and the publication marker commit in one transaction.
+    The ledger and workspaces pick the files up afterwards
+    (``workspaces.record_published_outputs``), so a slow or failed recording never
+    holds publication back.
     Rows for files an earlier pass indexed are left as they are. Returns the
     number of artifacts listed (0 if another instance already claimed the pass).
     """
@@ -77,23 +80,7 @@ async def index_job_artifacts(job_id: str, claim: str = "artifacts_published_at"
                     "created_at": artifact.created_at,
                 },
             )
-    if claim == "artifacts_published_at":
-        await _record_in_workspaces(job_id)
     return len(artifacts)
-
-
-async def _record_in_workspaces(job_id: str) -> None:
-    """Hand the published job to the ledger and its workspaces.
-
-    Publication has already committed, so a ledger failure is logged rather than
-    reported as a failed publication.
-    """
-    from ai_almanac.server.services.workspaces import on_job_published
-
-    try:
-        await on_job_published(job_id)
-    except Exception as exc:  # noqa: BLE001 — published outputs stand regardless
-        logger.warning("recording job %s in the ledger failed: %s", job_id, exc)
 
 
 async def publish_pending() -> None:
