@@ -3,6 +3,8 @@ the event stream reports what changed, and runs can be added by hand."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ai_almanac.server.services import (
@@ -10,6 +12,7 @@ from ai_almanac.server.services import (
     workspaces,
 )
 from tests.helpers.records import BENCHMARK_CONFIG, insert_job
+from tests.helpers.sse import sse_events
 from tests.helpers.workspaces import (
     job_step_in_record,
     workspace_with_session,
@@ -108,6 +111,35 @@ async def test_workspace_events_send_jobs_then_only_unseen_artifacts(
         a["id"] for event in resumed if event["type"] == "artifacts" for a in event["artifacts"]
     }
     assert resent == {a["id"] for a in artifacts["artifacts"] if a["created_at"] == newest}
+
+
+@pytest.mark.asyncio
+async def test_workspace_events_carry_a_forecasts_issue_dates(
+    client, as_new_user, user_id, monkeypatch
+) -> None:
+    from ai_almanac.server.routers import workspaces as workspaces_router
+    from ai_almanac.server.services.storage import get_storage
+
+    monkeypatch.setattr(workspaces_router, "EVENTS_LIFETIME_SECONDS", 0.0)
+    workspace, _ = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+    blend_id = insert_job(user_id, {"blend_name": "Kiremt blend"}, job_type="blend")
+    forecast_id = insert_job(user_id, {"blend_id": blend_id}, job_type="forecast")
+    output, _ = get_storage().job_output_uri(forecast_id)
+    (Path(output) / "blended_forecast_probabilities.csv").write_text(
+        "id,time,cv_week1,cv_week2,cv_week3,cv_week4,cv_later,lat,lon\n"
+        "a,2026-05-04,0.1,0.1,0.1,0.1,0.6,9.0,38.0\n"
+        "a,2026-07-01,0.6,0.2,0.1,0.05,0.05,9.0,38.0\n"
+    )
+    await workspaces.link_job(wid, forecast_id)
+
+    async with client.stream("GET", f"/workspaces/{wid}/events", headers=as_new_user) as response:
+        body = "".join([chunk async for chunk in response.aiter_text()])
+
+    [jobs] = [event for event in sse_events(body) if event["type"] == "jobs"]
+    [forecast] = jobs["jobs"]
+    assert forecast["headline"]["first_issue_date"] == "2026-05-04"
+    assert forecast["headline"]["last_issue_date"] == "2026-07-01"
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,7 @@ import json
 import shutil
 import tempfile
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -375,28 +375,31 @@ EVENTS_POLL_SECONDS = 3.0
 EVENTS_LIFETIME_SECONDS = 240.0
 
 
-def _sse(event_type: str, **payload: object) -> str:
-    return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
+def _sse(event_type: str, **payload: Sequence[BaseModel]) -> str:
+    """One event: each payload list as the same JSON the REST routes send, dates as strings."""
+    body = {
+        key: [model.model_dump(mode="json") for model in models] for key, models in payload.items()
+    }
+    return f"data: {json.dumps({'type': event_type, **body})}\n\n"
 
 
 async def _jobs_event(workspace_id: str) -> str:
-    jobs = await _job_outs(workspace_id)
-    return _sse("jobs", jobs=[job.model_dump() for job in jobs])
+    return _sse("jobs", jobs=await _job_outs(workspace_id))
 
 
 async def _artifacts_event(workspace_id: str, ids: set[str]) -> str:
     items = await workspaces.listing(workspace_id, only=ids)
-    return _sse("artifacts", artifacts=[ArtifactOut(**item).model_dump() for item in items])
+    return _sse("artifacts", artifacts=[ArtifactOut(**item) for item in items])
 
 
 async def _analyses_event(workspace_id: str) -> str:
     rows = await workspaces.list_analyses(workspace_id)
-    return _sse("analyses", analyses=[AnalysisOut(**row).model_dump() for row in rows])
+    return _sse("analyses", analyses=[AnalysisOut(**row) for row in rows])
 
 
 async def _follow_ups_event(workspace_id: str) -> str:
     items = await follow_ups.list_for_workspace(workspace_id)
-    return _sse("follow_ups", follow_ups=[FollowUpOut(**item).model_dump() for item in items])
+    return _sse("follow_ups", follow_ups=[FollowUpOut(**item) for item in items])
 
 
 async def _activity_events(
