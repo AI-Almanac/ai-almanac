@@ -5,6 +5,7 @@
 	import {
 		getCapabilities,
 		listAddableJobs,
+		startBlankWorkspace,
 		type ChatMessage,
 		type RunOrigin,
 		type WorkspaceArtifact
@@ -19,7 +20,9 @@
 	import ProductsStrip from '$lib/components/workspace/ProductsStrip.svelte';
 	import WorkspacePanel from '$lib/components/workspace/WorkspacePanel.svelte';
 	import WorkspaceCanvas from '$lib/components/workspace/WorkspaceCanvas.svelte';
+	import WorkspaceSetup from '$lib/components/workspace/WorkspaceSetup.svelte';
 	import WorkspaceStart from '$lib/components/workspace/WorkspaceStart.svelte';
+	import WorkspaceSwitcher from '$lib/components/workspace/WorkspaceSwitcher.svelte';
 	import WorkspaceSummaryStrip from '$lib/components/workspace/WorkspaceSummaryStrip.svelte';
 	import ZoneToggle from '$lib/components/workspace/ZoneToggle.svelte';
 	import {
@@ -49,6 +52,7 @@
 		type Product,
 		type ProductKind
 	} from '$lib/workspace/products';
+	import { rememberOpenedWorkspace } from '$lib/workspace/last-opened';
 	import { jobStatusMap, type Run } from '$lib/workspace/runs';
 	import { seasonLabel } from '$lib/workspace/season-form';
 	import { checkArrivals, fileView, jobsView, targetView } from '$lib/workspace/stage-follow';
@@ -128,6 +132,20 @@
 		untrack(() => void current.open(updates.signal));
 		return () => updates.abort();
 	});
+
+	// Remembered under the user it belongs to, so it waits for the account to load.
+	$effect(() => {
+		if (account.loaded) rememberOpenedWorkspace(localStorage, account.account?.id ?? null, id);
+	});
+
+	async function openBlankWorkspace() {
+		const blank = await startBlankWorkspace();
+		await goto(`/workspace/${blank.id}`);
+	}
+
+	async function seasonInForce() {
+		return { season: await session.seasonInForce(), year: session.yearInForce() };
+	}
 
 	function forgetLastWorkspace() {
 		view = parseCanvasView($page.url.searchParams);
@@ -283,8 +301,11 @@
 		{:else}
 			<header class="ws-header">
 				<div class="ws-title">
-					<a class="muted" href="/workspaces">← Workspaces</a>
-					<h1>{workspace.name}</h1>
+					<WorkspaceSwitcher
+						{workspace}
+						onDescribe={(change) => session.describe(change)}
+						onStartBlank={openBlankWorkspace}
+					/>
 					{#if workspace.settings.season && !summary}
 						<span class="muted ws-season">{seasonLabel(workspace.settings.season)}</span>
 					{/if}
@@ -298,10 +319,7 @@
 					<WorkspaceSummaryStrip
 						{summary}
 						seasonEditor={{
-							load: async () => ({
-								season: await session.seasonInForce(),
-								year: session.yearInForce()
-							}),
+							load: seasonInForce,
 							save: (change) => session.saveSettings(change)
 						}}
 						areaEditor={{
@@ -371,7 +389,19 @@
 								onNew={(panel) => openPanel({ panel })}
 								assistantAvailable={chatAvailable}
 								onOpenAssistant={() => toggleAssistant(true)}
-							/>
+							>
+								{#snippet setup()}
+									<WorkspaceSetup
+										untitled={workspace.untitled}
+										onName={(name) => session.describe({ name })}
+										area={workspace.settings.study_area ?? null}
+										saveArea={(study_area) => session.saveSettings({ study_area })}
+										{summary}
+										loadSeason={seasonInForce}
+										saveSeason={(change) => session.saveSettings(change)}
+									/>
+								{/snippet}
+							</WorkspaceStart>
 						{:else}
 							{#if shown.kind === 'file' && stageAnalysis && stageAnalysis.files.length > 1}
 								<AnalysisFiles
@@ -508,13 +538,6 @@
 		flex: 0 1 auto;
 		min-width: 0;
 	}
-	.ws-title h1 {
-		margin: 0;
-		font-family: var(--font-display);
-		font-size: var(--text-size-title);
-		white-space: nowrap;
-	}
-	.ws-title a,
 	.ws-season {
 		flex-shrink: 0;
 		white-space: nowrap;

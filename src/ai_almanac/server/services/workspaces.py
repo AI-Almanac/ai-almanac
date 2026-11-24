@@ -38,6 +38,8 @@ from . import (
 logger = logging.getLogger(__name__)
 
 WORKSPACE_KIND = "workspace"
+# What a workspace is called until its owner names it.
+UNTITLED_NAME = "Untitled workspace"
 NOT_IN_CONVERSATION = "This workspace is not available in this conversation."
 
 # The most runs offered for adding to a workspace at once, newest first.
@@ -101,6 +103,74 @@ async def create_workspace(
     async with get_db() as conn:
         await conn.execute(tables.workspaces.insert().values(**row))
     return row
+
+
+async def blank_workspace(user_id: str) -> dict:
+    """A workspace to start afresh in: the user's untouched untitled one when they have
+    one, so starting over and walking away does not leave a trail of empty workspaces."""
+    for candidate in await _untouched_untitled(user_id):
+        if not await _holds_anything(candidate["id"]):
+            return candidate
+    return await create_workspace(user_id, UNTITLED_NAME)
+
+
+async def _untouched_untitled(user_id: str) -> list[dict]:
+    """The user's workspaces still as a blank one is made: untitled, undescribed, unset."""
+    ws = tables.workspaces
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(ws)
+            .where(
+                ws.c.user_id == user_id,
+                ws.c.name == UNTITLED_NAME,
+                ws.c.description == "",
+                ws.c.settings_json.is_(None),
+            )
+            .order_by(ws.c.updated_at.desc())
+        )
+        return _rows(result)
+
+
+async def _holds_anything(workspace_id: str) -> bool:
+    """Whether the workspace has a run, a file, or a word said in its conversation."""
+    items = tables.workspace_items
+    async with get_db() as conn:
+        item = await conn.execute(
+            sa.select(items.c.workspace_id).where(items.c.workspace_id == workspace_id).limit(1)
+        )
+        if item.first() is not None:
+            return True
+        transcripts = await conn.execute(
+            sa.text(
+                "SELECT transcript FROM chat_sessions"
+                " WHERE scope->>'kind' = :kind AND scope->>'key' = :key"
+            ),
+            {"kind": WORKSPACE_KIND, "key": workspace_id},
+        )
+        return any(tables.json_col(row[0], []) for row in transcripts.fetchall())
+
+
+async def describe_workspace(
+    workspace_id: str, name: str | None = None, description: str | None = None
+) -> dict:
+    """Renames the workspace or rewrites its description; a field left out keeps its value."""
+    changes: dict[str, str] = {}
+    if name is not None:
+        if not name.strip():
+            raise WorkspaceError("Workspace name is required")
+        changes["name"] = name.strip()[:120]
+    if description is not None:
+        changes["description"] = description.strip()[:2000]
+    async with get_db() as conn:
+        await conn.execute(
+            tables.workspaces.update()
+            .where(tables.workspaces.c.id == workspace_id)
+            .values(**changes, updated_at=_now())
+        )
+        result = await conn.execute(
+            sa.select(tables.workspaces).where(tables.workspaces.c.id == workspace_id)
+        )
+        return _rows(result)[0]
 
 
 async def list_workspaces(user_id: str) -> list[dict]:

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { startingPoints, type NewRunEntry } from '$lib/workspace/new-run-menu';
 	import type { PanelName } from '$lib/workspace/panels';
 
@@ -8,41 +9,51 @@
 		onNew: (panel: PanelName) => void;
 		assistantAvailable: boolean;
 		onOpenAssistant?: () => void;
+		/** What to settle about the workspace first, above the starting points. */
+		setup?: Snippet;
 	}
 
-	let { entries, onNew, assistantAvailable, onOpenAssistant }: Props = $props();
+	let { entries, onNew, assistantAvailable, onOpenAssistant, setup }: Props = $props();
 
 	const points = $derived(startingPoints(entries));
 </script>
 
-<section class="start" aria-labelledby="workspace-start-heading">
-	<h2 id="workspace-start-heading">Starting points</h2>
-	<p class="lead">
-		This workspace has no products yet. Benchmarks, blends, forecasts and analyses show up here as
-		they are made.
-	</p>
-	<ul class="points">
-		{#each points as entry (entry.key)}
-			<li>
-				<button type="button" class="point" onclick={() => onNew(entry.panel)}>
-					<span>{entry.startLabel}</span>
-				</button>
-			</li>
-		{/each}
-	</ul>
-	{#if assistantAvailable && onOpenAssistant}
-		<p class="hint">
-			Or <button type="button" class="link" onclick={onOpenAssistant}>ask the assistant</button> to set
-			one up or answer a question.
+<div class="start">
+	{@render setup?.()}
+	<section class="points-section" aria-labelledby="workspace-start-heading">
+		<h2 id="workspace-start-heading">Starting points</h2>
+		<p class="lead">
+			This workspace has no products yet. Benchmarks, blends, forecasts and analyses show up here as
+			they are made.
 		</p>
-	{/if}
-</section>
+		<ul class="points">
+			{#each points as entry (entry.key)}
+				<li>
+					<button type="button" class="point" onclick={() => onNew(entry.panel)}>
+						<span>{entry.startLabel}</span>
+					</button>
+				</li>
+			{/each}
+		</ul>
+		{#if assistantAvailable && onOpenAssistant}
+			<p class="hint">
+				Or <button type="button" class="link" onclick={onOpenAssistant}>ask the assistant</button> to
+				set one up or answer a question.
+			</p>
+		{/if}
+	</section>
+</div>
 
 <style>
-	.start {
+	.points-section {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-3);
+	}
+	.start {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-5);
 		width: min(100%, 36rem);
 		margin: 0 auto;
 		padding: var(--space-5) var(--space-4);

@@ -2048,6 +2048,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/blank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Blank Workspace
+         * @description A workspace with nothing in it yet, made only when the user has no untouched one.
+         */
+        post: operations["start_blank_workspace_workspaces_blank_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/promote": {
         parameters: {
             query?: never;
@@ -2059,27 +2079,6 @@ export interface paths {
         put?: never;
         /** Promote Session */
         post: operations["promote_session_workspaces_promote_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/workspaces/default-season": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Default Season
-         * @description The season a new workspace works in unless it sets its own: the one usual in
-         *     ``country`` (a three-letter code), else the platform's fallback season.
-         */
-        get: operations["get_default_season_workspaces_default_season_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2100,7 +2099,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Describe Workspace */
+        patch: operations["describe_workspace_workspaces__workspace_id__patch"];
         trace?: never;
     };
     "/workspaces/{workspace_id}/summary": {
@@ -5953,6 +5953,16 @@ export interface components {
             /** Bins */
             bins: components["schemas"]["SkillBin"][];
         };
+        /**
+         * WorkspaceDescriptionIn
+         * @description A new name or description for a workspace; a field left out keeps its value.
+         */
+        WorkspaceDescriptionIn: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+        };
         /** WorkspaceDetail */
         WorkspaceDetail: {
             /** Id */
@@ -5965,6 +5975,8 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
+            /** Untitled */
+            untitled: boolean;
             settings: components["schemas"]["WorkspaceSettings"];
             /** Jobs */
             jobs: components["schemas"]["WorkspaceJobOut"][];
@@ -6036,6 +6048,8 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
+            /** Untitled */
+            untitled: boolean;
         };
         /**
          * WorkspaceSettings
@@ -10468,6 +10482,26 @@ export interface operations {
             };
         };
     };
+    start_blank_workspace_workspaces_blank_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+        };
+    };
     promote_session_workspaces_promote_post: {
         parameters: {
             query?: never;
@@ -10501,37 +10535,6 @@ export interface operations {
             };
         };
     };
-    get_default_season_workspaces_default_season_get: {
-        parameters: {
-            query?: {
-                country?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeasonWindow"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_workspace_workspaces__workspace_id__get: {
         parameters: {
             query?: never;
@@ -10550,6 +10553,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_workspace_workspaces__workspace_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceDescriptionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOut"];
                 };
             };
             /** @description Validation Error */
