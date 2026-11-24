@@ -898,39 +898,37 @@ def _patch_romp_config(config_path: str, env: dict) -> None:
             f.write(line + "\n")
 
 
-def _run_subprocess(cmd: list[str], env: dict, capture_output: bool) -> subprocess.CompletedProcess:
-    result = subprocess.run(cmd, env=env, capture_output=capture_output, text=capture_output)
-    if capture_output:
-        if result.stdout:
-            print(result.stdout, end="")
-        if result.stderr:
-            print(result.stderr, end="")
-    return result
+def _run_subprocess(cmd: list[str], env: dict) -> int:
+    """Run `cmd`, echoing its stdout and stderr line by line through sys.stdout, and
+    return its exit code. A child writes to the process's file descriptors, past any
+    Python-level redirect, so without the echo its errors never reach the run log."""
+    with subprocess.Popen(
+        cmd,
+        env={**env, "PYTHONUNBUFFERED": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    ) as proc:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+    return proc.returncode
 
 
-def _run_romp_entry(env: dict, local_out: Path, capture_output: bool) -> None:
+def _run_romp_entry(env: dict, local_out: Path) -> None:
     config_path = env.get("ROMP_CONFIG_PATH", "/tmp/romp_job.in")
 
     print("==> Generating config from environment...")
-    gen = _run_subprocess(
-        ["python3", "/app/scripts/generate_config.py"],
-        env=env,
-        capture_output=capture_output,
-    )
-    if gen.returncode != 0:
-        raise RuntimeError(f"Config generation failed with code {gen.returncode}")
+    gen_code = _run_subprocess(["python3", "/app/scripts/generate_config.py"], env=env)
+    if gen_code != 0:
+        raise RuntimeError(f"Config generation failed with code {gen_code}")
 
     _patch_romp_config(config_path, env)
 
     print("==> Starting ROMP...")
-    result = _run_subprocess(
-        ["momp-run", "-p", config_path],
-        env=env,
-        capture_output=capture_output,
-    )
-    if result.returncode not in (0, -11, 139):
-        raise RuntimeError(f"ROMP exited with code {result.returncode}")
-    if result.returncode in (-11, 139) and not any(local_out.iterdir()):
+    romp_code = _run_subprocess(["momp-run", "-p", config_path], env=env)
+    if romp_code not in (0, -11, 139):
+        raise RuntimeError(f"ROMP exited with code {romp_code}")
+    if romp_code in (-11, 139) and not any(local_out.iterdir()):
         raise RuntimeError("ROMP segfaulted with no output")
 
 
@@ -949,27 +947,18 @@ def _run_staged_benchmark(
     local_model: Path,
     local_out: Path,
     local_fig: Path,
-    capture_output: bool = False,
 ) -> None:
     config = _with_focus_mask(config, local_obs, local_out.parent)
     env = _romp_env(config, local_obs, local_model, local_out, local_fig)
     print(f"==> Running benchmark for {job_id}")
     print(f"    obs files: {sum(1 for _ in local_obs.iterdir())}")
     print(f"    model files: {sum(1 for _ in local_model.iterdir())}")
-    _run_romp_entry(
-        env,
-        local_out,
-        capture_output,
-    )
+    _run_romp_entry(env, local_out)
     if config.get("compute_e2s_metrics"):
         try:
-            result = _run_subprocess(
-                ["python3", "/almanac/e2s_metrics_runner.py"],
-                env=env,
-                capture_output=capture_output,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"Earth2Studio metrics exited with code {result.returncode}")
+            metrics_code = _run_subprocess(["python3", "/almanac/e2s_metrics_runner.py"], env=env)
+            if metrics_code != 0:
+                raise RuntimeError(f"Earth2Studio metrics exited with code {metrics_code}")
         except Exception as exc:
             print(
                 "WARNING: Earth2Studio metrics failed; "
@@ -1185,15 +1174,7 @@ def run_benchmark_local(
             if _uses_remote_obs(dataset_config):
                 _fetch_remote_obs(dataset_config, romp_params, local_obs)
 
-            _run_staged_benchmark(
-                job_id,
-                config,
-                local_obs,
-                local_model,
-                local_out,
-                local_fig,
-                capture_output=True,
-            )
+            _run_staged_benchmark(job_id, config, local_obs, local_model, local_out, local_fig)
             files = _capture_output_files(local_out, local_fig)
 
             print("==> Done.")
