@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import type { ChatSession, RulesetOption } from '$lib/api';
 	import { account } from '$lib/account.svelte';
+	import { copyText } from '$lib/clipboard';
 	import type { ChatSessionState } from '$lib/chat/session.svelte';
 	import { sessionLabel } from '$lib/chat/format';
 
@@ -113,7 +114,7 @@
 		const text = chat.messages
 			.map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`)
 			.join('\n\n');
-		await navigator.clipboard.writeText(text);
+		await copyText(text);
 		copyState = 'copied';
 		setTimeout(() => (copyState = 'idle'), 1500);
 	}

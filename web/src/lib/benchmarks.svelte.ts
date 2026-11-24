@@ -1,4 +1,5 @@
 import { untrack } from 'svelte';
+import { randomId } from '$lib/random-id';
 import {
 	getJobs,
 	getJob,
@@ -298,7 +299,7 @@ export class BenchmarkStore {
 	}
 
 	async submitRuns(data: MultiRunFormData): Promise<{ runId: string; jobs: Job[] }> {
-		const runId = crypto.randomUUID();
+		const runId = randomId();
 		const results = await Promise.all(
 			data.modelNames.map((modelName) =>
 				submitJob({

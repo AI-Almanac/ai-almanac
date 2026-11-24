@@ -26,6 +26,7 @@ import {
 	type Job
 } from '$lib/api';
 import { emptyAssistantTurn, foldTurnEvent, startsTurn } from '$lib/chat/turn';
+import { randomId } from '$lib/random-id';
 
 export interface ChatSessionCallbacks {
 	onSessionReady?: (sessionId: string) => void;
@@ -413,7 +414,7 @@ export class ChatSessionState {
 		this.messages = [
 			...this.messages,
 			{
-				id: crypto.randomUUID(),
+				id: randomId(),
 				role: 'user',
 				content: text,
 				created_at: new Date().toISOString(),

@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { ParsedFigure } from '$lib/result-parser';
+import { copyText } from '$lib/clipboard';
 import type { ChatArtifact, ChatMessage, ChatSession, ChatToolCall } from '$lib/api';
 
 export function renderMarkdown(text: string): string {
@@ -68,7 +69,7 @@ export function codeForToolCall(toolCall: ChatToolCall): string | null {
 }
 
 export async function copyCode(code: string) {
-	await navigator.clipboard.writeText(code);
+	await copyText(code);
 }
 
 export function sessionLabel(s: ChatSession): string {

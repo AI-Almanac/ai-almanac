@@ -1,3 +1,5 @@
+import { randomId } from '$lib/random-id';
+
 /**
  * The scope key for a page's conversation, kept for the browser tab.
  *
@@ -15,11 +17,11 @@ export function tabConversationKey(page: string, { fresh = false } = {}): string
 	try {
 		const saved = fresh ? null : sessionStorage.getItem(storageKey);
 		if (saved) return saved;
-		const key = crypto.randomUUID();
+		const key = randomId();
 		sessionStorage.setItem(storageKey, key);
 		return key;
 	} catch {
 		// Storage can be unavailable (private modes, server rendering).
-		return crypto.randomUUID();
+		return randomId();
 	}
 }
