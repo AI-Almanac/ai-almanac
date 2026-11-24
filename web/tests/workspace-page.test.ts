@@ -423,6 +423,34 @@ describe('workspace page', () => {
 		expect(api.unhideWorkspaceAnalysis).toHaveBeenCalledWith('ws-1', 'turn-abcdef12');
 		expect(await within(productsList()).findByText(analysisName)).toBeTruthy();
 		expect(within(productsList()).queryByText(/Hidden analyses/)).toBeNull();
+		expect(within(productsList()).getByRole('button', { current: true }).textContent).not.toContain(
+			analysisName
+		);
+	});
+
+	it('names a script from a hidden analysis by what it made, opened from an old link', async () => {
+		const script = {
+			...workspace.artifacts[1],
+			id: 'art-4',
+			label: 'code_ab12cd34',
+			title: 'Script',
+			kind: 'document',
+			format: 'python',
+			run_job_ids: [],
+			supporting: true
+		} as WorkspaceArtifact;
+		api.getWorkspace.mockResolvedValue({
+			...workspace,
+			artifacts: [...workspace.artifacts, script],
+			hidden_analyses: ['turn-abcdef12']
+		});
+		nav.url = 'http://localhost/workspace/ws-1?artifact=art-4';
+		render(WorkspacePage);
+
+		expect(
+			await screen.findByRole('heading', { name: 'Script 1 · made False alarm rate map' })
+		).toBeTruthy();
+		expect(screen.getByRole('navigation', { name: 'Files in this analysis' })).toBeTruthy();
 	});
 
 	it('moves the stage to a product that arrives while nothing has been opened', async () => {

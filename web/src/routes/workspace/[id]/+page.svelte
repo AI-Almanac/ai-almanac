@@ -99,7 +99,9 @@
 	);
 	const shown = $derived(stageView(view, followed, results, products));
 	const shownKey = $derived(shownProductKey(shown, results));
-	const stageAnalysis = $derived(analysisOnStage(shown, results));
+	// A file from a hidden analysis can still be opened, e.g. from an old link in the chat.
+	const allAnalyses = $derived([...results.analyses, ...session.hiddenAnalyses]);
+	const stageAnalysis = $derived(analysisOnStage(shown, { ...results, analyses: allAnalyses }));
 	const jobStatuses = $derived(jobStatusMap(workspace?.jobs ?? []));
 	const fileTitles = $derived(
 		Object.fromEntries((workspace?.artifacts ?? []).map((file) => [file.id, file.title]))
@@ -147,7 +149,7 @@
 	let knownProducts: Set<string> | null = null;
 	$effect(() => {
 		if (!workspace) return;
-		const check = checkArrivals(knownProducts, products);
+		const check = checkArrivals(knownProducts, products, hiddenProducts);
 		knownProducts = check.known;
 		if (check.arrived && untrack(() => view.kind === 'overview')) followed = check.arrived;
 	});
@@ -381,6 +383,7 @@
 							<WorkspaceCanvas
 								{workspace}
 								{results}
+								hiddenAnalyses={session.hiddenAnalyses}
 								view={shown}
 								onNavigate={navigate}
 								onOpenTurn={chatAvailable ? focusTurn : undefined}

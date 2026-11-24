@@ -24,6 +24,7 @@
 		type Run,
 		type WorkspaceResults
 	} from '$lib/workspace/runs';
+	import type { Analysis } from '$lib/workspace/analyses';
 	import { analysisFileName } from '$lib/workspace/supporting';
 	import ArtifactDetail from './ArtifactDetail.svelte';
 	import RunDetail from './RunDetail.svelte';
@@ -33,6 +34,8 @@
 		workspace: WorkspaceDetail;
 		/** The workspace's runs and analyses, grouped once by the page. */
 		results: WorkspaceResults;
+		/** Analyses hidden from the list, whose files can still be opened, e.g. from the chat. */
+		hiddenAnalyses?: Analysis[];
 		view: CanvasView;
 		onNavigate: (view: CanvasView) => void;
 		onOpenTurn?: (turnId: string) => void;
@@ -41,8 +44,16 @@
 		forecastUpdate?: { jobId: string; request: () => void };
 	}
 
-	let { workspace, results, view, onNavigate, onOpenTurn, onRenameFile, forecastUpdate }: Props =
-		$props();
+	let {
+		workspace,
+		results,
+		hiddenAnalyses = [],
+		view,
+		onNavigate,
+		onOpenTurn,
+		onRenameFile,
+		forecastUpdate
+	}: Props = $props();
 
 	/** A product the stage can show, keyed so that going back to it finds the same view. */
 	type StageTarget =
@@ -106,7 +117,9 @@
 
 	/** A file named among the others its analysis made, so a script says what it made. */
 	function nameInAnalysis(file: WorkspaceArtifact): string {
-		const analysis = results.analyses.find((entry) => entry.files.some((f) => f.id === file.id));
+		const analysis = [...results.analyses, ...hiddenAnalyses].find((entry) =>
+			entry.files.some((f) => f.id === file.id)
+		);
 		return analysisFileName(file, analysis?.files ?? [file]);
 	}
 
