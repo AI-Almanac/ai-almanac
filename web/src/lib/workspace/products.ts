@@ -13,6 +13,7 @@ import {
 	type RunKind,
 	type WorkspaceResults
 } from './runs';
+import type { ListName } from './run-names';
 import { foldSupporting } from './supporting';
 
 export type ProductKind = RunKind | 'analysis';
@@ -25,7 +26,12 @@ type ProductBase = {
 	label: string;
 	createdAt: string;
 };
-export type RunProduct = ProductBase & { kind: RunKind; run: Run };
+export type RunProduct = ProductBase & {
+	kind: RunKind;
+	run: Run;
+	/** What the run shares with its siblings, beneath the label that sets it apart. */
+	context: string | null;
+};
 export type AnalysisProduct = ProductBase & {
 	kind: 'analysis';
 	analysis: Analysis;
@@ -42,12 +48,13 @@ function runCreatedAt(run: Run): string {
 	return run.jobs.reduce((latest, job) => (job.created_at > latest ? job.created_at : latest), '');
 }
 
-function runProduct(run: Run, kind: RunKind, label: string): RunProduct {
+function runProduct(run: Run, kind: RunKind, { lead, context }: ListName): RunProduct {
 	return {
 		kind,
 		key: runProductKey(run.key),
 		name: runTitle(run),
-		label,
+		label: lead,
+		context,
 		createdAt: runCreatedAt(run),
 		run
 	};
@@ -65,21 +72,27 @@ function analysisProduct(analysis: Analysis, heading: AnalysisHeading): Analysis
 	};
 }
 
+export function analysisProducts(
+	analyses: Analysis[],
+	headingOf: (analysis: Analysis) => AnalysisHeading
+): AnalysisProduct[] {
+	return analyses.map((analysis) => analysisProduct(analysis, headingOf(analysis)));
+}
+
 /** Benchmarks, blends, forecasts, then analyses; kinds with nothing in them are left out. */
 export function productGroups(
 	results: WorkspaceResults,
 	headingOf: (analysis: Analysis) => AnalysisHeading
 ): ProductGroup[] {
-	const labels = runListLabels(results.runs);
-	const labelOf = (run: Run) => labels[results.runs.indexOf(run)];
-	const runGroups: ProductGroup[] = runsByKind(results.runs).map((section) => ({
-		kind: section.kind,
-		title: section.title,
-		products: section.runs.map((run) => runProduct(run, section.kind, labelOf(run)))
-	}));
-	const analyses = results.analyses.map((analysis) =>
-		analysisProduct(analysis, headingOf(analysis))
-	);
+	const runGroups: ProductGroup[] = runsByKind(results.runs).map((section) => {
+		const labels = runListLabels(section.runs);
+		return {
+			kind: section.kind,
+			title: section.title,
+			products: section.runs.map((run, index) => runProduct(run, section.kind, labels[index]))
+		};
+	});
+	const analyses = analysisProducts(results.analyses, headingOf);
 	if (analyses.length === 0) return runGroups;
 	return [...runGroups, { kind: 'analysis', title: 'Analyses', products: analyses }];
 }

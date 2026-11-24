@@ -15,6 +15,7 @@ import {
 	metricsWindow,
 	runView
 } from '../src/lib/workspace/runs';
+import { runTime } from '../src/lib/run-status';
 import { workspaceArtifact, workspaceJob } from './fixtures/workspace';
 
 /** A job with no model or summary, so each test names only what it reads. */
@@ -157,12 +158,12 @@ describe('naming a run by what sets it apart', () => {
 		lead_days: { start: 1, end: 30 }
 	};
 	const AMHARA = ['North Gondar', 'South Gondar', 'North Wollo', 'South Wollo', 'Wag Hemra'];
-	const change = (label: string, value: number | boolean | null, unit: string | null = null) => ({
-		label,
-		short_label: label,
-		value,
-		unit
-	});
+	const change = (
+		label: string,
+		value: number | boolean | null,
+		unit: string | null = null,
+		byDefault: number | boolean | null = null
+	) => ({ label, short_label: label, value, unit, default: byDefault });
 	const onset = (
 		overrides: Partial<NonNullable<WorkspaceJob['onset_definition']>> = {}
 	): WorkspaceJob['onset_definition'] => ({
@@ -177,30 +178,38 @@ describe('naming a run by what sets it apart', () => {
 		job({ id: `${id}-aifs`, run_id: id, model_name: 'aifs', scope: SCOPE, ...overrides })
 	];
 	const runsOf = (...jobs: WorkspaceJob[][]) => groupByRun(jobs.flat(), []).runs;
-	const labelsOf = (...jobs: WorkspaceJob[][]) => runListLabels(runsOf(...jobs));
+	const leadsOf = (runs: ReturnType<typeof runsOf>) => runListLabels(runs).map((name) => name.lead);
+	const namesByRun = (...jobs: WorkspaceJob[][]) => {
+		const runs = runsOf(...jobs);
+		const names = runListLabels(runs);
+		return (key: string) => names[runs.findIndex((run) => run.key === key)];
+	};
+	const DEFAULT_ONSET = onset({ is_default: true });
+	const threshold = (value: number) =>
+		onset({ changes: [change('Onset threshold', value, 'mm', 20)] });
 
 	it('titles a whole-region run with the default onset definition by region, years and models', () => {
 		const [run] = runsOf(benchmark('r', { onset_definition: onset({ is_default: true }) }));
 
-		expect(runTitle(run)).toBe('Ethiopia · 1998–2024 · FuXi, AIFS · days 1–30');
-		expect(runListLabels([run])).toEqual(['Ethiopia · 1998–2024 · FuXi, AIFS']);
+		expect(runTitle(run)).toBe('Ethiopia · 1998–2024 · AIFS, FuXi · days 1–30');
+		expect(leadsOf([run])).toEqual(['Ethiopia · 1998–2024 · AIFS, FuXi']);
 	});
 
 	it('leads with the area of interest in place of the region', () => {
 		const [run] = runsOf(benchmark('r', { area_of_interest: AMHARA }));
 
 		expect(runTitle(run)).toBe(
-			'5 areas: North Gondar, South Gondar, North Wollo, … · 1998–2024 · FuXi, AIFS · days 1–30'
+			'5 areas: North Gondar, South Gondar, North Wollo, … · 1998–2024 · AIFS, FuXi · days 1–30'
 		);
-		expect(runListLabels([run])).toEqual(['5 areas: North Gondar, … · 1998–2024 · FuXi, AIFS']);
+		expect(leadsOf([run])).toEqual(['5 areas: North Gondar, … · 1998–2024 · AIFS, FuXi']);
 	});
 
 	it('names a short list of areas, or one box, in full', () => {
 		const [two] = runsOf(benchmark('r', { area_of_interest: ['Borena', 'Guji'] }));
 		const [box] = runsOf(benchmark('r', { area_of_interest: ['9°N–13°N, 36°E–40°E'] }));
 
-		expect(runListLabels([two])).toEqual(['Borena, Guji · 1998–2024 · FuXi, AIFS']);
-		expect(runListLabels([box])).toEqual(['9°N–13°N, 36°E–40°E · 1998–2024 · FuXi, AIFS']);
+		expect(leadsOf([two])).toEqual(['Borena, Guji · 1998–2024 · AIFS, FuXi']);
+		expect(leadsOf([box])).toEqual(['9°N–13°N, 36°E–40°E · 1998–2024 · AIFS, FuXi']);
 	});
 
 	it('names the onset definition and its changed settings only when it is not the default', () => {
@@ -208,14 +217,14 @@ describe('naming a run by what sets it apart', () => {
 		const [run] = runsOf(benchmark('r', { onset_definition: changed }));
 
 		expect(runTitle(run)).toBe(
-			'Ethiopia · 1998–2024 · Standard wet spell, 20 mm onset threshold · FuXi, AIFS · days 1–30'
+			'Ethiopia · 1998–2024 · Standard wet spell, 20 mm onset threshold · AIFS, FuXi · days 1–30'
 		);
 	});
 
 	it('names another onset definition on its own when its settings are untouched', () => {
 		const [run] = runsOf(benchmark('r', { onset_definition: onset({ name: 'Two-stage' }) }));
 
-		expect(runListLabels([run])).toEqual(['Ethiopia · 1998–2024 · Two-stage · FuXi, AIFS']);
+		expect(leadsOf([run])).toEqual(['Ethiopia · 1998–2024 · Two-stage · AIFS, FuXi']);
 	});
 
 	it('counts changed onset settings once there are too many to read in the list', () => {
@@ -226,33 +235,92 @@ describe('naming a run by what sets it apart', () => {
 		];
 		const [run] = runsOf(benchmark('r', { onset_definition: onset({ changes }) }));
 
-		expect(runListLabels([run])[0]).toContain('Standard wet spell, 3 changed settings');
+		expect(leadsOf([run])[0]).toContain('Standard wet spell, 3 changed settings');
 		expect(runTitle(run)).toContain(
 			'Standard wet spell, 20 mm onset threshold, 5 days wet spell length, no dry spell check'
 		);
 	});
 
-	it('gives runs that differ only in area or onset definition different list labels', () => {
-		const runs = runsOf(
+	it('leads siblings with the area that sets them apart, with what they share beneath', () => {
+		const nameOf = namesByRun(
 			benchmark('whole'),
-			benchmark('amhara', { area_of_interest: AMHARA }),
-			benchmark('wetter', {
-				onset_definition: onset({ changes: [change('Onset threshold', 20, 'mm')] })
-			})
+			benchmark('amhara', { area_of_interest: AMHARA })
 		);
-		const labels = runListLabels(runs);
-		const labelOf = (key: string) => labels[runs.findIndex((run) => run.key === key)];
 
-		expect(labelOf('whole')).toBe('Ethiopia · 1998–2024 · FuXi, AIFS');
-		expect(labelOf('amhara')).toBe('5 areas: North Gondar, … · 1998–2024 · FuXi, AIFS');
-		expect(labelOf('wetter')).toBe(
-			'Ethiopia · 1998–2024 · Standard wet spell, 20 mm onset threshold · FuXi, AIFS'
+		expect(nameOf('whole')).toEqual({ lead: 'Ethiopia', context: '1998–2024 · AIFS, FuXi' });
+		expect(nameOf('amhara')).toEqual({
+			lead: '5 areas: North Gondar, …',
+			context: '1998–2024 · AIFS, FuXi'
+		});
+	});
+
+	it('names the default onset threshold by its value when a sibling changed it', () => {
+		const nameOf = namesByRun(
+			benchmark('lower', { onset_definition: threshold(15) }),
+			benchmark('default', { onset_definition: DEFAULT_ONSET })
 		);
+
+		expect(nameOf('lower')).toEqual({
+			lead: '15 mm onset threshold',
+			context: 'Ethiopia · 1998–2024 · AIFS, FuXi'
+		});
+		expect(nameOf('default')).toEqual({
+			lead: '20 mm onset threshold (default)',
+			context: 'Ethiopia · 1998–2024 · AIFS, FuXi'
+		});
+	});
+
+	it('names each onset definition when siblings use different ones, marking the default', () => {
+		const nameOf = namesByRun(
+			benchmark('default', { onset_definition: DEFAULT_ONSET }),
+			benchmark('two-stage', { onset_definition: onset({ name: 'Two-stage' }) })
+		);
+
+		expect(nameOf('default').lead).toBe('Standard wet spell (default)');
+		expect(nameOf('two-stage').lead).toBe('Two-stage');
+	});
+
+	it('tells apart siblings with the same settings by when they started', () => {
+		const started = (at: string) => ({ onset_definition: DEFAULT_ONSET, started_at: at });
+		const nameOf = namesByRun(
+			benchmark('lower', { onset_definition: threshold(15) }),
+			benchmark('first', started('2026-11-24T08:12:00Z')),
+			benchmark('second', started('2026-11-24T09:30:00Z'))
+		);
+
+		expect(nameOf('lower').lead).toBe('15 mm onset threshold');
+		expect(nameOf('first').lead).toBe(
+			`20 mm onset threshold (default) · started ${runTime('2026-11-24T08:12:00Z')}`
+		);
+		expect(nameOf('second').lead).toBe(
+			`20 mm onset threshold (default) · started ${runTime('2026-11-24T09:30:00Z')}`
+		);
+	});
+
+	it('reads two runs of the same models alike whatever order their jobs came in', () => {
+		const reversed = (id: string) =>
+			[...benchmark(id, { onset_definition: DEFAULT_ONSET })].reverse();
+		const nameOf = namesByRun(
+			benchmark('lower', { onset_definition: threshold(15) }),
+			benchmark('first', { onset_definition: DEFAULT_ONSET }),
+			reversed('second')
+		);
+
+		expect(nameOf('first').context).toBe(nameOf('second').context);
+		expect(nameOf('first').lead).not.toContain('AIFS');
 	});
 
 	it('uses the short name of a changed onset setting in the list and its full name in the title', () => {
 		const wetSpell = onset({
-			changes: [{ label: 'Wet spell rain total', short_label: 'Wet spell', value: 20, unit: 'mm' }]
+			changes: [
+				{
+					label: 'Wet spell rain total',
+					short_label: 'Wet spell',
+					value: 20,
+					unit: 'mm',
+					default: 30
+				}
+			]
 		});
 
 		expect(onsetName(wetSpell, LIST_NAME.onsetChanges, LIST_NAME.shortLabels)).toBe(
@@ -263,20 +331,22 @@ describe('naming a run by what sets it apart', () => {
 		);
 	});
 
-	it('spells out runs whose short labels would match', () => {
-		const onsetWith = (threshold: number) =>
-			onset({
-				changes: [change('Onset threshold', threshold, 'mm'), change('Wet spell length', 5, 'days')]
-			});
-		const labels = labelsOf(
+	it('spells out siblings whose short names would match', () => {
+		const nameOf = namesByRun(
 			benchmark('a', { area_of_interest: AMHARA }),
-			benchmark('b', { area_of_interest: [...AMHARA.slice(0, 4), 'Oromia'] }),
-			benchmark('c', { onset_definition: onsetWith(20) }),
-			benchmark('d', { onset_definition: onsetWith(25) })
+			benchmark('b', { area_of_interest: [...AMHARA.slice(0, 4), 'Oromia'] })
 		);
 
-		expect(new Set(labels).size).toBe(4);
-		expect(labels.find((label) => label.includes('Oromia'))).toContain('Oromia · 1998–2024');
+		expect(nameOf('a').lead).toBe(AMHARA.join(', '));
+		expect(nameOf('b').lead).toContain('Oromia');
+	});
+
+	it('titles a run with its changed onset threshold', () => {
+		const [run] = runsOf(benchmark('r', { onset_definition: threshold(15) }));
+
+		expect(runTitle(run)).toBe(
+			'Ethiopia · 1998–2024 · Standard wet spell, 15 mm onset threshold · AIFS, FuXi · days 1–30'
+		);
 	});
 
 	it('gives a blend its area and onset definition after its own name', () => {
@@ -339,13 +409,15 @@ describe('applyWorkspaceEvent', () => {
 		]);
 	});
 
-	it('replaces analysis names with the latest ones', () => {
+	it('replaces analysis names and hidden analyses with the latest ones', () => {
 		const named = { ...base, analyses: [{ turn_id: 't1', title: 'Old', named_by: 'assistant' }] };
 		const next = applyWorkspaceEvent(named as WorkspaceDetail, {
 			type: 'analyses',
-			analyses: [{ turn_id: 't2', title: 'Onset map', named_by: 'assistant' }]
+			analyses: [{ turn_id: 't2', title: 'Onset map', named_by: 'assistant' }],
+			hidden_analyses: ['t1']
 		});
 		expect(next.analyses).toEqual([{ turn_id: 't2', title: 'Onset map', named_by: 'assistant' }]);
+		expect(next.hidden_analyses).toEqual(['t1']);
 		expect(next.artifacts).toBe(base.artifacts);
 	});
 });

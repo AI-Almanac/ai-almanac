@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/svelte';
+import { describe, expect, it } from 'vitest';
 
 import WorkspaceSummaryStrip from '../src/lib/components/workspace/WorkspaceSummaryStrip.svelte';
 import type { ForecastSummary, SeasonSummary, WorkspaceSummary } from '../src/lib/api';
@@ -115,34 +115,39 @@ describe('summary words', () => {
 	});
 
 	it('shows the setup as chips with model display names, leaving unknowns out', () => {
-		expect(setupChips(summary.setup)).toEqual(['Ethiopia', 'CHIRPS Ethiopia', 'AIFS, FuXi']);
+		expect(setupChips(summary.setup)).toEqual([
+			'Ethiopia',
+			'Observed: CHIRPS Ethiopia',
+			'AIFS, FuXi'
+		]);
 		expect(setupChips({ region: null, observations: null, models: [] })).toEqual([]);
+	});
+
+	it('leaves the region out of the setup when the area already names it', () => {
+		expect(setupChips(summary.setup, 'Ethiopia')).toEqual([
+			'Observed: CHIRPS Ethiopia',
+			'AIFS, FuXi'
+		]);
+		expect(setupChips(summary.setup, 'Oromia')[0]).toBe('Ethiopia');
 	});
 });
 
 describe('WorkspaceSummaryStrip', () => {
-	it('opens the run behind a fact and asks the assistant to update the forecast', async () => {
-		const onOpenJob = vi.fn();
-		const onUpdateForecast = vi.fn();
-		render(WorkspaceSummaryStrip, { summary, canAct: true, onOpenJob, onUpdateForecast });
+	it('says what the workspace is about, without forecast or skill results', () => {
+		render(WorkspaceSummaryStrip, { summary });
 
-		await fireEvent.click(screen.getByRole('button', { name: 'RPSS 0.12 vs climatology' }));
-		expect(onOpenJob).toHaveBeenCalledWith('blend-1');
-
-		await fireEvent.click(screen.getByRole('button', { name: 'Update forecast' }));
-		expect(onUpdateForecast).toHaveBeenCalled();
 		expect(screen.getByText(/Kiremt 2026 is under way/)).toBeTruthy();
-		expect(screen.getByText('Ethiopia · CHIRPS Ethiopia · AIFS, FuXi')).toBeTruthy();
-		expect(screen.getByTitle('AIFS-FuXi Ethiopia Blend · held out 2019–2024')).toBeTruthy();
+		expect(screen.getByText('Ethiopia · Observed: CHIRPS Ethiopia · AIFS, FuXi')).toBeTruthy();
+		expect(screen.queryByText(/RPSS/)).toBeNull();
+		expect(screen.queryByText(/Issued/)).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Update forecast' })).toBeNull();
 	});
 
-	it('offers no update when the assistant is not there, and notes a default season', () => {
+	it('notes a default season', () => {
 		render(WorkspaceSummaryStrip, {
-			summary: { ...summary, season: { ...season, is_default: true } },
-			canAct: false
+			summary: { ...summary, season: { ...season, is_default: true } }
 		});
 
-		expect(screen.queryByRole('button', { name: 'Update forecast' })).toBeNull();
 		expect(screen.getByText('(default dates)').title).toMatch(/Platform default dates/);
 	});
 });

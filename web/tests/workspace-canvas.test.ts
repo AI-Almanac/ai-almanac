@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkspaceDetail } from '../src/lib/api';
@@ -77,5 +77,32 @@ describe('the stage when another run is opened', () => {
 
 		expect(screen.getAllByTestId('run-probe')).toHaveLength(KEPT_VIEWS);
 		expect(mounts.filter((key) => key === 'run-0')).toHaveLength(2);
+	});
+});
+
+describe('updating the latest forecast', () => {
+	const forecastUpdate = { jobId: 'job-run-1', request: vi.fn() };
+
+	function showRun(runKey: string) {
+		render(WorkspaceCanvas, {
+			workspace,
+			results,
+			view: { kind: 'run', runKey },
+			onNavigate,
+			forecastUpdate
+		});
+	}
+
+	it('is offered on that forecast’s run and asks for the update', async () => {
+		showRun('run-1');
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Update forecast' }));
+		expect(forecastUpdate.request).toHaveBeenCalled();
+	});
+
+	it('is not offered on other runs', () => {
+		showRun('run-0');
+
+		expect(screen.queryByRole('button', { name: 'Update forecast' })).toBeNull();
 	});
 });

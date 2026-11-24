@@ -18,13 +18,18 @@ export type ArrivalCheck = {
 /**
  * What arrived since `known` was taken. The first check, with nothing known yet,
  * finds no arrival: what the workspace already held when it loaded is not new.
+ * Hidden products stay known, so one the user unhides is not taken for new work.
  */
 export function checkArrivals(
 	known: ReadonlySet<string> | null,
-	products: Product[]
+	products: Product[],
+	hidden: Product[] = []
 ): ArrivalCheck {
 	const arrival = known ? newestArrival(known, products) : null;
-	return { known: seenProducts(products), arrived: arrival ? productView(arrival) : null };
+	return {
+		known: seenProducts([...products, ...hidden]),
+		arrived: arrival ? productView(arrival) : null
+	};
 }
 
 /** The run any of the jobs belong to. */

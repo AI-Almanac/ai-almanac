@@ -28,6 +28,7 @@
 		onclick={() => onOpen(product)}
 	>
 		<span class="title">{product.label}</span>
+		{#if product.context}<span class="context">{product.context}</span>{/if}
 		{#if headline}<span class="headline">{headline}</span>{/if}
 	</button>
 	<RunStatusIndicator run={product.run} quiet />
@@ -75,6 +76,7 @@
 		font-size: var(--text-size-label);
 		font-weight: 500;
 	}
+	.context,
 	.headline {
 		overflow: hidden;
 		text-overflow: ellipsis;

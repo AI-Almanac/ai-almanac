@@ -128,3 +128,24 @@ def test_jobs_already_published_are_not_recorded_again(tmp_path: Path, monkeypat
         "before-the-ledger": "t3",
         "unpublished": None,
     }
+
+
+def test_hidden_analyses_migration_is_additive_and_reversible(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_ALMANAC_DATA_DIR", str(tmp_path))
+    config = _alembic_config()
+    command.upgrade(config, "0033")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO workspace_hidden_analyses (workspace_id, turn_id, hidden_at) "
+            "VALUES ('w', 't', 'now')"
+        )
+    engine.dispose()
+    command.downgrade(config, "0032")
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'almanac.db'}")
+    tables = sa.inspect(engine).get_table_names()
+    engine.dispose()
+    assert "workspace_hidden_analyses" not in tables
+    assert "workspace_analyses" in tables

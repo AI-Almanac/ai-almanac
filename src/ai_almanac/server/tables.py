@@ -205,6 +205,16 @@ workspace_analyses = sa.Table(
     sa.Column("updated_at", sa.Text(), nullable=False),
 )
 
+# Analyses the user hid from the products list (migration 0033). A table of its
+# own, since an analysis can be hidden without having a name.
+workspace_hidden_analyses = sa.Table(
+    "workspace_hidden_analyses",
+    metadata,
+    sa.Column("workspace_id", sa.Text(), primary_key=True),
+    sa.Column("turn_id", sa.Text(), primary_key=True),
+    sa.Column("hidden_at", sa.Text(), nullable=False),
+)
+
 provenance_steps = sa.Table(
     "provenance_steps",
     metadata,

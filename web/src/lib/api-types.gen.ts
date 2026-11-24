@@ -2182,6 +2182,30 @@ export interface paths {
         patch: operations["rename_analysis_workspaces__workspace_id__analyses__turn_id__patch"];
         trace?: never;
     };
+    "/workspaces/{workspace_id}/analyses/{turn_id}/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Hide Analysis
+         * @description Leave an analysis out of the products list; its files stay in the workspace.
+         */
+        put: operations["hide_analysis_workspaces__workspace_id__analyses__turn_id__hidden_put"];
+        post?: never;
+        /**
+         * Unhide Analysis
+         * @description Show a hidden analysis in the products list again.
+         */
+        delete: operations["unhide_analysis_workspaces__workspace_id__analyses__turn_id__hidden_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/settings": {
         parameters: {
             query?: never;
@@ -4518,6 +4542,8 @@ export interface components {
             value: boolean | number | null;
             /** Unit */
             unit: string | null;
+            /** Default */
+            default: boolean | number | null;
         };
         /**
          * Point
@@ -5946,6 +5972,11 @@ export interface components {
             artifacts: components["schemas"]["ai_almanac__server__routers__workspaces__ArtifactOut"][];
             /** Analyses */
             analyses: components["schemas"]["AnalysisOut"][];
+            /**
+             * Hidden Analyses
+             * @description Turn ids of the analyses the user hid from the products list
+             */
+            hidden_analyses: string[];
         };
         /** WorkspaceIn */
         WorkspaceIn: {
@@ -10659,6 +10690,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AnalysisOut"] | null;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hide_analysis_workspaces__workspace_id__analyses__turn_id__hidden_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                turn_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unhide_analysis_workspaces__workspace_id__analyses__turn_id__hidden_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                turn_id: string;
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

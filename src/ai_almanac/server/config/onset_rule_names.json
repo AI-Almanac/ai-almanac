@@ -18,6 +18,10 @@
       "dry_extent": {
         "label": "Days checked for a dry spell",
         "short_label": "dry spell check"
+      },
+      "wet_threshold": {
+        "label": "Onset threshold",
+        "short_label": "onset threshold"
       }
     }
   },

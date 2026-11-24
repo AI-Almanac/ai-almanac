@@ -26,21 +26,33 @@
 		onRename?: (file: WorkspaceArtifact, title: string | null) => Promise<void>;
 		/** The interactive view of the run this file came from, e.g. "Skill maps". */
 		mapView?: { name: string; onOpen: () => void };
+		/** What to call the file when its own title says too little, e.g. a script. */
+		displayName?: string;
 	}
 
-	let { workspaceId, file, onDownload, onOpenTurn, onRename, mapView }: Props = $props();
+	let { workspaceId, file, onDownload, onOpenTurn, onRename, mapView, displayName }: Props =
+		$props();
 
-	const name = $derived(file.title || file.label);
+	const name = $derived(displayName ?? (file.title || file.label));
 	const facts = $derived(fileFacts(file));
 	const gridded = $derived(griddedFile(file));
 
+	function madeWhen(iso: string, now = new Date()): string {
+		const made = new Date(iso);
+		const thisYear = made.getFullYear() === now.getFullYear();
+		return made.toLocaleString([], {
+			month: 'short',
+			day: 'numeric',
+			year: thisYear ? undefined : 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
+
 	function fileFacts(file: WorkspaceArtifact): string {
 		const size = parseFileSummary(file.summary).sizeBytes;
-		const made = new Date(file.created_at).toLocaleString([], {
-			dateStyle: 'medium',
-			timeStyle: 'short'
-		});
-		return [formatName(file.format), size === null ? null : formatBytes(size), `made ${made}`]
+		const sizeText = size === null ? null : formatBytes(size);
+		return [formatName(file.format), sizeText, madeWhen(file.created_at)]
 			.filter(Boolean)
 			.join(' · ');
 	}
@@ -88,40 +100,39 @@
 
 <div class="file-detail">
 	<header>
-		<div class="heading">
-			<div class="title-row">
-				<RenamableName {name} onRename={onRename && ((title) => onRename(file, title))}>
-					{#snippet children(rename)}
-						<h3>{name}</h3>
-						{#if rename}{@render rename()}{/if}
-					{/snippet}
-				</RenamableName>
-			</div>
-			<span class="facts">{facts}</span>
-			<!-- A failed re-check leaves no earlier result standing in for it. -->
-			<IntegrityStatus
-				status={error ? null : integrity}
-				checking={busy}
-				onCheck={checkProvenance}
+		<div class="title-row">
+			<RenamableName {name} onRename={onRename && ((title) => onRename(file, title))}>
+				{#snippet children(rename)}
+					<h3>{name}</h3>
+					{#if rename}{@render rename()}{/if}
+				{/snippet}
+			</RenamableName>
+			<span class="download"><DownloadButton label={name} onclick={() => onDownload(file)} /></span>
+		</div>
+		<div class="meta-row">
+			<p class="facts">
+				<span>{facts}</span>
+				<!-- A failed re-check leaves no earlier result standing in for it. -->
+				<IntegrityStatus
+					status={error ? null : integrity}
+					checking={busy}
+					onCheck={checkProvenance}
+				/>
+				{#if mapView}
+					<button type="button" class="open-map" onclick={mapView.onOpen}>
+						Open in {mapView.name.toLowerCase()} →
+					</button>
+				{/if}
+			</p>
+			<SegmentedTabs
+				options={TABS}
+				value={tab}
+				onSelect={(next) => (tab = next)}
+				ariaLabel="File view"
 			/>
 		</div>
-		<DownloadButton label={name} withText onclick={() => onDownload(file)} />
+		{#if gridded}<p class="what" title={gridded.description}>{gridded.description}</p>{/if}
 	</header>
-
-	{#if gridded}<p class="what">{gridded.description}</p>{/if}
-
-	{#if mapView}
-		<button type="button" class="open-map" onclick={mapView.onOpen}>
-			Explore this on the {mapView.name.toLowerCase()} →
-		</button>
-	{/if}
-
-	<SegmentedTabs
-		options={TABS}
-		value={tab}
-		onSelect={(next) => (tab = next)}
-		ariaLabel="File view"
-	/>
 
 	<div class="panel">
 		{#if tab === 'contents'}
@@ -136,19 +147,12 @@
 	.file-detail {
 		display: flex;
 		flex-direction: column;
-		gap: 0.85rem;
+		gap: 0.75rem;
 	}
 	header {
 		display: flex;
-		flex-wrap: wrap;
-		justify-content: space-between;
-		align-items: flex-start;
-		gap: 0.75rem;
-	}
-	.heading {
-		display: flex;
 		flex-direction: column;
-		gap: 0.15rem;
+		gap: 0.3rem;
 		min-width: 0;
 	}
 	.title-row {
@@ -176,33 +180,63 @@
 		font-size: 0.98rem;
 		overflow-wrap: anywhere;
 	}
+	.download {
+		align-self: center;
+		margin-left: auto;
+	}
+	.meta-row {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.4rem 1rem;
+	}
 	.facts {
+		display: flex;
+		flex: 1 1 auto;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.2rem 0;
+		min-width: 0;
+		margin: 0;
 		font-size: 0.76rem;
 		color: var(--color-text-dim);
 	}
+	.facts > :global(* + *)::before {
+		content: '·';
+		margin: 0 0.45em;
+		color: var(--color-text-dim);
+	}
+	.open-map {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--color-accent);
+		font: inherit;
+		white-space: nowrap;
+		cursor: pointer;
+	}
+	.open-map:hover,
+	.open-map:focus-visible {
+		text-decoration: underline;
+		text-underline-offset: 0.15em;
+	}
+	/* The description runs long for some files; two lines say what it is. */
 	.what {
+		display: -webkit-box;
+		overflow: hidden;
 		margin: 0;
 		max-width: 42rem;
-		font-size: var(--text-size-body);
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
 	}
 	.panel {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
 		padding: 0 0.1rem;
-	}
-	.open-map {
-		align-self: flex-start;
-		padding: 0.35rem 0.7rem;
-		border: 1px solid var(--color-accent-border);
-		border-radius: 0.35rem;
-		background: var(--color-accent-light);
-		color: var(--color-accent);
-		font: inherit;
-		font-size: 0.85rem;
-		cursor: pointer;
-	}
-	.open-map:hover {
-		background: var(--color-accent-soft);
 	}
 </style>

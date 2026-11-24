@@ -1,5 +1,6 @@
 import type { WorkspaceArtifact, WorkspaceJob } from '$lib/api/workspaces';
 import { modelDisplayName } from '$lib/model-names';
+import { runTime } from '$lib/run-status';
 import { groupByTurn, type Analysis } from './analyses';
 import {
 	FULL_NAME,
@@ -7,6 +8,8 @@ import {
 	TITLE_NAME,
 	NO_SCOPE,
 	nameParts,
+	siblingNames,
+	type ListName,
 	type NameDetail,
 	type RunNaming
 } from './run-names';
@@ -101,10 +104,11 @@ function unique<T>(values: T[]): T[] {
 	return [...new Set(values)];
 }
 
+/** In a fixed order, so two runs of the same models read alike whatever order their jobs came in. */
 function runModels(run: Run): string[] {
 	return unique(
 		run.jobs.flatMap((job) => (job.model_name ? [modelDisplayName(job.model_name)] : []))
-	);
+	).sort((a, b) => a.localeCompare(b));
 }
 
 export type RunKind = 'benchmark' | 'blend' | 'forecast';
@@ -211,14 +215,41 @@ export function runTitle(run: Run): string {
 	return runName(run, TITLE_NAME);
 }
 
+function sameName(a: ListName, b: ListName): boolean {
+	return a.lead === b.lead && a.context === b.context;
+}
+
+function repeated(names: ListName[], name: ListName): boolean {
+	return names.filter((each) => sameName(each, name)).length > 1;
+}
+
+/** "started Nov 24, 8:12 AM", or when it was submitted for a run yet to start. */
+function runStart(run: Run): string {
+	const [started] = run.jobs.flatMap((job) => job.started_at ?? []).sort();
+	if (started) return `started ${runTime(started)}`;
+	const [submitted] = run.jobs.map((job) => job.created_at).sort();
+	return `submitted ${runTime(submitted)}`;
+}
+
+function withStart(name: ListName, run: Run): ListName {
+	return { ...name, lead: `${name.lead} · ${runStart(run)}` };
+}
+
 /**
- * What each run is called in the products list, in the order given: the short
- * name, spelled out in full for runs whose short names would otherwise match.
+ * What each of a group of sibling runs is called in the products list, in the
+ * order given: what sets it apart from the others first, with what they share
+ * as context. Runs whose short names match are spelled out in full, and runs
+ * that still match are told apart by when they started.
  */
-export function runListLabels(runs: Run[]): string[] {
-	const short = runs.map((run) => runName(run, LIST_NAME));
-	const shared = (label: string) => short.filter((each) => each === label).length > 1;
-	return runs.map((run, index) => (shared(short[index]) ? runName(run, FULL_NAME) : short[index]));
+export function runListLabels(runs: Run[]): ListName[] {
+	if (runs.length < 2) return runs.map((run) => ({ lead: runName(run, LIST_NAME), context: null }));
+	const namings = runs.map(runNaming);
+	const short = siblingNames(namings, LIST_NAME);
+	const full = siblingNames(namings, FULL_NAME);
+	const spelled = short.map((name, index) => (repeated(short, name) ? full[index] : name));
+	return spelled.map((name, index) =>
+		repeated(spelled, name) ? withStart(name, runs[index]) : name
+	);
 }
 
 export function findRunByJobs(runs: Run[], jobIds: string[]): Run | null {

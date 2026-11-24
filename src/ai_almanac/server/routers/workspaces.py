@@ -10,6 +10,8 @@ GET  /workspaces/{id}/settings/effective           the same, unset ones filled w
 PATCH /workspaces/{id}/settings                    change named settings; null clears one
 PATCH /workspaces/{id}/artifacts/{aid}             rename a file; null restores its default name
 PATCH /workspaces/{id}/analyses/{turn_id}          rename an analysis; null clears its name
+PUT  /workspaces/{id}/analyses/{turn_id}/hidden    hide an analysis from the products list
+DELETE /workspaces/{id}/analyses/{turn_id}/hidden  show it again
 POST /workspaces/{id}/jobs                         link a job
 GET  /workspaces/{id}/addable-jobs                 the user's runs not in the workspace yet
 GET  /workspaces/{id}/artifacts                    artifacts with breadcrumbs
@@ -140,6 +142,9 @@ class WorkspaceDetail(WorkspaceOut):
     jobs: list[WorkspaceJobOut]
     artifacts: list[ArtifactOut]
     analyses: list[AnalysisOut]
+    hidden_analyses: list[str] = Field(
+        description="Turn ids of the analyses the user hid from the products list"
+    )
 
 
 class RenameIn(BaseModel):
@@ -280,6 +285,7 @@ async def get_workspace(workspace: OwnedWorkspace):
         jobs=await _job_outs(workspace_id),
         artifacts=[ArtifactOut(**item) for item in await workspaces.listing(workspace_id)],
         analyses=[AnalysisOut(**row) for row in await workspaces.list_analyses(workspace_id)],
+        hidden_analyses=await workspaces.hidden_analyses(workspace_id),
     )
 
 
@@ -345,6 +351,23 @@ async def rename_analysis(workspace: OwnedWorkspace, turn_id: str, body: RenameI
     return AnalysisOut(**named) if named else None
 
 
+@router.put("/{workspace_id}/analyses/{turn_id}/hidden", status_code=204)
+async def hide_analysis(workspace: OwnedWorkspace, turn_id: str) -> None:
+    """Leave an analysis out of the products list; its files stay in the workspace."""
+    workspace_id = workspace["id"]
+    if not await workspaces.turn_file_titles(workspace_id, turn_id):
+        raise HTTPException(
+            status_code=404, detail="No analysis in this workspace came from that turn"
+        )
+    await workspaces.hide_analysis(workspace_id, turn_id)
+
+
+@router.delete("/{workspace_id}/analyses/{turn_id}/hidden", status_code=204)
+async def unhide_analysis(workspace: OwnedWorkspace, turn_id: str) -> None:
+    """Show a hidden analysis in the products list again."""
+    await workspaces.unhide_analysis(workspace["id"], turn_id)
+
+
 @router.get("/{workspace_id}/settings", response_model=WorkspaceSettings)
 async def get_settings(workspace: OwnedWorkspace):
     workspace_id = workspace["id"]
@@ -389,11 +412,13 @@ EVENTS_POLL_SECONDS = 3.0
 EVENTS_LIFETIME_SECONDS = 240.0
 
 
-def _sse(event_type: str, **payload: Sequence[BaseModel]) -> str:
+def _jsonable(item: BaseModel | str) -> Any:
+    return item.model_dump(mode="json") if isinstance(item, BaseModel) else item
+
+
+def _sse(event_type: str, **payload: Sequence[BaseModel | str]) -> str:
     """One event: each payload list as the same JSON the REST routes send, dates as strings."""
-    body = {
-        key: [model.model_dump(mode="json") for model in models] for key, models in payload.items()
-    }
+    body = {key: [_jsonable(item) for item in items] for key, items in payload.items()}
     return f"data: {json.dumps({'type': event_type, **body})}\n\n"
 
 
@@ -408,7 +433,11 @@ async def _artifacts_event(workspace_id: str, ids: set[str]) -> str:
 
 async def _analyses_event(workspace_id: str) -> str:
     rows = await workspaces.list_analyses(workspace_id)
-    return _sse("analyses", analyses=[AnalysisOut(**row) for row in rows])
+    return _sse(
+        "analyses",
+        analyses=[AnalysisOut(**row) for row in rows],
+        hidden_analyses=await workspaces.hidden_analyses(workspace_id),
+    )
 
 
 async def _follow_ups_event(workspace_id: str) -> str:

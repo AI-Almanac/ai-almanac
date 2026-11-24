@@ -64,6 +64,24 @@ export function analysisHeading(
 	return { text: name ?? question ?? fallback, question };
 }
 
+export type AnalysesByVisibility = { shown: Analysis[]; hidden: Analysis[] };
+
+/** The analyses the products list shows, apart from the ones the user hid from it. */
+export function byVisibility(analyses: Analysis[], hiddenTurnIds: string[]): AnalysesByVisibility {
+	const isHidden = (analysis: Analysis) =>
+		analysis.turnId !== null && hiddenTurnIds.includes(analysis.turnId);
+	return {
+		shown: analyses.filter((analysis) => !isHidden(analysis)),
+		hidden: analyses.filter(isHidden)
+	};
+}
+
+/** The hidden analyses' turns after one is hidden or shown again. */
+export function withHidden(hiddenTurnIds: string[], turnId: string, hide: boolean): string[] {
+	const others = hiddenTurnIds.filter((id) => id !== turnId);
+	return hide ? [...others, turnId] : others;
+}
+
 /** The analysis names after one is set (`named`) or cleared (`null`). */
 export function withAnalysisName(
 	names: AnalysisName[],

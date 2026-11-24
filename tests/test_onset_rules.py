@@ -28,6 +28,7 @@ def test_job_params_accept_a_valid_onset_definition() -> None:
         ("two_stage", {"stage1_days": 2.5}, "must be a int"),
         ("two_stage", {"inclusive": 1}, "must be a bool"),
         ("legacy", {"wet_spell": None}, "is required"),
+        ("legacy", {"wet_threshold": 15.0}, "unknown parameter"),
     ],
 )
 def test_job_params_reject_bad_onset_definitions(rule, params, message) -> None:

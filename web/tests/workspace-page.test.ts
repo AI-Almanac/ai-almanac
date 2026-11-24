@@ -80,7 +80,9 @@ const api = vi.hoisted(() => ({
 	getMetricDefinitions: vi.fn(),
 	watchWorkspace: vi.fn(),
 	renameWorkspaceArtifact: vi.fn(),
-	renameWorkspaceAnalysis: vi.fn()
+	renameWorkspaceAnalysis: vi.fn(),
+	hideWorkspaceAnalysis: vi.fn(),
+	unhideWorkspaceAnalysis: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
@@ -134,7 +136,8 @@ const workspace: WorkspaceDetail = {
 			breadcrumb: ['benchmark.job', 'figure.plot_map']
 		})
 	],
-	analyses: []
+	analyses: [],
+	hidden_analyses: []
 };
 
 const areaOutlines: WorkspaceArtifact = {
@@ -359,7 +362,8 @@ describe('workspace page', () => {
 
 		workspaceEvents.send({
 			type: 'analyses',
-			analyses: [{ turn_id: 'turn-abcdef12', title: 'AIFS false alarms', named_by: 'assistant' }]
+			analyses: [{ turn_id: 'turn-abcdef12', title: 'AIFS false alarms', named_by: 'assistant' }],
+			hidden_analyses: []
 		});
 
 		expect(await screen.findByText('AIFS false alarms')).toBeTruthy();
@@ -388,6 +392,65 @@ describe('workspace page', () => {
 		await fireEvent.click(files.getByRole('button', { name: 'Region outlines' }));
 		expect(nav.goto).toHaveBeenLastCalledWith('?artifact=art-3', expect.anything());
 		expect(await screen.findByRole('heading', { name: 'Region outlines' })).toBeTruthy();
+	});
+
+	it('hides an analysis on the stage from the list, keeping it a press away to show again', async () => {
+		nav.url = 'http://localhost/workspace/ws-1?artifact=art-2';
+		render(WorkspacePage);
+		await screen.findByRole('navigation', { name: 'Products' });
+		const analysisName = within(productsList()).getByText(/^Analysis from /).textContent ?? '';
+
+		await fireEvent.click(
+			within(productsList()).getByRole('button', { name: `Hide ${analysisName} from this list` })
+		);
+
+		expect(api.hideWorkspaceAnalysis).toHaveBeenCalledWith('ws-1', 'turn-abcdef12');
+		expect(nav.goto).toHaveBeenLastCalledWith(
+			expect.not.stringContaining('artifact'),
+			expect.anything()
+		);
+		expect(within(productsList()).queryByRole('button', { name: analysisName })).toBeNull();
+
+		await fireEvent.click(
+			within(productsList()).getByRole('button', { name: 'Hidden analyses (1)' })
+		);
+		await fireEvent.click(
+			within(productsList()).getByRole('button', {
+				name: `Show ${analysisName} in the list again`
+			})
+		);
+
+		expect(api.unhideWorkspaceAnalysis).toHaveBeenCalledWith('ws-1', 'turn-abcdef12');
+		expect(await within(productsList()).findByText(analysisName)).toBeTruthy();
+		expect(within(productsList()).queryByText(/Hidden analyses/)).toBeNull();
+		expect(within(productsList()).getByRole('button', { current: true }).textContent).not.toContain(
+			analysisName
+		);
+	});
+
+	it('names a script from a hidden analysis by what it made, opened from an old link', async () => {
+		const script = {
+			...workspace.artifacts[1],
+			id: 'art-4',
+			label: 'code_ab12cd34',
+			title: 'Script',
+			kind: 'document',
+			format: 'python',
+			run_job_ids: [],
+			supporting: true
+		} as WorkspaceArtifact;
+		api.getWorkspace.mockResolvedValue({
+			...workspace,
+			artifacts: [...workspace.artifacts, script],
+			hidden_analyses: ['turn-abcdef12']
+		});
+		nav.url = 'http://localhost/workspace/ws-1?artifact=art-4';
+		render(WorkspacePage);
+
+		expect(
+			await screen.findByRole('heading', { name: 'Script 1 · made False alarm rate map' })
+		).toBeTruthy();
+		expect(screen.getByRole('navigation', { name: 'Files in this analysis' })).toBeTruthy();
 	});
 
 	it('moves the stage to a product that arrives while nothing has been opened', async () => {

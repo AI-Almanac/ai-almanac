@@ -7,9 +7,11 @@ import {
 	failureMessage,
 	getWorkspace,
 	getWorkspaceSummary,
+	hideWorkspaceAnalysis,
 	linkWorkspaceJob,
 	renameWorkspaceAnalysis,
 	renameWorkspaceArtifact,
+	unhideWorkspaceAnalysis,
 	watchWorkspace,
 	type FollowUp,
 	type RunOrigin,
@@ -24,7 +26,7 @@ import {
 	type SeasonWindow,
 	type WorkspaceSettings
 } from '$lib/api/workspace-settings';
-import { withAnalysisName } from './analyses';
+import { byVisibility, withAnalysisName, withHidden, type Analysis } from './analyses';
 import { applyWorkspaceEvent, newestArtifactAt } from './live-updates';
 import { groupByRun, type WorkspaceResults } from './runs';
 
@@ -42,9 +44,18 @@ export class WorkspaceSession {
 	/** Why the workspace could not be loaded. */
 	error = $state<string | null>(null);
 
-	readonly results = $derived(
+	readonly #grouped = $derived(
 		this.workspace ? groupByRun(this.workspace.jobs, this.workspace.artifacts) : NO_RESULTS
 	);
+	readonly #analyses = $derived(
+		byVisibility(this.#grouped.analyses, this.workspace?.hidden_analyses ?? [])
+	);
+	/** What the products list and the stage show: everything but the analyses the user hid. */
+	readonly results: WorkspaceResults = $derived({
+		...this.#grouped,
+		analyses: this.#analyses.shown
+	});
+	readonly hiddenAnalyses: Analysis[] = $derived(this.#analyses.hidden);
 
 	// Updates applied from the event stream, so a snapshot fetched before one of
 	// them landed is not laid over it.
@@ -132,6 +143,15 @@ export class WorkspaceSession {
 		if (this.workspace) {
 			const analyses = withAnalysisName(this.workspace.analyses, turnId, named);
 			this.workspace = { ...this.workspace, analyses };
+		}
+	}
+
+	/** Hides an analysis from the products list, or (`hide` false) shows it again. */
+	async setAnalysisHidden(turnId: string, hide: boolean) {
+		await (hide ? hideWorkspaceAnalysis : unhideWorkspaceAnalysis)(this.id, turnId);
+		if (this.workspace) {
+			const hidden_analyses = withHidden(this.workspace.hidden_analyses, turnId, hide);
+			this.workspace = { ...this.workspace, hidden_analyses };
 		}
 	}
 

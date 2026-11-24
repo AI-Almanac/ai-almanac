@@ -86,7 +86,7 @@ async def test_a_rerun_approval_names_the_job_and_lists_only_what_changes(
 
     assert _facts(raised) == {
         "Job": "AIFS · Ethiopia · 1998–2024 · days 1–30",
-        "Wet threshold": "25.0",
+        "Onset threshold": "25.0",
         "Onset definition": "Two-stage",
         "Runs on": "This computer",
     }
@@ -138,7 +138,7 @@ async def test_a_primitive_without_a_describer_still_names_the_ids_it_can_resolv
     facts = _facts(raised)
     assert facts["Observations"].startswith("CHIRPS-")
     assert facts["Other"] == "not-a-known-id"
-    assert facts["Wet threshold"] == "20.0"
+    assert facts["Onset threshold"] == "20.0"
 
 
 @pytest.mark.asyncio
@@ -279,3 +279,13 @@ async def test_a_rerun_is_expected_to_take_as_long_as_the_run_it_repeats(
 
     assert _shown(facts)["Expected time"] == "About 45 minutes"
     assert proposed_run_facts.rerun_jobs(None) == []
+
+
+def test_an_onset_definition_on_a_card_lists_the_settings_it_changes() -> None:
+    changed = approval_display.onset_definition_with_changes(
+        None, None, {"wet_threshold": 15.0, "wet_spell": 5}
+    )
+
+    assert changed == "Standard wet spell, wet spell 5 days, onset threshold 15 mm"
+    assert approval_display.onset_definition_with_changes(None, None, {}) == "Standard wet spell"
+    assert approval_display.onset_definition_with_changes("new_rule", None, {}) == "New rule"

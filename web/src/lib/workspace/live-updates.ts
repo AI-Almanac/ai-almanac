@@ -1,13 +1,18 @@
 /** A workspace kept current from its event stream. */
 import type { WorkspaceArtifact, WorkspaceDetail, WorkspaceEvent } from '$lib/api/workspaces';
 
-/** The workspace after one live update: jobs and analysis names are replaced, new files merged by id. */
+/**
+ * The workspace after one live update: jobs, analysis names and hidden analyses
+ * are replaced, new files merged by id.
+ */
 export function applyWorkspaceEvent(
 	workspace: WorkspaceDetail,
 	event: Exclude<WorkspaceEvent, { type: 'follow_ups' }>
 ): WorkspaceDetail {
 	if (event.type === 'jobs') return { ...workspace, jobs: event.jobs };
-	if (event.type === 'analyses') return { ...workspace, analyses: event.analyses };
+	if (event.type === 'analyses') {
+		return { ...workspace, analyses: event.analyses, hidden_analyses: event.hidden_analyses };
+	}
 	const incoming = new Map(event.artifacts.map((artifact) => [artifact.id, artifact]));
 	return {
 		...workspace,

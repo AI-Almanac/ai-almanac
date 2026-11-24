@@ -85,10 +85,13 @@ export function skillFact(skill: WorkspaceSkill | null): Fact {
 	};
 }
 
-/** Region, observations and models as short chips; whatever is unknown is left out. */
-export function setupChips(setup: SetupSummary): string[] {
+/**
+ * Region, observations and models as short chips; whatever is unknown is left out,
+ * and so is a region the workspace's area already names.
+ */
+export function setupChips(setup: SetupSummary, areaWords: string | null = null): string[] {
+	const region = setup.region === areaWords ? null : setup.region;
+	const observed = setup.observations ? `Observed: ${setup.observations}` : null;
 	const models = setup.models.map(modelDisplayName).join(', ');
-	return [setup.region, setup.observations, models || null].filter((chip): chip is string =>
-		Boolean(chip)
-	);
+	return [region, observed, models || null].filter((chip): chip is string => Boolean(chip));
 }

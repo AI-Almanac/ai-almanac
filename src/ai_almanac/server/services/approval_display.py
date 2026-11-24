@@ -33,6 +33,7 @@ _LABELS = {
     "focus_area": "Area of interest",
     "forecast_window_days": "Forecast days",
     "onset_rule": "Onset definition",
+    "wet_threshold": "Onset threshold",
     "onset_rule_params": "Onset",
     "start_year_clim": "Climatology from",
     "end_year_clim": "Climatology to",
@@ -159,6 +160,27 @@ def forecast_days_label(days: int) -> str:
 def onset_definition_label(rule: str | None) -> str:
     """An onset definition by the name the rest of the app gives it; unset is the default."""
     return onset_rules.display_name(rule)
+
+
+def onset_definition_with_changes(
+    rule: str | None, rule_params: Mapping | None, settings: Mapping
+) -> str:
+    """An onset definition by name, then each setting not at its default, e.g.
+    'Standard wet spell, onset threshold 15 mm'."""
+    key = rule or onset_rules.DEFAULT_ONSET_RULE
+    if key not in onset_rules.onset_rules():
+        return onset_definition_label(key)
+    changes = onset_rules.changed_params(key, rule_params, settings)
+    return ", ".join([onset_definition_label(key), *map(_setting_text, changes)])
+
+
+def _setting_text(change: Mapping) -> str:
+    value = change["value"]
+    if value is None or isinstance(value, bool):
+        said = {None: "none", True: "on", False: "off"}[value]
+    else:
+        said = f"{value:g}"
+    return " ".join(part for part in (change["short_label"], said, change["unit"]) if part)
 
 
 def evaluation_span(source: dict | None, dates: EvaluationDates | None = None) -> YearSpan | None:
