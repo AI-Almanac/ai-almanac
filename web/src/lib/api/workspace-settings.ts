@@ -6,12 +6,6 @@ import { request } from './core';
 export type WorkspaceSettings = components['schemas']['WorkspaceSettings'];
 export type SeasonWindow = components['schemas']['SeasonWindow'];
 
-/** The season a new workspace works in unless it sets its own: the one usual in `country`. */
-export async function getDefaultSeason(country: string | null): Promise<SeasonWindow> {
-	const query = country ? `?country=${encodeURIComponent(country)}` : '';
-	return request<SeasonWindow>(`/workspaces/default-season${query}`);
-}
-
 /** The settings a run here uses today: unset ones filled with the platform defaults. */
 export async function getEffectiveWorkspaceSettings(
 	workspaceId: string

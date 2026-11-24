@@ -192,20 +192,6 @@ async def test_a_workspace_with_unusable_settings_is_not_made(client, as_new_use
     assert (await client.get("/workspaces", headers=as_new_user)).json() == before
 
 
-@pytest.mark.parametrize(
-    ("country", "season"), [("ETH", "Kiremt"), (None, SeasonWindow().name)], ids=["usual", "none"]
-)
-async def test_a_new_workspace_starts_from_the_season_usual_in_its_country(
-    client, as_new_user, country: str | None, season: str
-) -> None:
-    params = {"country": country} if country else {}
-
-    response = await client.get("/workspaces/default-season", headers=as_new_user, params=params)
-
-    assert response.status_code == 200, response.text
-    assert response.json()["name"] == season
-
-
 # --- the season year -----------------------------------------------------------
 
 

@@ -50,7 +50,6 @@ from ..services import (
 )
 from ..services.boundaries import AreaLevel
 from ..services.run_summaries import OnsetDefinition
-from ..services.seasons import SeasonWindow, default_season
 from ..services.skill_area_summaries import SkillByArea
 from ..services.workspace_settings import WorkspaceSettings
 from ..services.workspace_summary import JobHeadline, WorkspaceSummary
@@ -72,6 +71,15 @@ class WorkspaceOut(BaseModel):
     description: str
     created_at: str
     updated_at: str
+    # Still under the name a blank workspace is made with, so not yet named by its owner.
+    untitled: bool
+
+
+class WorkspaceDescriptionIn(BaseModel):
+    """A new name or description for a workspace; a field left out keeps its value."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class Span(BaseModel):
@@ -221,7 +229,14 @@ class ProvenanceOut(BaseModel):
 
 
 def _out(row: dict) -> WorkspaceOut:
-    return WorkspaceOut(**{key: row[key] for key in WorkspaceOut.model_fields})
+    return WorkspaceOut(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        untitled=row["name"] == workspaces.UNTITLED_NAME,
+    )
 
 
 async def _job_outs(workspace_id: str) -> list[WorkspaceJobOut]:
@@ -254,6 +269,12 @@ async def create_workspace(body: WorkspaceIn, user: CurrentUser):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/blank", response_model=WorkspaceOut)
+async def start_blank_workspace(user: CurrentUser):
+    """A workspace with nothing in it yet, made only when the user has no untouched one."""
+    return _out(await workspaces.blank_workspace(user.id))
+
+
 @router.get("", response_model=list[WorkspaceOut])
 async def list_workspaces(user: CurrentUser):
     return [_out(row) for row in await workspaces.list_workspaces(user.id)]
@@ -267,15 +288,6 @@ async def promote_session(body: PromoteIn, user: CurrentUser):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/default-season", response_model=SeasonWindow)
-async def get_default_season(
-    country: Annotated[str | None, Query(min_length=3, max_length=3)] = None,
-):
-    """The season a new workspace works in unless it sets its own: the one usual in
-    ``country`` (a three-letter code), else the platform's fallback season."""
-    return default_season(country.upper() if country else None)
-
-
 @router.get("/{workspace_id}", response_model=WorkspaceDetail)
 async def get_workspace(workspace: OwnedWorkspace):
     workspace_id = workspace["id"]
@@ -287,6 +299,17 @@ async def get_workspace(workspace: OwnedWorkspace):
         analyses=[AnalysisOut(**row) for row in await workspaces.list_analyses(workspace_id)],
         hidden_analyses=await workspaces.hidden_analyses(workspace_id),
     )
+
+
+@router.patch("/{workspace_id}", response_model=WorkspaceOut)
+async def describe_workspace(workspace: OwnedWorkspace, body: WorkspaceDescriptionIn):
+    try:
+        described = await workspaces.describe_workspace(
+            workspace["id"], name=body.name, description=body.description
+        )
+    except workspaces.WorkspaceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _out(described)
 
 
 @router.get("/{workspace_id}/summary", response_model=WorkspaceSummary)

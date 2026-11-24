@@ -4,6 +4,7 @@
  */
 import {
 	cancelFollowUp,
+	describeWorkspace,
 	failureMessage,
 	getWorkspace,
 	getWorkspaceSummary,
@@ -16,6 +17,7 @@ import {
 	type FollowUp,
 	type RunOrigin,
 	type WorkspaceArtifact,
+	type WorkspaceDescription,
 	type WorkspaceDetail,
 	type WorkspaceEvent,
 	type WorkspaceSummary
@@ -126,6 +128,12 @@ export class WorkspaceSession {
 		const settings = await updateWorkspaceSettings(this.id, patch);
 		if (this.workspace) this.workspace = { ...this.workspace, settings };
 		await this.refreshSummary();
+	}
+
+	/** Renames the workspace or rewrites what it is for. */
+	async describe(change: WorkspaceDescription) {
+		const described = await describeWorkspace(this.id, change);
+		if (this.workspace) this.workspace = { ...this.workspace, ...described };
 	}
 
 	async renameFile(file: WorkspaceArtifact, title: string | null) {

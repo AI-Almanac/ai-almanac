@@ -82,7 +82,10 @@ const api = vi.hoisted(() => ({
 	renameWorkspaceArtifact: vi.fn(),
 	renameWorkspaceAnalysis: vi.fn(),
 	hideWorkspaceAnalysis: vi.fn(),
-	unhideWorkspaceAnalysis: vi.fn()
+	unhideWorkspaceAnalysis: vi.fn(),
+	listWorkspaces: vi.fn(),
+	startBlankWorkspace: vi.fn(),
+	describeWorkspace: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
@@ -103,6 +106,7 @@ const workspace: WorkspaceDetail = {
 	description: '',
 	created_at: '2026-09-22T00:00:00Z',
 	updated_at: '2026-09-22T00:00:00Z',
+	untitled: false,
 	settings: {},
 	jobs: [
 		workspaceJob({ id: 'job-1', run_id: 'run-1', completed_at: '2026-09-22T00:00:00Z' }),
@@ -518,6 +522,51 @@ describe('workspace page', () => {
 		expect(screen.getByRole('button', { name: 'Train a blend' })).toBeTruthy();
 		expect(screen.queryByRole('link', { name: /Train a blend/ })).toBeNull();
 		expect(screen.queryByRole('button', { name: /assistant/i })).toBeNull();
+	});
+
+	it('asks for a name while the workspace is untitled, and shows it once given', async () => {
+		const blank = { ...workspace, name: 'Untitled workspace', untitled: true };
+		api.getWorkspace.mockResolvedValue({ ...blank, jobs: [], artifacts: [] });
+		api.describeWorkspace.mockResolvedValue({ ...blank, name: 'Kiremt 2026', untitled: false });
+		render(WorkspacePage);
+
+		const name = await screen.findByRole('textbox', { name: 'Name it' });
+		await fireEvent.input(name, { target: { value: 'Kiremt 2026' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+		expect(api.describeWorkspace).toHaveBeenCalledWith('ws-1', { name: 'Kiremt 2026' });
+		expect(await screen.findByRole('heading', { level: 1, name: /Kiremt 2026/ })).toBeTruthy();
+		expect(screen.queryByRole('textbox', { name: 'Name it' })).toBeNull();
+	});
+
+	it('switches to another workspace from its name in the header', async () => {
+		api.listWorkspaces.mockResolvedValue([
+			workspace,
+			{ ...workspace, id: 'ws-2', name: 'India 2026', description: 'Monsoon onset' }
+		]);
+		render(WorkspacePage);
+
+		await fireEvent.click(await screen.findByRole('button', { name: /Ethiopia 2026/ }));
+		const switcher = await screen.findByRole('dialog', { name: 'Workspaces' });
+
+		const other = await within(switcher).findByRole('link', { name: /India 2026/ });
+		expect(other.getAttribute('href')).toBe('/workspace/ws-2');
+		expect(
+			within(switcher)
+				.getByRole('link', { name: /Ethiopia 2026/ })
+				.getAttribute('aria-current')
+		).toBe('page');
+	});
+
+	it('starts a new workspace from the header without a form', async () => {
+		api.listWorkspaces.mockResolvedValue([workspace]);
+		api.startBlankWorkspace.mockResolvedValue({ ...workspace, id: 'ws-new', untitled: true });
+		render(WorkspacePage);
+
+		await fireEvent.click(await screen.findByRole('button', { name: /Ethiopia 2026/ }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'New workspace' }));
+
+		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/workspace/ws-new'));
 	});
 
 	it.each([

@@ -5,7 +5,6 @@ import type { components } from '../api-types.gen';
 import { authHeaders } from '../auth';
 import { sseEvents } from './chat';
 import { BASE_URL, request } from './core';
-import type { WorkspaceSettings } from './workspace-settings';
 
 export type Workspace = components['schemas']['WorkspaceOut'];
 export type WorkspaceDetail = components['schemas']['WorkspaceDetail'];
@@ -25,15 +24,21 @@ export async function listWorkspaces(): Promise<Workspace[]> {
 	return request<Workspace[]>('/workspaces');
 }
 
-/** A new workspace; `settings` holds the area and season chosen for it, if any. */
-export async function createWorkspace(
-	name: string,
-	description = '',
-	settings?: WorkspaceSettings
+/** A workspace with nothing in it yet; an untouched one the user already has is reused. */
+export async function startBlankWorkspace(): Promise<Workspace> {
+	return request<Workspace>('/workspaces/blank', { method: 'POST' });
+}
+
+/** What a workspace is called and what it is for; a field left out keeps its value. */
+export type WorkspaceDescription = components['schemas']['WorkspaceDescriptionIn'];
+
+export async function describeWorkspace(
+	id: string,
+	change: WorkspaceDescription
 ): Promise<Workspace> {
-	return request<Workspace>('/workspaces', {
-		method: 'POST',
-		body: JSON.stringify({ name, description, settings })
+	return request<Workspace>(`/workspaces/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(change)
 	});
 }
 
