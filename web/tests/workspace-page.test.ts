@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkspacePage from '../src/routes/workspace/[id]/+page.svelte';
+import { account } from '../src/lib/account.svelte';
+import { lastOpenedWorkspace } from '../src/lib/workspace/last-opened';
 import {
 	ApiError,
 	type ArtifactProvenance,
@@ -221,6 +223,24 @@ beforeEach(() => {
 			workspaceEvents.send = onEvent;
 		}
 	);
+});
+
+/** A signed-in user who may use workspaces. */
+const signedIn = (id: string): NonNullable<typeof account.account> => ({
+	id,
+	subject: 'user',
+	email: null,
+	display_name: null,
+	role: 'user',
+	deployment_mode: 'shared',
+	capabilities: {
+		can_admin: false,
+		can_browse_fs: false,
+		can_manage_data: false,
+		can_use_forecasting: false,
+		can_use_workspaces: true,
+		can_run_code: false
+	}
 });
 
 const workspaceEvents: { send: (event: WorkspaceEvent) => void } = { send: () => {} };
@@ -522,6 +542,25 @@ describe('workspace page', () => {
 		expect(screen.getByRole('button', { name: 'Train a blend' })).toBeTruthy();
 		expect(screen.queryByRole('link', { name: /Train a blend/ })).toBeNull();
 		expect(screen.queryByRole('button', { name: /assistant/i })).toBeNull();
+	});
+
+	it('remembers the workspace for its user once the account has loaded', async () => {
+		account.loaded = false;
+		account.account = null;
+		render(WorkspacePage);
+		await screen.findByRole('button', { name: /Ethiopia 2026/ });
+		expect(lastOpenedWorkspace(localStorage, null)).toBeNull();
+
+		try {
+			account.account = signedIn('u1');
+			account.loaded = true;
+
+			await waitFor(() => expect(lastOpenedWorkspace(localStorage, 'u1')).toBe('ws-1'));
+			expect(lastOpenedWorkspace(localStorage, null)).toBeNull();
+		} finally {
+			account.account = null;
+			account.loaded = false;
+		}
 	});
 
 	it('asks for a name while the workspace is untitled, and shows it once given', async () => {

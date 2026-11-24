@@ -127,11 +127,15 @@
 		untrack(() => {
 			if (openedId !== null && openedId !== id) forgetLastWorkspace();
 			openedId = id;
-			rememberOpenedWorkspace(localStorage, account.account?.id ?? null, id);
 		});
 		const updates = new AbortController();
 		untrack(() => void current.open(updates.signal));
 		return () => updates.abort();
+	});
+
+	// Remembered under the user it belongs to, so it waits for the account to load.
+	$effect(() => {
+		if (account.loaded) rememberOpenedWorkspace(localStorage, account.account?.id ?? null, id);
 	});
 
 	async function openBlankWorkspace() {
