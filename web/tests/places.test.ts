@@ -5,6 +5,7 @@ import type { Region } from '../src/lib/api/regions';
 import {
 	afterToggling,
 	countryNamed,
+	countryOfSelection,
 	matchingNames,
 	pickedAt,
 	pickedPlaces,
@@ -96,5 +97,16 @@ describe('finding a country or place by name', () => {
 			'East Gojjam',
 			'West Gojjam'
 		]);
+	});
+});
+
+describe('the country a selection names', () => {
+	it('is the whole country a selection is, without needing the country list', () => {
+		expect(countryOfSelection({ level: 'adm0', units: ['Kenya'], iso: 'KEN' })).toEqual(KENYA);
+	});
+
+	it('is not guessed from places or a box', () => {
+		expect(countryOfSelection({ level: 'adm1', units: ['Turkana'], iso: 'KEN' })).toBeNull();
+		expect(countryOfSelection({ lat_min: 1, lat_max: 2, lon_min: 3, lon_max: 4 })).toBeNull();
 	});
 });

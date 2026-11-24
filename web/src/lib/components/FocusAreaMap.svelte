@@ -13,7 +13,14 @@
 	} from '$lib/api/jobs';
 	import { getCountries, getPlaceBoundary, type Country } from '$lib/api/places';
 	import { boxBetween, boxOutline, isDegenerate, shapeBounds } from '$lib/geo/bbox';
-	import { afterToggling, countryNamed, matchingNames, pickedAt, wholeCountry } from '$lib/places';
+	import {
+		afterToggling,
+		countryNamed,
+		countryOfSelection,
+		matchingNames,
+		pickedAt,
+		wholeCountry
+	} from '$lib/places';
 	import { studyAreaWords } from '$lib/workspace/study-area';
 
 	interface Props {
@@ -66,7 +73,11 @@
 	const chosenIso = $derived(isFocusUnits(value) ? (value.iso ?? suggestedIso) : null);
 	/** The country chosen, else the one the data is about, which the map shows as context. */
 	const shownIso = $derived(chosenIso ?? suggestedIso);
-	const chosenCountry = $derived(countryOf(chosenIso));
+	// The last whole country seen, so narrowing it down keeps it even without the country list.
+	let lastWhole = $state<Country | null>(null);
+	const chosenCountry = $derived(
+		countryOf(chosenIso) ?? (lastWhole?.iso === chosenIso ? lastWhole : null)
+	);
 	const suggested = $derived(value ? null : countryOf(suggestedIso));
 	const picked = $derived(pickedAt(value, level));
 	const placeNames = $derived(zoneNames(zones));
@@ -128,10 +139,22 @@
 		onchange(wholeCountry(country));
 	}
 
-	function countryTyped(typed: string) {
-		countryText = typed;
+	/**
+	 * A country is taken once the entry is finished (picked from the list, Enter, or
+	 * leaving the box), so "Niger" is not chosen on the way to typing "Nigeria".
+	 */
+	function countryEntered(typed: string) {
+		if (!typed.trim()) return clearCountry();
 		const named = countryNamed(countries, typed);
-		if (named && named.iso !== chosenIso) chooseCountry(named);
+		if (!named) countryText = chosenCountry?.name ?? '';
+		else if (named.iso !== chosenIso) chooseCountry(named);
+	}
+
+	/** Picking from the suggestions arrives as a whole replacement, not as typing. */
+	function countryInput(event: Event & { currentTarget: HTMLInputElement }) {
+		countryText = event.currentTarget.value;
+		const fromList = !(event instanceof InputEvent) || event.inputType === 'insertReplacementText';
+		if (fromList) countryEntered(countryText);
 	}
 
 	function clearCountry() {
@@ -281,6 +304,11 @@
 		} else if (value) view = 'box';
 	});
 
+	$effect(() => {
+		const whole = countryOfSelection(value);
+		if (whole) untrack(() => (lastWhole = whole));
+	});
+
 	// The box shows its country's name once the country list is in.
 	$effect(() => {
 		const name = chosenCountry?.name ?? '';
@@ -381,7 +409,8 @@
 					aria-label="Country"
 					placeholder="Type a country"
 					value={countryText}
-					oninput={(event) => countryTyped(event.currentTarget.value)}
+					oninput={countryInput}
+					onchange={(event) => countryEntered(event.currentTarget.value)}
 				/>
 				<datalist id={COUNTRY_LIST_ID}>
 					{#each countries as listed (listed.iso)}

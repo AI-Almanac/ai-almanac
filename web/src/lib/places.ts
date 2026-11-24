@@ -75,3 +75,9 @@ export function matchingNames(names: string[], query: string): string[] {
 		.filter((name) => words.every((word) => name.toLowerCase().includes(word)))
 		.sort((a, b) => a.localeCompare(b));
 }
+
+/** The country a whole-country selection names, for when the country list is not to hand. */
+export function countryOfSelection(area: FocusAreaValue | null): Country | null {
+	if (!isFocusUnits(area) || area.level !== 'adm0' || !area.iso) return null;
+	return { iso: area.iso, name: area.units[0] };
+}
