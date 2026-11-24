@@ -53,6 +53,6 @@ LIBRARY_PATH = "$CONDA_PREFIX/targets/sbsa-linux/lib/stubs:$CONDA_PREFIX/lib"
 LIBRARY_PATH = "$CONDA_PREFIX/targets/x86_64-linux/lib/stubs:$CONDA_PREFIX/lib"
 
 [pypi-dependencies]
-vllm = "==0.30.0"
+vllm = "==0.34.0"
 # `hf download` for fetching model weights ahead of the first serve.
 huggingface_hub = { version = "*", extras = ["hf_xet"] }
