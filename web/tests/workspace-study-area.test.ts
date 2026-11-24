@@ -12,9 +12,23 @@ describe('the place a workspace works in', () => {
 		{
 			case: 'is named by its bounds when it is a box',
 			area: { lat_min: 8, lat_max: 12, lon_min: 36, lon_max: 40 },
-			words: '8° to 12° lat, 36° to 40° lon'
+			words: 'Box 8–12°N, 36–40°E'
 		},
-		{ case: 'is all of the data when no place is set', area: null, words: 'All of the data' }
+		{
+			case: 'says which side of the equator each edge of a box is on',
+			area: { lat_min: -5, lat_max: 3, lon_min: -10, lon_max: -2 },
+			words: 'Box 5°S–3°N, 10–2°W'
+		},
+		{
+			case: 'counts the places past the first few rather than naming them all',
+			area: {
+				level: 'adm2' as const,
+				units: ['Awi', 'Bale', 'Borena', 'Gedeo', 'Guji'],
+				iso: 'ETH'
+			},
+			words: 'Awi, Bale, Borena +2 more'
+		},
+		{ case: 'is not set when no place is chosen', area: null, words: 'Not set' }
 	])('$case', ({ area, words }) => {
 		expect(studyAreaWords(area)).toBe(words);
 	});

@@ -13,31 +13,36 @@
 	} from '$lib/api/jobs';
 	import { getCountries, getPlaceBoundary, type Country } from '$lib/api/places';
 	import { boxBetween, boxOutline, isDegenerate, shapeBounds } from '$lib/geo/bbox';
-	import { pickedPlaces, toggled, wholeCountry } from '$lib/places';
+	import { afterToggling, countryNamed, matchingNames, pickedAt, wholeCountry } from '$lib/places';
+	import { studyAreaWords } from '$lib/workspace/study-area';
 
 	interface Props {
 		value: FocusAreaValue | null;
-		/** Bounding box to frame when nothing is drawn yet. */
+		/** Bounding box to frame when nothing is chosen yet. */
 		extent?: BboxExtent | null;
-		/** Where places are picked until the user chooses a country, by its three-letter code. */
+		/** The country the data is about, offered as the first choice, by its three-letter code. */
 		country?: string | null;
+		/** What choosing no area means here. */
+		unsetLabel?: string;
 		onchange: (value: FocusAreaValue | null) => void;
 	}
 
-	const { value, extent = null, country: defaultCountry = null, onchange }: Props = $props();
+	const {
+		value,
+		extent = null,
+		country: suggestedIso = null,
+		unsetLabel = 'Everywhere the chosen data covers',
+		onchange
+	}: Props = $props();
 
-	type Mode = 'all' | 'box' | 'units';
-	const modes: { id: Mode; label: string }[] = [
-		{ id: 'all', label: 'All of the data' },
-		{ id: 'box', label: 'Draw a box' },
-		{ id: 'units', label: 'Pick places' }
-	];
+	type View = 'place' | 'box';
 	// Larger places first: a broad area is a handful of states, not hundreds of districts.
-	const UNIT_LEVELS: { id: FocusUnitLevel; label: string }[] = [
+	const LEVELS: { id: FocusUnitLevel; label: string }[] = [
 		{ id: 'adm0', label: 'Whole country' },
 		{ id: 'adm1', label: 'States & regions' },
 		{ id: 'adm2', label: 'Districts & zones' }
 	];
+	const COUNTRY_LIST_ID = `focus-countries-${Math.random().toString(36).slice(2)}`;
 
 	const SOURCE = 'focus-area';
 	const COUNTRY = 'focus-country';
@@ -51,16 +56,31 @@
 	let countryShape = $state<FeatureCollection | null>(null);
 	let zones = $state<FeatureCollection | null>(null);
 	let zonesFailed = $state(false);
-	let mode = $state<Mode>('all');
-	let unitLevel = $state<FocusUnitLevel>('adm1');
+	let view = $state<View>('place');
+	let level = $state<FocusUnitLevel>('adm0');
 	let countries = $state<Country[]>([]);
-	/** A country chosen here, or named by picked places; undefined until there is one. */
-	let chosenCountry = $state<string | null | undefined>(undefined);
-	/** The country places are picked in, by its three-letter code. */
-	const country = $derived(chosenCountry === undefined ? defaultCountry : chosenCountry);
+	let countryText = $state('');
+	let placeQuery = $state('');
 
 	const box = $derived(value && !isFocusUnits(value) ? value : null);
-	const picked = $derived(isFocusUnits(value) ? value.units : []);
+	const chosenIso = $derived(isFocusUnits(value) ? (value.iso ?? suggestedIso) : null);
+	/** The country chosen, else the one the data is about, which the map shows as context. */
+	const shownIso = $derived(chosenIso ?? suggestedIso);
+	const chosenCountry = $derived(countryOf(chosenIso));
+	const suggested = $derived(value ? null : countryOf(suggestedIso));
+	const picked = $derived(pickedAt(value, level));
+	const placeNames = $derived(zoneNames(zones));
+	const shownPlaces = $derived(matchingNames(placeNames, placeQuery));
+	const narrowing = $derived(view === 'place' && chosenIso !== null && level !== 'adm0');
+
+	function countryOf(iso: string | null): Country | null {
+		return countries.find((candidate) => candidate.iso === iso) ?? null;
+	}
+
+	function zoneNames(shapes: FeatureCollection | null): string[] {
+		const names = (shapes?.features ?? []).map((feature) => feature.properties?.shapeName);
+		return [...new Set(names.filter((name): name is string => typeof name === 'string' && !!name))];
+	}
 
 	function setData(source: string, data: FeatureCollection) {
 		(map?.getSource(source) as maplibregl.GeoJSONSource | undefined)?.setData(data);
@@ -79,9 +99,7 @@
 
 	function frame() {
 		const countryExtent = countryShape ? shapeBounds(countryShape) : null;
-		// The host's extent is its data's; a country chosen here is somewhere else.
-		const chosenHere = chosenCountry !== undefined;
-		fitTo(box ?? (chosenHere ? countryExtent : null) ?? extent ?? countryExtent);
+		fitTo(box ?? (chosenIso ? countryExtent : null) ?? extent ?? countryExtent);
 	}
 
 	function startDrawing() {
@@ -97,56 +115,50 @@
 		map?.getCanvas().style.removeProperty('cursor');
 	}
 
-	function setMode(next: Mode) {
+	/** A box and places are different kinds of area, so moving between them starts over. */
+	function showView(next: View) {
 		stopDrawing();
-		mode = next;
-		// The three choices are exclusive: leaving a mode discards its selection.
-		if (next === 'all' || (next === 'box') === isFocusUnits(value)) {
-			if (value) onchange(null);
+		view = next;
+		if (value) onchange(null);
+	}
+
+	function chooseCountry(country: Country) {
+		level = 'adm0';
+		placeQuery = '';
+		onchange(wholeCountry(country));
+	}
+
+	function countryTyped(typed: string) {
+		countryText = typed;
+		const named = countryNamed(countries, typed);
+		if (named && named.iso !== chosenIso) chooseCountry(named);
+	}
+
+	function clearCountry() {
+		countryText = '';
+		level = 'adm0';
+		onchange(null);
+	}
+
+	// Places are one level's, so moving to another level goes back to the whole country.
+	function showLevel(next: FocusUnitLevel) {
+		if (next === level) return;
+		level = next;
+		zones = null;
+		zonesFailed = false;
+		placeQuery = '';
+		if (chosenCountry && isFocusUnits(value) && value.level !== 'adm0') {
+			onchange(wholeCountry(chosenCountry));
 		}
 	}
 
-	// Each level has its own areas to load, so switching drops the loaded ones.
-	function showLevel(next: FocusUnitLevel) {
-		if (next === unitLevel) return;
-		unitLevel = next;
-		zones = null;
-		zonesFailed = false;
-	}
-
-	function countryOf(iso: string | null): Country | null {
-		return countries.find((candidate) => candidate.iso === iso) ?? null;
-	}
-
-	// A selection is one level's places, so changing level starts it over. A whole
-	// country is a selection in itself.
-	function setUnitLevel(next: FocusUnitLevel) {
-		if (next === unitLevel) return;
-		showLevel(next);
-		const whole = next === 'adm0' ? countryOf(country) : null;
-		if (whole) onchange(wholeCountry(whole));
-		else if (isFocusUnits(value)) onchange(null);
-	}
-
-	// Places belong to one country, so choosing another starts the selection over.
-	function setCountry(iso: string) {
-		chosenCountry = iso || null;
-		const whole = unitLevel === 'adm0' ? countryOf(chosenCountry) : null;
-		if (whole) onchange(wholeCountry(whole));
-		else if (isFocusUnits(value)) onchange(null);
+	function togglePlace(name: string) {
+		onchange(afterToggling(value, level, name, chosenCountry));
 	}
 
 	function zoneName(feature: maplibregl.MapGeoJSONFeature): string | null {
 		const name = feature.id ?? feature.properties?.shapeName;
 		return typeof name === 'string' && name ? name : null;
-	}
-
-	function togglePicked(name: string) {
-		onchange(pickedPlaces(unitLevel, toggled(picked, name), country));
-	}
-
-	function clearSelection() {
-		onchange(null);
 	}
 
 	/** Fill the viewport; the map keeps its instance and just re-measures. */
@@ -155,7 +167,7 @@
 		expanded = next;
 		await tick();
 		map?.resize();
-		if (!value) frame();
+		frame();
 	}
 
 	onMount(() => {
@@ -215,15 +227,15 @@
 				paint: { 'line-color': '#2f6fed', 'line-width': 2 }
 			});
 			map.on('click', `${ZONES}-fill`, (e) => {
-				if (mode !== 'units') return;
+				if (!narrowing) return;
 				const name = e.features?.[0] ? zoneName(e.features[0]) : null;
-				if (name) togglePicked(name);
+				if (name) togglePlace(name);
 			});
 			map.on('mouseenter', `${ZONES}-fill`, () => {
-				if (mode === 'units') map?.getCanvas().style.setProperty('cursor', 'pointer');
+				if (narrowing) map?.getCanvas().style.setProperty('cursor', 'pointer');
 			});
 			map.on('mouseleave', `${ZONES}-fill`, () => {
-				if (mode === 'units') map?.getCanvas().style.removeProperty('cursor');
+				if (narrowing) map?.getCanvas().style.removeProperty('cursor');
 			});
 			mapReady = true;
 			frame();
@@ -254,21 +266,28 @@
 
 	onDestroy(() => map?.remove());
 
-	// A value set from outside (chat, a reloaded config) decides the mode, and the
-	// country when its places name one.
+	// A value set from outside (chat, a reloaded config) decides the view and the level.
 	$effect(() => {
 		if (isFocusUnits(value)) {
-			mode = 'units';
-			const level = value.level;
-			const iso = value.iso;
+			const next = value.level;
 			untrack(() => {
-				showLevel(level);
-				if (iso) chosenCountry = iso;
+				view = 'place';
+				if (next !== 'adm0' && next !== level) {
+					level = next;
+					zones = null;
+					zonesFailed = false;
+				}
 			});
-		} else if (value) mode = 'box';
+		} else if (value) view = 'box';
 	});
 
-	// The list is only missed by the country choice; places already picked still show.
+	// The box shows its country's name once the country list is in.
+	$effect(() => {
+		const name = chosenCountry?.name ?? '';
+		untrack(() => (countryText = name));
+	});
+
+	// The list is only missed by the country search; a country already chosen still shows.
 	onMount(() => {
 		getCountries()
 			.then((listed) => (countries = listed))
@@ -278,7 +297,7 @@
 	// The country's border, when the boundary service knows it. A miss just leaves
 	// the basemap, so the map stays usable without boundary data.
 	$effect(() => {
-		const iso = country;
+		const iso = shownIso;
 		countryShape = null;
 		zones = null;
 		zonesFailed = false;
@@ -294,13 +313,13 @@
 		};
 	});
 
-	// Pickable places load on demand, the first time the mode calls for them.
+	// A level's places load the first time the country is narrowed to it.
 	$effect(() => {
-		const level = unitLevel;
-		const iso = country;
-		if (mode !== 'units' || !iso || zones || zonesFailed) return;
+		const atLevel = level;
+		const iso = chosenIso;
+		if (!narrowing || !iso || zones || zonesFailed) return;
 		let stale = false;
-		getPlaceBoundary(iso, level)
+		getPlaceBoundary(iso, atLevel)
 			.then(({ geojson }) => {
 				if (stale || !isFeatureCollection(geojson)) return;
 				zones = geojson;
@@ -327,18 +346,17 @@
 		if (mapReady) setData(SOURCE, boxOutline(box));
 	});
 
-	// The country highlight means "this is what gets scored", so it yields to any
-	// selection and returns when the selection is cleared.
+	// The country outline shows what is chosen, or what the data is about while nothing is.
 	$effect(() => {
 		if (!mapReady) return;
-		setData(COUNTRY, value ? EMPTY : (countryShape ?? EMPTY));
-		if (!value) frame();
+		setData(COUNTRY, view === 'place' ? (countryShape ?? EMPTY) : EMPTY);
+		untrack(frame);
 	});
 
 	$effect(() => {
 		if (!mapReady || !map) return;
 		setData(ZONES, zones ?? EMPTY);
-		const visibility = mode === 'units' ? 'visible' : 'none';
+		const visibility = narrowing ? 'visible' : 'none';
 		map.setLayoutProperty(`${ZONES}-fill`, 'visibility', visibility);
 		map.setLayoutProperty(`${ZONES}-line`, 'visibility', visibility);
 		map.removeFeatureState({ source: ZONES });
@@ -354,42 +372,32 @@
 
 <div class="focus-area" class:expanded>
 	<div class="toolbar">
-		<div class="modes" role="group" aria-label="Area of interest">
-			{#each modes as option (option.id)}
-				<button
-					type="button"
-					class:active={mode === option.id}
-					aria-pressed={mode === option.id}
-					onclick={() => setMode(option.id)}
-				>
-					{option.label}
-				</button>
-			{/each}
-		</div>
-		{#if mode === 'units'}
-			<select
-				class="country"
-				aria-label="Country to pick places in"
-				value={country ?? ''}
-				onchange={(event) => setCountry(event.currentTarget.value)}
-			>
-				<option value="" disabled>Choose a country</option>
-				{#each countries as listed (listed.iso)}
-					<option value={listed.iso}>{listed.name}</option>
-				{/each}
-			</select>
-			<div class="modes" role="group" aria-label="Kind of place to pick">
-				{#each UNIT_LEVELS as option (option.id)}
-					<button
-						type="button"
-						class:active={unitLevel === option.id}
-						aria-pressed={unitLevel === option.id}
-						onclick={() => setUnitLevel(option.id)}
-					>
-						{option.label}
+		{#if view === 'place'}
+			<div class="country-field">
+				<input
+					class="country"
+					type="search"
+					list={COUNTRY_LIST_ID}
+					aria-label="Country"
+					placeholder="Type a country"
+					value={countryText}
+					oninput={(event) => countryTyped(event.currentTarget.value)}
+				/>
+				<datalist id={COUNTRY_LIST_ID}>
+					{#each countries as listed (listed.iso)}
+						<option value={listed.name}></option>
+					{/each}
+				</datalist>
+				{#if chosenIso}
+					<button type="button" class="quiet" onclick={clearCountry}>Clear</button>
+				{:else if suggested}
+					<button type="button" class="suggest" onclick={() => chooseCountry(suggested)}>
+						Use {suggested.name}
 					</button>
-				{/each}
+				{/if}
 			</div>
+		{:else}
+			<span class="box-title">Draw a box on the map</span>
 		{/if}
 		<button
 			type="button"
@@ -400,27 +408,69 @@
 			{expanded ? 'Close' : 'Expand'}
 		</button>
 	</div>
-	<div class="map-frame">
-		<div class="map" bind:this={container}></div>
-		{#if drawing}
-			<p class="map-hint">Click and drag to draw the box</p>
-		{:else if mode === 'units' && picked.length === 0}
-			<p class="map-hint">
+
+	{#if view === 'place' && chosenIso}
+		<div class="levels" role="group" aria-label="Narrow down">
+			{#each LEVELS as option (option.id)}
+				<button
+					type="button"
+					class:active={level === option.id}
+					aria-pressed={level === option.id}
+					onclick={() => showLevel(option.id)}
+				>
+					{option.label}
+				</button>
+			{/each}
+		</div>
+	{/if}
+
+	<div class="body">
+		{#if narrowing}
+			<div class="places">
+				<input
+					type="search"
+					class="place-filter"
+					aria-label="Find a place"
+					placeholder="Find a place"
+					bind:value={placeQuery}
+				/>
 				{#if zonesFailed}
-					Couldn't load areas.
-					<button type="button" class="retry" onclick={() => (zonesFailed = false)}> Retry </button>
+					<p class="hint">
+						Couldn't load places.
+						<button type="button" class="quiet" onclick={() => (zonesFailed = false)}>Retry</button>
+					</p>
+				{:else if !zones}
+					<p class="hint">Loading places…</p>
 				{:else}
-					{#if !country}
-						Choose a country to pick places in
-					{:else}
-						{zones ? 'Click places to add them' : 'Loading places…'}
-					{/if}
+					<ul class="place-list" aria-label="Places">
+						{#each shownPlaces as name (name)}
+							<li>
+								<label>
+									<input
+										type="checkbox"
+										checked={picked.includes(name)}
+										onchange={() => togglePlace(name)}
+									/>
+									{name}
+								</label>
+							</li>
+						{:else}
+							<li class="hint">No place matches.</li>
+						{/each}
+					</ul>
 				{/if}
-			</p>
+			</div>
 		{/if}
+		<div class="map-frame">
+			<div class="map" bind:this={container}></div>
+			{#if drawing}
+				<p class="map-hint">Click and drag to draw the box</p>
+			{/if}
+		</div>
 	</div>
+
 	<div class="controls">
-		{#if mode === 'box'}
+		{#if view === 'box'}
 			<button
 				type="button"
 				class="draw"
@@ -430,28 +480,24 @@
 			>
 				{drawing ? 'Cancel' : box ? 'Redraw box' : 'Draw box'}
 			</button>
-			{#if box}
-				<button type="button" class="clear" title="Remove the box" onclick={clearSelection}>
-					Clear
-				</button>
-				<small>
-					{box.lat_min}° to {box.lat_max}° lat, {box.lon_min}° to {box.lon_max}° lon
-				</small>
-			{:else if !drawing}
-				<small>No box yet, so all of the data is scored</small>
-			{/if}
-		{:else if mode === 'units'}
-			{#if picked.length}
-				<button type="button" class="clear" title="Deselect every place" onclick={clearSelection}>
-					Clear
-				</button>
-				<small>{picked.length} selected: {picked.join(', ')}</small>
-			{:else}
-				<small>Click a place on the map to add it; click again to remove it</small>
-			{/if}
-		{:else}
-			<small>All of the data is scored</small>
 		{/if}
+		<small class="summary">
+			{#if narrowing && picked.length === 0}
+				All of {studyAreaWords(value)}; pick places to narrow it down
+			{:else}
+				{studyAreaWords(value, unsetLabel)}
+			{/if}
+		</small>
+		{#if box}
+			<button type="button" class="quiet" onclick={() => onchange(null)}>Clear</button>
+		{/if}
+		<button
+			type="button"
+			class="quiet switch"
+			onclick={() => showView(view === 'place' ? 'box' : 'place')}
+		>
+			{view === 'place' ? 'Not a country or region? Draw a box' : 'Pick a country instead'}
+		</button>
 	</div>
 </div>
 
@@ -470,15 +516,44 @@
 		background: var(--color-surface);
 	}
 
-	.toolbar {
+	.toolbar,
+	.country-field,
+	.controls {
 		display: flex;
 		flex-wrap: wrap;
-		justify-content: space-between;
 		align-items: center;
 		gap: 0.5rem;
 	}
 
-	.expand {
+	.toolbar {
+		justify-content: space-between;
+	}
+
+	.country-field {
+		flex: 1 1 16rem;
+		min-inline-size: 0;
+	}
+
+	.country,
+	.place-filter {
+		flex: 1 1 12rem;
+		min-inline-size: 0;
+		border: 1px solid var(--color-border);
+		border-radius: 0.5rem;
+		padding: 0.4rem 0.6rem;
+		background: var(--color-bg);
+		color: var(--color-text);
+		font: inherit;
+		font-size: 0.9rem;
+	}
+
+	.box-title {
+		font-size: 0.9rem;
+		font-weight: 600;
+	}
+
+	.expand,
+	.suggest {
 		border: 1px solid var(--color-border);
 		border-radius: 0.4rem;
 		padding: 0.3rem 0.7rem;
@@ -490,19 +565,9 @@
 		cursor: pointer;
 	}
 
-	.expanded .map-frame {
+	.levels {
 		display: flex;
-		flex: 1;
-		min-block-size: 0;
-	}
-
-	.expanded .map {
-		aspect-ratio: auto;
-		block-size: 100%;
-	}
-
-	.modes {
-		display: flex;
+		flex-wrap: wrap;
 		gap: 0.25rem;
 		padding: 0.2rem;
 		border: 1px solid var(--color-border);
@@ -511,18 +576,7 @@
 		inline-size: fit-content;
 	}
 
-	.country {
-		border: 1px solid var(--color-border);
-		border-radius: 0.5rem;
-		padding: 0.4rem 0.6rem;
-		background: var(--color-bg);
-		color: var(--color-text);
-		font: inherit;
-		font-size: 0.85rem;
-		max-inline-size: 100%;
-	}
-
-	.modes button {
+	.levels button {
 		border: 0;
 		border-radius: 0.35rem;
 		padding: 0.3rem 0.7rem;
@@ -534,14 +588,66 @@
 		cursor: pointer;
 	}
 
-	.modes button.active {
+	.levels button.active {
 		background: var(--color-surface-raised);
 		color: var(--color-text);
 		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 	}
 
+	.body {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.expanded .body {
+		flex: 1;
+		min-block-size: 0;
+	}
+
+	.place-filter {
+		flex: none;
+	}
+
+	.places {
+		display: flex;
+		flex: 1 1 12rem;
+		flex-direction: column;
+		gap: 0.4rem;
+		min-inline-size: 0;
+	}
+
+	.place-list {
+		display: flex;
+		flex-direction: column;
+		max-block-size: 16rem;
+		margin: 0;
+		padding: 0;
+		overflow-y: auto;
+		list-style: none;
+		font-size: 0.9rem;
+	}
+
+	.expanded .place-list {
+		max-block-size: none;
+	}
+
+	.place-list label {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.15rem 0.2rem;
+		cursor: pointer;
+	}
+
 	.map-frame {
 		position: relative;
+		flex: 2 1 20rem;
+		min-inline-size: 0;
+	}
+
+	.expanded .map-frame {
+		display: flex;
 	}
 
 	.map {
@@ -550,6 +656,11 @@
 		min-block-size: 12rem;
 		border-radius: 0.375rem;
 		overflow: hidden;
+	}
+
+	.expanded .map {
+		aspect-ratio: auto;
+		block-size: 100%;
 	}
 
 	.map-hint {
@@ -567,52 +678,53 @@
 		pointer-events: none;
 	}
 
-	.retry {
-		padding: 0;
-		border: none;
-		background: none;
-		color: var(--color-accent);
-		font: inherit;
-		text-decoration: underline;
-		cursor: pointer;
-		pointer-events: auto;
+	.hint {
+		margin: 0;
+		color: var(--color-text-muted);
+		font-size: 0.85rem;
 	}
 
 	.controls {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.5rem;
 		min-block-size: 1.8rem;
 	}
 
-	.controls button {
+	.summary {
+		color: var(--color-text-muted);
+	}
+
+	.switch {
+		margin-inline-start: auto;
+	}
+
+	.quiet {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--color-accent);
+		font: inherit;
+		font-size: 0.85rem;
+		cursor: pointer;
+	}
+
+	.draw {
+		border: 0;
 		border-radius: 0.4rem;
 		padding: 0.3rem 0.7rem;
+		background: var(--color-accent);
+		color: white;
 		font: inherit;
 		font-size: 0.85rem;
 		font-weight: 600;
 		cursor: pointer;
 	}
 
-	.draw {
-		border: 0;
-		background: var(--color-accent);
-		color: white;
-	}
-
 	.draw:hover {
 		background: var(--color-accent-hover);
 	}
 
-	.draw.cancel,
-	.clear {
+	.draw.cancel {
 		border: 1px solid var(--color-border);
 		background: var(--color-bg);
 		color: var(--color-text);
-	}
-
-	.controls small {
-		color: var(--color-text-muted);
 	}
 </style>
