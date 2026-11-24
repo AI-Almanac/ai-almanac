@@ -9,6 +9,7 @@ here instead of at deploy time.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -155,3 +156,19 @@ def test_model_years_outside_the_benchmark_range_are_not_staged(
     staged = module._stage_gcs_years(client, "gs://bucket/models/", tmp_path, 2005, 2007)
 
     assert (staged, requested) == (2, ["2005.nc", "2006.nc"])
+
+
+def test_a_failing_benchmark_step_leaves_its_error_in_the_run_log() -> None:
+    import io
+    import sys
+    from contextlib import redirect_stdout
+
+    module = _load_modal_app()
+    run_log = io.StringIO()
+    failing_step = [sys.executable, "-c", "import sys; sys.exit('Not enough forecast time steps')"]
+
+    with redirect_stdout(module._LogTee(run_log)):
+        exit_code = module._run_subprocess(failing_step, env=dict(os.environ))
+
+    assert exit_code == 1
+    assert "Not enough forecast time steps" in run_log.getvalue()
