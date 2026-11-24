@@ -40,7 +40,11 @@
 <SettingPopover label="Area" title="Change where runs here are scored" wide onOpen={startEditing}>
 	{#snippet value()}{studyAreaWords(area)}{/snippet}
 	{#snippet children(close)}
-		<FocusAreaMap value={draft} onchange={(next) => (draft = next)} />
+		<FocusAreaMap
+			value={draft}
+			unsetLabel="Not set; each run uses its own area"
+			onchange={(next) => (draft = next)}
+		/>
 		{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
 		<div class="actions">
 			<button type="button" class="save" disabled={saving} onclick={() => keep(close)}>
