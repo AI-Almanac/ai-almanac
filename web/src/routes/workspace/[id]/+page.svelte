@@ -29,13 +29,19 @@
 		type InterfaceAction,
 		type WorkspaceTarget
 	} from '$lib/interface-actions/actions';
-	import { analysisHeading } from '$lib/workspace/analyses';
-	import { canvasQuery, parseCanvasView, type CanvasView } from '$lib/workspace/canvas-view';
+	import { analysisHeading, type Analysis } from '$lib/workspace/analyses';
+	import {
+		canvasQuery,
+		OVERVIEW,
+		parseCanvasView,
+		type CanvasView
+	} from '$lib/workspace/canvas-view';
 	import { newRunEntries } from '$lib/workspace/new-run-menu';
 	import { opened, type OpenPanel, type PanelRequest } from '$lib/workspace/panels';
 	import {
 		allProducts,
 		analysisOnStage,
+		analysisProducts,
 		productGroups,
 		productView,
 		shownProductKey,
@@ -47,7 +53,7 @@
 	import { seasonLabel } from '$lib/workspace/season-form';
 	import { checkArrivals, fileView, jobsView, targetView } from '$lib/workspace/stage-follow';
 	import { starterQuestions } from '$lib/workspace/starter-prompts';
-	import { updateForecastPrompt } from '$lib/workspace/summary';
+	import { canUpdateForecast, updateForecastPrompt } from '$lib/workspace/summary';
 	import { WorkspaceLayout } from '$lib/workspace/workspace-layout.svelte';
 	import { WorkspaceSession } from '$lib/workspace/workspace-session.svelte';
 	import { assistantLimits, PRODUCTS_LIMITS } from '$lib/workspace/zones';
@@ -80,11 +86,10 @@
 
 	const newEntries = $derived(newRunEntries(account.canUseForecasting));
 	const results = $derived(session.results);
-	const groups = $derived(
-		productGroups(results, (analysis) =>
-			analysisHeading(analysis, transcript, workspace?.analyses ?? [])
-		)
-	);
+	const headingOf = (analysis: Analysis) =>
+		analysisHeading(analysis, transcript, workspace?.analyses ?? []);
+	const groups = $derived(productGroups(results, headingOf));
+	const hiddenProducts = $derived(analysisProducts(session.hiddenAnalyses, headingOf));
 	const products = $derived(allProducts(groups));
 	const starterPrompts = $derived(
 		starterQuestions({
@@ -185,9 +190,12 @@
 		layout.setAssistantOpen(true);
 	}
 
-	function updateForecast() {
-		if (summary?.latest_forecast) ask(updateForecastPrompt(summary.latest_forecast));
-	}
+	/** The latest forecast, offered for an update when the assistant is there to make it. */
+	const forecastUpdate = $derived.by(() => {
+		const forecast = summary?.latest_forecast ?? null;
+		if (!chatAvailable || !forecast || !canUpdateForecast(forecast)) return undefined;
+		return { jobId: forecast.job_id, request: () => ask(updateForecastPrompt(forecast)) };
+	});
 
 	/** Opening something by hand: it is recorded in the URL and the stage stops following. */
 	function navigate(next: CanvasView) {
@@ -204,6 +212,15 @@
 	function openProduct(product: Product) {
 		const next = productView(product);
 		if (next) navigate(next);
+	}
+
+	/** Hides an analysis from the list; a stage showing it goes back to its default. */
+	async function hideAnalysis(turnId: string) {
+		const wasOnStage = stageAnalysis?.turnId === turnId;
+		await session.setAnalysisHidden(turnId, true);
+		if (!wasOnStage) return;
+		if (view.kind === 'overview') followed = null;
+		else navigate(OVERVIEW);
 	}
 
 	function showJob(jobId: string) {
@@ -278,9 +295,6 @@
 				{#if summary}
 					<WorkspaceSummaryStrip
 						{summary}
-						canAct={chatAvailable}
-						onUpdateForecast={updateForecast}
-						onOpenJob={showJob}
 						seasonEditor={{
 							load: async () => ({
 								season: await session.seasonInForce(),
@@ -304,7 +318,7 @@
 				style:--products-width={layout.widths.products}
 				style:--assistant-width={layout.widths.assistant}
 			>
-				{#if products.length > 0}
+				{#if products.length > 0 || hiddenProducts.length > 0}
 					<aside class="zone products-zone" class:collapsed={!layout.zones.productsOpen}>
 						{#if layout.zones.productsOpen}
 							<ProductsList
@@ -316,6 +330,9 @@
 								onCollapse={() => toggleProducts(false)}
 								onOpenTurn={chatAvailable ? focusTurn : undefined}
 								onRenameAnalysis={(turnId, title) => session.renameAnalysis(turnId, title)}
+								hiddenAnalyses={hiddenProducts}
+								onHideAnalysis={hideAnalysis}
+								onUnhideAnalysis={(turnId) => session.setAnalysisHidden(turnId, false)}
 								onRefresh={() => {
 									session.refresh();
 									session.refreshSummary();
@@ -368,6 +385,7 @@
 								onNavigate={navigate}
 								onOpenTurn={chatAvailable ? focusTurn : undefined}
 								onRenameFile={(file, title) => session.renameFile(file, title)}
+								{forecastUpdate}
 							/>
 						{/if}
 					</div>
@@ -484,7 +502,7 @@
 		min-width: 0;
 	}
 	.ws-header > :global(.summary) {
-		flex: 1 1 24rem;
+		flex: 0 1 auto;
 		min-width: 0;
 	}
 	.ws-title h1 {

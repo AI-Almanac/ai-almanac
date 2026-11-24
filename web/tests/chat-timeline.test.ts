@@ -246,7 +246,7 @@ describe('artifact links', () => {
 	it('renders run links as buttons that carry the job id', () => {
 		const html = renderMarkdown('[Open the skill maps](run:job-7)', { openArtifactLinks: true });
 		const doc = new DOMParser().parseFromString(html, 'text/html');
-		const button = doc.querySelector('button[data-run-ref]');
+		const button = doc.querySelector('[role="button"][data-run-ref]');
 
 		expect(button?.getAttribute('data-run-ref')).toBe('job-7');
 		expect(button?.textContent).toBe('Open the skill maps');
@@ -262,7 +262,7 @@ describe('artifact links', () => {
 	it('renders artifact links as buttons that carry the label', () => {
 		const html = renderMarkdown('See [the map](artifact:onset-map).', { openArtifactLinks: true });
 		const doc = new DOMParser().parseFromString(html, 'text/html');
-		const button = doc.querySelector('button[data-artifact-ref]');
+		const button = doc.querySelector('[role="button"][data-artifact-ref]');
 
 		expect(button?.getAttribute('data-artifact-ref')).toBe('onset-map');
 		expect(button?.textContent).toBe('the map');
@@ -274,7 +274,7 @@ describe('artifact links', () => {
 		const doc = new DOMParser().parseFromString(html, 'text/html');
 
 		expect(doc.body.textContent?.trim()).toBe('See the map.');
-		expect(doc.querySelector('button, a')).toBeNull();
+		expect(doc.querySelector('[role="button"], button, a')).toBeNull();
 	});
 
 	it('cannot be used to inject markup', () => {

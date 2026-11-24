@@ -9,7 +9,7 @@ from pydantic_ai import RunContext
 
 from ai_almanac.server import tables
 
-from .. import workspace_display, workspace_settings, workspaces
+from .. import run_summaries, workspace_display, workspace_settings, workspaces
 from ..focus_area import FocusArea
 from ..seasons import SeasonWindow
 from ..workspace_settings import WorkspaceSettings
@@ -57,12 +57,18 @@ def _found_run(row: dict, in_workspace: bool) -> dict:
         "models": config.get("model_names") or [m for m in [config.get("model_name")] if m],
         "training_years": params.get("training_years"),
         "cv_holdout_years": params.get("cv_holdout_years"),
+        "onset_definition": _onset_definition_of(config),
         "status": row["status"],
         "submitted": row["created_at"],
         "finished": row["completed_at"],
         "in_workspace": in_workspace,
         "job_id": row["id"],
     }
+
+
+def _onset_definition_of(config: dict) -> dict | None:
+    definition = run_summaries.onset_definition(config)
+    return None if definition is None else definition.model_dump()
 
 
 def _run_matches(

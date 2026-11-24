@@ -32,6 +32,8 @@ class OnsetParameter(BaseModel):
     short_label: str
     value: bool | int | float | None
     unit: str | None
+    # The value a run has when it is left unset, so a run that kept it can be named by it.
+    default: bool | int | float | None
 
 
 class OnsetDefinition(BaseModel):

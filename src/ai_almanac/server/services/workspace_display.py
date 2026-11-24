@@ -234,8 +234,8 @@ def _describe_map(params: dict) -> str:
 
 def _describe_onset(params: dict) -> str:
     threshold = params.get("wet_threshold")
-    wet_day = f"counting days of {threshold:g} mm or more as wet" if threshold else None
-    return _sentence("Found the onset date in each forecast", wet_day)
+    onset_total = f"with a {threshold:g} mm onset threshold" if threshold else None
+    return _sentence("Found the onset date in each forecast", onset_total)
 
 
 def _describe_summary(params: dict) -> str:

@@ -1142,7 +1142,9 @@ async def _workspace_instructions(deps: ChatDeps) -> str:
         await workspace_settings.get_settings(deps.workspace_id)
     )
     return settings_block + workspaces.prompt_listing(
-        await workspaces.listing(deps.workspace_id), await workspaces.recently_read(deps.session_id)
+        await workspaces.listing(deps.workspace_id),
+        await workspaces.recently_read(deps.session_id),
+        set(await workspaces.hidden_analyses(deps.workspace_id)),
     )
 
 

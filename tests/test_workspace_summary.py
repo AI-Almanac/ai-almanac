@@ -192,6 +192,9 @@ def test_benchmark_skill_is_the_lowest_onset_error_over_the_shortest_window() ->
     assert (skill.job_id, skill.model, skill.mae_days) == ("job-aifs", "AIFS", 6.4)
     assert (skill.climatology_mae_days, skill.window) == (11.9, "1-15")
 
+    named = summary.benchmark_skill(metrics, {"job-aifs": "AIFS v2"})
+    assert named is not None and named.model == "AIFS v2"
+
     longer_only = {"j": _metrics("j", {"AIFS": {"mean_mae": 12.0}}, window="16-30")}
     assert summary.benchmark_skill(longer_only).window == "16-30"
     assert summary.benchmark_skill({}) is None

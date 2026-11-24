@@ -10,9 +10,11 @@
 	let { status, checking, onCheck }: Props = $props();
 
 	const MARK = { ok: '✓', problem: '⚠', neutral: '·' } as const;
+	// A passing check needs no second look, so its re-check waits for a hover or focus.
+	const quiet = $derived(!checking && status?.tone === 'ok');
 </script>
 
-<div class="integrity" role="status">
+<span class="integrity" class:quiet role="status">
 	{#if checking}
 		<span class="state neutral">Checking against the record…</span>
 	{:else if status}
@@ -30,15 +32,15 @@
 	>
 		Verify again
 	</button>
-</div>
+</span>
 
 <style>
 	.integrity {
-		display: flex;
+		display: inline-flex;
 		flex-wrap: wrap;
 		align-items: baseline;
-		gap: 0.2rem 0.6rem;
-		font-size: 0.76rem;
+		row-gap: 0.2rem;
+		font-size: inherit;
 	}
 	.state {
 		display: inline-flex;
@@ -55,6 +57,7 @@
 	}
 	.check {
 		padding: 0;
+		margin-left: 0.5em;
 		border: 0;
 		background: none;
 		color: var(--color-text-muted);
@@ -62,6 +65,7 @@
 		text-decoration: underline;
 		text-decoration-color: var(--color-border);
 		text-underline-offset: 0.15em;
+		white-space: nowrap;
 		cursor: pointer;
 	}
 	.check:hover,
@@ -71,5 +75,20 @@
 	.check:disabled {
 		opacity: 0.6;
 		cursor: default;
+	}
+	/* Collapsed rather than hidden, so the keyboard still reaches it and focus shows it. */
+	@media (hover: hover) {
+		.quiet .check {
+			max-width: 0;
+			margin-left: 0;
+			overflow: hidden;
+			opacity: 0;
+		}
+		.quiet:hover .check,
+		.quiet:focus-within .check {
+			max-width: 10em;
+			margin-left: 0.5em;
+			opacity: 1;
+		}
 	}
 </style>

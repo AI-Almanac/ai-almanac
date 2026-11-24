@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { failureMessage } from '$lib/api';
 	import type { AnalysisProduct } from '$lib/workspace/products';
 	import RenamableName from './RenamableName.svelte';
 
@@ -9,9 +10,22 @@
 		selected?: boolean;
 		onOpenTurn?: (turnId: string) => void;
 		onRename?: (turnId: string, title: string | null) => Promise<void>;
+		/** Leaves the analysis out of the list; its files are kept. */
+		onHide?: (turnId: string) => Promise<void>;
 	}
 
-	let { product, onOpen, selected = false, onOpenTurn, onRename }: Props = $props();
+	let { product, onOpen, selected = false, onOpenTurn, onRename, onHide }: Props = $props();
+
+	let hideFailure = $state<string | null>(null);
+
+	async function hide(turnId: string, hideIt: (turnId: string) => Promise<void>) {
+		hideFailure = null;
+		try {
+			await hideIt(turnId);
+		} catch (e) {
+			hideFailure = failureMessage(e);
+		}
+	}
 
 	const turnId = $derived(product.analysis.turnId);
 	const fileCount = $derived(product.analysis.files.length);
@@ -41,8 +55,20 @@
 							Show in chat
 						</button>
 					{/if}
+					{#if turnId && onHide}
+						<button
+							type="button"
+							class="link"
+							aria-label={`Hide ${product.name} from this list`}
+							title="Hide from this list. Its files are kept."
+							onclick={() => hide(turnId, onHide)}
+						>
+							Hide
+						</button>
+					{/if}
 				</span>
 			</p>
+			{#if hideFailure}<p class="failure" role="alert">{hideFailure}</p>{/if}
 		{/snippet}
 	</RenamableName>
 </li>
@@ -110,6 +136,11 @@
 	.link:hover,
 	.link:focus-visible {
 		color: var(--color-accent);
+	}
+	.failure {
+		margin: 0;
+		font-size: var(--text-size-caption);
+		color: var(--color-danger);
 	}
 	/* The actions are occasional, so they wait for the pointer; touch screens
 	   and keyboard focus still always reach them. */

@@ -56,12 +56,45 @@ def test_only_the_settings_that_differ_from_the_definitions_defaults_are_listed(
             "short_label": "first stage rain",
             "value": 15.0,
             "unit": "mm",
+            "default": 10.0,
         }
     ]
     assert (longer_spell.name, longer_spell.is_default) == ("Standard wet spell", False)
     assert [change.model_dump() for change in longer_spell.changes] == [
-        {"label": "Wet spell length", "short_label": "wet spell", "value": 5, "unit": "days"}
+        {
+            "label": "Wet spell length",
+            "short_label": "wet spell",
+            "value": 5,
+            "unit": "days",
+            "default": 3,
+        }
     ]
+
+
+def test_a_standard_wet_spells_onset_threshold_is_part_of_its_definition() -> None:
+    lower = run_summaries.onset_definition(benchmark_config(wet_threshold=15.0))
+    at_default = run_summaries.onset_definition(benchmark_config(wet_threshold=20.0))
+
+    assert lower is not None and at_default is not None
+    assert (lower.name, lower.is_default) == ("Standard wet spell", False)
+    assert [change.model_dump() for change in lower.changes] == [
+        {
+            "label": "Onset threshold",
+            "short_label": "onset threshold",
+            "value": 15.0,
+            "unit": "mm",
+            "default": 20,
+        }
+    ]
+    assert (at_default.is_default, at_default.changes) == (True, [])
+
+
+def test_the_onset_threshold_is_never_a_param_the_rule_is_built_or_checked_with() -> None:
+    settings = {"wet_threshold": 15.0, "wet_spell": 5}
+
+    assert "wet_threshold" not in onset_rules.resolved_rule_params("legacy", None, settings)
+    assert onset_rules.onset_rule_errors("legacy", {"wet_threshold": 15.0})
+    assert onset_rules.resolved_definition("legacy", None, settings)["wet_threshold"] == 15.0
 
 
 def test_a_changed_setting_has_a_short_label_for_a_runs_name() -> None:
@@ -73,7 +106,7 @@ def test_a_changed_setting_has_a_short_label_for_a_runs_name() -> None:
     [threshold] = changed.changes
     assert (threshold.label, threshold.short_label) == ("Wet spell rain total", "onset threshold")
     for rule in onset_rules.onset_rules().values():
-        for spec in rule["params"]:
+        for spec in [*rule["params"], *rule["settings"]]:
             assert 0 < len(spec["short_label"]) <= len(spec["label"]), spec["name"]
             assert "_" not in spec["short_label"]
 
@@ -87,7 +120,8 @@ def test_every_onset_definition_has_a_name_a_description_and_labelled_settings()
 
     for key, rule in onset_rules.onset_rules().items():
         assert names[key]["display_name"] and names[key]["description"]
-        assert set(names[key]["params"]) == {spec["name"] for spec in rule["params"]}
+        specs = [*rule["params"], *rule["settings"]]
+        assert set(names[key]["params"]) == {spec["name"] for spec in specs}
         assert rule["display_name"] != key and "_" not in rule["display_name"]
 
 
@@ -296,6 +330,7 @@ async def test_a_workspaces_runs_say_their_area_definition_and_expected_time(
                 "short_label": "first stage rain",
                 "value": 15.0,
                 "unit": "mm",
+                "default": 10.0,
             }
         ],
     }

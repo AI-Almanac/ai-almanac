@@ -31,3 +31,17 @@ def test_a_small_workspace_is_listed_in_full() -> None:
     digest = workspaces.prompt_listing([_item(1), _item(2)])
     assert "item_1" in digest and "item_2" in digest and "more" not in digest
     assert workspaces.prompt_listing([]).strip() == "The workspace has no artifacts yet."
+
+
+def test_the_digest_marks_files_of_analyses_the_user_hid() -> None:
+    items = [_item(1) | {"turn_id": "turn-wrong"}, _item(2) | {"turn_id": "turn-right"}]
+
+    digest = workspaces.prompt_listing(items, hidden_turns={"turn-wrong"})
+    lines = {
+        line.split(" — ")[0][2:]: line for line in digest.splitlines() if line.startswith("- ")
+    }
+
+    assert lines["item_1"].endswith("(hidden by the user)")
+    assert not lines["item_2"].endswith("(hidden by the user)")
+    assert workspaces.HIDDEN_BY_USER_NOTE in digest
+    assert workspaces.HIDDEN_BY_USER_NOTE not in workspaces.prompt_listing(items)

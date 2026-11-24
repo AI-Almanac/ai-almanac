@@ -18,6 +18,13 @@ DEFAULT_ONSET_RULE = "legacy"
 _ACCEPTED_TYPES = {"int": (int,), "float": (int, float), "bool": (bool,)}
 # ROMP's legacy rule takes any of these it is not given from the flat benchmark settings.
 _LEGACY_SETTINGS = ("wet_init", "wet_spell", "dry_spell", "dry_extent")
+# Flat benchmark settings a rule's onset also depends on that ROMP does not take as one of
+# the rule's params: legacy's onset total is the `wet_threshold` ROMP hands every rule.
+# They are part of the definition a user reads, never of the params a rule is built or
+# checked with.
+_DEFINITION_SETTINGS: dict[str, tuple[dict, ...]] = {
+    "legacy": ({"name": "wet_threshold", "type": "float", "unit": "mm"},),
+}
 
 
 def _packaged_json(filename: str) -> Any:
@@ -39,11 +46,15 @@ def _named(rule: dict, names: Mapping[str, Any]) -> dict:
         **rule,
         "display_name": names.get("display_name") or _words(rule["name"]),
         "description": names.get("description"),
-        "params": [
-            {**spec, **_param_words(spec["name"], worded.get(spec["name"]) or {})}
-            for spec in rule["params"]
-        ],
+        "params": _worded_specs(rule["params"], worded),
+        "settings": _worded_specs(rule["settings"], worded),
     }
+
+
+def _worded_specs(specs: list[dict], worded: Mapping[str, Any]) -> list[dict]:
+    return [
+        {**spec, **_param_words(spec["name"], worded.get(spec["name"]) or {})} for spec in specs
+    ]
 
 
 def _param_words(name: str, worded: Mapping[str, str]) -> dict[str, str]:
@@ -58,7 +69,9 @@ def onset_rules() -> dict[str, dict]:
     onset_rule_names.json and joined here."""
     names = _packaged_json("onset_rule_names.json")
     return {
-        rule["name"]: _named(_with_run_defaults(rule), names.get(rule["name"]) or {})
+        rule["name"]: _named(
+            _with_definition_settings(_with_run_defaults(rule)), names.get(rule["name"]) or {}
+        )
         for rule in _packaged_json("onset_rules.json")
     }
 
@@ -80,6 +93,19 @@ def _with_run_defaults(rule: dict) -> dict:
     }
 
 
+def _with_definition_settings(rule: dict) -> dict:
+    """The rule with the flat benchmark settings its onset also depends on, each at the
+    platform's default (romp.yaml), as `settings` beside its params."""
+    platform = get_romp_defaults()
+    return {
+        **rule,
+        "settings": [
+            {**spec, "default": platform.get(spec["name"])}
+            for spec in _DEFINITION_SETTINGS.get(rule["name"], ())
+        ],
+    }
+
+
 def display_name(name: str | None) -> str:
     """What to call an onset definition in front of a user; unset means the default."""
     key = name or DEFAULT_ONSET_RULE
@@ -90,17 +116,19 @@ def display_name(name: str | None) -> str:
 def changed_params(
     name: str, rule_params: Mapping[str, Any] | None, settings: Mapping[str, Any]
 ) -> list[dict]:
-    """The rule's parameters whose resolved value differs from ROMP's default, each as
-    its label, its short label, value and unit."""
-    resolved = resolved_rule_params(name, rule_params, settings)
+    """The definition's parameters and settings whose value differs from the default a
+    run has, each as its label, its short label, value, unit and that default."""
+    rule = onset_rules()[name]
+    resolved = resolved_definition(name, rule_params, settings)
     return [
         {
             "label": spec["label"],
             "short_label": spec["short_label"],
             "value": resolved[spec["name"]],
             "unit": spec.get("unit"),
+            "default": spec.get("default"),
         }
-        for spec in onset_rules()[name]["params"]
+        for spec in [*rule["params"], *rule["settings"]]
         if resolved[spec["name"]] != spec.get("default")
     ]
 
@@ -116,6 +144,7 @@ def assistant_listing() -> list[dict]:
             "is_default": key == DEFAULT_ONSET_RULE,
             "internal_value": key,
             "params": rule["params"],
+            "settings": rule["settings"],
         }
         for key, rule in onset_rules().items()
     ]
@@ -165,6 +194,20 @@ def resolved_rule_params(
         else {}
     )
     return {**defaults, **flat, **(rule_params or {})}
+
+
+def resolved_definition(
+    name: str, rule_params: Mapping[str, Any] | None, settings: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Every value the definition's onset depends on: the params ROMP builds the rule
+    with, then the flat benchmark settings it also reads, set or at their defaults."""
+    definition_settings = {
+        spec["name"]: spec["default"]
+        if settings.get(spec["name"]) is None
+        else settings[spec["name"]]
+        for spec in onset_rules()[name]["settings"]
+    }
+    return {**resolved_rule_params(name, rule_params, settings), **definition_settings}
 
 
 def _legacy_lookahead(params: Mapping[str, Any]) -> int:

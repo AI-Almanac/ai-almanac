@@ -108,3 +108,102 @@ export function nameParts(naming: RunNaming, detail: NameDetail): string[] {
 		detail.leadDays ? leadDaysName(scope.lead_days) : null
 	].filter((part): part is string => Boolean(part));
 }
+
+/** What a run is called among its siblings: what sets it apart, then what it shares with them. */
+export type ListName = { lead: string; context: string | null };
+
+/** One part of a run's name, keyed so the same part of two runs' names can be compared. */
+type NamePart = { key: string; text: string };
+
+function part(key: string, text: string | null | undefined): NamePart[] {
+	return text ? [{ key, text }] : [];
+}
+
+function unique<T>(values: T[]): T[] {
+	return [...new Set(values)];
+}
+
+/** A setting as the run has it: its own change, else the default a sibling's change reports. */
+function settingOf(
+	onset: OnsetDefinition,
+	label: string,
+	sameRule: OnsetDefinition[]
+): OnsetChange {
+	const own = onset.changes.find((change) => change.label === label);
+	if (own) return own;
+	const changed = sameRule.flatMap((each) => each.changes).find((each) => each.label === label)!;
+	return { ...changed, value: changed.default };
+}
+
+function settingText(setting: OnsetChange, short: boolean): string {
+	const name = onsetChangeName(setting, short);
+	return setting.value === setting.default ? `${name} (default)` : name;
+}
+
+/** The definition's name sets siblings apart unless every one of them uses the default's. */
+function namesDefinition(onsets: OnsetDefinition[]): boolean {
+	return unique(onsets.map((onset) => onset.name)).length > 1 || !onsets.some((o) => o.is_default);
+}
+
+/**
+ * The run's onset definition among its siblings': its name where that tells them
+ * apart, and every setting a sibling of the same definition changed, by its value
+ * here, so a run that kept the default is named by it rather than by nothing.
+ */
+function onsetParts(
+	onset: OnsetDefinition | null,
+	onsets: OnsetDefinition[],
+	short: boolean
+): NamePart[] {
+	if (!onset) return [];
+	const sameRule = onsets.filter((each) => each.name === onset.name);
+	const labels = unique(sameRule.flatMap((each) => each.changes.map((change) => change.label)));
+	const settings = labels.map((label) => ({
+		key: `onset:${label}`,
+		text: settingText(settingOf(onset, label, sameRule), short)
+	}));
+	if (!namesDefinition(onsets)) return settings;
+	const marked = onset.is_default && settings.length === 0;
+	return [...part('onset', marked ? `${onset.name} (default)` : onset.name), ...settings];
+}
+
+/** In a title's order: own name, area (else region), years, onset definition, models. */
+function siblingParts(
+	naming: RunNaming,
+	onsets: OnsetDefinition[],
+	detail: NameDetail
+): NamePart[] {
+	const { scope } = naming;
+	return [
+		...part('own', naming.ownName),
+		...part('area', areaName(naming.areas, detail.areas) ?? scope.place),
+		...part('years', scope.years && spanName(scope.years)),
+		...onsetParts(naming.onset, onsets, detail.shortLabels),
+		...part('models', naming.models.join(', '))
+	];
+}
+
+function joined(parts: NamePart[]): string {
+	return parts.map((each) => each.text).join(' · ');
+}
+
+/** Leads with the parts that vary; a run whose every part is shared leads with those. */
+function listName(parts: NamePart[], varies: (key: string) => boolean): ListName {
+	const lead = parts.filter((each) => varies(each.key));
+	const shared = parts.filter((each) => !varies(each.key));
+	if (lead.length === 0) return { lead: joined(shared), context: null };
+	return { lead: joined(lead), context: joined(shared) || null };
+}
+
+/** Each sibling named by the parts of its name that differ from the others', the rest as context. */
+export function siblingNames(namings: RunNaming[], detail: NameDetail): ListName[] {
+	const onsets = namings.flatMap((naming) => naming.onset ?? []);
+	const parts = namings.map((naming) => siblingParts(naming, onsets, detail));
+	const textOf = (own: NamePart[], key: string) => own.find((each) => each.key === key)?.text;
+	const varying = new Set(
+		unique(parts.flat().map((each) => each.key)).filter(
+			(key) => unique(parts.map((own) => textOf(own, key))).length > 1
+		)
+	);
+	return parts.map((own) => listName(own, (key) => varying.has(key)));
+}

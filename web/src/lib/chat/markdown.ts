@@ -50,10 +50,18 @@ function escapeAttribute(value: string): string {
 		.replace(/>/g, '&gt;');
 }
 
+/** Whether a key press on a workspace link should open it, as Enter or Space opens a button. */
+export function opensLink(event: KeyboardEvent): boolean {
+	return event.key === 'Enter' || event.key === ' ';
+}
+
 /**
  * File and run links become buttons carrying their reference in a data attribute,
  * so a delegated click handler opens them and no href ever reaches the DOM.
- * Without anywhere to open them they become plain text rather than dead links.
+ * They are spans with a button's role rather than <button>s: a <button> always
+ * lays out as one unbreakable box, so a long title would leave its line and strand
+ * the punctuation after it. Without anywhere to open them they become plain text
+ * rather than dead links.
  */
 function artifactLinks(openable: boolean): MarkedExtension {
 	return {
@@ -63,7 +71,7 @@ function artifactLinks(openable: boolean): MarkedExtension {
 				if (attribute === null) return false;
 				const text = this.parser.parseInline(token.tokens);
 				if (!openable) return `<span class="artifact-link-text">${text}</span>`;
-				return `<button type="button" class="artifact-link" ${attribute}>${text}</button>`;
+				return `<span role="button" tabindex="0" class="artifact-link" ${attribute}>${text}</span>`;
 			}
 		}
 	};

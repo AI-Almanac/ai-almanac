@@ -297,8 +297,10 @@ async def list_models(region: str | None, user_id: str, scope: ChatScope) -> dic
 def list_onset_rules() -> dict:
     """The onset definitions a benchmark can score against. ``display_name`` and
     ``description`` are what to say to the user, each parameter's ``label`` likewise;
-    ``internal_value`` is only the value to set as advanced_params.onset_rule. The
-    default is named by its display name alone: leaving onset_rule unset selects it."""
+    ``internal_value`` is only the value to set as advanced_params.onset_rule. A
+    definition's ``settings`` are part of it too but are set as the advanced_params of
+    the same name, never in onset_rule_params. The default is named by its display name
+    alone: leaving onset_rule unset selects it."""
     return {
         "onset_definitions": onset_rules.assistant_listing(),
         "default_display_name": onset_rules.display_name(None),

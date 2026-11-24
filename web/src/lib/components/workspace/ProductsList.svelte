@@ -8,6 +8,7 @@
 	} from '$lib/workspace/products';
 	import type { Snippet } from 'svelte';
 	import AnalysisEntry from './AnalysisEntry.svelte';
+	import HiddenAnalyses from './HiddenAnalyses.svelte';
 	import RunRow from './RunRow.svelte';
 	import ProductKindIcon from './ProductKindIcon.svelte';
 	import ZoneToggle from './ZoneToggle.svelte';
@@ -22,6 +23,10 @@
 		onCollapse: () => void;
 		onOpenTurn?: (turnId: string) => void;
 		onRenameAnalysis?: (turnId: string, title: string | null) => Promise<void>;
+		/** The analyses the user hid, listed apart at the bottom so they can be shown again. */
+		hiddenAnalyses?: AnalysisProduct[];
+		onHideAnalysis?: (turnId: string) => Promise<void>;
+		onUnhideAnalysis?: (turnId: string) => Promise<void>;
 		onRefresh?: () => void;
 		/** The "New" menu, given whether to draw it small; left out when there is nothing to offer. */
 		newRun?: Snippet<[compact: boolean]>;
@@ -35,6 +40,9 @@
 		onCollapse,
 		onOpenTurn,
 		onRenameAnalysis,
+		hiddenAnalyses = [],
+		onHideAnalysis,
+		onUnhideAnalysis,
 		onRefresh,
 		newRun
 	}: Props = $props();
@@ -77,7 +85,7 @@
 	/>
 
 	<div class="groups">
-		{#if found.length === 0}
+		{#if found.length === 0 && query.trim()}
 			<p class="none">No product has “{query.trim()}” in its name.</p>
 		{/if}
 		{#each found as group (group.kind)}
@@ -96,6 +104,7 @@
 								onOpen={(analysis: AnalysisProduct) => onOpen(analysis)}
 								{onOpenTurn}
 								onRename={onRenameAnalysis}
+								onHide={onHideAnalysis}
 							/>
 						{:else}
 							<RunRow {product} selected={product.key === shownKey} {onOpen} />
@@ -104,6 +113,9 @@
 				</ul>
 			</section>
 		{/each}
+		{#if hiddenAnalyses.length > 0 && onUnhideAnalysis}
+			<HiddenAnalyses analyses={hiddenAnalyses} onUnhide={onUnhideAnalysis} />
+		{/if}
 	</div>
 </nav>
 

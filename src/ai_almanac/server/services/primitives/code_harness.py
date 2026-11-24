@@ -145,7 +145,7 @@ def _code_file(code: str, code_hash: str, directory: Path) -> ledger.OutputFile:
         path=source,
         label=f"code_{code_hash[:8]}",
         kind="document",
-        title="Code that was run",
+        title="Script",
         supporting=True,
     )
 

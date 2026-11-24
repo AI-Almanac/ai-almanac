@@ -283,6 +283,42 @@ async def name_analysis(
     return {key: row[key] for key in ("turn_id", "title", "named_by")}
 
 
+async def hidden_analyses(workspace_id: str) -> list[str]:
+    """The turns whose analyses the user hid from the products list, oldest first."""
+    hidden = tables.workspace_hidden_analyses
+    async with get_db() as conn:
+        result = await conn.execute(
+            sa.select(hidden.c.turn_id)
+            .where(hidden.c.workspace_id == workspace_id)
+            .order_by(hidden.c.hidden_at, hidden.c.turn_id)
+        )
+        return list(result.scalars())
+
+
+async def hide_analysis(workspace_id: str, turn_id: str) -> None:
+    """Leave an analysis out of the products list. Its files stay in the workspace."""
+    async with get_db() as conn:
+        # An upsert, so hiding twice at once stays idempotent (valid on SQLite and Postgres).
+        await conn.execute(
+            sa.text(
+                "INSERT INTO workspace_hidden_analyses (workspace_id, turn_id, hidden_at) "
+                "VALUES (:workspace_id, :turn_id, :now) "
+                "ON CONFLICT (workspace_id, turn_id) DO NOTHING"
+            ),
+            {"workspace_id": workspace_id, "turn_id": turn_id, "now": _now()},
+        )
+
+
+async def unhide_analysis(workspace_id: str, turn_id: str) -> None:
+    hidden = tables.workspace_hidden_analyses
+    async with get_db() as conn:
+        await conn.execute(
+            hidden.delete().where(
+                hidden.c.workspace_id == workspace_id, hidden.c.turn_id == turn_id
+            )
+        )
+
+
 async def turn_file_titles(workspace_id: str, turn_id: str) -> list[str]:
     """Names of the results (not supporting files) a turn added to the workspace."""
     return [
@@ -885,13 +921,29 @@ DIGEST_RECENT_ITEMS = 20
 DIGEST_RECENT_TURNS = 3
 
 
-def prompt_listing(items: list[dict], referenced: set[str] | None = None) -> str:
+HIDDEN_BY_USER_NOTE = (
+    "Items marked (hidden by the user) belong to analyses the user removed from their "
+    "results list; do not present them as current results unless the user asks about them."
+)
+
+
+def _digest_line(item: dict, hidden_turns: set[str]) -> str:
+    crumbs = " → ".join(item["breadcrumb"]) or "unknown"
+    line = f"- {item['label']} — {item['title']} — {item['kind']} — {crumbs}"
+    return line + " (hidden by the user)" if item.get("turn_id") in hidden_turns else line
+
+
+def prompt_listing(
+    items: list[dict], referenced: set[str] | None = None, hidden_turns: set[str] | None = None
+) -> str:
     """The per-turn artifact digest, capped so the prompt does not grow with the
     workspace (D-R9): counts per group, the most recent items and anything recent
-    turns read, then a pointer to ``list_artifacts`` for the rest."""
+    turns read, then a pointer to ``list_artifacts`` for the rest. Files of analyses
+    the user hid stay listed, since later work may build on them, but are marked."""
     if not items:
         return "\n\nThe workspace has no artifacts yet."
     referenced = referenced or set()
+    hidden_turns = hidden_turns or set()
     newest = sorted(items, key=lambda item: item["created_at"])[-DIGEST_RECENT_ITEMS:]
     keep = {item["id"] for item in newest} | referenced
     shown = [item for item in items if item["id"] in keep]
@@ -902,11 +954,11 @@ def prompt_listing(items: list[dict], referenced: set[str] | None = None) -> str
         + "). The most recent, and those read in the last few turns "
         "(label — title — kind — how it was made):"
     ]
-    for item in shown:
-        crumbs = " → ".join(item["breadcrumb"]) or "unknown"
-        lines.append(f"- {item['label']} — {item['title']} — {item['kind']} — {crumbs}")
-    if hidden := len(items) - len(shown):
-        lines.append(f"- {hidden} more — call list_artifacts to see them all.")
+    lines.extend(_digest_line(item, hidden_turns) for item in shown)
+    if rest := len(items) - len(shown):
+        lines.append(f"- {rest} more — call list_artifacts to see them all.")
+    if any(item.get("turn_id") in hidden_turns for item in shown):
+        lines.append(HIDDEN_BY_USER_NOTE)
     return "\n".join(lines)
 
 
@@ -934,6 +986,7 @@ class Activity:
     artifact_created: dict[str, str]
     follow_up_statuses: dict[str, str] = field(default_factory=dict)
     analysis_titles: dict[str, str] = field(default_factory=dict)
+    hidden_analyses: frozenset[str] = frozenset()
 
 
 async def activity(workspace_id: str) -> Activity:
@@ -958,11 +1011,17 @@ async def activity(workspace_id: str) -> Activity:
                 tables.workspace_analyses.c.workspace_id == workspace_id
             )
         )
+        hidden_rows = await conn.execute(
+            sa.select(tables.workspace_hidden_analyses.c.turn_id).where(
+                tables.workspace_hidden_analyses.c.workspace_id == workspace_id
+            )
+        )
         return Activity(
             dict(job_statuses.fetchall()),
             dict(artifact_rows.fetchall()),
             follow_up_statuses,
             dict(analysis_rows.fetchall()),
+            frozenset(hidden_rows.scalars()),
         )
 
 
@@ -997,7 +1056,8 @@ def activity_changes(previous: Activity, current: Activity) -> ActivityChanges:
         jobs=previous.job_statuses != current.job_statuses,
         new_artifacts=set(current.artifact_created) - set(previous.artifact_created),
         follow_ups=previous.follow_up_statuses != current.follow_up_statuses,
-        analyses=previous.analysis_titles != current.analysis_titles,
+        analyses=previous.analysis_titles != current.analysis_titles
+        or previous.hidden_analyses != current.hidden_analyses,
     )
 
 

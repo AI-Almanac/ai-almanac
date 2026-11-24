@@ -13,7 +13,7 @@
 	import { conversationItems } from '$lib/chat/conversation';
 	import { followUpReplyIds, isFollowUpTurn } from '$lib/chat/follow-ups';
 	import { currentGuardrails } from '$lib/chat/guardrails';
-	import { linkTarget, renderMarkdown } from '$lib/chat/markdown';
+	import { linkTarget, opensLink, renderMarkdown } from '$lib/chat/markdown';
 	import { turnTimeline, type ActivityGroup } from '$lib/chat/timeline';
 	import { figureCard } from '$lib/chat/reply-cards';
 	import { rateChatTurn, type ChatArtifact, type ChatMessage, type ChatToolCall } from '$lib/api';
@@ -124,13 +124,24 @@
 		if (target) onOpenItem?.(target);
 	}
 
-	// Artifact links arrive inside rendered markdown, so one delegated listener
-	// serves them all without the HTML carrying any handler of its own.
+	function openArtifactLinkByKey(event: KeyboardEvent) {
+		const target = opensLink(event) ? linkTarget(event.target) : null;
+		if (!target) return;
+		event.preventDefault();
+		onOpenItem?.(target);
+	}
+
+	// Artifact links arrive inside rendered markdown, so delegated listeners
+	// serve them all without the HTML carrying any handler of its own.
 	$effect(() => {
 		const el = messagesEl;
 		if (!el) return;
 		el.addEventListener('click', openArtifactLink);
-		return () => el.removeEventListener('click', openArtifactLink);
+		el.addEventListener('keydown', openArtifactLinkByKey);
+		return () => {
+			el.removeEventListener('click', openArtifactLink);
+			el.removeEventListener('keydown', openArtifactLinkByKey);
+		};
 	});
 
 	// Follow new output only while the reader is at the bottom, so scrolling up to
@@ -427,18 +438,23 @@
 		background: var(--color-accent-glow);
 	}
 
+	/* Inline so a long title wraps with the sentence; each line's piece keeps the tint. */
 	.prose :global(.artifact-link) {
-		display: inline-flex;
-		align-items: center;
-		padding: 0 var(--space-2);
-		border: 1px solid var(--color-accent);
-		border-radius: 2rem;
+		padding: 0 0.2em;
+		border-radius: 0.3em;
 		background: var(--color-accent-light);
 		color: var(--color-accent);
-		font: inherit;
-		font-size: var(--text-size-label);
 		font-weight: 500;
+		text-decoration: underline;
+		text-decoration-color: var(--color-accent-border);
+		text-underline-offset: 0.2em;
+		box-decoration-break: clone;
+		-webkit-box-decoration-break: clone;
 		cursor: pointer;
+	}
+	.prose :global(.artifact-link:focus-visible) {
+		outline: 0.15rem solid var(--color-accent);
+		outline-offset: 0.1rem;
 	}
 	.prose :global(.artifact-link:hover) {
 		background: var(--color-accent);

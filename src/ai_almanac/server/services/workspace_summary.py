@@ -13,6 +13,7 @@ import io
 import logging
 import re
 from collections import Counter
+from collections.abc import Mapping
 from datetime import date
 from typing import Literal
 
@@ -271,8 +272,21 @@ def headline_window(metrics: list[JobMetrics]) -> str | None:
     return min(windows, key=window_start) if windows else None
 
 
-def benchmark_skill(metrics_by_job: dict[str, JobMetrics]) -> BenchmarkSkill | None:
-    """The model with the lowest mean onset error over the shortest lead window."""
+def benchmark_model_names(jobs: list[dict]) -> dict[str, str]:
+    """Each benchmark job's model by the name the product gives it, keyed by job id: a
+    job's metrics name its model by the identifier ROMP was handed."""
+    return {
+        job["id"]: name
+        for job in jobs
+        if (name := workspace_display.model_display_name(job["config"]))
+    }
+
+
+def benchmark_skill(
+    metrics_by_job: dict[str, JobMetrics], model_names: Mapping[str, str] | None = None
+) -> BenchmarkSkill | None:
+    """The model with the lowest mean onset error over the shortest lead window, by its
+    display name in ``model_names`` (keyed by job id) where that has one."""
     window = headline_window(list(metrics_by_job.values()))
     if window is None:
         return None
@@ -291,7 +305,7 @@ def benchmark_skill(metrics_by_job: dict[str, JobMetrics]) -> BenchmarkSkill | N
     mae, model, job_id = min(models)
     return BenchmarkSkill(
         job_id=job_id,
-        model=model,
+        model=(model_names or {}).get(job_id, model),
         mae_days=round(mae, 1),
         climatology_mae_days=None if climatology is None else round(climatology, 1),
         window=window,
@@ -390,7 +404,9 @@ async def _skill(jobs: list[dict]) -> BlendSkill | BenchmarkSkill | None:
         return None
     run = finished_benchmark_runs(jobs)[_run_key(benchmark)]
     by_job = {job["id"]: await _job_metrics(job) for job in run}
-    return benchmark_skill({job_id: m for job_id, m in by_job.items() if m is not None})
+    return benchmark_skill(
+        {job_id: m for job_id, m in by_job.items() if m is not None}, benchmark_model_names(run)
+    )
 
 
 async def job_headlines(workspace_id: str) -> dict[str, JobHeadline]:
@@ -408,7 +424,10 @@ async def job_headlines(workspace_id: str) -> dict[str, JobHeadline]:
             headlines[job["id"]] = await _forecast_of(job)
     for run in finished_benchmark_runs(jobs).values():
         cached = {job["id"]: metrics.cached_job_metrics(job.get("metrics_cache")) for job in run}
-        if best := benchmark_skill({job_id: m for job_id, m in cached.items() if m}):
+        best = benchmark_skill(
+            {job_id: m for job_id, m in cached.items() if m}, benchmark_model_names(run)
+        )
+        if best:
             headlines[best.job_id] = best
     return headlines
 

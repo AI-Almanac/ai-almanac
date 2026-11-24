@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { linkTarget, renderMarkdown } from '../src/lib/chat/markdown';
+import { linkTarget, opensLink, renderMarkdown } from '../src/lib/chat/markdown';
 
 describe('a clicked workspace link', () => {
 	const host = document.createElement('div');
 	host.innerHTML = renderMarkdown('See [the map](artifact:onset-map) or [the run](run:job-7).', {
 		openArtifactLinks: true
 	});
-	const [file, run] = host.querySelectorAll('button');
+	const [file, run] = host.querySelectorAll('[role="button"]');
 
 	it('opens the file or run it names', () => {
 		expect(linkTarget(file)).toEqual({ kind: 'artifact', ref: 'onset-map' });
@@ -63,5 +63,24 @@ describe('markdown tables', () => {
 		expect(host.querySelector('table')).toBeNull();
 		expect(host.querySelector('.table-scroll')).toBeNull();
 		expect(host.querySelector('[onmouseover]')).toBeNull();
+	});
+});
+
+describe('a workspace link in a sentence', () => {
+	const host = document.createElement('div');
+	host.innerHTML = renderMarkdown('I plotted [a long figure title](artifact:onset-map).', {
+		openArtifactLinks: true
+	});
+	const link = host.querySelector('[data-artifact-ref]')!;
+
+	it('stays inline so a long title wraps with the sentence', () => {
+		expect(link.tagName).toBe('SPAN');
+	});
+
+	it('can be reached and opened from the keyboard', () => {
+		expect(link.getAttribute('tabindex')).toBe('0');
+		expect(opensLink(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true);
+		expect(opensLink(new KeyboardEvent('keydown', { key: ' ' }))).toBe(true);
+		expect(opensLink(new KeyboardEvent('keydown', { key: 'a' }))).toBe(false);
 	});
 });

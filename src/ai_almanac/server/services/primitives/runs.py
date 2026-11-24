@@ -228,7 +228,12 @@ def _benchmark_facts(
         ("Area of interest", area and area_label(area)),
         ("Evaluation years", show.evaluation_years_label(years)),
         ("Forecast days", show.forecast_days_label(spec.forecast_window_days)),
-        ("Onset definition", show.onset_definition_label(rule)),
+        (
+            "Onset definition",
+            show.onset_definition_with_changes(
+                rule, advanced.onset_rule_params, advanced.model_dump()
+            ),
+        ),
         ("Goal", spec.intent),
     )
 

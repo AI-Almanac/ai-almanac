@@ -2,13 +2,8 @@
 	import type { WorkspaceSummary } from '$lib/api';
 	import type { FocusAreaValue } from '$lib/api/jobs';
 	import type { SeasonInForce, SeasonSave } from '$lib/workspace/season-form';
-	import {
-		canUpdateForecast,
-		forecastFact,
-		seasonFact,
-		setupChips,
-		skillFact
-	} from '$lib/workspace/summary';
+	import { studyAreaWords } from '$lib/workspace/study-area';
+	import { seasonFact, setupChips } from '$lib/workspace/summary';
 	import AreaControl from './AreaControl.svelte';
 	import SeasonControl from './SeasonControl.svelte';
 
@@ -16,11 +11,6 @@
 
 	interface Props {
 		summary: WorkspaceSummary;
-		/** Whether the assistant can be asked to act, e.g. to update the forecast. */
-		canAct?: boolean;
-		onUpdateForecast?: () => void;
-		/** Opens the run a fact comes from. */
-		onOpenJob?: (jobId: string) => void;
 		/** Makes the season editable: reads the season in force, and saves a change. */
 		seasonEditor?: {
 			load: () => Promise<SeasonInForce>;
@@ -33,25 +23,14 @@
 		};
 	}
 
-	let {
-		summary,
-		canAct = false,
-		onUpdateForecast,
-		onOpenJob,
-		seasonEditor,
-		areaEditor
-	}: Props = $props();
+	let { summary, seasonEditor, areaEditor }: Props = $props();
 
 	const season = $derived(seasonFact(summary.season));
-	const forecast = $derived(forecastFact(summary.latest_forecast));
-	const skill = $derived(skillFact(summary.skill));
-	const setup = $derived(setupChips(summary.setup).join(' · '));
-	const forecastJob = $derived(summary.latest_forecast?.job_id ?? null);
-	const skillJob = $derived(summary.skill?.job_id ?? null);
-	const updatable = $derived(canAct && canUpdateForecast(summary.latest_forecast));
+	const areaWords = $derived(areaEditor ? studyAreaWords(areaEditor.area) : null);
+	const setup = $derived(setupChips(summary.setup, areaWords).join(' · '));
 </script>
 
-<!-- One line of facts; what each one rests on is a hover away rather than on screen. -->
+<!-- One line of what the workspace is about; what each fact rests on is a hover away. -->
 <div class="summary" role="group" aria-label="Workspace summary">
 	{#if areaEditor}
 		<span class="item">
@@ -76,27 +55,6 @@
 			{/if}
 		</span>
 	{/if}
-	<span class="item" title={forecast.detail ?? undefined}>
-		{#if forecastJob && onOpenJob}
-			<button type="button" class="open" onclick={() => onOpenJob(forecastJob)}>
-				{forecast.headline}
-			</button>
-		{:else}
-			{forecast.headline}
-		{/if}
-		{#if updatable && onUpdateForecast}
-			<button type="button" class="action" onclick={onUpdateForecast}>Update forecast</button>
-		{/if}
-	</span>
-	<span class="item" title={skill.detail ?? undefined}>
-		{#if skillJob && onOpenJob}
-			<button type="button" class="open" onclick={() => onOpenJob(skillJob)}>
-				{skill.headline}
-			</button>
-		{:else}
-			{skill.headline}
-		{/if}
-	</span>
 	{#if setup}
 		<span class="item dim" title="What this workspace is set up for">{setup}</span>
 	{/if}
@@ -135,25 +93,5 @@
 	}
 	.dim {
 		color: var(--color-text-muted);
-	}
-	.open,
-	.action {
-		padding: 0;
-		border: 0;
-		background: none;
-		font: inherit;
-		cursor: pointer;
-	}
-	.open {
-		color: inherit;
-		font-weight: 600;
-	}
-	.open:hover,
-	.action:hover {
-		text-decoration: underline;
-	}
-	.action {
-		color: var(--color-accent);
-		font-weight: 600;
 	}
 </style>

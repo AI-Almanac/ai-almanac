@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkspaceDetail, WorkspaceEvent, WorkspaceJob } from '../src/lib/api';
+import type {
+	WorkspaceArtifact,
+	WorkspaceDetail,
+	WorkspaceEvent,
+	WorkspaceJob
+} from '../src/lib/api';
 
 const api = vi.hoisted(() => ({
 	getWorkspace: vi.fn(),
 	getWorkspaceSummary: vi.fn(),
+	hideWorkspaceAnalysis: vi.fn(),
 	linkWorkspaceJob: vi.fn(),
+	unhideWorkspaceAnalysis: vi.fn(),
 	watchWorkspace: vi.fn()
 }));
 
@@ -29,6 +36,23 @@ function job(id: string, status = 'complete'): WorkspaceJob {
 function snapshot(jobs: WorkspaceJob[]): WorkspaceDetail {
 	return { id: 'ws-1', name: 'Kiremt', settings: {}, jobs, artifacts: [], analyses: [] } as never;
 }
+
+function analysisFile(id: string, turnId: string): WorkspaceArtifact {
+	return { id, turn_id: turnId, job_id: null, created_at: '2026-09-22T00:00:00Z' } as never;
+}
+
+function withAnalyses(hidden: string[]): WorkspaceDetail {
+	return {
+		...snapshot([]),
+		artifacts: [analysisFile('wrong-map', 'turn-wrong'), analysisFile('map', 'turn-right')],
+		hidden_analyses: hidden
+	};
+}
+
+const shownTurns = (session: WorkspaceSession) =>
+	session.results.analyses.map((analysis) => analysis.turnId);
+const hiddenTurns = (session: WorkspaceSession) =>
+	session.hiddenAnalyses.map((analysis) => analysis.turnId);
 
 /** Opens the session and hands back what the event stream would call with each update. */
 async function opened(session: WorkspaceSession) {
@@ -119,5 +143,43 @@ describe('a workspace kept current', () => {
 			['ws-1', 'y', 'started']
 		]);
 		expect(api.getWorkspace).toHaveBeenCalledTimes(2);
+	});
+
+	it('leaves a hidden analysis out of the results until it is shown again', async () => {
+		api.getWorkspace.mockResolvedValue(withAnalyses([]));
+		const session = new WorkspaceSession('ws-1');
+		await opened(session);
+
+		await session.setAnalysisHidden('turn-wrong', true);
+		const whileHidden = { shown: shownTurns(session), hidden: hiddenTurns(session) };
+		await session.setAnalysisHidden('turn-wrong', false);
+
+		expect(api.hideWorkspaceAnalysis).toHaveBeenCalledWith('ws-1', 'turn-wrong');
+		expect(api.unhideWorkspaceAnalysis).toHaveBeenCalledWith('ws-1', 'turn-wrong');
+		expect(whileHidden).toEqual({ shown: ['turn-right'], hidden: ['turn-wrong'] });
+		expect(hiddenTurns(session)).toEqual([]);
+		expect(shownTurns(session)).toContain('turn-wrong');
+	});
+
+	it('keeps an analysis listed when hiding it fails', async () => {
+		api.getWorkspace.mockResolvedValue(withAnalyses([]));
+		api.hideWorkspaceAnalysis.mockRejectedValueOnce(new Error('offline'));
+		const session = new WorkspaceSession('ws-1');
+		await opened(session);
+
+		await expect(session.setAnalysisHidden('turn-wrong', true)).rejects.toThrow('offline');
+
+		expect(hiddenTurns(session)).toEqual([]);
+	});
+
+	it('hides an analysis another page hid', async () => {
+		api.getWorkspace.mockResolvedValue(withAnalyses([]));
+		const session = new WorkspaceSession('ws-1');
+		const send = await opened(session);
+
+		send({ type: 'analyses', analyses: [], hidden_analyses: ['turn-wrong'] });
+
+		expect(shownTurns(session)).toEqual(['turn-right']);
+		expect(hiddenTurns(session)).toEqual(['turn-wrong']);
 	});
 });

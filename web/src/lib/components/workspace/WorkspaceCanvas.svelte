@@ -24,6 +24,7 @@
 		type Run,
 		type WorkspaceResults
 	} from '$lib/workspace/runs';
+	import { analysisFileName } from '$lib/workspace/supporting';
 	import ArtifactDetail from './ArtifactDetail.svelte';
 	import RunDetail from './RunDetail.svelte';
 	import RunStatusIndicator from './RunStatusIndicator.svelte';
@@ -36,9 +37,12 @@
 		onNavigate: (view: CanvasView) => void;
 		onOpenTurn?: (turnId: string) => void;
 		onRenameFile?: (file: WorkspaceArtifact, title: string | null) => Promise<void>;
+		/** The forecast that can be brought up to date, and how to ask for it; its run offers the update. */
+		forecastUpdate?: { jobId: string; request: () => void };
 	}
 
-	let { workspace, results, view, onNavigate, onOpenTurn, onRenameFile }: Props = $props();
+	let { workspace, results, view, onNavigate, onOpenTurn, onRenameFile, forecastUpdate }: Props =
+		$props();
 
 	/** A product the stage can show, keyed so that going back to it finds the same view. */
 	type StageTarget =
@@ -55,6 +59,9 @@
 			: view.kind === 'overview'
 				? defaultRun(results.runs)
 				: null
+	);
+	const updatable = $derived(
+		openRun?.jobs.some((job) => job.id === forecastUpdate?.jobId) ? forecastUpdate : undefined
 	);
 	const back = $derived(backLink(view, results.runs.length > 0));
 	const openFile = $derived(
@@ -97,6 +104,12 @@
 		return workspace.artifacts.find((file) => file.id === artifactId) ?? null;
 	}
 
+	/** A file named among the others its analysis made, so a script says what it made. */
+	function nameInAnalysis(file: WorkspaceArtifact): string {
+		const analysis = results.analyses.find((entry) => entry.files.some((f) => f.id === file.id));
+		return analysisFileName(file, analysis?.files ?? [file]);
+	}
+
 	/** Where a file can be explored: its run's view, on the file's own lead-time window. */
 	function mapViewOf(file: WorkspaceArtifact) {
 		const run = runOf(file, results.runs);
@@ -137,6 +150,9 @@
 					<h2>{runTitle(openRun)}</h2>
 				</div>
 				<RunStatusIndicator run={openRun} />
+				{#if updatable}
+					<button type="button" class="update" onclick={updatable.request}>Update forecast</button>
+				{/if}
 			</div>
 		</header>
 	{/if}
@@ -171,6 +187,7 @@
 							{onOpenTurn}
 							onRename={onRenameFile}
 							mapView={mapViewOf(file)}
+							displayName={nameInAnalysis(file)}
 						/>
 					{/if}
 				{/if}
@@ -264,6 +281,22 @@
 		font: inherit;
 		font-size: 0.84rem;
 		cursor: pointer;
+	}
+	.update {
+		flex: none;
+		margin-left: auto;
+		padding: var(--space-1) var(--space-3);
+		border: 1px solid var(--color-accent);
+		border-radius: 0.4rem;
+		background: none;
+		color: var(--color-accent);
+		font: inherit;
+		font-size: var(--text-size-label);
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.update:hover {
+		background: var(--color-surface-muted);
 	}
 	.muted,
 	.empty {

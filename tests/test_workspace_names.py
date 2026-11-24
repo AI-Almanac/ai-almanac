@@ -315,3 +315,93 @@ async def test_a_name_whose_files_have_gone_can_still_be_cleared(client, as_new_
     assert cleared.status_code == 200, cleared.text
     detail = (await client.get(f"/workspaces/{wid}", headers=as_new_user)).json()
     assert detail["analyses"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_hidden_analysis_leaves_the_list_but_keeps_its_files_until_shown_again(
+    client, as_new_user, user_id, tmp_path: Path
+) -> None:
+    workspace, session = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+    await _made_by_turn(
+        user_id,
+        wid,
+        session["id"],
+        "turn-wrong",
+        [ledger.OutputFile(path=write_png(tmp_path / "map.png"), label="map")],
+    )
+    hidden_url = f"/workspaces/{wid}/analyses/turn-wrong/hidden"
+
+    hidden = await client.put(hidden_url, headers=as_new_user)
+    again = await client.put(hidden_url, headers=as_new_user)
+    while_hidden = (await client.get(f"/workspaces/{wid}", headers=as_new_user)).json()
+    shown = await client.delete(hidden_url, headers=as_new_user)
+    after = (await client.get(f"/workspaces/{wid}", headers=as_new_user)).json()
+
+    assert (hidden.status_code, again.status_code, shown.status_code) == (204, 204, 204)
+    assert while_hidden["hidden_analyses"] == ["turn-wrong"]
+    assert [a["label"] for a in while_hidden["artifacts"]] == ["map"], "hiding deletes nothing"
+    assert after["hidden_analyses"] == []
+
+
+@pytest.mark.asyncio
+async def test_only_an_analysis_the_workspace_holds_can_be_hidden(client, as_new_user) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+
+    response = await client.put(
+        f"/workspaces/{workspace['id']}/analyses/turn-nowhere/hidden", headers=as_new_user
+    )
+
+    assert response.status_code == 404
+    detail = (await client.get(f"/workspaces/{workspace['id']}", headers=as_new_user)).json()
+    assert detail["hidden_analyses"] == []
+
+
+@pytest.mark.asyncio
+async def test_nobody_else_can_hide_or_show_an_analysis_in_my_workspace(
+    client, as_new_user, user_id, tmp_path: Path
+) -> None:
+    workspace, session = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+    await _made_by_turn(
+        user_id,
+        wid,
+        session["id"],
+        "turn-1",
+        [ledger.OutputFile(path=write_png(tmp_path / "map.png"), label="map")],
+    )
+    await workspaces.hide_analysis(wid, "turn-1")
+    stranger = {"X-Forwarded-User": "pytest-stranger"}
+    hidden_url = f"/workspaces/{wid}/analyses/turn-1/hidden"
+
+    put = await client.put(hidden_url, headers=stranger)
+    delete = await client.delete(hidden_url, headers=stranger)
+
+    assert (put.status_code, delete.status_code) == (404, 404)
+    assert await workspaces.hidden_analyses(wid) == ["turn-1"]
+
+
+@pytest.mark.asyncio
+async def test_hiding_an_analysis_reaches_an_open_workspace_page(
+    client, as_new_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from ai_almanac.server.routers import workspaces as workspaces_router
+
+    monkeypatch.setattr(workspaces_router, "EVENTS_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(workspaces_router, "EVENTS_LIFETIME_SECONDS", 0.3)
+    workspace, _ = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+
+    async def hide_while_the_page_is_open() -> None:
+        await asyncio.sleep(0.1)
+        await workspaces.hide_analysis(wid, "turn-1")
+
+    hiding = asyncio.create_task(hide_while_the_page_is_open())
+    async with client.stream("GET", f"/workspaces/{wid}/events", headers=as_new_user) as response:
+        body = "".join([chunk async for chunk in response.aiter_text()])
+    await asyncio.gather(hiding)
+
+    [event] = [e for e in sse_events(body) if e["type"] == "analyses"]
+    assert event["hidden_analyses"] == ["turn-1"]

@@ -99,6 +99,18 @@ export async function renameWorkspaceAnalysis(
 	});
 }
 
+/** Leave an analysis out of the products list; its files stay in the workspace. */
+export async function hideWorkspaceAnalysis(workspaceId: string, turnId: string): Promise<void> {
+	await request<void>(`/workspaces/${workspaceId}/analyses/${turnId}/hidden`, { method: 'PUT' });
+}
+
+/** Show a hidden analysis in the products list again. */
+export async function unhideWorkspaceAnalysis(workspaceId: string, turnId: string): Promise<void> {
+	await request<void>(`/workspaces/${workspaceId}/analyses/${turnId}/hidden`, {
+		method: 'DELETE'
+	});
+}
+
 export async function promoteSessionToWorkspace(sessionId: string): Promise<Workspace> {
 	return request<Workspace>('/workspaces/promote', {
 		method: 'POST',
@@ -150,7 +162,7 @@ export type WorkspaceEvent =
 	| { type: 'jobs'; jobs: WorkspaceJob[] }
 	| { type: 'artifacts'; artifacts: WorkspaceArtifact[] }
 	| { type: 'follow_ups'; follow_ups: FollowUp[] }
-	| { type: 'analyses'; analyses: AnalysisName[] };
+	| { type: 'analyses'; analyses: AnalysisName[]; hidden_analyses: string[] };
 
 const RECONNECT_MS = { first: 1_000, max: 30_000 };
 

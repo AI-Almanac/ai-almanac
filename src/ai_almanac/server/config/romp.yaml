@@ -150,7 +150,7 @@ defaults:
   region: "Ethiopia"
   nc_mask: null
   thresh_file: null
-  wet_threshold: 20        # mm — scalar rainfall threshold for wet day
+  wet_threshold: 20        # mm — rain a wet spell must total for onset (the onset threshold)
   wet_init: 1              # mm — minimum threshold to count as wet
   wet_spell: 3             # days — minimum consecutive wet days for a wet spell
   dry_spell: 7             # days — minimum consecutive dry days for a dry spell
