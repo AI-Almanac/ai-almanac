@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkspaceJob } from '../src/lib/api';
 import {
 	cancellableJobIds,
+	deletableJobIds,
 	durationWords,
 	isUnfinished,
 	modelProgress,
@@ -106,6 +107,26 @@ describe('per-model progress', () => {
 			'j1',
 			'j2'
 		]);
+	});
+});
+
+describe('deleting a run', () => {
+	it('takes every job of a run that has stopped, however it ended', () => {
+		expect(deletableJobIds(runOf('failed', 'complete', 'canceled'))).toEqual(['j0', 'j1', 'j2']);
+	});
+
+	it('takes nothing while any job is still going', () => {
+		for (const going of ['queued', 'running', 'canceling', 'status-from-the-future']) {
+			expect(deletableJobIds(runOf('failed', going))).toEqual([]);
+		}
+	});
+
+	it('takes nothing when any job is not the user’s to delete', () => {
+		const partlyShared = run(
+			workspaceJob({ id: 'a', status: 'failed' }),
+			workspaceJob({ id: 'b', status: 'failed', deletable: false })
+		);
+		expect(deletableJobIds(partlyShared)).toEqual([]);
 	});
 });
 

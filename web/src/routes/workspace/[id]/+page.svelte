@@ -222,7 +222,8 @@
 		stagePanel = null;
 		view = next;
 		followed = null;
-		goto(canvasQuery(next, $page.url.searchParams), {
+		// With the path: an empty query on its own would leave the URL as it was.
+		goto(`${$page.url.pathname}${canvasQuery(next, $page.url.searchParams)}`, {
 			replaceState: true,
 			keepFocus: true,
 			noScroll: true
@@ -239,6 +240,13 @@
 		const wasOnStage = stageAnalysis?.turnId === turnId;
 		await session.setAnalysisHidden(turnId, true);
 		if (!wasOnStage) return;
+		if (view.kind === 'overview') followed = null;
+		else navigate(OVERVIEW);
+	}
+
+	/** Deletes a run; a stage showing it goes back to its default. */
+	async function deleteRun(jobIds: string[]) {
+		await session.deleteJobs(jobIds);
 		if (view.kind === 'overview') followed = null;
 		else navigate(OVERVIEW);
 	}
@@ -418,6 +426,7 @@
 								onNavigate={navigate}
 								onOpenTurn={chatAvailable ? focusTurn : undefined}
 								onRenameFile={(file, title) => session.renameFile(file, title)}
+								onDeleteRun={deleteRun}
 								{forecastUpdate}
 							/>
 						{/if}

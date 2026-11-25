@@ -27,6 +27,7 @@
 	import type { Analysis } from '$lib/workspace/analyses';
 	import { analysisFileName } from '$lib/workspace/supporting';
 	import ArtifactDetail from './ArtifactDetail.svelte';
+	import DeleteRun from './DeleteRun.svelte';
 	import RunDetail from './RunDetail.svelte';
 	import RunStatusIndicator from './RunStatusIndicator.svelte';
 
@@ -40,6 +41,8 @@
 		onNavigate: (view: CanvasView) => void;
 		onOpenTurn?: (turnId: string) => void;
 		onRenameFile?: (file: WorkspaceArtifact, title: string | null) => Promise<void>;
+		/** Deletes the open run's jobs; without it, runs cannot be deleted here. */
+		onDeleteRun?: (jobIds: string[]) => Promise<void>;
 		/** The forecast that can be brought up to date, and how to ask for it; its run offers the update. */
 		forecastUpdate?: { jobId: string; request: () => void };
 	}
@@ -52,6 +55,7 @@
 		onNavigate,
 		onOpenTurn,
 		onRenameFile,
+		onDeleteRun,
 		forecastUpdate
 	}: Props = $props();
 
@@ -163,9 +167,17 @@
 					<h2>{runTitle(openRun)}</h2>
 				</div>
 				<RunStatusIndicator run={openRun} />
-				{#if updatable}
-					<button type="button" class="update" onclick={updatable.request}>Update forecast</button>
-				{/if}
+				<div class="run-actions">
+					{#if updatable}
+						<button type="button" class="update" onclick={updatable.request}>Update forecast</button
+						>
+					{/if}
+					{#if onDeleteRun}
+						{#key openRun.key}
+							<DeleteRun run={openRun} onDelete={onDeleteRun} />
+						{/key}
+					{/if}
+				</div>
 			</div>
 		</header>
 	{/if}
@@ -240,6 +252,7 @@
 	.run-heading {
 		display: flex;
 		flex: 1 1 100%;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.6rem;
 		min-width: 0;
@@ -295,9 +308,16 @@
 		font-size: 0.84rem;
 		cursor: pointer;
 	}
+	.run-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: flex-end;
+		gap: var(--space-2);
+		margin-left: auto;
+	}
 	.update {
 		flex: none;
-		margin-left: auto;
 		padding: var(--space-1) var(--space-3);
 		border: 1px solid var(--color-accent);
 		border-radius: 0.4rem;
