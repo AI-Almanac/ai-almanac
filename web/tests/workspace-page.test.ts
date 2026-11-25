@@ -87,7 +87,8 @@ const api = vi.hoisted(() => ({
 	unhideWorkspaceAnalysis: vi.fn(),
 	listWorkspaces: vi.fn(),
 	startBlankWorkspace: vi.fn(),
-	describeWorkspace: vi.fn()
+	describeWorkspace: vi.fn(),
+	deleteJob: vi.fn()
 }));
 
 vi.mock('../src/lib/api', async () => {
@@ -321,7 +322,7 @@ describe('workspace page', () => {
 		await screen.findByRole('navigation', { name: 'Products' });
 		await fireEvent.click(within(productsList()).getByText('Ethiopia Kiremt onset · AIFS, FuXi'));
 
-		expect(nav.goto).toHaveBeenCalledWith('?run=run-1', {
+		expect(nav.goto).toHaveBeenCalledWith('/workspace/ws-1?run=run-1', {
 			replaceState: true,
 			keepFocus: true,
 			noScroll: true
@@ -377,7 +378,7 @@ describe('workspace page', () => {
 		expect(await screen.findByText('False alarm rate')).toBeTruthy();
 		expect(screen.getByText('Variables (1)')).toBeTruthy();
 		await fireEvent.click(screen.getByText('← Back to run'));
-		expect(nav.goto).toHaveBeenLastCalledWith('?run=run-1', expect.anything());
+		expect(nav.goto).toHaveBeenLastCalledWith('/workspace/ws-1?run=run-1', expect.anything());
 	});
 
 	it('heads an analysis with its name once the assistant names it', async () => {
@@ -406,7 +407,7 @@ describe('workspace page', () => {
 		expect(within(productsList()).getByText('2 files')).toBeTruthy();
 		await fireEvent.click(entry);
 
-		expect(nav.goto).toHaveBeenLastCalledWith('?artifact=art-2', expect.anything());
+		expect(nav.goto).toHaveBeenLastCalledWith('/workspace/ws-1?artifact=art-2', expect.anything());
 		expect(await screen.findByRole('heading', { name: 'False alarm rate map' })).toBeTruthy();
 		expect(within(productsList()).getByRole('button', { current: true }).textContent).toContain(
 			'Analysis from'
@@ -414,7 +415,7 @@ describe('workspace page', () => {
 
 		const files = within(screen.getByRole('navigation', { name: 'Files in this analysis' }));
 		await fireEvent.click(files.getByRole('button', { name: 'Region outlines' }));
-		expect(nav.goto).toHaveBeenLastCalledWith('?artifact=art-3', expect.anything());
+		expect(nav.goto).toHaveBeenLastCalledWith('/workspace/ws-1?artifact=art-3', expect.anything());
 		expect(await screen.findByRole('heading', { name: 'Region outlines' })).toBeTruthy();
 	});
 
@@ -687,6 +688,37 @@ describe('workspace page', () => {
 		expect(screen.getByRole('dialog', { name: 'Add an existing run' })).toBeTruthy();
 	});
 
+	it('deletes a failed run from the stage and goes back to the overview', async () => {
+		const failed = workspaceJob({
+			id: 'job-7',
+			run_id: 'run-7',
+			status: 'failed',
+			error: 'ROMP exited with status 1',
+			created_at: '2026-09-23T00:00:00Z',
+			scope: { place: 'Kenya long rains onset', years: null, lead_days: null }
+		});
+		nav.url = 'http://localhost/workspace/ws-1?run=run-7';
+		api.getWorkspace.mockResolvedValue({ ...workspace, jobs: [...workspace.jobs, failed] });
+		render(WorkspacePage);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete benchmark' }));
+
+		api.getWorkspace.mockResolvedValue(workspace);
+		await fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
+
+		expect(api.deleteJob).toHaveBeenCalledWith('job-7');
+		await waitFor(() =>
+			expect(nav.goto).toHaveBeenLastCalledWith('/workspace/ws-1', expect.anything())
+		);
+		expect(within(productsList()).queryByText(/Kenya long rains onset/)).toBeNull();
+	});
+
+	it('offers no delete for a run that is still going', async () => {
+		render(WorkspacePage);
+
+		await screen.findByRole('heading', { name: 'Ethiopia Kiremt onset · AIFS, FuXi' });
+		expect(screen.queryByRole('button', { name: 'Delete benchmark' })).toBeNull();
+	});
+
 	it('adds an existing run picked by name and shows it on the stage', async () => {
 		const kenya = {
 			...workspace.jobs[0],
@@ -705,7 +737,9 @@ describe('workspace page', () => {
 		api.getWorkspace.mockResolvedValue({ ...workspace, jobs: [...workspace.jobs, kenya] });
 		await fireEvent.click(await picker.findByRole('button', { name: /Kenya long rains onset/ }));
 
-		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('?run=run-9', expect.anything()));
+		await waitFor(() =>
+			expect(nav.goto).toHaveBeenCalledWith('/workspace/ws-1?run=run-9', expect.anything())
+		);
 		expect(api.linkWorkspaceJob).toHaveBeenCalledWith('ws-1', 'job-9', 'added');
 		expect(screen.queryByRole('dialog', { name: 'Add an existing run' })).toBeNull();
 		expect(within(productsList()).getByText(/Kenya long rains onset/)).toBeTruthy();

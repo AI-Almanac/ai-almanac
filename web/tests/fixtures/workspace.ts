@@ -21,6 +21,7 @@ export function workspaceJob(overrides: Partial<WorkspaceJob> = {}): WorkspaceJo
 		started_at: null,
 		completed_at: null,
 		error: null,
+		deletable: true,
 		area_of_interest: null,
 		onset_definition: null,
 		expected_seconds: null,

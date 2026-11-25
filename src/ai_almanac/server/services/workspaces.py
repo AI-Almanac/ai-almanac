@@ -462,11 +462,24 @@ def _may_hold(job: dict, owner_id: str) -> bool:
     return job_access.can_read(job, _WorkspaceOwner(owner_id))
 
 
-async def _require_holdable(conn, workspace_id: str, job_id: str) -> None:
-    workspaces, jobs = tables.workspaces, tables.jobs
-    owner_id = (
+def _may_delete(job: dict, owner_id: str | None) -> bool:
+    """Whether the owner of the workspace holding ``job`` may delete it: their own run,
+    not an example everyone shares, which a delete would only hide from them."""
+    if owner_id is None or (job.get("visibility") or "private") == "example":
+        return False
+    return job_access.can_modify(job, _WorkspaceOwner(owner_id))
+
+
+async def _owner_id(conn, workspace_id: str) -> str | None:
+    workspaces = tables.workspaces
+    return (
         await conn.execute(sa.select(workspaces.c.user_id).where(workspaces.c.id == workspace_id))
     ).scalar()
+
+
+async def _require_holdable(conn, workspace_id: str, job_id: str) -> None:
+    jobs = tables.jobs
+    owner_id = await _owner_id(conn, workspace_id)
     job = (
         (
             await conn.execute(
@@ -756,7 +769,9 @@ async def job_rows(
 
 
 async def list_jobs(workspace_id: str) -> list[dict]:
-    return await _listed_jobs(in_workspace(workspace_id))
+    async with get_db() as conn:
+        owner_id = await _owner_id(conn, workspace_id)
+    return await _listed_jobs(in_workspace(workspace_id), owner_id)
 
 
 async def list_addable_jobs(workspace_id: str, user_id: str) -> list[dict]:
@@ -770,16 +785,20 @@ async def list_addable_jobs(workspace_id: str, user_id: str) -> list[dict]:
             jobs.c.job_type.in_(RUN_JOB_TYPES),
             jobs.c.id.not_in(linked_job_ids_query(sa.literal(workspace_id))),
         ),
+        user_id,
         limit=ADDABLE_JOBS_LIMIT,
     )
 
 
-async def _listed_jobs(where: sa.ColumnElement[bool], limit: int | None = None) -> list[dict]:
-    rows = await job_rows(where, limit=limit)
+async def _listed_jobs(
+    where: sa.ColumnElement[bool], owner_id: str | None, limit: int | None = None
+) -> list[dict]:
+    """Jobs as a workspace owned by ``owner_id`` lists them."""
+    rows = await job_rows(where, extra=(tables.jobs.c.visibility,), limit=limit)
     history = await job_history.finished_jobs_of(
         _history_owner(row) for row in rows if _is_waiting(row)
     )
-    return [_job_listing(row, history.get(_history_owner(row), [])) for row in rows]
+    return [_job_listing(row, history.get(_history_owner(row), []), owner_id) for row in rows]
 
 
 def _history_owner(job: dict) -> job_history.Owner:
@@ -790,13 +809,16 @@ def _is_waiting(job: dict) -> bool:
     return job["status"] in run_summaries.WAITING_STATUSES
 
 
-def _job_listing(row: dict, history: list[dict]) -> dict:
-    """A job as a workspace lists it: what it is, what tells it from its neighbours, and
-    for one still to finish, how long a run like it has taken this user before."""
+def _job_listing(row: dict, history: list[dict], owner_id: str | None) -> dict:
+    """A job as a workspace lists it: what it is, what tells it from its neighbours,
+    whether its owner may delete it, and for one still to finish, how long a run like it
+    has taken this user before."""
     config = row["config"]
-    listed = {key: value for key, value in row.items() if key not in ("config", "user_id")}
+    unlisted = ("config", "user_id", "visibility")
+    listed = {key: value for key, value in row.items() if key not in unlisted}
     return {
         **listed,
+        "deletable": _may_delete(row, owner_id),
         "model_name": workspace_display.job_name(config),
         "scope": workspace_display.run_scope(config),
         "region_id": config.get("region_id"),

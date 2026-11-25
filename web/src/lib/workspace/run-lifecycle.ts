@@ -1,6 +1,6 @@
 /**
  * A run while it is under way and after it stops: what each model is doing, how long
- * it should take, and which of its jobs can still be cancelled.
+ * it should take, and which of its jobs can still be cancelled or deleted.
  */
 import type { JobStatus, WorkspaceJob } from '$lib/api';
 import { plural } from '$lib/format/plural';
@@ -117,6 +117,16 @@ export function needsProgress(progress: ModelProgress[]): boolean {
 /** Jobs a cancel still reaches: one already cancelling or finished is left alone. */
 export function cancellableJobIds(run: Run): string[] {
 	return run.jobs.filter((job) => isUnderWay(stateOf(job.status))).map((job) => job.id);
+}
+
+/**
+ * Jobs a delete takes: all of a run's, once every one has stopped and the user may
+ * delete each; none otherwise, since half a run would be left behind.
+ */
+export function deletableJobIds(run: Run): string[] {
+	const stopped = run.jobs.every((job) => !isUnfinishedState(stateOf(job.status)));
+	const allowed = run.jobs.every((job) => job.deletable);
+	return stopped && allowed ? run.jobs.map((job) => job.id) : [];
 }
 
 export type RunStatus = { label: string; tone: 'running' | 'complete' | 'failed' };

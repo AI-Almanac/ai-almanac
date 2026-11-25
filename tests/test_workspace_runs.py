@@ -203,3 +203,21 @@ async def test_the_runs_offered_for_adding_are_the_users_own_that_are_not_here_y
     await client.post(f"/workspaces/{wid}/jobs", headers=as_new_user, json={"job_id": not_here})
     after = await client.get(f"/workspaces/{wid}/addable-jobs", headers=as_new_user)
     assert after.json() == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_owners_own_runs_are_offered_for_deleting(
+    client, as_new_user, user_id
+) -> None:
+    workspace, _ = await workspace_with_session(client, as_new_user)
+    wid = workspace["id"]
+    own = insert_job(user_id, BENCHMARK_CONFIG, status="failed")
+    shared = insert_job("someone-else", BENCHMARK_CONFIG, visibility="shared")
+    own_example = insert_job(user_id, BENCHMARK_CONFIG, visibility="example")
+    for job_id in (own, shared, own_example):
+        await workspaces.link_job(wid, job_id)
+
+    listed = await client.get(f"/workspaces/{wid}", headers=as_new_user)
+
+    deletable = {job["id"]: job["deletable"] for job in listed.json()["jobs"]}
+    assert deletable == {own: True, shared: False, own_example: False}

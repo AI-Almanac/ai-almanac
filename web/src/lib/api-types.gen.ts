@@ -6024,6 +6024,8 @@ export interface components {
             completed_at: string | null;
             /** Error */
             error: string | null;
+            /** Deletable */
+            deletable: boolean;
             /** Region Id */
             region_id: string | null;
             /** Blended */

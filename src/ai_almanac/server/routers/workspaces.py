@@ -107,6 +107,8 @@ class WorkspaceJobOut(BaseModel):
     started_at: str | None
     completed_at: str | None
     error: str | None
+    # The workspace's owner may delete it: their own run, not a shared example.
+    deletable: bool
     region_id: str | None
     blended: bool  # a forecast scored with a blend's weights, so it has an onset map
     # The areas the run was limited to, by name (or one lat/lon box in words); null

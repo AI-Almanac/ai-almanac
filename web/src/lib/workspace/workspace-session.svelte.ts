@@ -4,6 +4,7 @@
  */
 import {
 	cancelFollowUp,
+	deleteJob,
 	describeWorkspace,
 	failureMessage,
 	getWorkspace,
@@ -105,6 +106,18 @@ export class WorkspaceSession {
 		for (const jobId of jobIds) await linkWorkspaceJob(this.id, jobId, origin);
 		await this.refresh();
 		void this.refreshSummary();
+	}
+
+	/**
+	 * Deletes jobs outright, so they leave every workspace that holds them. The workspace
+	 * is reread either way: when some are refused, the rest are still gone.
+	 */
+	async deleteJobs(jobIds: string[]) {
+		const outcomes = await Promise.allSettled(jobIds.map((jobId) => deleteJob(jobId)));
+		await this.refresh();
+		void this.refreshSummary();
+		const refused = outcomes.find((outcome) => outcome.status === 'rejected');
+		if (refused) throw refused.reason;
 	}
 
 	/** The season in force: the workspace's own, else the platform default. */
